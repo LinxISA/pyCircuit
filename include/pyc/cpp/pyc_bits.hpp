@@ -39,6 +39,23 @@ private:
 template <unsigned Width>
 using Wire = Bits<Width>;
 
+namespace detail {
+
+template <unsigned... Ws>
+struct SumWidth;
+
+template <>
+struct SumWidth<> {
+  static constexpr unsigned value = 0;
+};
+
+template <unsigned W0, unsigned... Rest>
+struct SumWidth<W0, Rest...> {
+  static constexpr unsigned value = W0 + SumWidth<Rest...>::value;
+};
+
+} // namespace detail
+
 template <unsigned OutWidth, unsigned InWidth>
 constexpr Wire<OutWidth> trunc(Wire<InWidth> v) {
   static_assert(OutWidth > 0 && OutWidth <= 64, "trunc supports widths 1..64");
@@ -77,6 +94,23 @@ constexpr Wire<OutWidth> extract(Wire<InWidth> v, unsigned lsb) {
   static_assert(OutWidth > 0 && OutWidth <= 64, "extract supports widths 1..64");
   static_assert(InWidth > 0 && InWidth <= 64, "extract supports widths 1..64");
   return Wire<OutWidth>(v.value() >> lsb);
+}
+
+template <unsigned A>
+constexpr Wire<A> concat(Wire<A> a) {
+  return a;
+}
+
+template <unsigned A, unsigned B>
+constexpr Wire<A + B> concat(Wire<A> a, Wire<B> b) {
+  static_assert(A > 0 && B > 0, "concat inputs must be non-zero width");
+  static_assert(A + B <= 64, "concat supports total widths 1..64 in the prototype");
+  return Wire<A + B>((a.value() << B) | b.value());
+}
+
+template <unsigned A, unsigned B, unsigned C, unsigned... Rest>
+constexpr Wire<A + B + C + detail::SumWidth<Rest...>::value> concat(Wire<A> a, Wire<B> b, Wire<C> c, Wire<Rest>... rest) {
+  return concat(a, concat(b, c, rest...));
 }
 
 } // namespace pyc::cpp

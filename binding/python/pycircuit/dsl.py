@@ -135,6 +135,27 @@ class Module:
         self._emit(f"{tmp} = pyc.shli {a.ref} {{amount = {int(amount)}}} : {a.ty}")
         return Signal(ref=tmp, ty=a.ty)
 
+    def concat(self, *inputs: Signal) -> Signal:
+        """Concatenate integer signals into a packed bus (MSB-first)."""
+        if not inputs:
+            raise ValueError("concat requires at least one input")
+
+        def w(ty: str) -> int:
+            if not ty.startswith("i"):
+                raise TypeError("concat only supports integer types")
+            try:
+                return int(ty[1:])
+            except ValueError as e:
+                raise TypeError(f"invalid integer type: {ty!r}") from e
+
+        out_w = sum(w(s.ty) for s in inputs)
+        out_ty = self.i(out_w)
+        tmp = self._tmp()
+        op_list = ", ".join(s.ref for s in inputs)
+        ty_list = ", ".join(s.ty for s in inputs)
+        self._emit(f"{tmp} = pyc.concat ({op_list}) : ({ty_list}) -> {out_ty}")
+        return Signal(ref=tmp, ty=out_ty)
+
     def alias(self, a: Signal, *, name: str | None = None) -> Signal:
         """Alias a value (pure) to attach a debug name in codegen."""
         tmp = self._tmp()

@@ -2,6 +2,7 @@
 
 #include "pyc/Dialect/PYC/PYCOps.h"
 
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/IRMapping.h"
@@ -23,12 +24,15 @@ static bool isFusableCombOp(Operation *op) {
              pyc::OrOp,
              pyc::XorOp,
              pyc::NotOp,
+             pyc::ConcatOp,
+             pyc::AliasOp,
              pyc::EqOp,
              pyc::TruncOp,
              pyc::ZextOp,
              pyc::SextOp,
              pyc::ExtractOp,
-             pyc::ShliOp>(op);
+             pyc::ShliOp,
+             arith::SelectOp>(op);
 }
 
 struct FuseCombPass : public PassWrapper<FuseCombPass, OperationPass<func::FuncOp>> {

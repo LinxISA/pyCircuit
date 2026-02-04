@@ -7,8 +7,8 @@ def build(m: Circuit, N: int = 4) -> object:
     a = m.in_wire("a", width=8)
     b = m.in_wire("b", width=8)
 
-    x = a + b
-    if a == b:
+    x = (a + b) >> 1
+    if a < b:
         x = x + 1
     else:
         x = x + 2

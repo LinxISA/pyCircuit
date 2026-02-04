@@ -112,6 +112,14 @@ def PYC_ShliOp : PYC_Op<"shli", [Pure, SameOperandsAndResultType]> {
   let assemblyFormat = "$in attr-dict `:` type($result)";
 }
 
+def PYC_ConcatOp : PYC_Op<"concat", [Pure]> {
+  let summary = "Concatenate integers (MSB-first)";
+  let arguments = (ins Variadic<AnyInteger>:$inputs);
+  let results = (outs AnyInteger:$result);
+  let hasVerifier = 1;
+  let assemblyFormat = "`(` $inputs `)` attr-dict `:` `(` type($inputs) `)` `->` type($result)";
+}
+
 def PYC_AliasOp : PYC_Op<"alias", [Pure, SameOperandsAndResultType]> {
   let summary = "Alias a value (for naming / debug)";
   let arguments = (ins AnyType:$in);

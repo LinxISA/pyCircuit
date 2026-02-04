@@ -42,6 +42,12 @@ bash examples/update_generated.sh
   - `PYC_TRACE=1` writes a commit log under `examples/generated/linx_cpu_pyc/`.
   - `PYC_VCD=1` writes a VCD waveform under `examples/generated/linx_cpu_pyc/`.
   - Optional: set `PYC_TRACE_DIR=/path/to/dir` to override the output directory.
+- C++ FIFO TB (`examples/cpp/tb_fifo.cpp`) and issue-queue TB (`examples/cpp/tb_issue_queue_2picker.cpp`):
+  - Write `*.log` and `*.vcd` under `examples/generated/tb_fifo/` and `examples/generated/tb_issue_queue_2picker/`.
+  - Optional: set `PYC_TRACE_DIR=/path/to/dir` to override the output directory.
 - SystemVerilog CPU TB (`examples/linx_cpu/tb_linx_cpu_pyc.sv`):
   - Dumps to `examples/generated/linx_cpu_pyc/` by default.
+  - Disable with `+notrace` (VCD) and/or `+nolog` (log). Add `+logcycles` to log per-cycle CSV rows.
+- SystemVerilog issue-queue TB (`examples/issue_queue_2picker/tb_issue_queue_2picker.sv`):
+  - Dumps to `examples/generated/tb_issue_queue_2picker/` by default (override with `+trace_dir=<path>`).
   - Disable with `+notrace` (VCD) and/or `+nolog` (log). Add `+logcycles` to log per-cycle CSV rows.

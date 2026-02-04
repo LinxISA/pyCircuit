@@ -71,8 +71,16 @@ struct NameTable {
         names.try_emplace(v, cand);
         return cand;
       }
+      // Fall back to op-based names for readability (instead of v1/v2/...).
+      std::string base = sanitizeId(def->getName().getStringRef());
+      if (base.empty())
+        base = "v";
+      base += "_" + std::to_string(++next);
+      std::string cand = unique(base);
+      names.try_emplace(v, cand);
+      return cand;
     }
-    std::string n = unique("v" + std::to_string(++next));
+    std::string n = unique("arg_" + std::to_string(++next));
     names.try_emplace(v, n);
     return n;
   }
@@ -187,6 +195,19 @@ static LogicalResult emitCombAssign(Operation &op, llvm::raw_ostream &os, NameTa
       return sh.emitError("C++ emitter only supports widths 1..64 for shli in the prototype");
     os << "    " << nt.get(sh.getResult()) << " = pyc::cpp::Wire<" << w << ">(" << nt.get(sh.getIn())
        << ".value() << " << sh.getAmountAttr().getInt() << "ull);\n";
+    return success();
+  }
+  if (auto c = dyn_cast<pyc::ConcatOp>(op)) {
+    unsigned w = bitWidth(c.getResult().getType());
+    if (w == 0 || w > 64)
+      return c.emitError("C++ emitter only supports total widths 1..64 for concat in the prototype");
+    os << "    " << nt.get(c.getResult()) << " = pyc::cpp::concat(";
+    for (auto [i, v] : llvm::enumerate(c.getInputs())) {
+      if (i)
+        os << ", ";
+      os << nt.get(v);
+    }
+    os << ");\n";
     return success();
   }
   return op.emitError("unsupported combinational op for C++ emission");
@@ -388,6 +409,7 @@ static LogicalResult emitFunc(func::FuncOp f, llvm::raw_ostream &os) {
             pyc::OrOp,
             pyc::XorOp,
             pyc::NotOp,
+            pyc::ConcatOp,
             pyc::AliasOp,
             pyc::EqOp,
             pyc::TruncOp,

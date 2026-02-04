@@ -33,6 +33,7 @@ emit_one() {
 # Python examples.
 emit_one counter "${ROOT_DIR}/examples/counter.py"
 emit_one fifo_loopback "${ROOT_DIR}/examples/fifo_loopback.py"
+emit_one issue_queue_2picker "${ROOT_DIR}/examples/issue_queue_2picker.py"
 emit_one multiclock_regs "${ROOT_DIR}/examples/multiclock_regs.py"
 emit_one wire_ops "${ROOT_DIR}/examples/wire_ops.py"
 emit_one jit_control_flow "${ROOT_DIR}/examples/jit_control_flow.py"

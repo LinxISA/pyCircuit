@@ -8,33 +8,38 @@ struct JitControlFlow {
   pyc::cpp::Wire<8> b{};
   pyc::cpp::Wire<8> out{};
 
-  pyc::cpp::Wire<8> v1{};
-  pyc::cpp::Wire<8> v2{};
-  pyc::cpp::Wire<8> v3{};
-  pyc::cpp::Wire<8> v4{};
+  pyc::cpp::Wire<8> pyc_constant_1{};
+  pyc::cpp::Wire<8> pyc_constant_2{};
+  pyc::cpp::Wire<9> pyc_constant_3{};
   pyc::cpp::Wire<8> a__jit_control_flow__L7{};
   pyc::cpp::Wire<8> b__jit_control_flow__L8{};
-  pyc::cpp::Wire<8> v5{};
+  pyc::cpp::Wire<8> pyc_add_4{};
+  pyc::cpp::Wire<7> pyc_extract_5{};
+  pyc::cpp::Wire<8> pyc_zext_6{};
   pyc::cpp::Wire<8> x__jit_control_flow__L10{};
-  pyc::cpp::Wire<1> v6{};
-  pyc::cpp::Wire<8> v7{};
-  pyc::cpp::Wire<1> v8{};
-  pyc::cpp::Wire<8> v9{};
+  pyc::cpp::Wire<9> pyc_zext_7{};
+  pyc::cpp::Wire<9> pyc_zext_8{};
+  pyc::cpp::Wire<9> pyc_not_9{};
+  pyc::cpp::Wire<9> pyc_add_10{};
+  pyc::cpp::Wire<9> pyc_add_11{};
+  pyc::cpp::Wire<1> pyc_extract_12{};
+  pyc::cpp::Wire<8> pyc_add_13{};
   pyc::cpp::Wire<8> x__jit_control_flow__L12{};
-  pyc::cpp::Wire<8> v10{};
+  pyc::cpp::Wire<8> pyc_add_14{};
   pyc::cpp::Wire<8> x__jit_control_flow__L14{};
-  pyc::cpp::Wire<8> v11{};
+  pyc::cpp::Wire<8> pyc_mux_15{};
   pyc::cpp::Wire<8> x__jit_control_flow__L11{};
   pyc::cpp::Wire<8> acc__jit_control_flow__L16{};
-  pyc::cpp::Wire<8> v12{};
+  pyc::cpp::Wire<8> pyc_add_16{};
   pyc::cpp::Wire<8> acc__jit_control_flow__L18{};
-  pyc::cpp::Wire<8> v13{};
+  pyc::cpp::Wire<8> pyc_add_17{};
   pyc::cpp::Wire<8> acc__jit_control_flow__L18_2{};
-  pyc::cpp::Wire<8> v14{};
+  pyc::cpp::Wire<8> pyc_add_18{};
   pyc::cpp::Wire<8> acc__jit_control_flow__L18_3{};
-  pyc::cpp::Wire<8> v15{};
+  pyc::cpp::Wire<8> pyc_add_19{};
   pyc::cpp::Wire<8> acc__jit_control_flow__L18_4{};
   pyc::cpp::Wire<8> acc__jit_control_flow__L17{};
+  pyc::cpp::Wire<8> pyc_comb_20{};
 
 
   JitControlFlow() {
@@ -42,46 +47,47 @@ struct JitControlFlow {
   }
 
   inline void eval_comb_0() {
-    v1 = pyc::cpp::Wire<8>(2ull);
-    v2 = pyc::cpp::Wire<8>(1ull);
-    v3 = v1;
-    v4 = v2;
-  }
-
-  inline void eval_comb_1() {
-    v6 = pyc::cpp::Wire<1>((a__jit_control_flow__L7 == b__jit_control_flow__L8) ? 1u : 0u);
-    v7 = (x__jit_control_flow__L10 + v4);
-    v8 = v6;
-    v9 = v7;
+    pyc_constant_1 = pyc::cpp::Wire<8>(2ull);
+    pyc_constant_2 = pyc::cpp::Wire<8>(1ull);
+    pyc_constant_3 = pyc::cpp::Wire<9>(1ull);
+    a__jit_control_flow__L7 = a;
+    b__jit_control_flow__L8 = b;
+    pyc_add_4 = (a__jit_control_flow__L7 + b__jit_control_flow__L8);
+    pyc_extract_5 = pyc::cpp::extract<7, 8>(pyc_add_4, 1u);
+    pyc_zext_6 = pyc::cpp::zext<8, 7>(pyc_extract_5);
+    x__jit_control_flow__L10 = pyc_zext_6;
+    pyc_zext_7 = pyc::cpp::zext<9, 8>(a__jit_control_flow__L7);
+    pyc_zext_8 = pyc::cpp::zext<9, 8>(b__jit_control_flow__L8);
+    pyc_not_9 = (~pyc_zext_8);
+    pyc_add_10 = (pyc_not_9 + pyc_constant_3);
+    pyc_add_11 = (pyc_zext_7 + pyc_add_10);
+    pyc_extract_12 = pyc::cpp::extract<1, 9>(pyc_add_11, 8u);
+    pyc_add_13 = (x__jit_control_flow__L10 + pyc_constant_2);
+    x__jit_control_flow__L12 = pyc_add_13;
+    pyc_add_14 = (x__jit_control_flow__L10 + pyc_constant_1);
+    x__jit_control_flow__L14 = pyc_add_14;
+    pyc_mux_15 = (pyc_extract_12.toBool() ? x__jit_control_flow__L12 : x__jit_control_flow__L14);
+    x__jit_control_flow__L11 = pyc_mux_15;
+    acc__jit_control_flow__L16 = x__jit_control_flow__L11;
+    pyc_add_16 = (acc__jit_control_flow__L16 + pyc_constant_2);
+    acc__jit_control_flow__L18 = pyc_add_16;
+    pyc_add_17 = (acc__jit_control_flow__L18 + pyc_constant_2);
+    acc__jit_control_flow__L18_2 = pyc_add_17;
+    pyc_add_18 = (acc__jit_control_flow__L18_2 + pyc_constant_2);
+    acc__jit_control_flow__L18_3 = pyc_add_18;
+    pyc_add_19 = (acc__jit_control_flow__L18_3 + pyc_constant_2);
+    acc__jit_control_flow__L18_4 = pyc_add_19;
+    acc__jit_control_flow__L17 = acc__jit_control_flow__L18_4;
+    pyc_comb_20 = acc__jit_control_flow__L17;
   }
 
   inline void eval_comb_pass() {
     eval_comb_0();
-    a__jit_control_flow__L7 = a;
-    b__jit_control_flow__L8 = b;
-    v5 = (a__jit_control_flow__L7 + b__jit_control_flow__L8);
-    x__jit_control_flow__L10 = v5;
-    eval_comb_1();
-    x__jit_control_flow__L12 = v9;
-    v10 = (x__jit_control_flow__L10 + v3);
-    x__jit_control_flow__L14 = v10;
-    v11 = (v8.toBool() ? x__jit_control_flow__L12 : x__jit_control_flow__L14);
-    x__jit_control_flow__L11 = v11;
-    acc__jit_control_flow__L16 = x__jit_control_flow__L11;
-    v12 = (acc__jit_control_flow__L16 + v4);
-    acc__jit_control_flow__L18 = v12;
-    v13 = (acc__jit_control_flow__L18 + v4);
-    acc__jit_control_flow__L18_2 = v13;
-    v14 = (acc__jit_control_flow__L18_2 + v4);
-    acc__jit_control_flow__L18_3 = v14;
-    v15 = (acc__jit_control_flow__L18_3 + v4);
-    acc__jit_control_flow__L18_4 = v15;
-    acc__jit_control_flow__L17 = acc__jit_control_flow__L18_4;
   }
 
   void eval() {
     eval_comb_pass();
-    out = acc__jit_control_flow__L17;
+    out = pyc_comb_20;
   }
 
   void tick() {

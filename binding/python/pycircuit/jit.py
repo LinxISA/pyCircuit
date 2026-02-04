@@ -249,6 +249,10 @@ class _Compiler:
                 return a // b
             if isinstance(node.op, ast.Mod):
                 return a % b
+            if isinstance(node.op, ast.LShift):
+                return a << b
+            if isinstance(node.op, ast.RShift):
+                return a >> b
         raise JitError(f"unsupported const-eval expression: {ast.dump(node, include_attributes=False)}")
 
     # ---- expression evaluation (hardware + params) ----
@@ -346,6 +350,12 @@ class _Compiler:
                 if not isinstance(amt, int):
                     raise JitError("<< only supports constant shift amounts")
                 return w.shl(amount=int(amt))
+            if isinstance(node.op, ast.RShift):
+                w = _expect_wire(lhs, ctx=">>")
+                amt = rhs
+                if not isinstance(amt, int):
+                    raise JitError(">> only supports constant shift amounts")
+                return w.lshr(amount=int(amt))
         if isinstance(node, ast.UnaryOp):
             v = self.eval_expr(node.operand)
             if isinstance(node.op, ast.Invert):
@@ -396,6 +406,32 @@ class _Compiler:
                 w = _expect_wire(lhs, ctx="!=") if isinstance(lhs, (Wire, Reg)) else _expect_wire(rhs, ctx="!=")
                 eq = w.eq(rhs if isinstance(lhs, (Wire, Reg)) else lhs)
                 return ~eq
+            if isinstance(op, ast.Lt):
+                if isinstance(lhs, (Wire, Reg)):
+                    return _expect_wire(lhs, ctx="<").ult(rhs)
+                if isinstance(rhs, (Wire, Reg)):
+                    # a < b  ==>  b > a
+                    return _expect_wire(rhs, ctx="<").ugt(lhs)
+                return int(lhs) < int(rhs)
+            if isinstance(op, ast.LtE):
+                if isinstance(lhs, (Wire, Reg)):
+                    return ~_expect_wire(lhs, ctx="<=").ugt(rhs)
+                if isinstance(rhs, (Wire, Reg)):
+                    return ~_expect_wire(rhs, ctx="<=").ult(lhs)
+                return int(lhs) <= int(rhs)
+            if isinstance(op, ast.Gt):
+                if isinstance(lhs, (Wire, Reg)):
+                    return _expect_wire(lhs, ctx=">").ugt(rhs)
+                if isinstance(rhs, (Wire, Reg)):
+                    # a > b  ==>  b < a
+                    return _expect_wire(rhs, ctx=">").ult(lhs)
+                return int(lhs) > int(rhs)
+            if isinstance(op, ast.GtE):
+                if isinstance(lhs, (Wire, Reg)):
+                    return ~_expect_wire(lhs, ctx=">=").ult(rhs)
+                if isinstance(rhs, (Wire, Reg)):
+                    return ~_expect_wire(rhs, ctx=">=").ugt(lhs)
+                return int(lhs) >= int(rhs)
         if isinstance(node, ast.Call):
             return self.eval_call(node)
         if isinstance(node, ast.Attribute):

@@ -107,6 +107,28 @@ LogicalResult ShliOp::verify() {
   return success();
 }
 
+LogicalResult ConcatOp::verify() {
+  if (getInputs().empty())
+    return emitOpError("requires at least one input");
+
+  auto outTy = dyn_cast<IntegerType>(getResult().getType());
+  if (!outTy)
+    return emitOpError("only supports integer result types");
+
+  std::uint64_t sum = 0;
+  for (Value v : getInputs()) {
+    auto ty = dyn_cast<IntegerType>(v.getType());
+    if (!ty)
+      return emitOpError("only supports integer input types");
+    sum += static_cast<std::uint64_t>(ty.getWidth());
+  }
+
+  if (sum != static_cast<std::uint64_t>(outTy.getWidth()))
+    return emitOpError("result width must equal sum of input widths");
+
+  return success();
+}
+
 LogicalResult AssignOp::verify() {
   if (!getDst().getDefiningOp<WireOp>())
     return emitOpError("dst must be defined by pyc.wire");

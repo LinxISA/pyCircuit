@@ -39,6 +39,8 @@ All examples below live inside a standard MLIR `module { ... }` and use
 
 %s = pyc.extract %x {lsb = 4} : i16 -> i8
 %sh = pyc.shli %x {amount = 2} : i16
+
+%bus = pyc.concat(%a, %b, %c) : (i8, i16, i1) -> i25
 ```
 
 ### 2.2.1 `pyc.alias` (debug naming)
@@ -137,3 +139,7 @@ These are **not** part of the stable PYC dialect contract: `pyc-compile` runs
 
 - `scf.if` → `pyc.mux` networks (both branches are speculated; must be side-effect-free)
 - `scf.for` → fully unrolled logic (bounds must be compile-time constants)
+
+Note: MLIR canonicalization may also introduce `arith.select` during cleanup.
+`pyc-compile` supports `arith.select` in both C++ and Verilog emission, but it
+is not considered part of the stable PYC dialect surface area.

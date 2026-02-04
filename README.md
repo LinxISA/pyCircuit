@@ -70,6 +70,7 @@ executed as Python at JIT time. This preserves consistent name-mangling with fil
 - `include/pyc/`: backend template headers (C++ + Verilog)
 - `examples/`: small designs and golden outputs
 - `docs/IR_SPEC.md`: current PYC IR contract (prototype)
+- `docs/USAGE.md`: how to write real designs (JIT/frontend guide)
 
 ## LinxISA CPU bring-up (prototype)
 

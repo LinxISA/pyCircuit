@@ -12,10 +12,11 @@ __all__ = [
     "Signal",
     "Vec",
     "Wire",
+    "cat",
     "jit_inline",
     "jit_compile",
 ]
 
 from .dsl import Module, Signal
-from .hw import Bundle, Circuit, ClockDomain, Pop, Queue, Reg, Vec, Wire
+from .hw import Bundle, Circuit, ClockDomain, Pop, Queue, Reg, Vec, Wire, cat
 from .jit import JitError, compile as jit_compile, jit_inline

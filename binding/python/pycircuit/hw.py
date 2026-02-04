@@ -39,6 +39,12 @@ class Wire:
     def __str__(self) -> str:
         return self.sig.ref
 
+    def __bool__(self) -> bool:
+        raise TypeError(
+            "Wire cannot be used as a Python boolean. "
+            "Use `if` inside a JIT-compiled design function, or compare explicitly and return an i1 Wire."
+        )
+
     def out(self) -> "Wire":
         """Stage-friendly sugar: a Wire's value is itself."""
         return self
@@ -91,9 +97,65 @@ class Wire:
     def __invert__(self) -> "Wire":
         return Wire(self.m, self.m.not_(self.sig))
 
+    def __lshift__(self, other: int) -> "Wire":
+        if not isinstance(other, int):
+            raise TypeError("<< only supports constant integer shift amounts")
+        return self.shl(amount=int(other))
+
+    def lshr(self, *, amount: int) -> "Wire":
+        """Logical shift right by a constant amount (zero-fill)."""
+        amt = int(amount)
+        if amt < 0:
+            raise ValueError("lshr amount must be >= 0")
+        if amt == 0:
+            return self
+        if amt >= self.width:
+            return self.m.const_wire(0, width=self.width)
+        sliced = self.slice(lsb=amt, width=self.width - amt)
+        return sliced.zext(width=self.width)
+
+    def ashr(self, *, amount: int) -> "Wire":
+        """Arithmetic shift right by a constant amount (sign-fill)."""
+        amt = int(amount)
+        if amt < 0:
+            raise ValueError("ashr amount must be >= 0")
+        if amt == 0:
+            return self
+        if amt >= self.width:
+            return self[self.width - 1].sext(width=self.width)
+        sliced = self.slice(lsb=amt, width=self.width - amt)
+        return sliced.sext(width=self.width)
+
+    def __rshift__(self, other: int) -> "Wire":
+        if not isinstance(other, int):
+            raise TypeError(">> only supports constant integer shift amounts")
+        return self.lshr(amount=int(other))
+
     def eq(self, other: Union["Wire", "Reg", Signal, int]) -> "Wire":
         a, b = self._promote2(other)
         return Wire(self.m, self.m.eq(a.sig, b.sig))
+
+    def ult(self, other: Union["Wire", "Reg", Signal, int]) -> "Wire":
+        """Unsigned less-than compare (result is i1)."""
+        a, b = self._promote2(other)
+        ext_w = a.width + 1
+        a_ext = a.zext(width=ext_w)
+        b_ext = b.zext(width=ext_w)
+        diff = a_ext + ((~b_ext) + 1)
+        return diff[ext_w - 1]
+
+    def ugt(self, other: Union["Wire", "Reg", Signal, int]) -> "Wire":
+        """Unsigned greater-than compare (result is i1)."""
+        other_w = self._as_wire(other, width=None)
+        return other_w.ult(self)
+
+    def ule(self, other: Union["Wire", "Reg", Signal, int]) -> "Wire":
+        """Unsigned less-than-or-equal compare (result is i1)."""
+        return ~self.ugt(other)
+
+    def uge(self, other: Union["Wire", "Reg", Signal, int]) -> "Wire":
+        """Unsigned greater-than-or-equal compare (result is i1)."""
+        return ~self.ult(other)
 
     def select(self, a: Union["Wire", "Reg", Signal, int], b: Union["Wire", "Reg", Signal, int]) -> "Wire":
         if self.ty != "i1":
@@ -203,6 +265,12 @@ class Reg:
     def __str__(self) -> str:
         return self.q.ref
 
+    def __bool__(self) -> bool:
+        raise TypeError(
+            "Reg cannot be used as a Python boolean. "
+            "Use `if` inside a JIT-compiled design function, or compare explicitly and return an i1 Wire."
+        )
+
     def out(self) -> Wire:
         """Read the current value of the register (q) as a Wire."""
         return self.q
@@ -222,8 +290,32 @@ class Reg:
     def __invert__(self) -> Wire:
         return ~self.q
 
+    def __lshift__(self, other: int) -> Wire:
+        return self.q << other
+
+    def __rshift__(self, other: int) -> Wire:
+        return self.q >> other
+
+    def lshr(self, *, amount: int) -> Wire:
+        return self.q.lshr(amount=amount)
+
+    def ashr(self, *, amount: int) -> Wire:
+        return self.q.ashr(amount=amount)
+
     def eq(self, other: Union[Wire, Signal, int]) -> Wire:
         return self.q.eq(other)
+
+    def ult(self, other: Union[Wire, Signal, int]) -> Wire:
+        return self.q.ult(other)
+
+    def ugt(self, other: Union[Wire, Signal, int]) -> Wire:
+        return self.q.ugt(other)
+
+    def ule(self, other: Union[Wire, Signal, int]) -> Wire:
+        return self.q.ule(other)
+
+    def uge(self, other: Union[Wire, Signal, int]) -> Wire:
+        return self.q.uge(other)
 
     def select(self, a: Union[Wire, "Reg", Signal, int], b: Union[Wire, "Reg", Signal, int]) -> Wire:
         return self.q.select(a, b)
@@ -616,6 +708,13 @@ class Vec:
             raise ValueError("cannot pack a zero-width Vec")
 
         m = ws[0].m
+        concat = getattr(m, "concat", None)
+        if callable(concat):
+            return Wire(m, concat(*(w.sig for w in ws)))
+
+        # Fallback: build packing from basic shifts + ors (legacy Module backends).
+        if not isinstance(m, Circuit):
+            raise TypeError("Vec.pack requires a Circuit/Module with a concat() builder")
         acc = m.const_wire(0, width=out_w)
         lsb = 0
         for w in reversed(ws):
@@ -783,3 +882,15 @@ class Queue:
         if isinstance(v, int):
             return self.m.const_wire(int(v), width=1)
         raise TypeError(f"{ctx}: expected Wire/Signal/int, got {type(v).__name__}")
+
+
+def cat(*elems: Union[Wire, Reg]) -> Wire:
+    """Concatenate wires/regs into a packed bus (MSB-first).
+
+    Convenience wrapper so you can write:
+      `bus = cat(a, b, c)`
+
+    Equivalent to:
+      `bus = m.cat(a, b, c)` (when all values belong to the same Circuit).
+    """
+    return Vec(tuple(elems)).pack()
