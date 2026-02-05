@@ -329,7 +329,7 @@ static bool topoSortCombOps(ArrayRef<Operation *> ops, NameTable &nt, llvm::Smal
     unsigned idx = it.index();
     Operation *op = it.value();
 
-    llvm::SmallSet<unsigned, 8> deps;
+    llvm::SmallDenseSet<unsigned, 8> deps;
     auto addDep = [&](Value v) {
       auto it = valueProducer.find(v);
       if (it == valueProducer.end())
