@@ -74,8 +74,8 @@ struct JitPipelineVec {
   }
 
   inline void eval_comb_1() {
-    pyc_constant_1 = pyc::cpp::Wire<25>(0ull);
-    pyc_constant_2 = pyc::cpp::Wire<1>(1ull);
+    pyc_constant_1 = pyc::cpp::Wire<25>({0x0ull});
+    pyc_constant_2 = pyc::cpp::Wire<1>({0x1ull});
     a__jit_pipeline_vec__L19 = a;
     b__jit_pipeline_vec__L20 = b;
     sel__jit_pipeline_vec__L21 = sel;

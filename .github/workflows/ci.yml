@@ -74,13 +74,20 @@ jobs:
           set -euxo pipefail
           ninja -C build pyc-compile pyc-opt
 
-      - name: Regenerate checked-in outputs
+      - name: Regenerate checked-in outputs (examples + janus)
         run: |
           set -euxo pipefail
           bash examples/update_generated.sh
+          bash janus/update_generated.sh
           git diff --exit-code
 
       - name: Run Linx CPU C++ regression
         run: |
           set -euxo pipefail
           bash tools/run_linx_cpu_pyc_cpp.sh
+
+      - name: Run Janus C++ regressions
+        run: |
+          set -euxo pipefail
+          bash janus/tools/run_janus_bcc_pyc_cpp.sh
+          bash janus/tools/run_janus_bcc_ooo_pyc_cpp.sh

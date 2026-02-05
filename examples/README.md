@@ -3,13 +3,14 @@
 Emit `.pyc` (MLIR) from Python:
 
 ```bash
-PYTHONPATH=../binding/python python3 -m pycircuit.cli emit counter.py -o /tmp/counter.pyc
-PYTHONPATH=../binding/python python3 -m pycircuit.cli emit fifo_loopback.py -o /tmp/fifo_loopback.pyc
-PYTHONPATH=../binding/python python3 -m pycircuit.cli emit multiclock_regs.py -o /tmp/multiclock_regs.pyc
-PYTHONPATH=../binding/python python3 -m pycircuit.cli emit wire_ops.py -o /tmp/wire_ops.pyc
-PYTHONPATH=../binding/python python3 -m pycircuit.cli emit jit_control_flow.py -o /tmp/jit_control_flow.pyc
-PYTHONPATH=../binding/python python3 -m pycircuit.cli emit jit_pipeline_vec.py -o /tmp/jit_pipeline_vec.pyc
-PYTHONPATH=../binding/python python3 -m pycircuit.cli emit jit_cache.py -o /tmp/jit_cache.pyc
+PYTHONPATH=../python python3 -m pycircuit.cli emit counter.py -o /tmp/counter.pyc
+PYTHONPATH=../python python3 -m pycircuit.cli emit fifo_loopback.py -o /tmp/fifo_loopback.pyc
+PYTHONPATH=../python python3 -m pycircuit.cli emit multiclock_regs.py -o /tmp/multiclock_regs.pyc
+PYTHONPATH=../python python3 -m pycircuit.cli emit wire_ops.py -o /tmp/wire_ops.pyc
+PYTHONPATH=../python python3 -m pycircuit.cli emit jit_control_flow.py -o /tmp/jit_control_flow.pyc
+PYTHONPATH=../python python3 -m pycircuit.cli emit jit_pipeline_vec.py -o /tmp/jit_pipeline_vec.pyc
+PYTHONPATH=../python python3 -m pycircuit.cli emit jit_cache.py -o /tmp/jit_cache.pyc
+PYTHONPATH=../python python3 -m pycircuit.cli emit fastfwd_pyc/fastfwd_pyc.py -o /tmp/fastfwd_pyc.pyc
 ```
 
 Then compile to Verilog:
@@ -23,17 +24,8 @@ Then compile to Verilog:
 This repo checks in generated outputs under `examples/generated/`:
 
 ```bash
-bash examples/update_generated.sh
-```
-
-## Generated outputs (checked in)
-
-This repo checks in generated `*.v` and `*.hpp` outputs under `examples/generated/`.
-
-Regenerate (all examples + Linx CPU):
-
-```bash
-bash examples/update_generated.sh
+bash update_generated.sh          # examples only
+(cd .. && scripts/pyc regen)      # all goldens (examples + janus)
 ```
 
 ## Debug traces
@@ -41,6 +33,10 @@ bash examples/update_generated.sh
 - C++ CPU TB (`examples/linx_cpu_pyc/tb_linx_cpu_pyc.cpp`):
   - `PYC_TRACE=1` writes a commit log under `examples/generated/linx_cpu_pyc/`.
   - `PYC_VCD=1` writes a VCD waveform under `examples/generated/linx_cpu_pyc/`.
+  - Optional: set `PYC_TRACE_DIR=/path/to/dir` to override the output directory.
+- C++ FastFwd TB (`examples/fastfwd_pyc/tb_fastfwd_pyc.cpp`):
+  - `PYC_TRACE=1` writes a text log under `examples/generated/fastfwd_pyc/`.
+  - `PYC_VCD=1` writes a VCD waveform under `examples/generated/fastfwd_pyc/`.
   - Optional: set `PYC_TRACE_DIR=/path/to/dir` to override the output directory.
 - C++ FIFO TB (`examples/cpp/tb_fifo.cpp`) and issue-queue TB (`examples/cpp/tb_issue_queue_2picker.cpp`):
   - Write `*.log` and `*.vcd` under `examples/generated/tb_fifo/` and `examples/generated/tb_issue_queue_2picker/`.

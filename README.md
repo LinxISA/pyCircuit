@@ -60,6 +60,16 @@ Prereqs:
 - A C++17 compiler
 - An LLVM+MLIR build/install that provides `LLVMConfig.cmake` + `MLIRConfig.cmake`
 
+### Quickstart (recommended)
+
+If `llvm-config` is on your PATH:
+
+```bash
+scripts/pyc build
+scripts/pyc regen
+scripts/pyc test
+```
+
 ### Configure + build (recommended: top-level CMake)
 
 ```bash
@@ -95,7 +105,7 @@ python3 -m pip install -e .
 Emit `.pyc` (MLIR) from Python:
 
 ```bash
-PYTHONPATH=binding/python python3 -m pycircuit.cli emit examples/jit_pipeline_vec.py -o /tmp/jit_pipeline_vec.pyc
+PYTHONPATH=python python3 -m pycircuit.cli emit examples/jit_pipeline_vec.py -o /tmp/jit_pipeline_vec.pyc
 ```
 
 If installed via `pip`, you can also run:
@@ -113,7 +123,7 @@ Compile MLIR to Verilog:
 Regenerate the checked-in golden outputs under `examples/generated/`:
 
 ```bash
-bash examples/update_generated.sh
+scripts/pyc regen
 ```
 
 ## LinxISA CPU bring-up (example)
@@ -149,7 +159,7 @@ The tarball includes:
 
 ## Repo layout
 
-- `binding/python/pycircuit/`: Python DSL + AST/JIT frontend + CLI
+- `python/pycircuit/`: Python DSL + AST/JIT frontend + CLI
 - `pyc/mlir/`: MLIR dialect, passes, tools (`pyc-opt`, `pyc-compile`)
 - `include/pyc/`: backend template libraries (C++ + Verilog primitives)
 - `examples/`: example designs, testbenches, and checked-in generated outputs

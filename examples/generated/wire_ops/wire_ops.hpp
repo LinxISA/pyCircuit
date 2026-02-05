@@ -45,8 +45,8 @@ struct WireOps {
   }
 
   inline void eval_comb_1() {
-    pyc_constant_1 = pyc::cpp::Wire<8>(0ull);
-    pyc_constant_2 = pyc::cpp::Wire<1>(1ull);
+    pyc_constant_1 = pyc::cpp::Wire<8>({0x0ull});
+    pyc_constant_2 = pyc::cpp::Wire<1>({0x1ull});
     a__wire_ops__L9 = a;
     b__wire_ops__L10 = b;
     sel__wire_ops__L11 = sel;

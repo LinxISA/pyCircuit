@@ -2,24 +2,9 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
-
-if [[ -z "${PYC_COMPILE:-}" ]]; then
-  if [[ -x "${ROOT_DIR}/pyc/mlir/build/bin/pyc-compile" ]]; then
-    PYC_COMPILE="${ROOT_DIR}/pyc/mlir/build/bin/pyc-compile"
-  elif [[ -x "${ROOT_DIR}/build/bin/pyc-compile" ]]; then
-    PYC_COMPILE="${ROOT_DIR}/build/bin/pyc-compile"
-  elif command -v pyc-compile >/dev/null 2>&1; then
-    PYC_COMPILE="$(command -v pyc-compile)"
-  else
-    PYC_COMPILE=""
-  fi
-fi
-
-if [[ -z "${PYC_COMPILE}" || ! -x "${PYC_COMPILE}" ]]; then
-  echo "error: missing pyc-compile (PYC_COMPILE=${PYC_COMPILE:-<unset>})" >&2
-  echo "Build MLIR tools first (see ${ROOT_DIR}/README.md)." >&2
-  exit 1
-fi
+# shellcheck source=../scripts/lib.sh
+source "${ROOT_DIR}/scripts/lib.sh"
+pyc_find_pyc_compile
 
 OUT_ROOT="${ROOT_DIR}/examples/generated"
 mkdir -p "${OUT_ROOT}"
@@ -30,13 +15,14 @@ emit_one() {
   local outdir="${OUT_ROOT}/${name}"
 
   mkdir -p "${outdir}"
-  echo "[emit] ${name}: ${src}"
+  pyc_log "emit ${name}: ${src}"
 
   # Emit MLIR to a temp file (keep repo-clean: only check in .v/.hpp outputs).
   local tmp_pyc
   tmp_pyc="$(mktemp -t "pycircuit.${name}.pyc")"
 
-  PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="${ROOT_DIR}/binding/python" python3 -m pycircuit.cli emit "${src}" -o "${tmp_pyc}"
+  PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="$(pyc_pythonpath):${ROOT_DIR}" \
+    python3 -m pycircuit.cli emit "${src}" -o "${tmp_pyc}"
   "${PYC_COMPILE}" "${tmp_pyc}" --emit=verilog -o "${outdir}/${name}.v"
   "${PYC_COMPILE}" "${tmp_pyc}" --emit=cpp -o "${outdir}/${name}.hpp"
 }
@@ -50,9 +36,13 @@ emit_one wire_ops "${ROOT_DIR}/examples/wire_ops.py"
 emit_one jit_control_flow "${ROOT_DIR}/examples/jit_control_flow.py"
 emit_one jit_pipeline_vec "${ROOT_DIR}/examples/jit_pipeline_vec.py"
 emit_one jit_cache "${ROOT_DIR}/examples/jit_cache.py"
+emit_one fastfwd_pyc "${ROOT_DIR}/examples/fastfwd_pyc/fastfwd_pyc.py"
 
 # LinxISA CPU (pyCircuit).
 emit_one linx_cpu_pyc "${ROOT_DIR}/examples/linx_cpu_pyc/linx_cpu_pyc.py"
 mv -f "${OUT_ROOT}/linx_cpu_pyc/linx_cpu_pyc.hpp" "${OUT_ROOT}/linx_cpu_pyc/linx_cpu_pyc_gen.hpp"
 
-echo "OK: wrote outputs under ${OUT_ROOT}"
+# FastFwd (pyCircuit).
+mv -f "${OUT_ROOT}/fastfwd_pyc/fastfwd_pyc.hpp" "${OUT_ROOT}/fastfwd_pyc/fastfwd_pyc_gen.hpp"
+
+pyc_log "ok: wrote outputs under ${OUT_ROOT}"

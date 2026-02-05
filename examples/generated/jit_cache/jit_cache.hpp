@@ -628,19 +628,19 @@ struct JitCache {
   }
 
   inline void eval_comb_0() {
-    pyc_constant_1 = pyc::cpp::Wire<3>(7ull);
-    pyc_constant_2 = pyc::cpp::Wire<3>(6ull);
-    pyc_constant_3 = pyc::cpp::Wire<3>(5ull);
-    pyc_constant_4 = pyc::cpp::Wire<3>(4ull);
-    pyc_constant_5 = pyc::cpp::Wire<3>(3ull);
-    pyc_constant_6 = pyc::cpp::Wire<3>(2ull);
-    pyc_constant_7 = pyc::cpp::Wire<3>(1ull);
-    pyc_constant_8 = pyc::cpp::Wire<3>(0ull);
-    pyc_constant_9 = pyc::cpp::Wire<27>(0ull);
-    pyc_constant_10 = pyc::cpp::Wire<1>(1ull);
-    pyc_constant_11 = pyc::cpp::Wire<4>(0ull);
-    pyc_constant_12 = pyc::cpp::Wire<32>(0ull);
-    pyc_constant_13 = pyc::cpp::Wire<1>(0ull);
+    pyc_constant_1 = pyc::cpp::Wire<3>({0x7ull});
+    pyc_constant_2 = pyc::cpp::Wire<3>({0x6ull});
+    pyc_constant_3 = pyc::cpp::Wire<3>({0x5ull});
+    pyc_constant_4 = pyc::cpp::Wire<3>({0x4ull});
+    pyc_constant_5 = pyc::cpp::Wire<3>({0x3ull});
+    pyc_constant_6 = pyc::cpp::Wire<3>({0x2ull});
+    pyc_constant_7 = pyc::cpp::Wire<3>({0x1ull});
+    pyc_constant_8 = pyc::cpp::Wire<3>({0x0ull});
+    pyc_constant_9 = pyc::cpp::Wire<27>({0x0ull});
+    pyc_constant_10 = pyc::cpp::Wire<1>({0x1ull});
+    pyc_constant_11 = pyc::cpp::Wire<4>({0x0ull});
+    pyc_constant_12 = pyc::cpp::Wire<32>({0x0ull});
+    pyc_constant_13 = pyc::cpp::Wire<1>({0x0ull});
     req_valid__jit_cache__L166 = req_valid;
     req_addr__jit_cache__L167 = req_addr;
     rsp_ready__jit_cache__L168 = rsp_ready;
