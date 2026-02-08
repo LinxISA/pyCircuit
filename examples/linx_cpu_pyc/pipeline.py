@@ -21,12 +21,14 @@ class CoreState:
 @dataclass(frozen=True)
 class IfIdRegs:
     window: CycleAwareReg
+    pc: CycleAwareReg  # fetch address of instruction in IF/ID
 
 
 @dataclass(frozen=True)
 class IdExRegs:
     op: CycleAwareReg
     len_bytes: CycleAwareReg
+    pc: CycleAwareReg  # PC of instruction in ID/EX
     regdst: CycleAwareReg
     srcl: CycleAwareReg
     srcr: CycleAwareReg
@@ -41,6 +43,7 @@ class IdExRegs:
 class ExMemRegs:
     op: CycleAwareReg
     len_bytes: CycleAwareReg
+    pc: CycleAwareReg  # PC of instruction in EX/MEM
     regdst: CycleAwareReg
     alu: CycleAwareReg
     is_load: CycleAwareReg
@@ -54,6 +57,7 @@ class ExMemRegs:
 class MemWbRegs:
     op: CycleAwareReg
     len_bytes: CycleAwareReg
+    pc: CycleAwareReg  # PC of instruction in MEM/WB
     regdst: CycleAwareReg
     value: CycleAwareReg
 

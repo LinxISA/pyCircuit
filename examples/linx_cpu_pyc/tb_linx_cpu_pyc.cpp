@@ -46,6 +46,8 @@ static bool loadMemh(pyc::cpp::pyc_byte_mem<AddrWidth, DataWidth, DepthBytes> &m
 static bool runProgram(const char *name, const char *memhPath, std::uint64_t bootPc, std::optional<std::uint32_t> expectedMem100,
                        std::optional<std::uint64_t> expectedA0) {
   pyc::gen::linx_cpu_pyc dut{};
+  if (!loadMemh(dut.imem, memhPath))
+    return false;
   if (!loadMemh(dut.mem, memhPath))
     return false;
 
@@ -77,16 +79,31 @@ static bool runProgram(const char *name, const char *memhPath, std::uint64_t boo
       tb.vcdTrace(dut.pc, "pc");
       tb.vcdTrace(dut.stage, "stage");
       tb.vcdTrace(dut.cycles, "cycles");
-      tb.vcdTrace(dut.if_window, "if_window");
-      tb.vcdTrace(dut.wb_op, "wb_op");
-      tb.vcdTrace(dut.wb_regdst, "wb_regdst");
-      tb.vcdTrace(dut.wb_value, "wb_value");
+      tb.vcdTrace(dut.br_kind, "br_kind");
+      tb.vcdTrace(dut.br_base_pc, "br_base_pc");
+      tb.vcdTrace(dut.br_off, "br_off");
       tb.vcdTrace(dut.commit_cond, "commit_cond");
       tb.vcdTrace(dut.commit_tgt, "commit_tgt");
+      tb.vcdTrace(dut.active, "active");
+      tb.vcdTrace(dut.pc_if, "pc_if");
+      tb.vcdTrace(dut.pc_id, "pc_id");
+      tb.vcdTrace(dut.pc_ex, "pc_ex");
+      tb.vcdTrace(dut.pc_mem, "pc_mem");
+      tb.vcdTrace(dut.pc_wb, "pc_wb");
+      tb.vcdTrace(dut.if_window, "if_window");
       tb.vcdTrace(dut.a0, "a0");
       tb.vcdTrace(dut.a1, "a1");
       tb.vcdTrace(dut.ra, "ra");
       tb.vcdTrace(dut.sp, "sp");
+      tb.vcdTrace(dut.flush, "flush");
+      tb.vcdTrace(dut.valid_wb, "valid_wb");
+      tb.vcdTrace(dut.dbg_idex_srcl, "dbg_idex_srcl");
+      tb.vcdTrace(dut.dbg_idex_op, "dbg_idex_op");
+      tb.vcdTrace(dut.dbg_ex_alu, "dbg_ex_alu");
+      tb.vcdTrace(dut.dbg_stall, "dbg_stall");
+      tb.vcdTrace(dut.dbg_valid_id, "dbg_valid_id");
+      tb.vcdTrace(dut.dbg_valid_ex, "dbg_valid_ex");
+      tb.vcdTrace(dut.dbg_valid_mem, "dbg_valid_mem");
     }
   }
 
@@ -96,14 +113,14 @@ static bool runProgram(const char *name, const char *memhPath, std::uint64_t boo
   std::uint64_t insnCount = 0;
 
   for (std::uint64_t i = 0; i < 200000; i++) {
-    if (trace_log && dut.stage.value() == 4 && !dut.halted.toBool()) { // ST_WB
+    if (trace_log && dut.valid_wb.toBool() && !dut.halted.toBool()) {
       insnCount++;
-      tb.log() << "[wb #" << std::dec << insnCount << "] pc=0x" << std::hex << dut.pc.value()
-               << " win=0x" << dut.if_window.value() << " op=" << std::dec << dut.wb_op.value()
-               << " regdst=" << dut.wb_regdst.value() << " value=0x" << std::hex << dut.wb_value.value()
+      tb.log() << "[wb #" << std::dec << insnCount << "] pc_wb=0x" << std::hex << dut.pc_wb.value()
+               << " pc=0x" << dut.pc.value()
                << " a0=0x" << dut.a0.value() << " a1=0x" << dut.a1.value() << " ra=0x" << dut.ra.value()
                << " sp=0x" << dut.sp.value() << " br_kind=" << std::dec << dut.br_kind.value()
                << " commit_cond=" << dut.commit_cond.value() << " commit_tgt=0x" << std::hex << dut.commit_tgt.value()
+               << " flush=" << dut.flush.value()
                << std::dec << "\n";
     }
     tb.runCycles(1);

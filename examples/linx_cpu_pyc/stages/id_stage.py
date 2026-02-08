@@ -16,9 +16,11 @@ def build_id_stage(
     idex: IdExRegs,
     rf: RegFiles,
     consts: Consts,
+    fetch_pc_reg=None,
 ) -> None:
     # Stage inputs.
     window = ifid.window.out()
+    ifid_pc = ifid.pc.out()
 
     # Combinational decode.
     dec = decode_window(m, window)
@@ -34,6 +36,7 @@ def build_id_stage(
 
     idex.op.set(op, when=do_id)
     idex.len_bytes.set(len_bytes, when=do_id)
+    idex.pc.set(ifid_pc, when=do_id)
     idex.regdst.set(regdst, when=do_id)
     idex.srcl.set(srcl, when=do_id)
     idex.srcr.set(srcr, when=do_id)
@@ -48,3 +51,6 @@ def build_id_stage(
     idex.srcl_val.set(srcl_val, when=do_id)
     idex.srcr_val.set(srcr_val, when=do_id)
     idex.srcp_val.set(srcp_val, when=do_id)
+    if fetch_pc_reg is not None:
+        next_fetch_pc = ifid_pc + len_bytes.zext(width=64)
+        fetch_pc_reg.set(next_fetch_pc, when=do_id)

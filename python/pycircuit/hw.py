@@ -1108,11 +1108,13 @@ class CycleAwareDomain:
         self._cycle_stack: list[int] = []
 
     def _ensure_clk_rst(self) -> None:
-        """确保clk和rst已初始化。"""
+        """确保clk和rst已初始化。当域名为 'clk' 时使用端口名 'clk'/'rst'，以兼容现有 C++ testbench。"""
         if self.clk is None:
-            self.clk = self.m.clock(f"{self.name}_clk")
+            clk_name = "clk" if self.name == "clk" else f"{self.name}_clk"
+            self.clk = self.m.clock(clk_name)
         if self.rst is None:
-            self.rst = self.m.reset(f"{self.name}_rst")
+            rst_name = "rst" if self.name == "clk" else f"{self.name}_rst"
+            self.rst = self.m.reset(rst_name)
 
     @property
     def current_cycle(self) -> int:
