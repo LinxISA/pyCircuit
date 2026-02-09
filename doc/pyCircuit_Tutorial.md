@@ -749,6 +749,55 @@ for (int i = 0; i < 100; i++) {
 | `PYC_TRACE_DIR=path` | 指定 VCD 输出目录 |
 | `PYC_BOOT_PC=0x80000` | 指定启动 PC（CPU 设计） |
 
+### 10.5 原理图查看：`schematic_view.py`
+
+`tools/schematic_view.py` 可以将 pyCircuit 生成的 Verilog 文件转换为 **PDF/SVG/PNG 原理图**。布局按数据依赖从左到右排列：输入端口在最左，逻辑层级逐层向右展开，输出端口在最右。
+
+```bash
+# 基本用法
+python tools/schematic_view.py <verilog_file> [-o output.pdf]
+
+# 示例：Counter 原理图（显示常量节点）
+python tools/schematic_view.py examples/generated/counter/counter.v --show-constants --stats
+
+# 示例：CPU 原理图（默认折叠直通赋值 + 隐藏常量）
+python tools/schematic_view.py examples/generated/linx_cpu_pyc/linx_cpu_pyc.v --stats
+
+# 输出 SVG 格式
+python tools/schematic_view.py examples/generated/counter/counter.v -o counter.svg --format svg
+```
+
+**命令行参数**：
+
+| 参数 | 说明 |
+|------|------|
+| `--format pdf\|svg\|png` | 输出格式（默认 pdf） |
+| `--show-constants` | 显示常量节点（默认隐藏） |
+| `--no-collapse` | 禁用直通赋值折叠（`a=b` 保留为独立节点） |
+| `--max-nodes N` | 节点超限则中止渲染（默认 2000） |
+| `--stats` | 打印设计统计信息 |
+
+**视觉约定**：
+
+| 元素 | 形状 | 颜色 |
+|------|------|------|
+| 输入端口 | 五边形 | 蓝色 |
+| 输出端口 | 倒五边形 | 橙色 |
+| 寄存器（pyc_reg） | 3D 方框 | 绿色 |
+| 内存（pyc_byte_mem） | 圆柱体 | 紫色 |
+| MUX | 菱形 | 黄色 |
+| 组合逻辑 | 方框 | 灰色 |
+| 反馈边（D→REG） | 虚线 | 红色 |
+
+**工作原理**：
+
+1. 解析 Verilog 中的端口、wire、`assign` 语句和模块实例（`pyc_reg`、`pyc_byte_mem`）
+2. 构建数据依赖图，拓扑排序计算逻辑层级
+3. 折叠直通赋值（`assign a = b;` 链）减少冗余节点
+4. 使用 Graphviz `dot` 引擎渲染，`rankdir=LR` 实现从左到右布局
+
+> **依赖**：需要安装 [Graphviz](https://graphviz.org/) 系统包和 `pip install graphviz` Python 包。
+
 ---
 
 ## 11. 完整示例：LinxISA 五级流水线 CPU
@@ -920,6 +969,9 @@ m.output("pc", state_pc_r)
 bash tools/run_linx_cpu_pyc_cpp.sh                          # 全部回归测试
 PYC_VCD=1 bash tools/run_linx_cpu_pyc_cpp.sh                # 带 VCD
 PYC_VCD=1 PYC_TRACE_DIR=examples/generated/linx_cpu_pyc bash tools/run_linx_cpu_pyc_cpp.sh
+
+# 生成原理图（936 节点，57 逻辑层级）
+python tools/schematic_view.py examples/generated/linx_cpu_pyc/linx_cpu_pyc.v --stats
 ```
 
 ---
