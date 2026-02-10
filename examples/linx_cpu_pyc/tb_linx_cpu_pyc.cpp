@@ -76,6 +76,7 @@ static bool runProgram(const char *name, const char *memhPath, std::uint64_t boo
   const bool trace_log = (std::getenv("PYC_TRACE") != nullptr);
   const bool trace_vcd = (std::getenv("PYC_VCD") != nullptr);
   const bool trace_konata = envFlag("PYC_KONATA");
+  const char *commit_trace_path = std::getenv("PYC_COMMIT_TRACE");
   std::filesystem::path out_dir{};
   if (trace_log || trace_vcd || trace_konata) {
     const char *trace_dir_env = std::getenv("PYC_TRACE_DIR");
@@ -120,6 +121,68 @@ static bool runProgram(const char *name, const char *memhPath, std::uint64_t boo
       tb.vcdTrace(dut.sp, "sp");
     }
   }
+
+  std::ofstream commit_trace{};
+  std::uint64_t commit_idx = 0;
+  if (commit_trace_path && commit_trace_path[0] != '\0') {
+    std::filesystem::path p(commit_trace_path);
+    if (p.has_parent_path()) {
+      std::filesystem::create_directories(p.parent_path());
+    }
+    commit_trace.open(p, std::ios::out | std::ios::trunc);
+    if (!commit_trace.is_open()) {
+      std::cerr << "WARN: failed to open commit trace output: " << p << "\n";
+    }
+  }
+
+  auto maskInsn = [&](std::uint64_t raw, std::uint8_t len) -> std::uint64_t {
+    switch (len) {
+    case 2:
+      return raw & 0xFFFFu;
+    case 4:
+      return raw & 0xFFFF'FFFFu;
+    case 6:
+      return raw & 0xFFFF'FFFF'FFFFu;
+    default:
+      return raw;
+    }
+  };
+
+  auto emitCommit = [&](bool valid,
+                        std::uint64_t pc,
+                        std::uint64_t insn_raw,
+                        std::uint8_t len,
+                        bool wb_valid,
+                        std::uint32_t wb_rd,
+                        std::uint64_t wb_data,
+                        bool mem_valid,
+                        std::uint64_t mem_addr,
+                        std::uint64_t mem_wdata,
+                        std::uint64_t mem_rdata,
+                        std::uint64_t mem_size,
+                        bool trap_valid,
+                        std::uint32_t trap_cause,
+                        std::uint64_t next_pc) {
+    if (!commit_trace.is_open() || !valid)
+      return;
+    const std::uint64_t insn = maskInsn(insn_raw, len);
+    commit_trace << "{"
+                 << "\"cycle\":" << commit_idx++ << ","
+                 << "\"pc\":" << pc << ","
+                 << "\"insn\":" << insn << ","
+                 << "\"wb_valid\":" << (wb_valid ? 1 : 0) << ","
+                 << "\"wb_rd\":" << wb_rd << ","
+                 << "\"wb_data\":" << wb_data << ","
+                 << "\"mem_valid\":" << (mem_valid ? 1 : 0) << ","
+                 << "\"mem_addr\":" << mem_addr << ","
+                 << "\"mem_wdata\":" << mem_wdata << ","
+                 << "\"mem_rdata\":" << mem_rdata << ","
+                 << "\"mem_size\":" << mem_size << ","
+                 << "\"trap_valid\":" << (trap_valid ? 1 : 0) << ","
+                 << "\"trap_cause\":" << trap_cause << ","
+                 << "\"next_pc\":" << next_pc
+                 << "}\n";
+  };
 
   tb.addClock(dut.clk, /*halfPeriodSteps=*/1);
   tb.reset(dut.rst, /*cyclesAsserted=*/2, /*cyclesDeasserted=*/1);
@@ -257,6 +320,39 @@ static bool runProgram(const char *name, const char *memhPath, std::uint64_t boo
                << " commit_cond=" << dut.commit_cond.value() << " commit_tgt=0x" << std::hex << dut.commit_tgt.value()
                << std::dec << "\n";
     }
+
+    emitCommit(dut.commit0_valid.toBool(),
+               dut.commit0_pc.value(),
+               dut.commit0_insn_raw.value(),
+               static_cast<std::uint8_t>(dut.commit0_len.value() & 0xFFu),
+               dut.commit0_wb_valid.toBool(),
+               static_cast<std::uint32_t>(dut.commit0_wb_rd.value()),
+               dut.commit0_wb_data.value(),
+               dut.commit0_mem_valid.toBool(),
+               dut.commit0_mem_addr.value(),
+               dut.commit0_mem_wdata.value(),
+               dut.commit0_mem_rdata.value(),
+               dut.commit0_mem_size.value(),
+               dut.commit0_trap_valid.toBool(),
+               static_cast<std::uint32_t>(dut.commit0_trap_cause.value()),
+               dut.commit0_next_pc.value());
+
+    emitCommit(dut.commit1_valid.toBool(),
+               dut.commit1_pc.value(),
+               dut.commit1_insn_raw.value(),
+               static_cast<std::uint8_t>(dut.commit1_len.value() & 0xFFu),
+               dut.commit1_wb_valid.toBool(),
+               static_cast<std::uint32_t>(dut.commit1_wb_rd.value()),
+               dut.commit1_wb_data.value(),
+               dut.commit1_mem_valid.toBool(),
+               dut.commit1_mem_addr.value(),
+               dut.commit1_mem_wdata.value(),
+               dut.commit1_mem_rdata.value(),
+               dut.commit1_mem_size.value(),
+               dut.commit1_trap_valid.toBool(),
+               static_cast<std::uint32_t>(dut.commit1_trap_cause.value()),
+               dut.commit1_next_pc.value());
+
     tb.runCycles(1);
     if (dut.halted.toBool())
       break;

@@ -122,6 +122,7 @@ def build_mem_stage(
         memwb.srcr.set(srcr, when=do_mem)
         memwb.imm.set(imm, when=do_mem)
         memwb.value.set(mem_val, when=do_mem)
+        memwb.is_load.set(is_load, when=do_mem)
         memwb.is_store.set(is_store, when=do_mem)
         memwb.size.set(size, when=do_mem)
         memwb.addr.set(addr, when=do_mem)

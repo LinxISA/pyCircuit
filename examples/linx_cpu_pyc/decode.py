@@ -59,6 +59,13 @@ from .isa import (
     OP_FEXIT,
     OP_FRET_RA,
     OP_FRET_STK,
+    OP_MCOPY,
+    OP_MSET,
+    OP_BSTART_TMA,
+    OP_B_TEXT,
+    OP_B_IOT,
+    OP_B_IOTI,
+    OP_B_IOR,
     OP_HL_LB_PCR,
     OP_HL_LBU_PCR,
     OP_HL_LD_PCR,
@@ -442,6 +449,58 @@ def decode_window(m: Circuit, window: Wire) -> Decode:
         uimm_hi = insn32[7:12].zext(width=64)
         uimm_lo = insn32[25:32].zext(width=64)
         imm = uimm_hi.shl(amount=10) | uimm_lo.shl(amount=3)
+
+    # Memory templates (standalone blocks): MCOPY/MSET.
+    #
+    # Encoding (QEMU reference): opcode=0x31, funct7=0x10.
+    # - MCOPY: funct3=0, rs1=dst, rs2=src, size_reg in bits[31:27]
+    # - MSET : funct3=1, rs1=dst, rs2=value, size_reg in bits[31:27]
+    cond = in32 & masked_eq(insn32, mask=0xFE00707F, match=0x20000031)
+    if cond:
+        op = OP_MCOPY
+        len_bytes = 4
+        srcl = rs1_32
+        srcr = rs2_32
+        imm = srcp_32.zext(width=64)  # size reg index
+
+    cond = in32 & masked_eq(insn32, mask=0xFE00707F, match=0x20001031)
+    if cond:
+        op = OP_MSET
+        len_bytes = 4
+        srcl = rs1_32
+        srcr = rs2_32
+        imm = srcp_32.zext(width=64)  # size reg index
+
+    # Decoupled tile headers (bring-up subset): BSTART.TMA.
+    # Match the low 15 bits of known encodings (TLOAD/TSTORE variants share it).
+    cond = in32 & masked_eq(insn32, mask=0x00007FFF, match=0x00001181)
+    if cond:
+        op = OP_BSTART_TMA
+        len_bytes = 4
+
+    # Decoupled body pointer: B.TEXT (simm25 in halfwords; target = PC + (simm25 << 1)).
+    # simm25 occupies bits[31:7].
+    cond = in32 & masked_eq(insn32, mask=0x0000707F, match=0x00001003)
+    if cond:
+        op = OP_B_TEXT
+        len_bytes = 4
+        imm = insn32[7:32].sext(width=64)
+
+    # Tile header descriptors: B.IOT/B.IOTI/B.IOR.
+    cond = in32 & masked_eq(insn32, mask=0x0000707F, match=0x00004013)
+    if cond:
+        op = OP_B_IOT
+        len_bytes = 4
+
+    cond = in32 & masked_eq(insn32, mask=0x0000707F, match=0x00006013)
+    if cond:
+        op = OP_B_IOTI
+        len_bytes = 4
+
+    cond = in32 & masked_eq(insn32, mask=0x0000707F, match=0x00000013)
+    if cond:
+        op = OP_B_IOR
+        len_bytes = 4
 
     cond = in32 & masked_eq(insn32, mask=0x0000007F, match=0x00000017)
     if cond:
