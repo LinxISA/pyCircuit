@@ -2,6 +2,27 @@
 
 This document provides visual representations of the Cube matrix multiplication accelerator architecture.
 
+> **Note:** This document describes **Cube v1** (legacy) architecture. For the current **Cube v2** architecture with 4-stage pipelined systolic array, see [CUBE_V2_SPEC.md](CUBE_V2_SPEC.md).
+
+## Version Comparison
+
+| Feature | Cube v1 (Legacy) | Cube v2 (Current) |
+|---------|------------------|-------------------|
+| Systolic Array | 16×16 (256 PEs) | 4-stage pipelined (4 clusters × 64 PEs) |
+| Throughput | 1 tile per 32+ cycles | 1 uop/cycle (after 4-cycle fill) |
+| Peak MACs/cycle | ~256 | 4096 |
+| Input Buffers | Single weight/activation buffer | 64-entry L0A + 64-entry L0B |
+| Output Buffer | 256-entry result buffer | 64-entry ACC buffer |
+| Instruction Support | Simple start/reset | MATMUL block instruction |
+| Issue Queue | None | 64-entry OoO queue |
+| MMIO Width | 64-bit | 64-bit (simplified from 2048-bit) |
+
+---
+
+## Cube v1 Architecture (Legacy)
+
+The following sections describe the original Cube v1 architecture.
+
 ---
 
 ## 1. Cube Operation Flowchart

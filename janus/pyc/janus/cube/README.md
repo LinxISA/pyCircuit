@@ -2,9 +2,125 @@
 
 A 16×16 systolic array matrix multiplication accelerator implemented in pyCircuit.
 
-## Overview
+## Versions
 
-The Cube module implements a weight-stationary systolic array for matrix multiplication. It features:
+| Version | Description | Status |
+|---------|-------------|--------|
+| **Cube v1** | Basic 16×16 systolic array with weight-stationary dataflow | Stable |
+| **Cube v2** | 4-stage pipelined systolic array with MATMUL block instruction support | **New** |
+
+---
+
+## Cube v2 (Recommended)
+
+Cube v2 is a high-performance matrix multiplication accelerator with MATMUL block instruction support.
+
+### Key Features
+
+- **4-stage pipelined systolic array** (4 PE Clusters × 64 PEs each)
+- **1 uop/cycle throughput** after 4-cycle pipeline fill
+- **Peak performance**: 4096 MACs/cycle
+- **MATMUL block instruction**: Supports A[M×K] × B[K×N] = C[M×N]
+- **Triple buffering**: L0A (64 entries), L0B (64 entries), ACC (64 entries)
+- **64-entry issue queue** with out-of-order execution
+- **64-bit MMIO interface** (simplified for C++ emitter compatibility)
+
+### Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    4-Stage Pipelined Systolic Array                          │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  L0A Buffer (64 entries)               L0B Buffer (64 entries)              │
+│  ┌─────────────────────┐               ┌─────────────────────┐              │
+│  │ 16×16×16-bit tiles  │               │ 16×16×16-bit tiles  │              │
+│  └─────────┬───────────┘               └─────────┬───────────┘              │
+│            │                                     │                           │
+│            ▼                                     ▼                           │
+│  ┌─────────────────────────────────────────────────────────────────────┐    │
+│  │  PE Cluster 0 (Rows 0-3)   → 64 PEs × 16 MACs = 1024 MACs/cycle    │    │
+│  └─────────────────────────────────────┬───────────────────────────────┘    │
+│                                        │ Partial sums (4×16×32-bit)         │
+│                                        ▼                                     │
+│  ┌─────────────────────────────────────────────────────────────────────┐    │
+│  │  PE Cluster 1 (Rows 4-7)   → 64 PEs × 16 MACs = 1024 MACs/cycle    │    │
+│  └─────────────────────────────────────┬───────────────────────────────┘    │
+│                                        │                                     │
+│                                        ▼                                     │
+│  ┌─────────────────────────────────────────────────────────────────────┐    │
+│  │  PE Cluster 2 (Rows 8-11)  → 64 PEs × 16 MACs = 1024 MACs/cycle    │    │
+│  └─────────────────────────────────────┬───────────────────────────────┘    │
+│                                        │                                     │
+│                                        ▼                                     │
+│  ┌─────────────────────────────────────────────────────────────────────┐    │
+│  │  PE Cluster 3 (Rows 12-15) → 64 PEs × 16 MACs = 1024 MACs/cycle    │    │
+│  └─────────────────────────────────────┬───────────────────────────────┘    │
+│                                        │                                     │
+│                                        ▼                                     │
+│                          ┌─────────────────────────┐                        │
+│                          │  ACC Buffer (64 entries) │                        │
+│                          │  16×16×32-bit results    │                        │
+│                          └─────────────────────────┘                        │
+│                                                                              │
+│  Total: 4 clusters × 1024 MACs = 4096 MACs/cycle                            │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Pipeline Timing
+
+```
+Cycle:    0     1     2     3     4     5     6     7     8    ...
+          │     │     │     │     │     │     │     │     │
+          ▼     ▼     ▼     ▼     ▼     ▼     ▼     ▼     ▼
+
+uop0:   [C0]──[C1]──[C2]──[C3]──►ACC
+uop1:         [C0]──[C1]──[C2]──[C3]──►ACC
+uop2:               [C0]──[C1]──[C2]──[C3]──►ACC
+uop3:                     [C0]──[C1]──[C2]──[C3]──►ACC
+uop4:                           [C0]──[C1]──[C2]──[C3]──►ACC
+
+Pipeline: 4-cycle latency, 1 uop/cycle throughput
+```
+
+### Cube v2 File Structure
+
+```
+cube/
+├── cube_v2.py              # Top-level module
+├── cube_v2_types.py        # Dataclass definitions
+├── cube_v2_consts.py       # Constants and addresses
+├── cube_v2_decoder.py      # MATMUL instruction decoder
+├── cube_v2_issue_queue.py  # 64-entry issue queue
+├── cube_v2_l0.py           # L0A/L0B buffers (64 entries each)
+├── cube_v2_acc.py          # ACC buffer (64 entries)
+├── cube_v2_systolic.py     # 4-stage pipelined systolic array
+├── cube_v2_mmio.py         # MMIO interface (64-bit)
+├── tb_cube_v2.v            # Verilog testbench
+└── CUBE_V2_SPEC.md         # Detailed architecture specification
+```
+
+### Cube v2 Memory Map
+
+| Offset | Size | Description |
+|--------|------|-------------|
+| 0x0000 | 8B | Control Register |
+| 0x0008 | 8B | Status Register |
+| 0x0010 | 8B | MATMUL Instruction (M, K, N) |
+| 0x0018 | 8B | Matrix A Address |
+| 0x0020 | 8B | Matrix B Address |
+| 0x0028 | 8B | Matrix C Address |
+| 0x1000 | 8B | L0A Data Port (64-bit) |
+| 0x2000 | 8B | L0B Data Port (64-bit) |
+| 0x3000 | 8B | ACC Data Port (64-bit) |
+
+For complete Cube v2 documentation, see [CUBE_V2_SPEC.md](CUBE_V2_SPEC.md).
+
+---
+
+## Cube v1 (Legacy)
+
+The original Cube module implements a weight-stationary systolic array for matrix multiplication. It features:
 
 - **16×16 Processing Element (PE) array** (256 PEs total)
 - **16-bit integer inputs** (weights and activations)
@@ -78,12 +194,27 @@ Base address: `0x80000000` (configurable)
 
 ```
 cube/
-├── __init__.py          # Package marker
-├── cube.py              # Top-level module (main build function)
-├── cube_types.py        # Dataclasses (CubeState, PERegs, FsmResult, MmioWriteResult)
-├── cube_consts.py       # Constants (states, addresses, array size)
-├── util.py              # Utility functions (Consts dataclass)
-└── README.md            # This file
+├── __init__.py              # Package marker
+├── util.py                  # Utility functions (Consts dataclass)
+├── README.md                # This file
+│
+├── # Cube v1 (Legacy)
+├── cube.py                  # Top-level module (main build function)
+├── cube_types.py            # Dataclasses (CubeState, PERegs, FsmResult)
+├── cube_consts.py           # Constants (states, addresses, array size)
+│
+├── # Cube v2 (Recommended)
+├── cube_v2.py               # Top-level module
+├── cube_v2_types.py         # Dataclass definitions
+├── cube_v2_consts.py        # Constants and addresses
+├── cube_v2_decoder.py       # MATMUL instruction decoder
+├── cube_v2_issue_queue.py   # 64-entry issue queue
+├── cube_v2_l0.py            # L0A/L0B buffers (128 entries each)
+├── cube_v2_acc.py           # ACC buffer (128 entries)
+├── cube_v2_systolic.py      # 4-stage pipelined systolic array
+├── cube_v2_mmio.py          # MMIO interface (2048-bit)
+├── tb_cube_v2.v             # Verilog testbench
+└── CUBE_V2_SPEC.md          # Detailed architecture specification
 ```
 
 ### Key Components in cube.py
@@ -228,20 +359,23 @@ C = [[c00, c01, ..., c0F],
 
 ## Known Limitations
 
+### Cube v1
 1. **Multiplication operator**: Currently using addition as placeholder due to pyCircuit limitations
 2. **No overflow detection**: 32-bit accumulator can overflow for large values
 3. **Fixed array size**: 16×16 array is hardcoded
 4. **Simplified memory interface**: Real CPU integration would require proper bus protocol
 
-## Visual Documentation
-
-For detailed architecture diagrams, flowcharts, and visual representations, see:
-- [VISUAL_GUIDE.md](VISUAL_GUIDE.md) - Intuitive visual guide with animations and examples
-- [ARCHITECTURE.md](ARCHITECTURE.md) - Complete technical architecture with 15 detailed diagrams
+### Cube v2
+1. **Multiplication operator**: Currently using addition as placeholder (same as v1)
+2. **64-bit MMIO bandwidth**: Simplified from 2048-bit for C++ emitter compatibility
+3. **No double buffering**: Data loading and computation cannot overlap yet
 
 ## References
 
+- [Cube v2 Specification](CUBE_V2_SPEC.md) - Detailed architecture for Cube v2
 - [pyCircuit Usage Guide](../../../../docs/USAGE.md)
 - [Janus BCC CPU](../bcc/janus_bcc_pyc.py)
 - [Systolic Array Architecture](https://en.wikipedia.org/wiki/Systolic_array)
 - [Improvement Plan](IMPROVEMENT_PLAN.md) - Future development roadmap
+- [VISUAL_GUIDE.md](VISUAL_GUIDE.md) - Intuitive visual guide with animations and examples
+- [ARCHITECTURE.md](ARCHITECTURE.md) - Complete technical architecture with 15 detailed diagrams

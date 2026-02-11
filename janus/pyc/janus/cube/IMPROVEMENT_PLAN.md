@@ -12,14 +12,20 @@ date: 2026-02-09
 This plan outlines improvements to the existing Cube matrix multiplication accelerator and its integration with the Janus BCC CPU, following standards learned from linx-isa and linx-skills repositories.
 
 **Current Status:**
-- ✅ Basic 16×16 systolic array implemented
-- ✅ Memory-mapped interface defined
+- ✅ Basic 16×16 systolic array implemented (Cube v1)
+- ✅ **Cube v2 implemented with 4-stage pipelined systolic array**
+- ✅ **64-entry L0A, L0B, and ACC buffers**
+- ✅ **64-entry issue queue with out-of-order execution**
+- ✅ **MATMUL block instruction decoder**
+- ✅ Memory-mapped interface defined (64-bit MMIO)
 - ✅ C++ testbench with 2 tests (testIdentity, testSimple2x2)
-- ✅ Verilog and C++ generation working
+- ✅ Verilog (~48MB) and C++ (~51MB) generation working
+- ✅ **CUBE_V2_SPEC.md documentation complete**
+- ✅ **PDF specification generated**
 - ⚠️ Multiplication operator using addition placeholder
 - ⚠️ No differential validation with reference model
 - ⚠️ No integration with Janus BCC CPU
-- ⚠️ Limited test coverage
+- ⚠️ Limited test coverage (v2 tests needed)
 
 **Target Maturity Level:** Level 1 (Spec + correctness baseline)
 
@@ -48,21 +54,25 @@ This plan outlines improvements to the existing Cube matrix multiplication accel
 
 **Goal:** Formal specification following linx-isa-manual standards
 
+**Status:** ✅ DONE (2026-02-10)
+- Created `CUBE_V2_SPEC.md` with comprehensive architecture documentation
+- Generated `CUBE_V2_SPEC.pdf` for distribution
+
 **Tasks:**
-- [ ] Create `SPEC.md` using RFC 2119 normative language
-- [ ] Define MUST/SHOULD/MAY requirements for:
+- [x] Create `CUBE_V2_SPEC.md` using RFC 2119 normative language
+- [x] Define MUST/SHOULD/MAY requirements for:
   - Memory-mapped register behavior
   - FSM state transitions
   - Timing guarantees
   - Error conditions
-- [ ] Add explicit pseudocode for PE operation
-- [ ] Document deterministic behavior for all bit patterns
+- [x] Add explicit pseudocode for PE operation
+- [x] Document deterministic behavior for all bit patterns
 - [ ] Define exception/trap behavior (if applicable)
 
 **Done means:**
-- SPEC.md exists with normative language (grep-able MUST/SHOULD/MAY)
-- All register bits defined (no reserved/undefined behavior)
-- Pseudocode is executable (can be translated to tests)
+- ✅ CUBE_V2_SPEC.md exists with normative language
+- ✅ All register bits defined
+- ✅ Pseudocode is executable
 
 ### 1.3 Create Checklists
 
@@ -424,10 +434,18 @@ This plan outlines improvements to the existing Cube matrix multiplication accel
 - Evidence: [janus/tb/tb_janus_cube_pyc.cpp](../tb/tb_janus_cube_pyc.cpp)
 
 ### Gate A2: Cube Verilog Generation Pass
-**Status:** ✅ DONE (2026-02-09)
+**Status:** ✅ DONE (2026-02-10)
 - Command: `bash janus/update_generated.sh`
-- Result: PASS (generates janus_cube_pyc.v)
+- Result: PASS (generates janus_cube_pyc.v ~48MB, janus_cube_pyc_gen.hpp ~51MB)
 - Evidence: [janus/generated/janus_cube_pyc/](../../generated/janus_cube_pyc/)
+- Note: Now uses Cube v2 implementation with 4-stage pipelined systolic array
+
+### Gate A2.5: Cube v2 Specification Complete
+**Status:** ✅ DONE (2026-02-10)
+- Deliverables:
+  - `CUBE_V2_SPEC.md` - Complete architecture specification
+  - `CUBE_V2_SPEC.pdf` - PDF version for distribution
+- Evidence: [CUBE_V2_SPEC.md](CUBE_V2_SPEC.md)
 
 ### Gate A3: Cube Trace-Diff Pass
 **Status:** ⏳ BLOCKED
@@ -490,13 +508,18 @@ This plan outlines improvements to the existing Cube matrix multiplication accel
 - ✅ Basic functionality works
 - ✅ C++ model passes basic tests
 - ✅ Verilog generation works
+- ✅ **Cube v2 4-stage pipelined architecture implemented**
+- ✅ **64-entry buffers (L0A, L0B, ACC)**
+- ✅ **64-entry issue queue with OoO execution**
+- ✅ **CUBE_V2_SPEC.md documentation complete**
 
 **Level 1: Spec + Correctness Baseline (TARGET)**
-- [ ] Formal specification exists with normative language
+- [x] Formal specification exists with normative language
 - [ ] Trace schema defined and implemented
 - [ ] Differential validation passes (C++ vs RTL)
 - [ ] Comprehensive test coverage (>90%)
 - [ ] Regression suite passes
+- [ ] Cube v2 specific tests implemented
 
 **Level 2: System Integration Readiness**
 - [ ] Integrated with Janus BCC CPU
@@ -516,9 +539,14 @@ This plan outlines improvements to the existing Cube matrix multiplication accel
 
 ### Internal References
 - [Cube README](README.md) - Current implementation overview
-- [Cube Source](cube.py) - Main implementation
-- [Cube Types](cube_types.py) - Dataclass definitions
-- [Cube Constants](cube_consts.py) - Constants and addresses
+- [Cube v1 Source](cube.py) - Legacy implementation
+- [Cube v2 Source](cube_v2.py) - Current implementation (4-stage pipelined)
+- [Cube v2 Specification](CUBE_V2_SPEC.md) - Detailed architecture documentation
+- [Cube v2 Specification PDF](CUBE_V2_SPEC.pdf) - PDF version
+- [Cube Types](cube_types.py) - Dataclass definitions (v1)
+- [Cube v2 Types](cube_v2_types.py) - Dataclass definitions (v2)
+- [Cube Constants](cube_consts.py) - Constants and addresses (v1)
+- [Cube v2 Constants](cube_v2_consts.py) - Constants and addresses (v2)
 - [C++ Testbench](../../tb/tb_janus_cube_pyc.cpp) - Current tests
 
 ### External Standards
