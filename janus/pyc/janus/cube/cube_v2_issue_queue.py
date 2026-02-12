@@ -1,6 +1,6 @@
 """Cube v2 Issue Queue Implementation.
 
-The Issue Queue holds 64 uops and supports out-of-order execution.
+The Issue Queue holds 16 uops and supports out-of-order execution.
 A uop can be issued when its L0A and L0B data are ready and the ACC entry is available.
 """
 
@@ -58,9 +58,9 @@ def build_issue_queue(
     enqueue_is_first: Wire,  # Is first uop for this ACC
     enqueue_is_last: Wire,   # Is last uop for this ACC
     # Ready status from buffers (bitmaps)
-    l0a_valid_bitmap: Wire,  # 64-bit bitmap of valid L0A entries
-    l0b_valid_bitmap: Wire,  # 64-bit bitmap of valid L0B entries
-    acc_available_bitmap: Wire,  # 64-bit bitmap of available ACC entries
+    l0a_valid_bitmap: Wire,  # 16-bit bitmap of valid L0A entries
+    l0b_valid_bitmap: Wire,  # 16-bit bitmap of valid L0B entries
+    acc_available_bitmap: Wire,  # 16-bit bitmap of available ACC entries
     # Issue acknowledgment
     issue_ack: Wire,         # Systolic array accepted the issued uop
     # Flush

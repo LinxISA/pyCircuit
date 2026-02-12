@@ -4,9 +4,9 @@ Matrix Multiplication Accelerator with MATMUL Block Instruction Support.
 
 Features:
 - MATMUL block instruction decomposition into uops
-- 64-entry L0A and L0B input buffers
-- 64-entry ACC output buffer
-- 64-entry issue queue with out-of-order execution
+- 16-entry L0A and L0B input buffers
+- 16-entry ACC output buffer
+- 16-entry issue queue with out-of-order execution
 - 4-stage pipelined systolic array (4 PE Clusters × 64 PEs each)
 - Pipeline throughput: 1 uop/cycle after 4-cycle fill
 - Peak: 4096 MACs/cycle
@@ -323,6 +323,7 @@ def build(m: Circuit, *, base_addr: int = 0x80000000) -> None:
         acc_ready_bitmap = acc_ready_bitmap | bit
 
     # --- MMIO Read ---
+    # Bitmaps are already 64-bit
     rdata_64, rdata_wide = build_mmio_read(
         m,
         consts=consts,

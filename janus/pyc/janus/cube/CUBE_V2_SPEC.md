@@ -34,6 +34,23 @@ Cube v2 is a matrix multiplication accelerator that supports large matrix operat
 | MMIO Read Bandwidth | 64-bit/cycle |
 | MMIO Write Bandwidth | 64-bit/cycle |
 
+### 1.3 Code Generation Optimization
+
+通过模块复用 (`@module` + `m.instance()`) 大幅减少生成代码量：
+
+| 阶段 | Verilog 大小 | 代码行数 | 模块数 | 减少比例 |
+|------|-------------|----------|--------|----------|
+| 原始 (无复用) | 48MB | 1,082,274 | 1 | - |
+| PE 模块复用 | 45MB | ~1M | 2 | 6% |
+| PE + L0 模块复用 | 22MB | 506,117 | 3 | 54% |
+
+生成的模块结构：
+```
+janus_cube_pyc (顶层)
+├── L0Entry × 128 (64 L0A + 64 L0B entries)
+└── CubePE × 256 (4 clusters × 64 PEs)
+```
+
 ---
 
 ## 2. Architecture Block Diagram
@@ -780,20 +797,81 @@ Throughput: 8 uops / 11 cycles = 0.73 uops/cycle
 
 ```
 cube_v2/
-├── cube_v2.py              # Top-level module
+├── cube_v2_reuse.py        # Top-level module (with module reuse)
 ├── cube_v2_types.py        # Dataclass definitions
 ├── cube_v2_consts.py       # Constants and addresses
 ├── cube_v2_decoder.py      # MATMUL instruction decoder
 ├── cube_v2_issue_queue.py  # 64-entry issue queue
-├── cube_v2_l0a.py          # L0A buffer (64 entries)
-├── cube_v2_l0b.py          # L0B buffer (64 entries)
+├── cube_v2_pe.py           # PE module definition (@module)
+├── cube_v2_l0_entry.py     # L0 entry module definition (@module)
+├── cube_v2_l0_reuse.py     # L0A/L0B buffer (using m.instance())
+├── cube_v2_systolic_reuse.py # Systolic array (using m.instance())
 ├── cube_v2_acc.py          # ACC buffer (64 entries)
-├── cube_v2_systolic.py     # 16×16 systolic array
 ├── cube_v2_mmio.py         # MMIO interface
-└── cube_v2_fsm.py          # Main control FSM
+└── util.py                 # Utility functions
 ```
 
-### 11.2 Key Interfaces
+### 11.2 Module Reuse Implementation
+
+PE 和 L0 Entry 使用 `@module` 装饰器定义为可复用模块：
+
+```python
+# cube_v2_pe.py - PE 模块定义
+from pycircuit.module import module
+
+@module(name="CubePE")
+def build_pe(m: Circuit) -> None:
+    """Single PE with tree-based dot product."""
+    clk = m.clock("clk")
+    rst = m.reset("rst")
+    # 32 inputs: a0-a15, b0-b15
+    # Tree-based reduction for 16-element dot product
+    # Output: 32-bit result
+
+# cube_v2_l0_entry.py - L0 Entry 模块定义
+@module(name="L0Entry")
+def build_l0_entry(m: Circuit) -> None:
+    """Single L0 buffer entry (16×16 = 256 elements)."""
+    clk = m.clock("clk")
+    rst = m.reset("rst")
+    load_valid = m.input("load_valid", width=1)
+    load_row = m.input("load_row", width=4)
+    load_col = m.input("load_col", width=4)
+    load_data = m.input("load_data", width=16)
+    # 256 data registers + valid status
+    # Outputs: valid, d_r{row}_c{col} for all 256 elements
+```
+
+使用 `m.instance()` 实例化模块：
+
+```python
+# cube_v2_systolic_reuse.py - 256 PE instances
+for cluster in range(4):
+    for row in range(4):
+        for col in range(16):
+            pe = m.instance(
+                build_pe,
+                name=f"pe_c{cluster}_r{row}_c{col}",
+                clk=clk, rst=rst,
+                a0=a_row[0], ..., a15=a_row[15],
+                b0=b_col[0], ..., b15=b_col[15],
+                ...
+            )
+
+# cube_v2_l0_reuse.py - 64 L0 entry instances per buffer
+for i in range(num_entries):
+    entry = m.instance(
+        build_l0_entry,
+        name=f"{prefix}_entry_{i}",
+        clk=clk, rst=rst,
+        load_valid=entry_load_valid,
+        load_row=load_row,
+        load_col=load_col,
+        load_data=load_data,
+    )
+```
+
+### 11.3 Key Interfaces
 
 ```python
 # L0A/L0B Buffer Interface

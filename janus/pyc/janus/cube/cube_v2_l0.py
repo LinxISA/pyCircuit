@@ -1,9 +1,11 @@
 """Cube v2 L0 Buffer Implementation (L0A and L0B).
 
 L0A and L0B are input buffer register files that store 16×16 tiles of input matrices.
-Each buffer has 64 entries, with each entry holding 256 16-bit elements (4096 bits).
+Each buffer has 16 entries, with each entry holding 256 16-bit elements (4096 bits).
 
 Loading an entry requires multiple MMIO cycles.
+
+Optimization: Uses binary tree mux for O(log n) depth instead of O(n) cascading mux.
 """
 
 from __future__ import annotations
@@ -60,6 +62,36 @@ def _make_l0_data_regs(
                     row_regs.append(reg)
             data_regs.append(row_regs)
     return data_regs
+
+
+def _binary_tree_mux(m: Circuit, idx: Wire, values: list[Wire], idx_width: int) -> Wire:
+    """Build a binary tree mux for O(log n) depth selection.
+
+    Args:
+        m: Circuit module
+        idx: Selection index wire
+        values: List of values to select from (must be power of 2)
+        idx_width: Width of index in bits
+
+    Returns:
+        Selected value wire
+    """
+    n = len(values)
+    if n == 1:
+        return values[0]
+    if n == 2:
+        # Use bit 0 of idx to select
+        return idx[0].select(values[1], values[0])
+
+    # Split into two halves and recurse
+    mid = n // 2
+    # Lower half selected when MSB is 0
+    left = _binary_tree_mux(m, idx, values[:mid], idx_width - 1)
+    # Upper half selected when MSB is 1
+    right = _binary_tree_mux(m, idx, values[mid:], idx_width - 1)
+    # Use MSB to select between halves
+    msb_bit = idx_width - 1
+    return idx[msb_bit].select(right, left)
 
 
 @jit_inline
@@ -127,19 +159,20 @@ def build_l0_buffer(
                 status_list[i].valid.set(consts.one1, when=last_elem)
                 load_done = load_done | last_elem
 
-        # Read logic - returns 16×16 matrix of elements
+        # Read logic - returns 16×16 matrix of elements using binary tree mux
         with m.scope("READ"):
             read_data_matrix = []
 
             for row in range(ARRAY_SIZE):
                 row_data = []
                 for col in range(ARRAY_SIZE):
-                    elem = c(0, width=INPUT_WIDTH)
-                    for i in range(num_entries):
-                        entry_match = read_entry_idx.eq(c(i, width=L0_IDX_WIDTH))
-                        elem = entry_match.select(
-                            data_regs_list[i][row][col].out(), elem
-                        )
+                    # Collect all entry values for this element
+                    elem_values = [
+                        data_regs_list[i][row][col].out()
+                        for i in range(num_entries)
+                    ]
+                    # Use binary tree mux for O(log n) selection depth
+                    elem = _binary_tree_mux(m, read_entry_idx, elem_values, L0_IDX_WIDTH)
                     row_data.append(elem)
                 read_data_matrix.append(row_data)
 

@@ -10,9 +10,9 @@ ARRAY_SIZE = 16  # 16×16 systolic array
 # =============================================================================
 # Buffer Sizes
 # =============================================================================
-L0A_ENTRIES = 64   # L0A buffer entries (reduced from 128 for 64-bit bitmap)
-L0B_ENTRIES = 64   # L0B buffer entries (reduced from 128 for 64-bit bitmap)
-ACC_ENTRIES = 64   # ACC buffer entries (reduced from 128 for 64-bit bitmap)
+L0A_ENTRIES = 64   # L0A buffer entries
+L0B_ENTRIES = 64   # L0B buffer entries
+ACC_ENTRIES = 64   # ACC buffer entries
 ISSUE_QUEUE_SIZE = 64  # Issue queue entries
 
 # Entry sizes in bits

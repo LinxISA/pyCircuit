@@ -5,6 +5,8 @@
 - Pipeline latency: 4 cycles
 - Throughput: 1 uop/cycle (after pipeline fill)
 - Data forwarding between clusters enables continuous execution
+
+Optimization: Uses tree-based adder reduction for O(log n) depth instead of O(n) cascading.
 """
 
 from __future__ import annotations
@@ -31,6 +33,28 @@ if TYPE_CHECKING:
 NUM_CLUSTERS = 4
 # Rows per cluster
 ROWS_PER_CLUSTER = ARRAY_SIZE // NUM_CLUSTERS  # 16 / 4 = 4
+
+
+def _tree_reduce_add(values: list[Wire]) -> Wire:
+    """Reduce a list of values using tree-based addition for O(log n) depth.
+
+    Args:
+        values: List of Wire values to sum
+
+    Returns:
+        Sum of all values
+    """
+    n = len(values)
+    if n == 1:
+        return values[0]
+    if n == 2:
+        return values[0] + values[1]
+
+    # Split into two halves and recurse
+    mid = n // 2
+    left = _tree_reduce_add(values[:mid])
+    right = _tree_reduce_add(values[mid:])
+    return left + right
 
 
 @dataclass(frozen=True)
@@ -138,8 +162,8 @@ def _build_pe_cluster(
             for col in range(ARRAY_SIZE):
                 with m.scope(f"pe_r{row}_c{col}"):
                     # Compute dot product: sum(A[row][k] × B[k][col])
-                    dot_product = c(0, width=OUTPUT_WIDTH)
-
+                    # Using tree-based reduction for O(log n) depth
+                    products = []
                     for k in range(ARRAY_SIZE):
                         # A[row][k] - element from l0a_rows
                         a_elem = l0a_rows[row][k]
@@ -149,7 +173,10 @@ def _build_pe_cluster(
                         # MAC: a × b (using addition as placeholder)
                         # TODO: Replace with multiplication when supported
                         product = a_elem.zext(width=OUTPUT_WIDTH) + b_elem.zext(width=OUTPUT_WIDTH)
-                        dot_product = dot_product + product
+                        products.append(product)
+
+                    # Tree-based reduction for dot product
+                    dot_product = _tree_reduce_add(products)
 
                     # Add incoming partial sum
                     incoming = partial_in[row][col] if partial_in else c(0, width=OUTPUT_WIDTH)

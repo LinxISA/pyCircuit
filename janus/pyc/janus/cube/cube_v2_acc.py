@@ -1,7 +1,7 @@
 """Cube v2 ACC Buffer Implementation.
 
 ACC is the accumulator buffer that stores 16×16 tiles of output matrix results.
-Each buffer has 64 entries, with each entry holding 256 32-bit elements (8192 bits).
+Each buffer has 16 entries, with each entry holding 256 32-bit elements (8192 bits).
 
 Storing an entry requires 4 MMIO cycles (2048 bits per cycle).
 """

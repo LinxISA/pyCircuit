@@ -30,7 +30,7 @@ emit_one() {
 emit_one janus_bcc_pyc "${ROOT_DIR}/janus/pyc/janus/bcc/janus_bcc_pyc.py"
 emit_one janus_bcc_ooo_pyc "${ROOT_DIR}/janus/pyc/janus/bcc/janus_bcc_ooo_pyc.py"
 emit_one janus_top_pyc "${ROOT_DIR}/janus/pyc/janus/top.py"
-emit_one janus_cube_pyc "${ROOT_DIR}/janus/pyc/janus/cube/cube.py"
+emit_one janus_cube_pyc "${ROOT_DIR}/janus/pyc/janus/cube/cube_v2_reuse.py"
 
 mv -f "${OUT_ROOT}/janus_bcc_pyc/janus_bcc_pyc.hpp" "${OUT_ROOT}/janus_bcc_pyc/janus_bcc_pyc_gen.hpp"
 mv -f "${OUT_ROOT}/janus_bcc_ooo_pyc/janus_bcc_ooo_pyc.hpp" "${OUT_ROOT}/janus_bcc_ooo_pyc/janus_bcc_ooo_pyc_gen.hpp"
