@@ -24,22 +24,28 @@ def _default_top_name(src: Path) -> str:
 
 
 def _load_py_file(path: Path) -> object:
+    path = path.resolve()
     spec = importlib.util.spec_from_file_location(path.stem, path)
     if spec is None or spec.loader is None:
         raise RuntimeError(f"Failed to import {path}")
     m = importlib.util.module_from_spec(spec)
-    # Ensure the module is visible during execution (dataclasses relies on this).
     sys.modules[spec.name] = m
     spec.loader.exec_module(m)
     return m
 
 
 def _cmd_emit(args: argparse.Namespace) -> int:
-    src = Path(args.python_file)
+    src_arg = args.python_file
     out = Path(args.output)
-    mod = _load_py_file(src)
+    # If argument looks like a module name (contains dot), import it (supports relative imports).
+    if "." in src_arg and not Path(src_arg).exists():
+        mod = importlib.import_module(src_arg)
+        src = Path(src_arg.replace(".", "/") + ".py")  # for _default_top_name
+    else:
+        src = Path(src_arg)
+        mod = _load_py_file(src)
     if not hasattr(mod, "build"):
-        raise SystemExit(f"{src} must define build() -> pycircuit.Module")
+        raise SystemExit(f"{src_arg} must define build() -> pycircuit.Module")
     build = getattr(mod, "build")
 
     # JIT-by-default behavior:

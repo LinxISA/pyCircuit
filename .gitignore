@@ -5,6 +5,7 @@ __pycache__/
 
 # C extensions
 *.so
+*.dylib
 
 # Distribution / packaging
 .Python
@@ -69,6 +70,7 @@ dfx_runtime.txt
 *.fsdb
 *.vvp
 *.kanata
+*.konata
 local_settings.py
 db.sqlite3
 db.sqlite3-journal

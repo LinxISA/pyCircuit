@@ -63,8 +63,9 @@ case "${cmd}" in
       -DMLIR_DIR="${MLIR_DIR}" \
       -DPYC_BUILD_CPP_EXAMPLES=OFF
 
-    pyc_log "build pyc-compile/pyc-opt"
-    ninja -C "${ROOT_DIR}/build" pyc-compile pyc-opt
+    pyc_log "build pyc-compile (pyc-opt is optional, run ninja pyc-opt to try)"
+    ninja -C "${ROOT_DIR}/build" pyc-compile
+    ninja -C "${ROOT_DIR}/build" pyc-opt 2>/dev/null || true
     pyc_log "ok: ${ROOT_DIR}/build/bin/pyc-compile"
     ;;
 

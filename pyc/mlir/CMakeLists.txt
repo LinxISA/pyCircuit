@@ -90,23 +90,31 @@ target_link_libraries(pyc_transforms PUBLIC
   MLIRSCFDialect
 )
 
-add_executable(pyc-opt tools/pyc-opt.cpp)
-llvm_update_compile_flags(pyc-opt)
-set_target_properties(pyc-opt PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
-target_include_directories(pyc-opt PRIVATE
-  "${PYC_SOURCE_DIR}/include"
-  "${PYC_BINARY_DIR}/include"
-)
-target_link_libraries(pyc-opt PRIVATE
-  pyc_dialect
-  pyc_transforms
-  MLIRArithDialect
-  MLIRFuncDialect
-  MLIRFuncInlinerExtension
-  MLIRRegisterAllPasses
-  MLIRSCFDialect
-  MLIROptLib
-)
+# pyc-opt requires MLIRRegisterAllPasses; Homebrew LLVM may not export it.
+# Build script uses "ninja pyc-compile" only so pyc-opt is optional; if you run
+# "ninja" (all), pyc-opt may fail to link on some systems.
+if(TARGET MLIRRegisterAllPasses)
+  add_executable(pyc-opt tools/pyc-opt.cpp EXCLUDE_FROM_ALL)
+  set_target_properties(pyc-opt PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
+  llvm_update_compile_flags(pyc-opt)
+  target_include_directories(pyc-opt PRIVATE
+    "${PYC_SOURCE_DIR}/include"
+    "${PYC_BINARY_DIR}/include"
+  )
+  target_link_libraries(pyc-opt PRIVATE
+    pyc_dialect
+    pyc_transforms
+    MLIRArithDialect
+    MLIRFuncDialect
+    MLIRFuncInlinerExtension
+    MLIRRegisterAllPasses
+    MLIRSCFDialect
+    MLIROptLib
+  )
+  set(PYC_OPT_BUILT 1)
+else()
+  message(STATUS "MLIRRegisterAllPasses not found; skipping pyc-opt (pyc-compile only)")
+endif()
 
 add_executable(pyc-compile tools/pyc-compile.cpp lib/Emit/VerilogEmitter.cpp lib/Emit/CppEmitter.cpp)
 llvm_update_compile_flags(pyc-compile)
@@ -131,4 +139,8 @@ target_link_libraries(pyc-compile PRIVATE
 )
 
 # Install binaries for packaging / reuse.
-install(TARGETS pyc-opt pyc-compile RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}")
+set(PYC_INSTALL_TARGETS pyc-compile)
+if(PYC_OPT_BUILT)
+  list(APPEND PYC_INSTALL_TARGETS pyc-opt)
+endif()
+install(TARGETS ${PYC_INSTALL_TARGETS} RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}")

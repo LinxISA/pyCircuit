@@ -20,12 +20,54 @@ __all__ = [
     "compile_design",
     "jit_inline",
     "jit_compile",
+    # Cycle-Aware API
+    "CycleAwareCircuit",
+    "CycleAwareDomain",
+    "CycleAwareModule",
+    "CycleAwareSignal",
+    "CycleAwareQueue",
+    "CycleAwareByteMem",
+    "CycleAwareBundle",
+    "CycleAwarePop",
+    "SignalFactory",
+    "ca_cat",
+    "ca_bundle",
+    "mux",
+    "compile_cycle_aware",
     "module",
     "sva",
 ]
 
 from .design import Design, DesignError, module
 from .dsl import Module, Signal
-from .hw import Bundle, Circuit, ClockDomain, Pop, Queue, Reg, Vec, Wire, cat
-from .jit import JitError, compile as jit_compile, compile_design, jit_inline
+from .hw import (
+    Bundle,
+    Circuit,
+    ClockDomain,
+    Pop,
+    Queue,
+    Reg,
+    Vec,
+    Wire,
+    cat,
+    CycleAwareBundle,
+    CycleAwareByteMem,
+    CycleAwareCircuit,
+    CycleAwareDomain,
+    CycleAwareModule,
+    CycleAwarePop,
+    CycleAwareQueue,
+    CycleAwareSignal,
+    SignalFactory,
+    ca_bundle,
+    ca_cat,
+    mux,
+)
 from .tb import Tb, TbError, sva
+from .jit import (
+    JitError,
+    compile as jit_compile,
+    compile_cycle_aware,
+    compile_design,
+    jit_inline,
+)

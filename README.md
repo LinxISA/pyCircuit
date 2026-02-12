@@ -56,6 +56,38 @@ def build(m: Circuit, STAGES: int = 3) -> None:
     m.output("out_tag", out["tag"])
 ```
 
+## Cycle-Aware API (New)
+
+pyCircuit includes a new **cycle-aware** programming paradigm that tracks signal timing automatically:
+
+```python
+from pycircuit import compile_cycle_aware, mux
+
+def counter(m, domain, width=8):
+    # Cycle 0: inputs
+    enable = domain.create_signal("enable", width=1)
+    count = domain.create_const(0, width=width, name="count")
+    
+    # Combinational logic
+    count_next = mux(enable, count + 1, count)
+    
+    # Cycle 1: register
+    domain.next()
+    count_reg = domain.cycle(count_next, reset_value=0, name="count")
+    
+    m.output("count", count_reg.sig)
+
+circuit = compile_cycle_aware(counter, name="counter", width=8)
+print(circuit.emit_mlir())
+```
+
+Key features:
+- **Automatic cycle balancing**: When combining signals of different cycles, DFFs are inserted automatically
+- **Cycle management**: `domain.next()`, `prev()`, `push()`, `pop()` for precise cycle control
+- **JIT compilation**: Python functions compile directly to MLIR
+
+See `docs/CYCLE_AWARE_API.md` for the full API reference and `examples/counter_cycle_aware.py` for more examples.
+
 ## Build (pyc-compile / pyc-opt)
 
 Prereqs:
@@ -136,6 +168,7 @@ See `docs/VERILOG_FLOW.md`.
 ## LinxISA CPU bring-up (example)
 
 - pyCircuit source: `examples/linx_cpu_pyc/`
+- Cycle-aware variant: `examples/linx_cpu_pyc_cycle_aware/`
 - SV testbench + program images: `examples/linx_cpu/`
 - Generated outputs (checked in): `examples/generated/linx_cpu_pyc/`
 
@@ -145,10 +178,27 @@ Run the self-checking C++ regression:
 bash tools/run_linx_cpu_pyc_cpp.sh
 ```
 
+Run the cycle-aware variant (same memh fixtures, simpler core model):
+
+```bash
+bash tools/run_linx_cpu_pyc_cycle_aware_cpp.sh
+```
+
 Optional debug artifacts:
 - `PYC_TRACE=1` enables a WB/commit log
 - `PYC_VCD=1` enables VCD dumping
 - `PYC_TRACE_DIR=/path/to/out` overrides the output directory
+- `PYC_KONATA=1` writes a Konata pipeview trace (`*.konata`)
+- `PYC_COMMIT_TRACE=/path/to/trace.jsonl` writes a JSONL commit trace (for diffing)
+
+QEMU vs pyCircuit commit-trace diff (requires Linx QEMU + an LLVM `llvm-mc` build):
+
+```bash
+# Optional env overrides:
+#   QEMU_BIN=/path/to/qemu-system-linx64
+#   LLVM_BUILD=/path/to/llvm-build (must contain bin/llvm-mc)
+bash tools/run_linx_qemu_vs_pyc.sh /path/to/test.s
+```
 
 ## Packaging (release tarball)
 

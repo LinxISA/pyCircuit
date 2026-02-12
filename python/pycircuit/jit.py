@@ -8,11 +8,29 @@ from pathlib import Path
 from typing import Any
 
 from .dsl import Signal
-from .hw import Bundle, Circuit, Reg, Vec, Wire
+from .hw import (
+    Bundle,
+    Circuit,
+    CycleAwareBundle,
+    CycleAwareCircuit,
+    CycleAwareDomain,
+    CycleAwareSignal,
+    Reg,
+    Vec,
+    Wire,
+    mux as ca_mux,
+)
 
 
 class JitError(RuntimeError):
     pass
+
+
+def _expect_cycle_aware_signal(v: Any, *, ctx: str) -> CycleAwareSignal:
+    """Extract a CycleAwareSignal from a value."""
+    if isinstance(v, CycleAwareSignal):
+        return v
+    raise JitError(f"{ctx}: expected a CycleAwareSignal, got {type(v).__name__}")
 
 
 def jit_inline(fn: Any) -> Any:
@@ -980,6 +998,619 @@ def compile(fn: Any, *, name: str | None = None, design_ctx: Any | None = None, 
         else:
             for i, v in enumerate(returned):
                 m.output(f"out{i}", as_out(v))
+
+    return m
+
+
+# =============================================================================
+# Cycle-Aware Compiler
+# =============================================================================
+
+
+class _CycleAwareCompiler:
+    """周期感知编译器，支持CycleAwareSignal的AST编译。"""
+
+    def __init__(
+        self,
+        m: CycleAwareCircuit,
+        domain: CycleAwareDomain,
+        params: dict[str, Any],
+        *,
+        globals_: dict[str, Any],
+        source_stem: str | None = None,
+        line_offset: int = 0,
+    ) -> None:
+        self.m = m
+        self.domain = domain
+        self.env: dict[str, Any] = dict(params)
+        self.globals = globals_
+        self.source_stem = source_stem
+        self.line_offset = int(line_offset)
+        self._inline_stack: list[Any] = []
+
+    @staticmethod
+    def _ty_width(ty: str) -> int:
+        if not ty.startswith("i"):
+            raise JitError(f"expected integer type iN, got {ty!r}")
+        try:
+            w = int(ty[1:])
+        except ValueError as e:
+            raise JitError(f"invalid integer type: {ty!r}") from e
+        if w <= 0:
+            raise JitError(f"invalid integer width in type: {ty!r}")
+        return w
+
+    def _scoped_name(self, base: str) -> str:
+        scoped = base
+        if hasattr(self.m, "scoped_name"):
+            scoped = self.m.scoped_name(base)
+        return scoped
+
+    def _abs_lineno(self, node: ast.AST) -> int | None:
+        line = getattr(node, "lineno", None)
+        if not isinstance(line, int) or line <= 0:
+            return None
+        return self.line_offset + line
+
+    def _name_with_loc(self, name: str, node: ast.AST) -> str:
+        line = self._abs_lineno(node)
+        if line is None:
+            return name
+        if self.source_stem:
+            return f"{name}__{self.source_stem}__L{line}"
+        return f"{name}__L{line}"
+
+    def _alias_if_signal(self, v: Any, *, base_name: str, node: ast.AST) -> Any:
+        """如果是CycleAwareSignal，添加命名别名。"""
+        if isinstance(v, CycleAwareSignal):
+            n = self._scoped_name(self._name_with_loc(base_name, node))
+            return v.named(n)
+        return v
+
+    def eval_const(self, node: ast.AST) -> int:
+        """常量求值（用于range边界、位宽等）。"""
+        if isinstance(node, ast.Constant):
+            if isinstance(node.value, bool):
+                return int(node.value)
+            if isinstance(node.value, int):
+                return int(node.value)
+            raise JitError(f"unsupported constant in const-eval: {node.value!r}")
+        if isinstance(node, ast.Name):
+            v = self.env.get(node.id, self.globals.get(node.id))
+            if isinstance(v, bool):
+                return int(v)
+            if isinstance(v, int):
+                return int(v)
+            raise JitError(f"const-eval name {node.id!r} is not an int/bool")
+        if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.USub):
+            return -self.eval_const(node.operand)
+        if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.UAdd):
+            return +self.eval_const(node.operand)
+        if isinstance(node, ast.BinOp):
+            a = self.eval_const(node.left)
+            b = self.eval_const(node.right)
+            if isinstance(node.op, ast.Add):
+                return a + b
+            if isinstance(node.op, ast.Sub):
+                return a - b
+            if isinstance(node.op, ast.Mult):
+                return a * b
+            if isinstance(node.op, ast.FloorDiv):
+                return a // b
+            if isinstance(node.op, ast.Div):
+                return a // b
+            if isinstance(node.op, ast.Mod):
+                return a % b
+            if isinstance(node.op, ast.LShift):
+                return a << b
+            if isinstance(node.op, ast.RShift):
+                return a >> b
+        raise JitError(f"unsupported const-eval expression: {ast.dump(node, include_attributes=False)}")
+
+    def eval_expr(self, node: ast.AST) -> Any:
+        """表达式求值（硬件信号 + 参数）。"""
+        if isinstance(node, ast.Constant):
+            return node.value
+        if isinstance(node, ast.List):
+            return [self.eval_expr(e) for e in node.elts]
+        if isinstance(node, ast.Tuple):
+            return tuple(self.eval_expr(e) for e in node.elts)
+        if isinstance(node, ast.Name):
+            if node.id in self.env:
+                return self.env[node.id]
+            if node.id in self.globals:
+                return self.globals[node.id]
+            raise JitError(f"unknown name {node.id!r}")
+        if isinstance(node, ast.Subscript):
+            base = self.eval_expr(node.value)
+            sl = node.slice
+            if isinstance(base, CycleAwareSignal):
+                if isinstance(sl, ast.Slice):
+                    if sl.step is not None:
+                        raise JitError("signal slicing does not support step")
+                    lo = None if sl.lower is None else self.eval_const(sl.lower)
+                    hi = None if sl.upper is None else self.eval_const(sl.upper)
+                    return base[slice(lo, hi, None)]
+                bit = int(self.eval_const(sl))
+                return base[bit]
+            if isinstance(base, (list, tuple)):
+                if isinstance(sl, ast.Constant) and isinstance(sl.value, int):
+                    return base[int(sl.value)]
+                raise JitError("list/tuple subscript must be a constant integer")
+            if isinstance(base, CycleAwareBundle):
+                if isinstance(sl, ast.Constant) and isinstance(sl.value, str):
+                    return base[str(sl.value)]
+                raise JitError("CycleAwareBundle subscript must be a string constant")
+            raise JitError(f"unsupported subscript base type: {type(base).__name__}")
+        if isinstance(node, ast.BinOp):
+            lhs = self.eval_expr(node.left)
+            rhs = self.eval_expr(node.right)
+            # 如果有一个是CycleAwareSignal，进行硬件运算
+            if isinstance(lhs, CycleAwareSignal) or isinstance(rhs, CycleAwareSignal):
+                return self._eval_binop(node.op, lhs, rhs)
+            # 纯Python运算
+            if isinstance(node.op, ast.Add):
+                return int(lhs) + int(rhs)
+            if isinstance(node.op, ast.Sub):
+                return int(lhs) - int(rhs)
+            if isinstance(node.op, ast.Mult):
+                return int(lhs) * int(rhs)
+            if isinstance(node.op, ast.FloorDiv) or isinstance(node.op, ast.Div):
+                return int(lhs) // int(rhs)
+            if isinstance(node.op, ast.Mod):
+                return int(lhs) % int(rhs)
+            if isinstance(node.op, ast.BitAnd):
+                return int(lhs) & int(rhs)
+            if isinstance(node.op, ast.BitOr):
+                return int(lhs) | int(rhs)
+            if isinstance(node.op, ast.BitXor):
+                return int(lhs) ^ int(rhs)
+            if isinstance(node.op, ast.LShift):
+                return int(lhs) << int(rhs)
+            if isinstance(node.op, ast.RShift):
+                return int(lhs) >> int(rhs)
+        if isinstance(node, ast.UnaryOp):
+            v = self.eval_expr(node.operand)
+            if isinstance(node.op, ast.Invert):
+                if isinstance(v, CycleAwareSignal):
+                    return ~v
+                return ~int(v)
+            if isinstance(node.op, ast.Not):
+                if isinstance(v, CycleAwareSignal):
+                    if v.ty != "i1":
+                        raise JitError("not only supports i1 signals")
+                    return ~v
+                return not bool(v)
+            if isinstance(node.op, ast.USub):
+                return -int(v)
+            if isinstance(node.op, ast.UAdd):
+                return +int(v)
+        if isinstance(node, ast.Compare):
+            if len(node.ops) != 1 or len(node.comparators) != 1:
+                raise JitError("only single comparisons are supported")
+            lhs = self.eval_expr(node.left)
+            rhs = self.eval_expr(node.comparators[0])
+            op = node.ops[0]
+            return self._eval_compare(op, lhs, rhs)
+        if isinstance(node, ast.Call):
+            return self.eval_call(node)
+        if isinstance(node, ast.Attribute):
+            base = self.eval_expr(node.value)
+            try:
+                return getattr(base, node.attr)
+            except AttributeError as e:
+                raise JitError(str(e)) from e
+
+        raise JitError(f"unsupported expression: {ast.dump(node, include_attributes=False)}")
+
+    def _eval_binop(self, op: ast.operator, lhs: Any, rhs: Any) -> CycleAwareSignal:
+        """执行硬件二元运算。"""
+        # 确保至少一个是CycleAwareSignal
+        if isinstance(lhs, CycleAwareSignal):
+            sig = lhs
+        elif isinstance(rhs, CycleAwareSignal):
+            sig = rhs
+        else:
+            raise JitError("internal: _eval_binop called without CycleAwareSignal")
+
+        if isinstance(op, ast.Add):
+            return sig + rhs if isinstance(lhs, CycleAwareSignal) else rhs + lhs
+        if isinstance(op, ast.Sub):
+            if isinstance(lhs, CycleAwareSignal):
+                return lhs - rhs
+            # int - CycleAwareSignal
+            return sig.domain.create_const(int(lhs), width=sig.width) - sig
+        if isinstance(op, ast.Mult):
+            return sig * rhs if isinstance(lhs, CycleAwareSignal) else rhs * lhs
+        if isinstance(op, ast.BitAnd):
+            return sig & rhs if isinstance(lhs, CycleAwareSignal) else rhs & lhs
+        if isinstance(op, ast.BitOr):
+            return sig | rhs if isinstance(lhs, CycleAwareSignal) else rhs | lhs
+        if isinstance(op, ast.BitXor):
+            return sig ^ rhs if isinstance(lhs, CycleAwareSignal) else rhs ^ lhs
+        if isinstance(op, ast.LShift):
+            if not isinstance(lhs, CycleAwareSignal):
+                raise JitError("<< requires signal on left side")
+            if not isinstance(rhs, int):
+                raise JitError("<< only supports constant shift amounts")
+            return lhs << rhs
+        if isinstance(op, ast.RShift):
+            if not isinstance(lhs, CycleAwareSignal):
+                raise JitError(">> requires signal on left side")
+            if not isinstance(rhs, int):
+                raise JitError(">> only supports constant shift amounts")
+            return lhs >> rhs
+        raise JitError(f"unsupported binary operator: {type(op).__name__}")
+
+    def _eval_compare(self, op: ast.cmpop, lhs: Any, rhs: Any) -> Any:
+        """执行比较运算。"""
+        if isinstance(lhs, CycleAwareSignal) or isinstance(rhs, CycleAwareSignal):
+            sig = lhs if isinstance(lhs, CycleAwareSignal) else rhs
+            other = rhs if isinstance(lhs, CycleAwareSignal) else lhs
+            if isinstance(op, ast.Eq):
+                return sig.eq(other)
+            if isinstance(op, ast.NotEq):
+                return ~sig.eq(other)
+            if isinstance(op, ast.Lt):
+                if isinstance(lhs, CycleAwareSignal):
+                    return lhs.lt(rhs)
+                return sig.gt(other)  # other < sig => sig > other
+            if isinstance(op, ast.LtE):
+                if isinstance(lhs, CycleAwareSignal):
+                    return lhs.le(rhs)
+                return sig.ge(other)
+            if isinstance(op, ast.Gt):
+                if isinstance(lhs, CycleAwareSignal):
+                    return lhs.gt(rhs)
+                return sig.lt(other)
+            if isinstance(op, ast.GtE):
+                if isinstance(lhs, CycleAwareSignal):
+                    return lhs.ge(rhs)
+                return sig.le(other)
+        # 纯Python比较
+        if isinstance(op, ast.Eq):
+            return lhs == rhs
+        if isinstance(op, ast.NotEq):
+            return lhs != rhs
+        if isinstance(op, ast.Lt):
+            return int(lhs) < int(rhs)
+        if isinstance(op, ast.LtE):
+            return int(lhs) <= int(rhs)
+        if isinstance(op, ast.Gt):
+            return int(lhs) > int(rhs)
+        if isinstance(op, ast.GtE):
+            return int(lhs) >= int(rhs)
+        raise JitError(f"unsupported comparison operator: {type(op).__name__}")
+
+    def eval_call(self, node: ast.Call) -> Any:
+        """函数调用求值。"""
+        if isinstance(node.func, ast.Name) and node.func.id == "range":
+            raise JitError("range() is only supported in for-loops")
+        if isinstance(node.func, ast.Name) and node.func.id == "mux":
+            # 内置mux函数
+            if len(node.args) != 3:
+                raise JitError("mux() requires exactly 3 arguments: cond, true_val, false_val")
+            cond = self.eval_expr(node.args[0])
+            true_val = self.eval_expr(node.args[1])
+            false_val = self.eval_expr(node.args[2])
+            if not isinstance(cond, CycleAwareSignal):
+                raise JitError("mux condition must be a CycleAwareSignal")
+            return ca_mux(cond, true_val, false_val)
+
+        if isinstance(node.func, ast.Attribute):
+            recv = self.eval_expr(node.func.value)
+            fn = getattr(recv, node.func.attr)
+        elif isinstance(node.func, ast.Name):
+            fn = self.env.get(node.func.id, self.globals.get(node.func.id))
+            if fn is None:
+                raise JitError(f"unknown function {node.func.id!r}")
+        else:
+            raise JitError("unsupported call target")
+
+        args = [self.eval_expr(a) for a in node.args]
+        kwargs = {kw.arg: self.eval_expr(kw.value) for kw in node.keywords if kw.arg is not None}
+        try:
+            return fn(*args, **kwargs)
+        except TypeError as e:
+            raise JitError(f"call failed: {e}") from e
+
+    def compile_block(self, stmts: list[ast.stmt]) -> None:
+        """编译语句块。"""
+        for s in stmts:
+            self.compile_stmt(s)
+
+    def compile_stmt(self, node: ast.stmt) -> None:
+        """编译单个语句。"""
+        if isinstance(node, ast.Pass):
+            return
+        if isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant) and isinstance(node.value.value, str):
+            # 忽略docstring
+            return
+        if isinstance(node, ast.Expr):
+            # 表达式语句（如方法调用）
+            expr = node.value
+            # 检查是否是 domain.next() 或 domain.prev() 调用
+            if isinstance(expr, ast.Call) and isinstance(expr.func, ast.Attribute):
+                recv = self.eval_expr(expr.func.value)
+                if isinstance(recv, CycleAwareDomain):
+                    method = expr.func.attr
+                    if method == "next":
+                        recv.next()
+                        return
+                    elif method == "prev":
+                        recv.prev()
+                        return
+                    elif method == "push":
+                        recv.push()
+                        return
+                    elif method == "pop":
+                        recv.pop()
+                        return
+            # 其他表达式语句
+            _ = self.eval_expr(node.value)
+            return
+        if isinstance(node, ast.Assign):
+            if len(node.targets) != 1 or not isinstance(node.targets[0], ast.Name):
+                raise JitError("only simple assignments to a single name are supported")
+            name = node.targets[0].id
+            v = self.eval_expr(node.value)
+            self.env[name] = self._alias_if_signal(v, base_name=name, node=node)
+            return
+        if isinstance(node, ast.AnnAssign):
+            if not isinstance(node.target, ast.Name) or node.value is None:
+                raise JitError("only simple annotated assignments are supported")
+            name = node.target.id
+            v = self.eval_expr(node.value)
+            self.env[name] = self._alias_if_signal(v, base_name=name, node=node)
+            return
+        if isinstance(node, ast.AugAssign):
+            if not isinstance(node.target, ast.Name):
+                raise JitError("only simple augmented assignments are supported")
+            name = node.target.id
+            cur = self.env.get(name)
+            if cur is None:
+                raise JitError(f"augassign to unknown name {name!r}")
+            rhs = self.eval_expr(node.value)
+            if isinstance(cur, CycleAwareSignal):
+                result = self._eval_binop(node.op, cur, rhs)
+                self.env[name] = self._alias_if_signal(result, base_name=name, node=node)
+            else:
+                raise JitError("augmented assignment only supported for CycleAwareSignal")
+            return
+        if isinstance(node, ast.If):
+            self.compile_if(node)
+            return
+        if isinstance(node, ast.For):
+            self.compile_for(node)
+            return
+        if isinstance(node, ast.With):
+            self.compile_with(node)
+            return
+        if isinstance(node, ast.Return):
+            raise JitError("return is only supported at top-level")
+
+        raise JitError(f"unsupported statement: {ast.dump(node, include_attributes=False)}")
+
+    def compile_with(self, node: ast.With) -> None:
+        """编译with语句。"""
+        if len(node.items) != 1:
+            raise JitError("with supports exactly one context manager (prototype)")
+        item = node.items[0]
+        if item.optional_vars is not None:
+            raise JitError("with-as is not supported (prototype)")
+
+        cm = self.eval_expr(item.context_expr)
+        enter = getattr(cm, "__enter__", None)
+        exit_ = getattr(cm, "__exit__", None)
+        if enter is None or exit_ is None:
+            raise JitError("with context is not a context manager")
+
+        enter()
+        try:
+            self.compile_block(node.body)
+        finally:
+            exit_(None, None, None)
+
+    def compile_if(self, node: ast.If) -> None:
+        """编译if语句（静态或动态条件）。"""
+        cond_v = self.eval_expr(node.test)
+        
+        # 静态条件（Python bool/int）
+        if not isinstance(cond_v, CycleAwareSignal) and isinstance(cond_v, (bool, int)):
+            if bool(cond_v):
+                self.compile_block(node.body)
+            else:
+                self.compile_block(node.orelse)
+            return
+
+        # 动态条件（CycleAwareSignal）
+        cond = _expect_cycle_aware_signal(cond_v, ctx="if condition")
+        if cond.ty != "i1":
+            raise JitError("if condition must be an i1 signal or a python bool")
+
+        # 对于动态条件，使用mux来选择值
+        # 找出在两个分支中被赋值的变量
+        pre_env = dict(self.env)
+        assigned = sorted(_assigned_names(node.body) | _assigned_names(node.orelse))
+        
+        if not assigned:
+            raise JitError("if does not assign any variables under a dynamic condition")
+
+        # 编译then分支
+        then_env = dict(pre_env)
+        then_comp = _CycleAwareCompiler(
+            self.m,
+            self.domain,
+            {},
+            globals_=self.globals,
+            source_stem=self.source_stem,
+            line_offset=self.line_offset,
+        )
+        then_comp.env = then_env
+        then_comp.compile_block(node.body)
+
+        # 编译else分支
+        else_env = dict(pre_env)
+        else_comp = _CycleAwareCompiler(
+            self.m,
+            self.domain,
+            {},
+            globals_=self.globals,
+            source_stem=self.source_stem,
+            line_offset=self.line_offset,
+        )
+        else_comp.env = else_env
+        else_comp.compile_block(node.orelse)
+
+        # 使用mux合并结果
+        for name in assigned:
+            then_v = then_comp.env.get(name)
+            else_v = else_comp.env.get(name)
+            
+            if isinstance(then_v, CycleAwareSignal) and isinstance(else_v, CycleAwareSignal):
+                # 使用条件选择
+                merged = cond.select(then_v, else_v)
+                self.env[name] = merged.named(name)
+            elif isinstance(then_v, CycleAwareSignal):
+                # else分支没有赋值，使用原始值
+                pre_v = pre_env.get(name)
+                if isinstance(pre_v, CycleAwareSignal):
+                    merged = cond.select(then_v, pre_v)
+                    self.env[name] = merged.named(name)
+                else:
+                    self.env[name] = then_v
+            elif isinstance(else_v, CycleAwareSignal):
+                # then分支没有赋值
+                pre_v = pre_env.get(name)
+                if isinstance(pre_v, CycleAwareSignal):
+                    merged = cond.select(pre_v, else_v)
+                    self.env[name] = merged.named(name)
+                else:
+                    self.env[name] = else_v
+            else:
+                # 两个分支都不是信号，保留then分支的值
+                self.env[name] = then_v
+
+    def compile_for(self, node: ast.For) -> None:
+        """编译for循环（静态展开）。"""
+        if not isinstance(node.target, ast.Name):
+            raise JitError("only `for name in range(...)` loops are supported")
+        loop_var = node.target.id
+
+        if not isinstance(node.iter, ast.Call) or not isinstance(node.iter.func, ast.Name) or node.iter.func.id != "range":
+            raise JitError("only `for ... in range(...)` is supported")
+        args = node.iter.args
+        if not (1 <= len(args) <= 3):
+            raise JitError("range() must have 1..3 arguments")
+
+        if len(args) == 1:
+            lb_i = 0
+            ub_i = self.eval_const(args[0])
+            step_i = 1
+        elif len(args) == 2:
+            lb_i = self.eval_const(args[0])
+            ub_i = self.eval_const(args[1])
+            step_i = 1
+        else:
+            lb_i = self.eval_const(args[0])
+            ub_i = self.eval_const(args[1])
+            step_i = self.eval_const(args[2])
+
+        if step_i <= 0:
+            raise JitError("range() step must be > 0")
+
+        # 静态展开循环
+        for i in range(lb_i, ub_i, step_i):
+            self.env[loop_var] = i
+            self.compile_block(node.body)
+
+        # 清理循环变量
+        if loop_var in self.env:
+            del self.env[loop_var]
+
+
+def compile_cycle_aware(
+    fn: Any,
+    *,
+    name: str | None = None,
+    domain_name: str = "clk",
+    **params: Any,
+) -> CycleAwareCircuit:
+    """编译Python函数为周期感知电路。
+
+    这是新的周期感知编译器入口点。函数签名应为：
+        def my_circuit(m: CycleAwareCircuit, domain: CycleAwareDomain, ...params):
+            ...
+
+    参数:
+        fn: 要编译的Python函数
+        name: 模块名称（默认使用函数名）
+        domain_name: 默认时钟域名称
+        **params: JIT编译时参数
+    
+    返回:
+        CycleAwareCircuit: 编译后的电路
+    """
+    lines, start_line = inspect.getsourcelines(fn)
+    src = textwrap.dedent("".join(lines))
+    tree = ast.parse(src)
+    fdef = _find_function_def(tree, fn.__name__)
+
+    if len(fdef.args.args) < 2:
+        raise JitError(
+            "function must take at least two arguments: "
+            "(m: CycleAwareCircuit, domain: CycleAwareDomain)"
+        )
+    builder_arg = fdef.args.args[0].arg
+    domain_arg = fdef.args.args[1].arg
+
+    # 绑定JIT参数
+    for a in fdef.args.args[2:]:
+        if a.arg not in params:
+            raise JitError(f"missing JIT param {a.arg!r}")
+
+    m = CycleAwareCircuit(name or fn.__name__)
+    domain = m.create_domain(domain_name)
+
+    src_file = inspect.getsourcefile(fn) or inspect.getfile(fn)
+    src_stem = None
+    try:
+        if src_file:
+            src_stem = Path(src_file).stem
+    except Exception:
+        src_stem = None
+
+    c = _CycleAwareCompiler(
+        m,
+        domain,
+        params=dict(params),
+        globals_=dict(fn.__globals__),
+        source_stem=src_stem,
+        line_offset=int(start_line - 1),
+    )
+    c.env[builder_arg] = m
+    c.env[domain_arg] = domain
+    # 添加mux到环境
+    c.env["mux"] = ca_mux
+
+    returned: list[Any] = []
+    for stmt in fdef.body:
+        if isinstance(stmt, ast.Return):
+            if stmt.value is None:
+                break
+            v = c.eval_expr(stmt.value)
+            if isinstance(v, tuple):
+                returned.extend(v)
+            else:
+                returned.append(v)
+            break
+        c.compile_stmt(stmt)
+
+    # 处理返回值作为输出
+    if returned:
+        for i, v in enumerate(returned):
+            if isinstance(v, CycleAwareSignal):
+                m.output(f"out{i}" if len(returned) > 1 else "out", v)
 
     return m
 

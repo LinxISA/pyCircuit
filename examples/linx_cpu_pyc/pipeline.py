@@ -13,6 +13,11 @@ class CoreState:
     br_off: Reg
     commit_cond: Reg
     commit_tgt: Reg
+    # Decoupled-block state (B.TEXT out-of-line bodies).
+    dec_hdr_active: Reg
+    in_body: Reg
+    body_tpc: Reg
+    return_pc: Reg
     exit_code: Reg
     cycles: Reg
     halted: Reg
@@ -79,7 +84,8 @@ class MemWbRegs:
     srcr: Reg
     imm: Reg
     value: Reg
-    # Store-commit fields (stores commit in WB for precise flush behavior).
+    # Memory commit fields (loads/stores commit in WB for precise flush behavior).
+    is_load: Reg
     is_store: Reg
     size: Reg
     addr: Reg
