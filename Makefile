@@ -6,7 +6,7 @@ help:
 	@echo "Targets:"
 	@echo "  configure  Configure CMake (needs LLVM_DIR/MLIR_DIR)"
 	@echo "  tools      Build pyc-compile + pyc-opt"
-	@echo "  regen      Regenerate checked-in outputs (examples/ + janus/)"
+	@echo "  regen      Regenerate local outputs under ./.pycircuit_out"
 	@echo "  test       Run C++ regressions (linx_cpu + janus)"
 	@echo "  install    Install into dist/pycircuit/"
 	@echo "  package    Build a TGZ via CPack"
@@ -27,14 +27,14 @@ tools: configure
 	ninja -C "$(BUILD_DIR)" pyc-compile pyc-opt
 
 regen: tools
-	PYC_COMPILE="$(BUILD_DIR)/bin/pyc-compile" bash examples/update_generated.sh
-	PYC_COMPILE="$(BUILD_DIR)/bin/pyc-compile" bash janus/update_generated.sh
+	PYC_COMPILE="$(BUILD_DIR)/bin/pyc-compile" bash designs/examples/update_generated.sh
+	PYC_COMPILE="$(BUILD_DIR)/bin/pyc-compile" bash designs/janus/update_generated.sh
 
 test: tools
-	PYC_COMPILE="$(BUILD_DIR)/bin/pyc-compile" bash tools/run_linx_cpu_pyc_cpp.sh
-	PYC_COMPILE="$(BUILD_DIR)/bin/pyc-compile" bash tools/run_fastfwd_pyc_cpp.sh
-	PYC_COMPILE="$(BUILD_DIR)/bin/pyc-compile" bash janus/tools/run_janus_bcc_pyc_cpp.sh
-	PYC_COMPILE="$(BUILD_DIR)/bin/pyc-compile" bash janus/tools/run_janus_bcc_ooo_pyc_cpp.sh
+	PYC_COMPILE="$(BUILD_DIR)/bin/pyc-compile" bash flows/tools/run_linx_cpu_pyc_cpp.sh
+	PYC_COMPILE="$(BUILD_DIR)/bin/pyc-compile" bash flows/tools/run_fastfwd_pyc_cpp.sh
+	PYC_COMPILE="$(BUILD_DIR)/bin/pyc-compile" bash designs/janus/tools/run_janus_bcc_pyc_cpp.sh
+	PYC_COMPILE="$(BUILD_DIR)/bin/pyc-compile" bash designs/janus/tools/run_janus_bcc_ooo_pyc_cpp.sh
 
 install: tools
 	cmake --install "$(BUILD_DIR)" --prefix dist/pycircuit

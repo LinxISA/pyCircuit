@@ -106,7 +106,7 @@ static void memh_feed_byte(uint64_t addr, uint8_t byte, uint64_t *base, uint64_t
 }
 
 static void load_memh_stream(void) {
-  // Parses the same format produced by janus/tools/ihex_to_memh.py:
+  // Parses the same format produced by designs/janus/flows/tools/ihex_to_memh.py:
   //   @<addr>
   //   <byte>
   //   <byte>

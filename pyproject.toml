@@ -20,7 +20,7 @@ classifiers = [
 ]
 
 [tool.setuptools.packages.find]
-where = ["python"]
+where = ["compiler/frontend"]
 
 [project.scripts]
 pycircuit = "pycircuit.cli:main"
