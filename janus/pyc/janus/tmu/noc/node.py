@@ -26,6 +26,9 @@ def build_ring_node(
     inject_payload: Wire,
     node_id: int,
     local_ready: Wire,
+    dst: Wire | None = None,
+    dst_lsb: int = 6,
+    dst_width: int = 2,
 ) -> RingNodeOut:
     c = m.const
     in_valid = m.wire(in_valid)
@@ -36,8 +39,11 @@ def build_ring_node(
     inject_payload = m.wire(inject_payload)
     local_ready = m.wire(local_ready)
 
-    target = in_payload[6:8]
-    take_local = in_valid & local_ready & target.eq(c(node_id, width=2))
+    if dst is None:
+        target = in_payload.slice(lsb=dst_lsb, width=dst_width)
+    else:
+        target = m.wire(dst)
+    take_local = in_valid & local_ready & target.eq(c(node_id, width=target.width))
     forward_valid = in_valid & (~take_local)
 
     out_valid = forward_valid | (inject_valid & (~forward_valid))
