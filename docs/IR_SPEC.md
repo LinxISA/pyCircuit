@@ -4,6 +4,9 @@ PYC is an MLIR dialect (`pyc`) intended to be a common, backend-agnostic IR for
 hardware components, with multi-clock modeling and strict ready/valid streaming
 semantics.
 
+For the refactored compiler pipeline and pass-by-pass behavior, see
+`docs/COMPILER_FLOW.md`.
+
 ## 1) Types
 
 - `!pyc.clock`: a clock signal
@@ -168,14 +171,14 @@ into a single region:
 `pyc-compile --emit=verilog` emits Verilog:
 
 - **Combinational ops** are typically emitted as flattened `assign` expressions (netlist style).
-- **Stateful ops** instantiate the corresponding primitives from `include/pyc/verilog/`:
-  - `pyc.reg` → `pyc_reg` (`include/pyc/verilog/pyc_reg.v`)
-  - `pyc.fifo` → `pyc_fifo` (`include/pyc/verilog/pyc_fifo.v`)
-  - `pyc.async_fifo` → `pyc_async_fifo` (`include/pyc/verilog/pyc_async_fifo.v`)
-  - `pyc.byte_mem` → `pyc_byte_mem` (`include/pyc/verilog/pyc_byte_mem.v`)
-  - `pyc.sync_mem` → `pyc_sync_mem` (`include/pyc/verilog/pyc_sync_mem.v`)
-  - `pyc.sync_mem_dp` → `pyc_sync_mem_dp` (`include/pyc/verilog/pyc_sync_mem_dp.v`)
-  - `pyc.cdc_sync` → `pyc_cdc_sync` (`include/pyc/verilog/pyc_cdc_sync.v`)
+- **Stateful ops** instantiate the corresponding primitives from `runtime/verilog/`:
+  - `pyc.reg` → `pyc_reg` (`runtime/verilog/pyc_reg.v`)
+  - `pyc.fifo` → `pyc_fifo` (`runtime/verilog/pyc_fifo.v`)
+  - `pyc.async_fifo` → `pyc_async_fifo` (`runtime/verilog/pyc_async_fifo.v`)
+  - `pyc.byte_mem` → `pyc_byte_mem` (`runtime/verilog/pyc_byte_mem.v`)
+  - `pyc.sync_mem` → `pyc_sync_mem` (`runtime/verilog/pyc_sync_mem.v`)
+  - `pyc.sync_mem_dp` → `pyc_sync_mem_dp` (`runtime/verilog/pyc_sync_mem_dp.v`)
+  - `pyc.cdc_sync` → `pyc_cdc_sync` (`runtime/verilog/pyc_cdc_sync.v`)
 
 `pyc-compile` also runs `pyc-fuse-comb`, which enables emission of flattened
 Verilog `assign` statements for large purely-combinational regions.

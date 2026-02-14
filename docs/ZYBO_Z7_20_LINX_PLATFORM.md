@@ -2,8 +2,8 @@
 
 This repo provides two Zybo Z7-20 PS/PL bitstreams:
 
-- **In-order** core: `linx_cpu_pyc` (from `examples/generated/linx_cpu_pyc/`)
-- **OOO** core: `janus_bcc_ooo_pyc` (from `janus/generated/janus_bcc_ooo_pyc/`)
+- **In-order** core artifacts: `.pycircuit_out/examples/linx_cpu_pyc/`
+- **OOO** core artifacts: `.pycircuit_out/janus/janus_bcc_ooo_pyc/`
 
 Both use the same PL control/status block (AXI4-Lite) so a PS “monitor” app can:
 
@@ -17,13 +17,13 @@ Both use the same PL control/status block (AXI4-Lite) so a PS “monitor” app 
 Build + program the in-order platform:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File tools\windows\zybo_z7_20_linx_platform_flow.ps1 -Core InOrder -Program
+powershell -ExecutionPolicy Bypass -File flows\tools\windows\zybo_z7_20_linx_platform_flow.ps1 -Core InOrder -Program
 ```
 
 Build + program the OOO platform:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File tools\windows\zybo_z7_20_linx_platform_flow.ps1 -Core OOO -Program
+powershell -ExecutionPolicy Bypass -File flows\tools\windows\zybo_z7_20_linx_platform_flow.ps1 -Core OOO -Program
 ```
 
 Each build also exports an `.xsa` in the Vivado build directory, so you can build the PS app in Vitis/XSCT.
@@ -52,7 +52,6 @@ Default base address (Vivado scripts): `0x43C0_0000`.
 After programming a platform bitstream and running the PS monitor app, you can run a suite from a PC:
 
 ```powershell
-python tools\zybo\run_fpga_suite.py --port COM5 --manifest boards\zybo_z7_20\tests\fpga_manifest_inorder.json
-python tools\zybo\run_fpga_suite.py --port COM5 --manifest boards\zybo_z7_20\tests\fpga_manifest_ooo.json
+python flows\tools\zybo\run_fpga_suite.py --port COM5 --manifest boards\zybo_z7_20\tests\fpga_manifest_inorder.json
+python flows\tools\zybo\run_fpga_suite.py --port COM5 --manifest boards\zybo_z7_20\tests\fpga_manifest_ooo.json
 ```
-

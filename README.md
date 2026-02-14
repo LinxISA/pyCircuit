@@ -1,222 +1,120 @@
 # pyCircuit
 
-`pyCircuit` is a Python-first hardware construction + compilation toolkit built around a small MLIR dialect (**PYC**).
-You write *sequential-looking* Python; the frontend emits `.pyc` (MLIR), MLIR passes canonicalize + fuse, and `pyc-compile`
-emits either:
+`pyCircuit` is a Python-first hardware construction and compilation toolkit built on a PYC MLIR dialect.
 
-- **Verilog** (static RTL; strict ready/valid streaming)
-- **Header-only C++** (cycle/tick model; convenient for bring-up + debug)
+You write Python design code, emit MLIR (`.pyc`), run a strict MLIR pass pipeline, then emit:
 
-Everything between Python and codegen stays **MLIR-only**.
+- Verilog RTL
+- C++ cycle models
 
-Docs:
-- `docs/USAGE.md` (how to write designs; JIT rules; debug/tracing)
-- `docs/IR_SPEC.md` (PYC dialect contract)
-- `docs/PRIMITIVES.md` (backend template “ABI”: matching C++/Verilog primitives)
-- `docs/VERILOG_FLOW.md` (open-source Verilog sim/lint with Icarus/Verilator/GTKWave)
-- `docs/LINX_WORKSPACE.md` (Windows + Zybo Z7-20 + LinxISA bring-up workspace notes)
-- `docs/WSL_UBUNTU_ON_WINDOWS.md` (install Ubuntu from TUNA mirror + build Linx toolchains in WSL)
+## Documentation
 
-## Design goals (why this repo exists)
+- `docs/USAGE.md`: frontend design authoring guide
+- `docs/COMPILER_FLOW.md`: refactored end-to-end flow + pass-by-pass pipeline reference
+- `docs/IR_SPEC.md`: PYC IR contract
+- `docs/PRIMITIVES.md`: runtime primitive contracts (`runtime/cpp`, `runtime/verilog`)
+- `docs/VERILOG_FLOW.md`: open-source Verilog sim/lint flow
+- `docs/LINX_WORKSPACE.md`: Windows + Zybo + Linx workspace notes
+- `docs/WSL_UBUNTU_ON_WINDOWS.md`: WSL setup for Linx bring-up
 
-- **Readable Python**: build pipelines/modules with `with m.scope("STAGE"):` + normal Python operators.
-- **Static hardware only**: Python control flow lowers to MLIR `scf.*`, then into *static* mux/unrolled logic.
-- **Traceability**: stable name mangling (`scope + file:line`) so generated Verilog/C++ stays debuggable.
-- **Multi-clock from day 1**: explicit `!pyc.clock` / `!pyc.reset`.
-- **Strict ready/valid**: streaming primitives use a single interpretation everywhere.
+## Refactored Layout (Current)
 
-## Tiny example (JIT-by-default)
+- Frontend: `compiler/frontend/pycircuit/`
+- MLIR compiler: `compiler/mlir/`
+- Runtime libraries: `runtime/cpp/`, `runtime/verilog/`
+- Flows: `flows/scripts/`, `flows/tools/`
+- Designs: `designs/examples/`, `designs/janus/`
 
-```python
-from pycircuit import Circuit, cat
+Legacy paths are no longer canonical (`python/pycircuit`, `pyc/mlir`, `include/pyc`, `tools/`, `scripts/`, `examples/`, `janus/`).
 
-def build(m: Circuit, STAGES: int = 3) -> None:
-    dom = m.domain("sys")
+## Quickstart
 
-    a = m.input("a", width=16)
-    b = m.input("b", width=16)
-    sel = m.input("sel", width=1)
-
-    with m.scope("EX"):
-        x = a ^ b
-        y = a + b
-        data = x
-        if sel:
-            data = y
-
-    pkt = m.bundle(data=data, tag=(a == b))
-    bus = pkt.pack()           # lowers to `pyc.concat`
-
-    with m.scope("PIPE0"):
-        r = m.out("bus", domain=dom, width=bus.width, init=0)
-        r.set(bus)
-
-    out = pkt.unpack(r.out())
-    m.output("out_data", out["data"])
-    m.output("out_tag", out["tag"])
-```
-
-## Cycle-Aware API (New)
-
-pyCircuit includes a new **cycle-aware** programming paradigm that tracks signal timing automatically:
-
-```python
-from pycircuit import compile_cycle_aware, mux
-
-def counter(m, domain, width=8):
-    # Cycle 0: inputs
-    enable = domain.create_signal("enable", width=1)
-    count = domain.create_const(0, width=width, name="count")
-    
-    # Combinational logic
-    count_next = mux(enable, count + 1, count)
-    
-    # Cycle 1: register
-    domain.next()
-    count_reg = domain.cycle(count_next, reset_value=0, name="count")
-    
-    m.output("count", count_reg.sig)
-
-circuit = compile_cycle_aware(counter, name="counter", width=8)
-print(circuit.emit_mlir())
-```
-
-Key features:
-- **Automatic cycle balancing**: When combining signals of different cycles, DFFs are inserted automatically
-- **Cycle management**: `domain.next()`, `prev()`, `push()`, `pop()` for precise cycle control
-- **JIT compilation**: Python functions compile directly to MLIR
-
-See `docs/CYCLE_AWARE_API.md` for the full API reference and `examples/counter_cycle_aware.py` for more examples.
-
-## Build (pyc-compile / pyc-opt)
-
-Prereqs:
-- CMake ≥ 3.20 + Ninja
-- A C++17 compiler
-- An LLVM+MLIR build/install that provides `LLVMConfig.cmake` + `MLIRConfig.cmake`
-
-### Quickstart (recommended)
-
-If `llvm-config` is on your PATH:
+## 1) Build compiler tools
 
 ```bash
-scripts/pyc build
-scripts/pyc regen
-scripts/pyc test
+flows/scripts/pyc build
 ```
 
-### Configure + build (recommended: top-level CMake)
+## 2) Emit MLIR from Python design
 
 ```bash
-LLVM_DIR="$(llvm-config --cmakedir)"
-MLIR_DIR="$(dirname "$LLVM_DIR")/mlir"
-
-cmake -G Ninja -S . -B build \
-  -DCMAKE_BUILD_TYPE=Release \
-  -DLLVM_DIR="$LLVM_DIR" \
-  -DMLIR_DIR="$MLIR_DIR"
-
-ninja -C build pyc-compile pyc-opt
+PYTHONPATH=compiler/frontend python3 -m pycircuit.cli emit \
+  designs/examples/jit_pipeline_vec.py \
+  -o /tmp/jit_pipeline_vec.pyc
 ```
 
-### Alternative: build helper (llvm-project source tree)
-
-If you keep `llvm-project` in `~/llvm-project`, you can use:
-
-```bash
-bash pyc/mlir/scripts/build_all.sh
-```
-
-## Emit + compile a design
-
-### (Optional) install the Python frontend
-
-For convenience you can install the Python package (so `pycircuit` is on your PATH):
-
-```bash
-python3 -m pip install -e .
-```
-
-Emit `.pyc` (MLIR) from Python:
-
-```bash
-PYTHONPATH=python python3 -m pycircuit.cli emit examples/jit_pipeline_vec.py -o /tmp/jit_pipeline_vec.pyc
-```
-
-If installed via `pip`, you can also run:
-
-```bash
-pycircuit emit examples/jit_pipeline_vec.py -o /tmp/jit_pipeline_vec.pyc
-```
-
-Compile MLIR to Verilog:
+## 3) Compile MLIR to Verilog / C++
 
 ```bash
 ./build/bin/pyc-compile /tmp/jit_pipeline_vec.pyc --emit=verilog -o /tmp/jit_pipeline_vec.v
+./build/bin/pyc-compile /tmp/jit_pipeline_vec.pyc --emit=cpp -o /tmp/jit_pipeline_vec.hpp
 ```
 
-Regenerate the checked-in golden outputs under `examples/generated/`:
+Useful options:
+
+- `--sim-mode=default|cpp-only`
+- `--cpp-only-preserve-ops` (only meaningful with `cpp-only`)
+- `--logic-depth=<N>` (default `32`)
+- `--out-dir=<dir>` (split-per-module emission + `manifest.json` + `compile_stats.json`)
+
+## 4) Regenerate local outputs / run regressions
 
 ```bash
-scripts/pyc regen
+flows/scripts/pyc regen
+flows/scripts/pyc test
 ```
 
-## Open-source Verilog simulation (Icarus / Verilator)
-
-See `docs/VERILOG_FLOW.md`.
-
-## LinxISA CPU bring-up (example)
-
-- pyCircuit source: `examples/linx_cpu_pyc/`
-- Cycle-aware variant: `examples/linx_cpu_pyc_cycle_aware/`
-- SV testbench + program images: `examples/linx_cpu/`
-- Generated outputs (checked in): `examples/generated/linx_cpu_pyc/`
-
-Run the self-checking C++ regression:
+Equivalent flow-runner commands:
 
 ```bash
-bash tools/run_linx_cpu_pyc_cpp.sh
+python3 flows/tools/pyc_flow.py doctor
+python3 flows/tools/pyc_flow.py regen
+python3 flows/tools/pyc_flow.py cpp-test
 ```
 
-Run the cycle-aware variant (same memh fixtures, simpler core model):
+## Frontend Semantics (Refactored)
+
+- JIT-by-default build pattern: `build(m: Circuit, ...)`.
+- In design context, plain calls `child(m, ...)` auto-instantiate modules.
+- Hardware args become ports; Python literals become specialization parameters.
+- For complex specialization objects, use explicit `Circuit.instance(..., params=...)`.
+- `@jit_inline` is the explicit inline escape hatch.
+- `m.debug(name, signal)` exports stable debug probe ports (`dbg__*`) for TB/traces.
+
+See `docs/USAGE.md` for detailed frontend rules and examples.
+
+## Compiler Pipeline
+
+The exact pass order and per-pass behavior are documented in `docs/COMPILER_FLOW.md`.
+
+Current `pyc-compile` default pipeline ends with strict legality checks:
+
+- no remaining dynamic SCF/index hardware values,
+- strict combinational depth check (`--logic-depth`),
+- compile stats collection (`Reg/Mem`, `WNS/TNS`, depth).
+
+## Generated Artifact Policy
+
+Generated files are out-of-tree local artifacts and are not checked into git.
+
+Default script output root:
+
+- `.pycircuit_out/examples/...`
+- `.pycircuit_out/janus/...`
+
+The repository `.gitignore` enforces this policy.
+
+## Linx bring-up shortcuts
+
+Run Linx CPU C++ regression:
 
 ```bash
-bash tools/run_linx_cpu_pyc_cycle_aware_cpp.sh
+bash flows/tools/run_linx_cpu_pyc_cpp.sh
 ```
 
-Optional debug artifacts:
-- `PYC_TRACE=1` enables a WB/commit log
-- `PYC_VCD=1` enables VCD dumping
-- `PYC_TRACE_DIR=/path/to/out` overrides the output directory
-- `PYC_KONATA=1` writes a Konata pipeview trace (`*.konata`)
-- `PYC_COMMIT_TRACE=/path/to/trace.jsonl` writes a JSONL commit trace (for diffing)
-
-QEMU vs pyCircuit commit-trace diff (requires Linx QEMU + an LLVM `llvm-mc` build):
+Run Janus C++ regressions:
 
 ```bash
-# Optional env overrides:
-#   QEMU_BIN=/path/to/qemu-system-linx64
-#   LLVM_BUILD=/path/to/llvm-build (must contain bin/llvm-mc)
-bash tools/run_linx_qemu_vs_pyc.sh /path/to/test.s
+bash designs/janus/tools/run_janus_bcc_pyc_cpp.sh
+bash designs/janus/tools/run_janus_bcc_ooo_pyc_cpp.sh
 ```
-
-## Packaging (release tarball)
-
-After building, you can install + package the toolchain:
-
-```bash
-cmake --install build --prefix dist/pycircuit
-(cd build && cpack -G TGZ)
-```
-
-The tarball includes:
-- `bin/pyc-compile`, `bin/pyc-opt`
-- `include/pyc/*` (C++ + Verilog template libraries)
-- `share/pycircuit/python/pycircuit` (Python frontend sources; usable via `PYTHONPATH=...`)
-
-## Repo layout
-
-- `python/pycircuit/`: Python DSL + AST/JIT frontend + CLI
-- `pyc/mlir/`: MLIR dialect, passes, tools (`pyc-opt`, `pyc-compile`)
-- `include/pyc/`: backend template libraries (C++ + Verilog primitives)
-- `examples/`: example designs, testbenches, and checked-in generated outputs

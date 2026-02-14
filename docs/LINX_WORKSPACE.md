@@ -16,7 +16,7 @@ Expected workspace layout (matches the skills):
 Run:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File tools\windows\linx_doctor.ps1
+powershell -ExecutionPolicy Bypass -File flows\tools\windows\linx_doctor.ps1
 ```
 
 ## 2) FPGA bring-up (Zybo Z7-20)
@@ -24,7 +24,7 @@ powershell -ExecutionPolicy Bypass -File tools\windows\linx_doctor.ps1
 ### 2.1 Known-good LED blink
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File tools\windows\zybo_z7_20_flow.ps1 -Program
+powershell -ExecutionPolicy Bypass -File flows\tools\windows\zybo_z7_20_flow.ps1 -Program
 ```
 
 ### 2.2 LinxISA CPU bring-up demo (UART + exit MMIO)
@@ -32,7 +32,7 @@ powershell -ExecutionPolicy Bypass -File tools\windows\zybo_z7_20_flow.ps1 -Prog
 Build/program:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File tools\windows\zybo_z7_20_linx_cpu_flow.ps1 -Program
+powershell -ExecutionPolicy Bypass -File flows\tools\windows\zybo_z7_20_linx_cpu_flow.ps1 -Program
 ```
 
 Behavior:
@@ -53,25 +53,25 @@ Program image:
 Install WSL2 + Ubuntu 22.04 (requires admin, may require reboot):
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File tools\windows\install_wsl2_ubuntu2204.ps1
+powershell -ExecutionPolicy Bypass -File flows\tools\windows\install_wsl2_ubuntu2204.ps1
 ```
 
 If you want the Ubuntu rootfs from the Tsinghua (TUNA) mirror (offline-style `wsl --import`):
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File tools\windows\install_ubuntu2204_tuna_wsl.ps1
+powershell -ExecutionPolicy Bypass -File flows\tools\windows\install_ubuntu2204_tuna_wsl.ps1
 ```
 
 In WSL, bootstrap pyCircuit (LLVM/MLIR via apt.llvm.org) and build `pyc-compile`:
 
 ```bash
-bash tools/wsl/bootstrap_pyc_ubuntu2204.sh
+bash flows/tools/wsl/bootstrap_pyc_ubuntu2204.sh
 ```
 
 In WSL, install deps + print the suggested build commands for LLVM (LinxISA backend), QEMU, docs, and regression:
 
 ```bash
-bash tools/wsl/bootstrap_linx_ubuntu2204.sh
+bash flows/tools/wsl/bootstrap_linx_ubuntu2204.sh
 ```
 
 Full WSL usage + build script:
@@ -87,5 +87,5 @@ cd /mnt/c/Users/<you>/pyCircuit
 export LINXISA_DIR=/mnt/c/Users/<you>/linx/linx-isa
 export LLVM_LINXISA_BIN=/mnt/c/Users/<you>/linx/llvm-project/build-linxisa-clang/bin
 export LINX_LD_SCRIPT=/mnt/c/Users/<you>/linx/linx-isa/toolchain/libc/linx.ld
-bash janus/tools/build_linxisa_benchmarks_memh.sh
+bash designs/janus/tools/build_linxisa_benchmarks_memh.sh
 ```

@@ -54,7 +54,7 @@ def build(m: Circuit, STAGES: int = 3) -> None:
 You can override JIT parameters from the CLI (repeat `--param` as needed):
 
 ```bash
-PYTHONPATH=python python3 -m pycircuit.cli emit examples/fastfwd_pyc/fastfwd_pyc.py \
+PYTHONPATH=compiler/frontend python3 -m pycircuit.cli emit designs/examples/fastfwd_pyc/fastfwd_pyc.py \
   --param N_FE=8 \
   --param LANE_Q_DEPTH=64 --param ROB_DEPTH=32 \
   -o /tmp/fastfwd.pyc
@@ -76,47 +76,69 @@ with m.scope("EX"):
 - `.set(v, when=cond)` drives the backedge “next” wire (`d`).
 - `with m.scope("NAME"):` prefixes debug names for easier traceability.
 
-### 2.3 Hierarchy: `m.instance(...)` (multi-module designs)
+### 2.3 Hierarchy: function-call auto-instantiation (default)
 
-For large projects (SoCs, many cores), pyCircuit supports explicit module
-instantiation while preserving module boundaries through codegen.
+In the refactored frontend, plain function calls become module instances by
+default in design context.
 
 `pycircuit.cli emit` compiles a design into a single MLIR `module { ... }` that
-may contain **multiple** `func.func` hardware modules. Use `Circuit.instance`
-to instantiate submodules:
+can contain multiple `func.func` modules connected by `pyc.instance`.
 
 ```python
-from pycircuit import Circuit, module
+from pycircuit import Circuit, module, jit_inline
 
 @module(name="Core")
 def core(m: Circuit, *, WIDTH: int = 32) -> None:
-    clk = m.clock("clk")
-    rst = m.reset("rst")
     x = m.input("x", width=WIDTH)
     m.output("y", x + 1)
 
+@jit_inline
+def add_const(m: Circuit, x, c: int = 1):
+    # Inline helper (does not create a submodule).
+    return x + c
+
 def build(m: Circuit) -> None:
-    clk = m.clock("clk")
-    rst = m.reset("rst")
     x = m.input("x", width=32)
 
-    u0 = m.instance(core, name="core0", params={"WIDTH": 32}, clk=clk, rst=rst, x=x)
-    m.output("y", u0["y"])
+    # Auto-instance call:
+    # - hardware args -> ports
+    # - Python literals -> specialization params
+    u0 = core(m, x=x, WIDTH=32)
+
+    y = add_const(m, u0["y"], c=3)  # explicitly inlined helper
+    m.output("y", y)
 ```
 
 Key rules:
 
-- `name=` is the **instance name** used in generated Verilog/C++.
-- `params=` are **compile-time** specialization parameters (must be deterministic:
-  `bool/int/str` and tuples/lists/dicts thereof).
-- Port connections are **by port name**; missing/extra ports are hard errors.
-- The output of `m.instance(...)` is a `Bundle` keyed by the callee’s output port names.
+- Auto-instance applies to module-style calls `fn(m, ...)` with hardware values.
+- Hardware values (`Wire`/`Reg`/`Signal`/containers) map to ports.
+- Python literals map to specialization parameters.
+- For complex specialization objects, prefer explicit `Circuit.instance(..., params=...)`.
+- Instance names are deterministic callsite names: `<callee>__L<line>__N<idx>`.
+- `@jit_inline` is the explicit inline escape hatch.
+- `Circuit.instance(...)` remains available for fully explicit instantiation control.
 
 To scale builds, `pyc-compile` also supports split emission:
 
 ```bash
 pyc-compile design.pyc --emit=verilog --out-dir out/
 pyc-compile design.pyc --emit=cpp --out-dir out/
+```
+
+#### C++ backend optimization: instance eval cache (default-on)
+
+For generated C++ only, `pyc-compile` emits an input-change cache for each
+`pyc.instance` callsite. During parent `eval()`, a submodule's `eval()` is
+invoked only when at least one instance input has changed since the previous
+parent `eval()` pass. Outputs are still re-driven every pass from the submodule
+state, so behavior remains stable while reducing redundant recomputation.
+
+This optimization is enabled by default. To disable it for differential
+performance checks:
+
+```bash
+clang++ ... -DPYC_DISABLE_INSTANCE_EVAL_CACHE ...
 ```
 
 ### 2.4 Cycle-aware designs (optional API)
@@ -131,15 +153,13 @@ For CLI compatibility, the recommended pattern is:
 
 Examples:
 
-- `examples/digital_clock/digital_clock.py`
-- `examples/calculator/calculator.py`
-- `examples/multiclock_regs.py`
+- `designs/examples/digital_clock/digital_clock.py`
+- `designs/examples/calculator/calculator.py`
+- `designs/examples/multiclock_regs.py`
 
 Reference:
 
 - `docs/CYCLE_AWARE_API.md`
-
-This writes one file per module plus an `out/manifest.json`.
 
 FPGA-first Verilog emission enables inference-friendly attributes in primitives:
 
@@ -147,7 +167,7 @@ FPGA-first Verilog emission enables inference-friendly attributes in primitives:
 pyc-compile design.pyc --emit=verilog --target=fpga -o out.v
 ```
 
-### 2.4 Assertions (simulation-only)
+### 2.5 Assertions (simulation-only)
 
 In JIT-compiled design code, Python `assert` is supported and lowers to a
 simulation-only `pyc.assert` op:
@@ -164,7 +184,7 @@ Notes:
 - In non-JIT (elaboration) designs, use `m.assert_(cond, msg="...")` instead of
   Python `assert`, since `Wire` cannot be used as a Python boolean.
 
-### 2.5 Testbench generation: `pycircuit testgen` (C++ + SV/SVA)
+### 2.6 Testbench generation: `pycircuit testgen` (C++ + SV/SVA)
 
 A single Python file can define both the design and a small cycle-based
 testbench:
@@ -188,7 +208,7 @@ def tb(t: Tb) -> None:
 Generate split RTL plus C++/SystemVerilog testbenches:
 
 ```bash
-PYTHONPATH=python python3 -m pycircuit.cli testgen path/to/design.py --out-dir out/
+PYTHONPATH=compiler/frontend python3 -m pycircuit.cli testgen path/to/design.py --out-dir out/
 ```
 
 This emits:
@@ -196,7 +216,8 @@ This emits:
 - `out/*.v` (+ `out/pyc_primitives.v`) and `out/manifest.json`
 - `out/*.hpp`
 - `out/tb_<Top>.cpp`
-- `out/tb_<Top>.sv` (includes SVA assertions)
+- `out/tb_<Top>.sv` (includes SVA assertions; skipped in `--sim-mode=cpp-only`)
+- `out/compile_stats.json` (Reg/Mem + depth/WNS/TNS stats from `pyc-compile`)
 
 ---
 
@@ -337,15 +358,15 @@ Limitations (prototype): one `push()` and one `pop()` call per `Queue` instance.
 - async read (combinational)
 - sync write on clock edge (byte strobes)
 
-See `examples/linx_cpu_pyc/memory.py` and `examples/linx_cpu_pyc/linx_cpu_pyc.py`.
+See `designs/examples/linx_cpu_pyc/memory.py` and `designs/examples/linx_cpu_pyc/linx_cpu_pyc.py`.
 
 ---
 
-## 8) Multi-file designs: `@jit_inline`
+## 8) Multi-file designs: auto-instance vs `@jit_inline`
 
-If you split a design into multiple Python files (pipeline stages/modules),
-mark helpers with `@jit_inline` so they compile into the current circuit rather
-than executing at JIT time.
+If you split a design into multiple Python files, module-like calls are
+instance calls by default. Mark helper functions with `@jit_inline` when they
+must compile into the caller body.
 
 This preserves consistent name mangling:
 
@@ -369,14 +390,14 @@ Generated Verilog/C++ tries to keep readable identifiers:
 
 ### 9.2 C++ tracing (linx CPU)
 
-`examples/linx_cpu_pyc/tb_linx_cpu_pyc.cpp` supports:
+`designs/examples/linx_cpu_pyc/tb_linx_cpu_pyc.cpp` supports:
 
-- `PYC_TRACE=1` → instruction-level log (writes into `examples/generated/linx_cpu_pyc/`)
+- `PYC_TRACE=1` → instruction-level log (default under `.pycircuit_out/examples/linx_cpu_pyc/`)
 - `PYC_VCD=1` → VCD waveform dump (same folder)
 
 ### 9.3 SV tracing
 
-`examples/linx_cpu/tb_linx_cpu_pyc.sv` supports:
+`designs/examples/linx_cpu/tb_linx_cpu_pyc.sv` supports:
 
 - VCD dump by default (disable with `+notrace`)
 - log file by default (disable with `+nolog`)

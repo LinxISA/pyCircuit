@@ -50,7 +50,7 @@ xc7z020clg400-1
 
 ## Repo bring-up build (LED blink)
 
-Build a minimal bitstream using checked-in generated RTL:
+Build a minimal bitstream using the board RTL in this repo:
 
 ```powershell
 vivado -mode batch -source boards/zybo_z7_20/vivado/build_zybo_counter.tcl
