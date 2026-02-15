@@ -5,24 +5,25 @@ include(GNUInstallDirs)
 
 option(PYC_BUILD_MLIR_TOOLS "Build MLIR-based pyc tools" ON)
 option(PYC_BUILD_CPP_EXAMPLES "Build C++ simulation examples" ON)
-option(PYC_INSTALL_TEMPLATES "Install include/pyc template libraries" ON)
+option(PYC_INSTALL_TEMPLATES "Install runtime template libraries" ON)
 option(PYC_INSTALL_PYTHON "Install Python frontend sources (for binary packages)" ON)
 
 if(PYC_BUILD_MLIR_TOOLS)
-  add_subdirectory(pyc/mlir)
+  add_subdirectory(compiler/mlir)
 endif()
 
 if(PYC_BUILD_CPP_EXAMPLES)
-  add_subdirectory(examples/cpp)
+  add_subdirectory(designs/examples/cpp)
 endif()
 
 if(PYC_INSTALL_TEMPLATES)
-  install(DIRECTORY include/pyc DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}")
+  install(DIRECTORY runtime/cpp DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}")
+  install(DIRECTORY runtime/verilog DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}")
 endif()
 
 if(PYC_INSTALL_PYTHON)
   install(
-    DIRECTORY python/pycircuit
+    DIRECTORY compiler/frontend/pycircuit
     DESTINATION "${CMAKE_INSTALL_DATADIR}/pycircuit/python"
     PATTERN "__pycache__" EXCLUDE
     PATTERN "*.pyc" EXCLUDE

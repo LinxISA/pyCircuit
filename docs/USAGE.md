@@ -35,15 +35,16 @@ generate in Verilog and C++.
 as long as all non-`m` parameters have defaults.
 
 ```python
-from pycircuit import Circuit
+from pycircuit import Circuit, u
 
 def build(m: Circuit, STAGES: int = 3) -> None:
-    dom = m.domain("sys")
+    clk = m.clock("clk")
+    rst = m.reset("rst")
 
     a = m.input("a", width=16)
     b = m.input("b", width=16)
 
-    r = m.out("acc", domain=dom, width=16, init=0)
+    r = m.out("acc", clk=clk, rst=rst, width=16, init=u(16, 0))
 
     x = a + b
     r.set(x)  # default when=1
@@ -141,25 +142,59 @@ performance checks:
 clang++ ... -DPYC_DISABLE_INSTANCE_EVAL_CACHE ...
 ```
 
-### 2.4 Cycle-aware designs (optional API)
+### 2.4 Literal DSL (V3)
 
-pyCircuit also provides a **cycle-aware** API (`CycleAwareCircuit` / `CycleAwareDomain`) that tracks the
-cycle of each signal and can automatically balance cycles when values are combined.
+V3 design code removes the old const-helper authoring style. Use:
 
-For CLI compatibility, the recommended pattern is:
+- plain Python literals where context infers type/width (`0`, `0xFF`, `0b1010`)
+- explicit helpers when width/sign must be pinned:
+  - `u(width, value)` / `s(width, value)`
+  - `U(value)` / `S(value)`
 
-- Keep your “design function” as `fn(m: CycleAwareCircuit, domain: CycleAwareDomain, ...) -> None`
-- Provide a zero-arg `build()` wrapper that calls `compile_cycle_aware(fn, ...)` and returns the circuit.
+Example:
 
-Examples:
+```python
+from pycircuit import Circuit, u
 
-- `designs/examples/digital_clock/digital_clock.py`
-- `designs/examples/calculator/calculator.py`
-- `designs/examples/multiclock_regs.py`
+def build(m: Circuit) -> None:
+    x = m.input("x", width=32)
+    y = x + u(32, 5)
+    m.output("y", y)
+```
 
-Reference:
+### 2.5 Components (`@component`)
 
-- `docs/CYCLE_AWARE_API.md`
+Use class-based parametric components for reusable modules:
+
+```python
+from pycircuit import Circuit, component
+
+@component
+class Add1:
+    width: int = 8
+    def build(self, m: Circuit, x):
+        return (x + 1)[0:self.width]
+
+def build(m: Circuit) -> None:
+    x = m.input("x", width=8)
+    y = Add1(width=8)(m, x=x)
+    m.output("y", y)
+```
+
+### 2.6 Native `match/case`
+
+JIT supports Python `match` with literal cases and `_` default. Hardware subjects lower to compare-chain control logic.
+This requires Python 3.10+ syntax support in the frontend runtime.
+
+```python
+match op:
+    case 0:
+        y = a + b
+    case 1:
+        y = a - b
+    case _:
+        y = a ^ b
+```
 
 FPGA-first Verilog emission enables inference-friendly attributes in primitives:
 
@@ -167,7 +202,7 @@ FPGA-first Verilog emission enables inference-friendly attributes in primitives:
 pyc-compile design.pyc --emit=verilog --target=fpga -o out.v
 ```
 
-### 2.5 Assertions (simulation-only)
+### 2.7 Assertions (simulation-only)
 
 In JIT-compiled design code, Python `assert` is supported and lowers to a
 simulation-only `pyc.assert` op:
@@ -184,7 +219,7 @@ Notes:
 - In non-JIT (elaboration) designs, use `m.assert_(cond, msg="...")` instead of
   Python `assert`, since `Wire` cannot be used as a Python boolean.
 
-### 2.6 Testbench generation: `pycircuit testgen` (C++ + SV/SVA)
+### 2.8 Testbench generation: `pycircuit testgen` (C++ + SV/SVA)
 
 A single Python file can define both the design and a small cycle-based
 testbench:
@@ -244,10 +279,10 @@ The frontend tries to remove common “cast noise”:
   - if a variable is only assigned in one branch, the other branch keeps the
     previous value (if pre-defined) or defaults to `0`.
 
-If you need explicit signed behavior, use `.sext(...)` / `.ashr(...)` manually
-today. You can also mark signed intent at the edges (e.g. `m.input(..., signed=True)`
-or negative literals); signed intent is propagated through most arithmetic and
-selects signed lowering (`pyc.slt`, `pyc.sdiv`, `pyc.ashri`, etc).
+For explicit signed behavior, mark values with `.as_signed()` (or signed ports)
+and use normal operators. Explicit cast helpers (`trunc`/`zext`/`sext`) are
+removed from design-facing APIs; narrowing should be done with slicing when
+required.
 
 ---
 
@@ -275,10 +310,10 @@ Inside JIT-compiled code, these compile to `i1` wires:
 - `==`, `!=`
 - `<`, `<=`, `>`, `>=` (respects signed intent: if either operand is signed, lowers to signed compare)
 
-In helper functions executed at JIT time (plain Python), prefer explicit methods:
+In helper functions executed at JIT time (plain Python), keep using operator
+syntax (`==`, `<`, etc). For explicit unsigned compares, use:
 
-- `x.eq(y)` for equality
-- `x.ult(y)`, `x.ule(y)`, `x.ugt(y)`, `x.uge(y)` for unsigned compares
+- `x.ult(y)`, `x.ule(y)`, `x.ugt(y)`, `x.uge(y)`
 
 ### 4.4 Concatenation (packed buses)
 

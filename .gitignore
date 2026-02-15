@@ -220,8 +220,10 @@ marimo/_static/
 marimo/_lsp/
 __marimo__/
 
-# Verilog tool build outputs
-examples/generated/**/verilator/
-
-# Janus generated outputs (pyc-compile, verilator builds, benchmark artifacts)
+# pyCircuit generated outputs (local artifacts only; never checked in)
+.pycircuit_out/
+designs/**/generated/
+designs/examples/generated/**/verilator/
+designs/janus/generated/
+examples/generated/
 janus/generated/
