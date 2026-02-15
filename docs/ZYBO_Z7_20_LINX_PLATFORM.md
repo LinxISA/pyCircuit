@@ -3,7 +3,7 @@
 This repo provides two Zybo Z7-20 PS/PL bitstreams:
 
 - **In-order** core artifacts: `.pycircuit_out/examples/linx_cpu_pyc/`
-- **OOO** core artifacts: `.pycircuit_out/janus/janus_bcc_ooo_pyc/`
+- **OOO** core artifacts: `.pycircuit_out/linxcore/linxcore_top/`
 
 Both use the same PL control/status block (AXI4-Lite) so a PS “monitor” app can:
 

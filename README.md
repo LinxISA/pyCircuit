@@ -23,7 +23,7 @@ You write Python design code, emit MLIR (`.pyc`), run a strict MLIR pass pipelin
 - MLIR compiler: `compiler/mlir/`
 - Runtime libraries: `runtime/cpp/`, `runtime/verilog/`
 - Flows: `flows/scripts/`, `flows/tools/`
-- Designs: `designs/examples/`, `designs/janus/`
+- Designs: `designs/examples/`, `designs/linxcore/`
 
 Legacy paths are no longer canonical (`python/pycircuit`, `pyc/mlir`, `include/pyc`, `tools/`, `scripts/`, `examples/`, `janus/`).
 
@@ -100,7 +100,7 @@ Generated files are out-of-tree local artifacts and are not checked into git.
 Default script output root:
 
 - `.pycircuit_out/examples/...`
-- `.pycircuit_out/janus/...`
+- `.pycircuit_out/linxcore/...`
 
 The repository `.gitignore` enforces this policy.
 
@@ -112,9 +112,8 @@ Run Linx CPU C++ regression:
 bash flows/tools/run_linx_cpu_pyc_cpp.sh
 ```
 
-Run Janus C++ regressions:
+Run LinxCore smoke regression:
 
 ```bash
-bash designs/janus/tools/run_janus_bcc_pyc_cpp.sh
-bash designs/janus/tools/run_janus_bcc_ooo_pyc_cpp.sh
+bash designs/linxcore/tests/test_trace_schema_and_mem.sh
 ```

@@ -48,10 +48,8 @@ def _detect_pyc_compile(root: Path) -> Path:
     raise SystemExit("missing pyc-compile (set PYC_COMPILE=... or build it first)")
 
 
-def _pythonpath(root: Path, *, include_janus: bool = False) -> str:
+def _pythonpath(root: Path) -> str:
     parts = [str(root / "compiler" / "frontend"), str(root / "designs")]
-    if include_janus:
-        parts.append(str(root / "designs" / "janus" / "pyc"))
     old = os.environ.get("PYTHONPATH")
     if old:
         parts.append(old)
@@ -208,7 +206,7 @@ def _run_linx_case(
     }
 
 
-def _run_janus_case(
+def _run_linxcore_case(
     root: Path,
     pyc_compile: Path,
     profile: str,
@@ -217,76 +215,37 @@ def _run_janus_case(
     perf_repeats: int,
     perf_max_cycles: int,
 ) -> dict[str, Any]:
-    out_dir = root / ".pycircuit_out" / "perf" / "janus_bcc_ooo"
+    out_dir = root / ".pycircuit_out" / "perf" / "linxcore"
     out_dir.mkdir(parents=True, exist_ok=True)
-    pyc_path = out_dir / "janus_bcc_ooo_pyc.pyc"
-    hdr_path = out_dir / "janus_bcc_ooo_pyc_gen.hpp"
-    tb_path = out_dir / f"tb_janus_bcc_ooo_pyc_cpp_{profile}"
-    stats_path = Path(str(hdr_path) + ".stats.json")
-
-    env_emit = os.environ.copy()
-    env_emit["PYTHONDONTWRITEBYTECODE"] = "1"
-    env_emit["PYTHONPATH"] = _pythonpath(root, include_janus=True)
-
-    emit_s, _ = _run(
-        [
-            sys.executable,
-            "-m",
-            "pycircuit.cli",
-            "emit",
-            "designs/janus/pyc/janus/bcc/janus_bcc_ooo_pyc.py",
-            "-o",
-            str(pyc_path),
-        ],
-        cwd=root,
-        env=env_emit,
-    )
-
-    compile_s, _ = _run(
-        [
-            str(pyc_compile),
-            str(pyc_path),
-            "--emit=cpp",
-            f"--sim-mode={sim_mode}",
-            f"--logic-depth={logic_depth}",
-            "-o",
-            str(hdr_path),
-        ],
-        cwd=root,
-        env=os.environ.copy(),
-    )
-
-    cxx = os.environ.get("CXX", "clang++")
-    tb_build_s, _ = _run(
-        [
-            cxx,
-            *_build_flags(profile),
-            "-I",
-            str(root / "runtime"),
-            "-I",
-            str(out_dir),
-            "-o",
-            str(tb_path),
-            str(root / "designs" / "janus" / "tb" / "tb_janus_bcc_ooo_pyc.cpp"),
-        ],
-        cwd=root,
-        env=os.environ.copy(),
-    )
 
     env_run = os.environ.copy()
+    env_run["PYC_COMPILE"] = str(pyc_compile)
+    env_run["PYC_LOGIC_DEPTH"] = str(int(logic_depth))
     env_run.setdefault("PYC_KONATA", "0")
-    perf_memh = str(root / "designs" / "janus" / "programs" / "test_or.memh")
+    env_run["PYC_MAX_CYCLES"] = str(int(perf_max_cycles))
+    env_run["CORE_ITERATIONS"] = str(int(perf_repeats))
+    env_run["DHRY_RUNS"] = str(int(perf_repeats) * 100)
+
+    emit_s, bench_build_out = _run(
+        ["bash", str(root / "designs" / "linxcore" / "tools" / "image" / "build_linxisa_benchmarks_memh_compat.sh")],
+        cwd=root,
+        env=env_run,
+        capture_stdout=True,
+    )
+    memh_lines = [ln.strip() for ln in bench_build_out.splitlines() if ln.strip()]
+    if len(memh_lines) < 2:
+        raise RuntimeError("failed to build linxcore benchmark memh")
+    perf_memh = memh_lines[1]
+
+    compile_s, _ = _run(
+        ["bash", str(root / "designs" / "linxcore" / "tools" / "generate" / "update_generated_linxcore.sh")],
+        cwd=root,
+        env=env_run,
+    )
+
+    tb_build_s = 0.0
     sim_s, sim_out = _run(
-        [
-            str(tb_path),
-            "--perf",
-            "--perf-repeat",
-            str(int(perf_repeats)),
-            "--perf-max-cycles",
-            str(int(perf_max_cycles)),
-            "--perf-memh",
-            perf_memh,
-        ],
+        ["bash", str(root / "designs" / "linxcore" / "tools" / "generate" / "run_linxcore_top_cpp.sh"), perf_memh],
         cwd=root,
         env=env_run,
         capture_stdout=True,
@@ -305,14 +264,14 @@ def _run_janus_case(
         "cycles_per_sec": cps,
         "perf_repeats": int(perf_repeats),
         "perf_max_cycles": int(perf_max_cycles),
-        "header_loc": _count_lines(hdr_path),
-        "compile_stats": _stats(stats_path),
+        "header_loc": 0,
+        "compile_stats": {},
     }
 
 
 def main() -> int:
     root = _repo_root()
-    ap = argparse.ArgumentParser(description="Run pyCircuit Linx+Janus perf smoke and emit JSON metrics.")
+    ap = argparse.ArgumentParser(description="Run pyCircuit Linx+LinxCore perf smoke and emit JSON metrics.")
     ap.add_argument(
         "--output",
         default=str(root / ".pycircuit_out" / "perf" / "perf_smoke.json"),
@@ -322,7 +281,7 @@ def main() -> int:
     ap.add_argument("--logic-depth", type=int, default=32)
     ap.add_argument("--sim-mode", choices=["default", "cpp-only"], default="cpp-only")
     ap.add_argument("--perf-repeats-linx", type=int, default=16)
-    ap.add_argument("--perf-repeats-janus", type=int, default=16)
+    ap.add_argument("--perf-repeats-linxcore", type=int, default=16)
     ap.add_argument("--perf-max-cycles", type=int, default=4096)
     args = ap.parse_args()
 
@@ -345,13 +304,13 @@ def main() -> int:
         perf_repeats=int(args.perf_repeats_linx),
         perf_max_cycles=int(args.perf_max_cycles),
     )
-    result["cases"]["janus_bcc_ooo"] = _run_janus_case(
+    result["cases"]["linxcore"] = _run_linxcore_case(
         root,
         pyc_compile,
         profile=str(args.profile),
         logic_depth=int(args.logic_depth),
         sim_mode=str(args.sim_mode),
-        perf_repeats=int(args.perf_repeats_janus),
+        perf_repeats=int(args.perf_repeats_linxcore),
         perf_max_cycles=int(args.perf_max_cycles),
     )
 

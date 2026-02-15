@@ -39,10 +39,10 @@ Regenerate example outputs:
 python3 flows/tools/pyc_flow.py regen --examples
 ```
 
-Regenerate Janus outputs:
+Regenerate LinxCore outputs:
 
 ```bash
-python3 flows/tools/pyc_flow.py regen --janus
+python3 flows/tools/pyc_flow.py regen --linxcore
 ```
 
 Default `regen` with no flags runs both.

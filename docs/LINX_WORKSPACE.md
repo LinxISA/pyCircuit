@@ -80,12 +80,12 @@ Full WSL usage + build script:
 
 ## 4) Benchmarks (memh images for bring-up)
 
-Once you have a LinxISA clang + libc available, you can build `.memh` images used by Janus bring-up scripts:
+Once you have a LinxISA clang + libc available, you can build `.memh` images used by LinxCore bring-up scripts:
 
 ```bash
 cd /mnt/c/Users/<you>/pyCircuit
 export LINXISA_DIR=/mnt/c/Users/<you>/linx/linx-isa
 export LLVM_LINXISA_BIN=/mnt/c/Users/<you>/linx/llvm-project/build-linxisa-clang/bin
 export LINX_LD_SCRIPT=/mnt/c/Users/<you>/linx/linx-isa/toolchain/libc/linx.ld
-bash designs/janus/tools/build_linxisa_benchmarks_memh.sh
+bash designs/linxcore/tools/image/build_linxisa_benchmarks_memh_compat.sh
 ```

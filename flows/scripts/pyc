@@ -14,7 +14,7 @@ Usage: flows/scripts/pyc <command>
 Commands:
   build        Configure+build pyc-compile/pyc-opt into ./build
   regen        Regenerate local outputs under ./.pycircuit_out
-  test         Run examples compile regression + C++ regressions (fastfwd + linx_cpu + janus)
+  test         Run examples compile regression + C++ regressions (fastfwd + linx_cpu + linxcore)
 
 Env:
   LLVM_DIR, MLIR_DIR   Optional. If unset, flows/scripts/pyc tries to infer via llvm-config.
@@ -73,8 +73,8 @@ case "${cmd}" in
     pyc_find_pyc_compile
     pyc_log "regen .pycircuit_out/examples/*"
     PYC_COMPILE="${PYC_COMPILE}" bash "${ROOT_DIR}/designs/examples/update_generated.sh"
-    pyc_log "regen .pycircuit_out/janus/*"
-    PYC_COMPILE="${PYC_COMPILE}" bash "${ROOT_DIR}/designs/janus/update_generated.sh"
+    pyc_log "regen .pycircuit_out/linxcore/*"
+    PYC_COMPILE="${PYC_COMPILE}" bash "${ROOT_DIR}/designs/linxcore/tools/generate/update_generated_linxcore.sh"
     pyc_log "ok"
     ;;
 
@@ -86,10 +86,8 @@ case "${cmd}" in
     PYC_COMPILE="${PYC_COMPILE}" bash "${ROOT_DIR}/flows/tools/run_fastfwd_pyc_cpp.sh" --cycles 2000 --packets 4000
     pyc_log "linx cpu regression (C++)"
     PYC_COMPILE="${PYC_COMPILE}" bash "${ROOT_DIR}/flows/tools/run_linx_cpu_pyc_cpp.sh"
-    pyc_log "janus bcc regression (C++)"
-    PYC_COMPILE="${PYC_COMPILE}" bash "${ROOT_DIR}/designs/janus/tools/run_janus_bcc_pyc_cpp.sh"
-    pyc_log "janus bcc ooo regression (C++)"
-    PYC_COMPILE="${PYC_COMPILE}" bash "${ROOT_DIR}/designs/janus/tools/run_janus_bcc_ooo_pyc_cpp.sh"
+    pyc_log "linxcore smoke regression"
+    PYC_COMPILE="${PYC_COMPILE}" bash "${ROOT_DIR}/designs/linxcore/tests/test_trace_schema_and_mem.sh"
     pyc_log "ok"
     ;;
 

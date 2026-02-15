@@ -221,6 +221,6 @@ Generated outputs are local artifacts and must not be checked into git.
 Default output root used by flow scripts:
 
 - `.pycircuit_out/examples/...`
-- `.pycircuit_out/janus/...`
+- `.pycircuit_out/linxcore/...`
 
 The repo `.gitignore` enforces this policy.

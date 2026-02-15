@@ -115,7 +115,7 @@ def main() -> int:
 
     roots = [Path(p) for p in ns.paths] if ns.paths else [
         Path("/Users/zhoubot/pyCircuit/designs/examples"),
-        Path("/Users/zhoubot/pyCircuit/designs/janus"),
+        Path("/Users/zhoubot/pyCircuit/designs/linxcore"),
     ]
     changed = 0
     for f in iter_py_files(roots):

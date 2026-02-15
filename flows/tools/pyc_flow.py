@@ -153,8 +153,8 @@ def cmd_regen(args: argparse.Namespace) -> int:
 
     if args.examples:
         run(["bash", str(ROOT / "designs" / "examples" / "update_generated.sh")], env=env)
-    if args.janus:
-        run(["bash", str(ROOT / "designs" / "janus" / "update_generated.sh")], env=env)
+    if args.linxcore:
+        run(["bash", str(ROOT / "designs" / "linxcore" / "tools" / "generate" / "update_generated_linxcore.sh")], env=env)
     return 0
 
 
@@ -169,9 +169,8 @@ def cmd_cpp_test(args: argparse.Namespace) -> int:
         run(["bash", str(ROOT / "flows" / "tools" / "run_fastfwd_pyc_cpp.sh")], env=env)
     if args.cpu:
         run(["bash", str(ROOT / "flows" / "tools" / "run_linx_cpu_pyc_cpp.sh")], env=env)
-    if args.janus:
-        run(["bash", str(ROOT / "designs" / "janus" / "tools" / "run_janus_bcc_pyc_cpp.sh")], env=env)
-        run(["bash", str(ROOT / "designs" / "janus" / "tools" / "run_janus_bcc_ooo_pyc_cpp.sh")], env=env)
+    if args.linxcore:
+        run(["bash", str(ROOT / "designs" / "linxcore" / "tests" / "test_trace_schema_and_mem.sh")], env=env)
     return 0
 
 
@@ -651,16 +650,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     doctor = sub.add_parser("doctor", help="Check for required external tools.")
     doctor.set_defaults(fn=cmd_doctor)
 
-    regen = sub.add_parser("regen", help="Regenerate checked-in outputs (designs/examples/ + designs/janus/).")
+    regen = sub.add_parser("regen", help="Regenerate checked-in outputs (designs/examples/ + designs/linxcore/).")
     regen.add_argument("--examples", action="store_true", help="Regenerate .pycircuit_out/examples/*")
-    regen.add_argument("--janus", action="store_true", help="Regenerate .pycircuit_out/janus/*")
+    regen.add_argument("--linxcore", action="store_true", help="Regenerate LinxCore generated outputs")
     regen.add_argument("--fastfwd-nfe", type=int, default=None, help="Override FastFwd FE count (multiple of 4, <= 32)")
     regen.set_defaults(fn=cmd_regen)
 
     cpp = sub.add_parser("cpp-test", help="Run C++ tick-model regressions (CA models).")
     cpp.add_argument("--fastfwd", action="store_true", help="Run FastFwd C++ regression")
     cpp.add_argument("--cpu", action="store_true", help="Run Linx CPU C++ regression")
-    cpp.add_argument("--janus", action="store_true", help="Run Janus C++ regressions")
+    cpp.add_argument("--linxcore", action="store_true", help="Run LinxCore smoke regression")
     cpp.set_defaults(fn=cmd_cpp_test)
 
     vsim = sub.add_parser("verilog-sim", help="Simulate generated Verilog with Icarus or Verilator.")
@@ -697,13 +696,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     ns = p.parse_args(argv)
 
     # Convenience defaults.
-    if ns.cmd == "regen" and not (ns.examples or ns.janus):
+    if ns.cmd == "regen" and not (ns.examples or ns.linxcore):
         ns.examples = True
-        ns.janus = True
-    if ns.cmd == "cpp-test" and not (ns.fastfwd or ns.cpu or ns.janus):
+        ns.linxcore = True
+    if ns.cmd == "cpp-test" and not (ns.fastfwd or ns.cpu or ns.linxcore):
         ns.fastfwd = True
         ns.cpu = True
-        ns.janus = True
+        ns.linxcore = True
 
     return int(ns.fn(ns))
 

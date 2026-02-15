@@ -27,7 +27,7 @@ EXAMPLES_ONLY_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
 
 DEFAULT_TARGETS: tuple[str, ...] = (
     "designs/examples",
-    "designs/janus",
+    "designs/linxcore",
     "docs",
     "README.md",
 )
@@ -86,7 +86,7 @@ def main() -> int:
         "targets",
         nargs="*",
         default=list(DEFAULT_TARGETS),
-        help="Files/directories to scan (default: designs/examples designs/janus docs README.md)",
+        help="Files/directories to scan (default: designs/examples designs/linxcore docs README.md)",
     )
     args = ap.parse_args()
 

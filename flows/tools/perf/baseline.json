@@ -1,6 +1,6 @@
 {
   "cases": {
-    "janus_bcc_ooo": {
+    "linxcore": {
       "compile_s": 6.0,
       "cycles_per_sec": 50.0,
       "emit_s": 4.0,
