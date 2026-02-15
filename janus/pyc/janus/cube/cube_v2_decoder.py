@@ -1,7 +1,7 @@
 """Cube v2 MATMUL Decoder and Uop Generator.
 
 Decomposes MATMUL(M, K, N) instructions into micro-operations (uops) for the systolic array.
-Each uop represents a 16×16 tile multiplication.
+Each uop represents an ARRAY_SIZE×ARRAY_SIZE tile multiplication.
 """
 
 from __future__ import annotations
@@ -83,22 +83,26 @@ def build_matmul_decoder(
         gen_state = _make_uop_gen_state(m, clk, rst, consts)
 
         # Calculate tile counts on start
-        # tiles = ceil(dim / 16) = (dim + 15) / 16
+        # tiles = ceil(dim / ARRAY_SIZE) = (dim + ARRAY_SIZE - 1) / ARRAY_SIZE
+        # Use bit shift for power-of-2 ARRAY_SIZE
+        import math
+        shift_amount = int(math.log2(ARRAY_SIZE))
+
         with m.scope("TILE_CALC"):
             tile_size = c(ARRAY_SIZE, width=16)
             tile_mask = c(ARRAY_SIZE - 1, width=16)
 
             # M tiles
             m_plus = inst_m + tile_mask
-            m_tiles_calc = m_plus >> 4  # Divide by 16
+            m_tiles_calc = m_plus >> shift_amount
 
             # K tiles
             k_plus = inst_k + tile_mask
-            k_tiles_calc = k_plus >> 4
+            k_tiles_calc = k_plus >> shift_amount
 
             # N tiles
             n_plus = inst_n + tile_mask
-            n_tiles_calc = n_plus >> 4
+            n_tiles_calc = n_plus >> shift_amount
 
         # Latch instruction on start
         with m.scope("LATCH"):
@@ -110,14 +114,8 @@ def build_matmul_decoder(
             gen_state.k_tiles.set(k_tiles_calc.trunc(width=TILE_IDX_WIDTH), when=start)
             gen_state.n_tiles.set(n_tiles_calc.trunc(width=TILE_IDX_WIDTH), when=start)
 
-            # Reset tile indices
-            gen_state.m_tile.set(c(0, width=TILE_IDX_WIDTH), when=start)
-            gen_state.k_tile.set(c(0, width=TILE_IDX_WIDTH), when=start)
-            gen_state.n_tile.set(c(0, width=TILE_IDX_WIDTH), when=start)
-
-            # Start generating
-            gen_state.generating.set(consts.one1, when=start)
-            gen_state.gen_done.set(consts.zero1, when=start)
+            # Note: tile indices are set below with explicit priority mux
+            # Note: generating and gen_done are set below with explicit priority
 
         # Uop generation logic
         with m.scope("UOP_GEN"):
@@ -157,7 +155,7 @@ def build_matmul_decoder(
             # Output valid uop
             uop_valid = can_generate
 
-            # Advance tile indices (iterate: k, n, m order for better locality)
+            # Compute tile index advancement (iterate: k, n, m order for better locality)
             with m.scope("ADVANCE"):
                 # Next k_tile
                 k_tile_next = k_tile + c(1, width=TILE_IDX_WIDTH)
@@ -174,29 +172,63 @@ def build_matmul_decoder(
                 # All done when m wraps
                 all_done = k_wrap & n_wrap & m_wrap
 
-                # Update indices when generating
-                # K advances every cycle
+                # Compute new values for tile indices
                 new_k = k_wrap.select(c(0, width=TILE_IDX_WIDTH), k_tile_next)
-                gen_state.k_tile.set(new_k, when=can_generate)
-
-                # N advances when K wraps
                 new_n = (k_wrap & n_wrap).select(c(0, width=TILE_IDX_WIDTH), n_tile_next)
-                gen_state.n_tile.set(new_n, when=can_generate & k_wrap)
 
-                # M advances when N wraps
-                gen_state.m_tile.set(m_tile_next, when=can_generate & k_wrap & n_wrap)
+        # Explicit priority mux for generating and gen_done
+        # Priority: reset_decoder > (can_generate & all_done) > start > hold
+        with m.scope("STATE_UPDATE"):
+            current_generating = gen_state.generating.out()
+            current_gen_done = gen_state.gen_done.out()
 
-                # Done when all tiles generated
-                gen_state.generating.set(consts.zero1, when=can_generate & all_done)
-                gen_state.gen_done.set(consts.one1, when=can_generate & all_done)
+            # Default: hold current value
+            next_generating = current_generating
+            next_gen_done = current_gen_done
 
-        # Reset logic
-        with m.scope("RESET"):
-            gen_state.generating.set(consts.zero1, when=reset_decoder)
-            gen_state.gen_done.set(consts.zero1, when=reset_decoder)
-            gen_state.m_tile.set(c(0, width=TILE_IDX_WIDTH), when=reset_decoder)
-            gen_state.k_tile.set(c(0, width=TILE_IDX_WIDTH), when=reset_decoder)
-            gen_state.n_tile.set(c(0, width=TILE_IDX_WIDTH), when=reset_decoder)
+            # start sets generating=1, gen_done=0
+            next_generating = start.select(consts.one1, next_generating)
+            next_gen_done = start.select(consts.zero1, next_gen_done)
+
+            # can_generate & all_done sets generating=0, gen_done=1
+            finish_cond = can_generate & all_done
+            next_generating = finish_cond.select(consts.zero1, next_generating)
+            next_gen_done = finish_cond.select(consts.one1, next_gen_done)
+
+            # reset_decoder sets generating=0, gen_done=0 (highest priority)
+            next_generating = reset_decoder.select(consts.zero1, next_generating)
+            next_gen_done = reset_decoder.select(consts.zero1, next_gen_done)
+
+            # Single set call with explicit next value
+            gen_state.generating.set(next_generating)
+            gen_state.gen_done.set(next_gen_done)
+
+        # Explicit priority mux for tile indices
+        # Priority: reset_decoder > start > advance > hold
+        with m.scope("TILE_UPDATE"):
+            # K tile
+            current_k = gen_state.k_tile.out()
+            next_k = current_k
+            next_k = can_generate.select(new_k, next_k)
+            next_k = start.select(c(0, width=TILE_IDX_WIDTH), next_k)
+            next_k = reset_decoder.select(c(0, width=TILE_IDX_WIDTH), next_k)
+            gen_state.k_tile.set(next_k)
+
+            # N tile
+            current_n = gen_state.n_tile.out()
+            next_n_val = current_n
+            next_n_val = (can_generate & k_wrap).select(new_n, next_n_val)
+            next_n_val = start.select(c(0, width=TILE_IDX_WIDTH), next_n_val)
+            next_n_val = reset_decoder.select(c(0, width=TILE_IDX_WIDTH), next_n_val)
+            gen_state.n_tile.set(next_n_val)
+
+            # M tile
+            current_m = gen_state.m_tile.out()
+            next_m = current_m
+            next_m = (can_generate & k_wrap & n_wrap).select(m_tile_next, next_m)
+            next_m = start.select(c(0, width=TILE_IDX_WIDTH), next_m)
+            next_m = reset_decoder.select(c(0, width=TILE_IDX_WIDTH), next_m)
+            gen_state.m_tile.set(next_m)
 
         gen_done = gen_state.gen_done.out()
 

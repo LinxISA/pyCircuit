@@ -544,6 +544,28 @@ Performance metrics:
     - At 1 GHz: 4.096 TMAC/s (INT16)
 ```
 
+### 7.6 Benchmark Results (64×64×64 MATMUL)
+
+Actual cycle counts measured via Verilator simulation:
+
+| PE Array | Tile Size | Tiles (M×K×N) | Uops | Theoretical | Actual | Overhead | Efficiency |
+|----------|-----------|---------------|------|-------------|--------|----------|------------|
+| 16×16 | 16×16 | 4×4×4 | 64 | 67 | 74 | 7 | 90.54% |
+| 8×8 | 8×8 | 8×8×8 | 512 | 515 | 579 | 64 | 88.95% |
+| 4×4 | 4×4 | 16×16×16 | 4096 | 4099 | 4163 | 64 | 98.46% |
+
+```
+Theoretical cycles = uops + pipeline_depth - 1 + startup_overhead
+  - 16×16: 64 + 4 - 1 = 67 (actual: 74, +7 overhead)
+  - 8×8:   512 + 4 - 1 = 515 (actual: 579, +64 overhead)
+  - 4×4:   4096 + 4 - 1 = 4099 (actual: 4163, +64 overhead)
+
+Efficiency = theoretical / actual
+  - Larger PE arrays have higher per-uop throughput but more startup overhead
+  - Smaller PE arrays have lower overhead percentage due to more uops
+  - Fixed overhead (~64 cycles) from pipeline startup/drain and FSM transitions
+```
+
 ---
 
 ## 8. MMIO Interface

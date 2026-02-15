@@ -83,6 +83,16 @@ uop4:                           [C0]──[C1]──[C2]──[C3]──►ACC
 Pipeline: 4-cycle latency, 1 uop/cycle throughput
 ```
 
+### Benchmark Results (64×64×64 MATMUL)
+
+| PE Array | Uops | Actual Cycles | Efficiency |
+|----------|------|---------------|------------|
+| 16×16 | 64 | 74 | 90.54% |
+| 8×8 | 512 | 579 | 88.95% |
+| 4×4 | 4096 | 4163 | 98.46% |
+
+See [CUBE_V2_SPEC.md](CUBE_V2_SPEC.md#76-benchmark-results-64×64×64-matmul) for detailed analysis.
+
 ### Cube v2 File Structure
 
 ```

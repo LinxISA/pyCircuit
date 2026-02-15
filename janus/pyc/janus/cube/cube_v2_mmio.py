@@ -168,6 +168,8 @@ def build_mmio_read(
 def build_mmio_inst_write(
     m: Circuit,
     *,
+    clk: Wire,
+    rst: Wire,
     consts: Consts,
     base_addr: int,
     mem_wvalid: Wire,
@@ -185,9 +187,19 @@ def build_mmio_inst_write(
         # MATMUL instruction register (M, K, N packed)
         # Format: [15:0] = M, [31:16] = K, [47:32] = N
         inst_match = mem_waddr.eq(c(base_addr + ADDR_MATMUL_INST, width=64)) & mem_wvalid
-        inst_m = mem_wdata[0:16]
-        inst_k = mem_wdata[16:32]
-        inst_n = mem_wdata[32:48]
+
+        # Latch instruction values into registers
+        inst_m_reg = m.out("inst_m", clk=clk, rst=rst, width=16, init=0, en=consts.one1)
+        inst_k_reg = m.out("inst_k", clk=clk, rst=rst, width=16, init=0, en=consts.one1)
+        inst_n_reg = m.out("inst_n", clk=clk, rst=rst, width=16, init=0, en=consts.one1)
+
+        inst_m_reg.set(mem_wdata[0:16], when=inst_match)
+        inst_k_reg.set(mem_wdata[16:32], when=inst_match)
+        inst_n_reg.set(mem_wdata[32:48], when=inst_match)
+
+        inst_m = inst_m_reg.out()
+        inst_k = inst_k_reg.out()
+        inst_n = inst_n_reg.out()
 
         # Address registers
         addr_a_match = mem_waddr.eq(c(base_addr + ADDR_ADDR_A, width=64)) & mem_wvalid

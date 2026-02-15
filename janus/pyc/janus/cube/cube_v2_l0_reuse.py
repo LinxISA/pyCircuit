@@ -86,12 +86,21 @@ def build_l0_buffer_reuse(
                 loading_reg = m.out("loading", clk=clk, rst=rst, width=1, init=0, en=consts.one1)
                 ref_count_reg = m.out("ref_count", clk=clk, rst=rst, width=8, init=0, en=consts.one1)
 
-                # Create a valid register that mirrors the instance output
-                valid_reg = m.out("valid", clk=clk, rst=rst, width=1, init=0, en=consts.one1)
-                valid_reg.set(entry["valid"], when=consts.one1)
+                # Use the instance's valid output directly (it's already registered)
+                # Create a dummy register that just holds the value for the status interface
+                valid_wire = entry["valid"]
+
+                # Create a simple wrapper that exposes the valid signal
+                # We use a register but set it unconditionally to the instance output
+                # This avoids the extra cycle of latency
+                class ValidWrapper:
+                    def __init__(self, wire):
+                        self._wire = wire
+                    def out(self):
+                        return self._wire
 
                 status = L0EntryStatus(
-                    valid=valid_reg,
+                    valid=ValidWrapper(valid_wire),
                     loading=loading_reg,
                     ref_count=ref_count_reg,
                 )

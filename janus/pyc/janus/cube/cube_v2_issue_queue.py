@@ -90,30 +90,26 @@ def build_issue_queue(
         queue_full = count.out().eq(c(ISSUE_QUEUE_SIZE, width=QUEUE_IDX_WIDTH + 1))
         queue_empty = count.out().eq(c(0, width=QUEUE_IDX_WIDTH + 1))
 
-        # Enqueue logic
+        # Enqueue logic - compute enqueue conditions
         with m.scope("ENQUEUE"):
             can_enqueue = enqueue_valid & ~queue_full & ~flush
 
+            # Compute per-entry enqueue conditions
+            enqueue_this_list = []
             for i in range(ISSUE_QUEUE_SIZE):
                 tail_match = tail.out().eq(c(i, width=QUEUE_IDX_WIDTH))
                 enqueue_this = can_enqueue & tail_match
+                enqueue_this_list.append(enqueue_this)
 
-                # Write uop data
+                # Write uop data (these don't have conflicts)
                 entries[i].uop.l0a_idx.set(enqueue_l0a_idx, when=enqueue_this)
                 entries[i].uop.l0b_idx.set(enqueue_l0b_idx, when=enqueue_this)
                 entries[i].uop.acc_idx.set(enqueue_acc_idx, when=enqueue_this)
                 entries[i].uop.is_first.set(enqueue_is_first, when=enqueue_this)
                 entries[i].uop.is_last.set(enqueue_is_last, when=enqueue_this)
 
-                # Set valid, clear issued
-                entries[i].valid.set(consts.one1, when=enqueue_this)
-                entries[i].issued.set(consts.zero1, when=enqueue_this)
-
-            # Update tail pointer
-            next_tail = (tail.out() + consts.one8.trunc(width=QUEUE_IDX_WIDTH)) & c(
-                ISSUE_QUEUE_SIZE - 1, width=QUEUE_IDX_WIDTH
-            )
-            tail.set(next_tail, when=can_enqueue)
+            # Note: valid and issued updates moved to ENTRY_STATE section
+            # Note: tail pointer update moved to FLUSH section with explicit priority mux
 
         # Update ready bits based on buffer status
         with m.scope("READY_UPDATE"):
@@ -182,12 +178,13 @@ def build_issue_queue(
 
                 found = found | is_ready
 
-            # Mark as issued when acknowledged
+            # Compute mark_issued conditions (moved to ENTRY_STATE section)
             issue_and_ack = issue_valid & issue_ack
+            mark_issued_list = []
             for i in range(ISSUE_QUEUE_SIZE):
                 idx_match = issue_idx.eq(c(i, width=QUEUE_IDX_WIDTH))
                 mark_issued = issue_and_ack & idx_match
-                entries[i].issued.set(consts.one1, when=mark_issued)
+                mark_issued_list.append(mark_issued)
 
             # Create issue result
             issued_uop = Uop(
@@ -199,15 +196,14 @@ def build_issue_queue(
             )
             issue_result = IssueResult(issue_valid=issue_valid, uop=issued_uop)
 
-        # Retire logic (remove completed entries)
+        # Retire logic (compute retire conditions)
         with m.scope("RETIRE"):
-            # Retire from head when issued
+            # Compute can_retire conditions
+            can_retire_list = []
             for i in range(ISSUE_QUEUE_SIZE):
                 head_match = head.out().eq(c(i, width=QUEUE_IDX_WIDTH))
                 can_retire = head_match & entries[i].valid.out() & entries[i].issued.out()
-
-                # Clear entry
-                entries[i].valid.set(consts.zero1, when=can_retire)
+                can_retire_list.append(can_retire)
 
             # Update head pointer when retiring
             head_entry_issued = consts.zero1
@@ -218,32 +214,72 @@ def build_issue_queue(
                     head_entry_issued,
                 )
 
-            next_head = (head.out() + consts.one8.trunc(width=QUEUE_IDX_WIDTH)) & c(
-                ISSUE_QUEUE_SIZE - 1, width=QUEUE_IDX_WIDTH
-            )
-            head.set(next_head, when=head_entry_issued)
+            # Note: head pointer update moved to FLUSH section with explicit priority mux
+
+        # Entry state updates with explicit priority mux
+        # This consolidates all valid and issued updates to avoid multiple continuous assignments
+        with m.scope("ENTRY_STATE"):
+            for i in range(ISSUE_QUEUE_SIZE):
+                # Valid: Priority: flush > retire > enqueue > hold
+                current_valid = entries[i].valid.out()
+                next_valid = current_valid
+                next_valid = enqueue_this_list[i].select(consts.one1, next_valid)
+                next_valid = can_retire_list[i].select(consts.zero1, next_valid)
+                next_valid = flush.select(consts.zero1, next_valid)
+                entries[i].valid.set(next_valid)
+
+                # Issued: Priority: enqueue (clear) > mark_issued (set) > hold
+                current_issued = entries[i].issued.out()
+                next_issued = current_issued
+                next_issued = mark_issued_list[i].select(consts.one1, next_issued)
+                next_issued = enqueue_this_list[i].select(consts.zero1, next_issued)
+                entries[i].issued.set(next_issued)
 
         # Update count
         with m.scope("COUNT"):
             enqueued = can_enqueue
             retired = head_entry_issued
 
-            next_count = count.out()
-            # Increment on enqueue
-            next_count = enqueued.select(next_count + c(1, width=QUEUE_IDX_WIDTH + 1), next_count)
-            # Decrement on retire
+            # Explicit priority mux for count
+            # Priority: flush > (enqueue/retire) > hold
+            current_count = count.out()
+            next_count = current_count
+
+            # Increment on enqueue (lower priority)
+            next_count = enqueued.select(current_count + c(1, width=QUEUE_IDX_WIDTH + 1), next_count)
+            # Decrement on retire (same priority level, can happen simultaneously)
             next_count = retired.select(next_count - c(1, width=QUEUE_IDX_WIDTH + 1), next_count)
+            # Flush resets to 0 (highest priority)
+            next_count = flush.select(c(0, width=QUEUE_IDX_WIDTH + 1), next_count)
 
-            count.set(next_count, when=enqueued | retired)
+            # Single set call
+            count.set(next_count)
 
-        # Flush logic
-        with m.scope("FLUSH"):
-            for i in range(ISSUE_QUEUE_SIZE):
-                entries[i].valid.set(consts.zero1, when=flush)
+        # Pointer updates with explicit priority mux
+        with m.scope("PTRS_UPDATE"):
+            # Explicit priority mux for head and tail
+            # Priority: flush > normal update > hold
+            current_head = head.out()
+            next_head_val = current_head
+            next_head_val = head_entry_issued.select(
+                (current_head + consts.one8.trunc(width=QUEUE_IDX_WIDTH)) & c(
+                    ISSUE_QUEUE_SIZE - 1, width=QUEUE_IDX_WIDTH
+                ),
+                next_head_val,
+            )
+            next_head_val = flush.select(c(0, width=QUEUE_IDX_WIDTH), next_head_val)
+            head.set(next_head_val)
 
-            head.set(c(0, width=QUEUE_IDX_WIDTH), when=flush)
-            tail.set(c(0, width=QUEUE_IDX_WIDTH), when=flush)
-            count.set(c(0, width=QUEUE_IDX_WIDTH + 1), when=flush)
+            current_tail = tail.out()
+            next_tail_val = current_tail
+            next_tail_val = can_enqueue.select(
+                (current_tail + consts.one8.trunc(width=QUEUE_IDX_WIDTH)) & c(
+                    ISSUE_QUEUE_SIZE - 1, width=QUEUE_IDX_WIDTH
+                ),
+                next_tail_val,
+            )
+            next_tail_val = flush.select(c(0, width=QUEUE_IDX_WIDTH), next_tail_val)
+            tail.set(next_tail_val)
 
         entries_used = count.out()
 

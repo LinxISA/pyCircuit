@@ -137,6 +137,8 @@ def build(m: Circuit, *, base_addr: int = 0x80000000) -> None:
         addr_c,
     ) = build_mmio_inst_write(
         m,
+        clk=clk,
+        rst=rst,
         consts=consts,
         base_addr=base_addr,
         mem_wvalid=mem_wvalid,
@@ -145,24 +147,37 @@ def build(m: Circuit, *, base_addr: int = 0x80000000) -> None:
     )
 
     # --- L0A/L0B Load Decode ---
-    # L0A load: address 0x0100-0x01FF
-    # L0B load: address 0x0200-0x02FF
+    # L0A load: address 0x1000-0x4FFF (64 entries × 256 bytes each)
+    # L0B load: address 0x5000-0x8FFF (64 entries × 256 bytes each)
     # Format: entry_idx in bits 13:8, row in bits 7:4, col in bits 3:0
+    # Entry address = base + 0x1000 + (entry_idx << 8) + (row << 4) + col
     with m.scope("L0_LOAD_DECODE"):
         # Extract address offset from base
         addr_offset = (mem_waddr - c(base_addr, width=64)).trunc(width=16)
 
-        # Check if address is in L0A range (0x0100-0x01FF)
-        l0a_range = addr_offset[8:16].eq(c(0x01, width=8))
+        # Check if address is in L0A range (0x1000-0x4FFF)
+        # bits 15:12 in [1,2,3,4]
+        l0a_high = addr_offset[12:16]
+        l0a_range = (l0a_high.eq(c(0x1, width=4)) |
+                     l0a_high.eq(c(0x2, width=4)) |
+                     l0a_high.eq(c(0x3, width=4)) |
+                     l0a_high.eq(c(0x4, width=4)))
         l0a_load_valid = mem_wvalid & l0a_range
-        l0a_entry_idx = addr_offset[8:14].trunc(width=L0_IDX_WIDTH)
+        # entry_idx = (offset - 0x1000) >> 8
+        l0a_entry_idx = ((addr_offset - c(0x1000, width=16)) >> 8).trunc(width=L0_IDX_WIDTH)
         l0a_row = addr_offset[4:8]
         l0a_col = addr_offset[0:4]
 
-        # Check if address is in L0B range (0x0200-0x02FF)
-        l0b_range = addr_offset[8:16].eq(c(0x02, width=8))
+        # Check if address is in L0B range (0x5000-0x8FFF)
+        # bits 15:12 in [5,6,7,8]
+        l0b_high = addr_offset[12:16]
+        l0b_range = (l0b_high.eq(c(0x5, width=4)) |
+                     l0b_high.eq(c(0x6, width=4)) |
+                     l0b_high.eq(c(0x7, width=4)) |
+                     l0b_high.eq(c(0x8, width=4)))
         l0b_load_valid = mem_wvalid & l0b_range
-        l0b_entry_idx = addr_offset[8:14].trunc(width=L0_IDX_WIDTH)
+        # entry_idx = (offset - 0x5000) >> 8
+        l0b_entry_idx = ((addr_offset - c(0x5000, width=16)) >> 8).trunc(width=L0_IDX_WIDTH)
         l0b_row = addr_offset[4:8]
         l0b_col = addr_offset[0:4]
 
