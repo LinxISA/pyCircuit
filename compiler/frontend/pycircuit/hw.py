@@ -3,7 +3,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 from dataclasses import dataclass
 import inspect
-from typing import Any, Iterable, Iterator, Union, overload
+from typing import Any, Iterable, Iterator, Mapping, Union, overload
 
 from .dsl import Module, Signal
 from .literals import LiteralValue, infer_literal_width
@@ -636,6 +636,49 @@ class Circuit(Module):
             self.output(scoped, sig)
             self._debug_exports[scoped] = sig
         return w
+
+    def debug_bundle(self, prefix: str, fields: Mapping[str, Union[Wire, Reg, Signal]]) -> dict[str, Wire]:
+        """Export a group of debug probes using `prefix_<field>` names."""
+        raw_prefix = str(prefix).strip()
+        if not raw_prefix:
+            raise ValueError("debug bundle prefix must be non-empty")
+        out: dict[str, Wire] = {}
+        for key, value in fields.items():
+            raw_key = str(key).strip()
+            if not raw_key:
+                raise ValueError("debug bundle field name must be non-empty")
+            out[raw_key] = self.debug(f"{raw_prefix}_{raw_key}", value)
+        return out
+
+    def debug_probe(
+        self,
+        stage: str,
+        lane: int,
+        fields: Mapping[str, Union[Wire, Reg, Signal]],
+        *,
+        family: str = "pv",
+    ) -> dict[str, Wire]:
+        """Emit canonical DFX probes as `dbg__<family>_<stage>_<field>_lane<k>_<stage>`."""
+        raw_stage = str(stage).strip().lower()
+        if not raw_stage:
+            raise ValueError("debug probe stage must be non-empty")
+        if lane < 0:
+            raise ValueError("debug probe lane must be >= 0")
+        raw_family = str(family).strip().lower()
+        if not raw_family:
+            raise ValueError("debug probe family must be non-empty")
+        out: dict[str, Wire] = {}
+        for key, value in fields.items():
+            raw_key = str(key).strip()
+            if not raw_key:
+                raise ValueError("debug probe field name must be non-empty")
+            name = f"{raw_family}_{raw_stage}_{raw_key}_lane{int(lane)}_{raw_stage}"
+            out[raw_key] = self.debug(name, value)
+        return out
+
+    def debug_occ(self, stage: str, lane: int, fields: Mapping[str, Union[Wire, Reg, Signal]]) -> dict[str, Wire]:
+        """Emit occupancy probes as `dbg__occ_<stage>_<field>_lane<k>_<stage>`."""
+        return self.debug_probe(stage, lane, fields, family="occ")
 
     def assign(self, dst: Union[Wire, Reg, Signal], src: Union[Wire, Reg, Signal, int, LiteralValue]) -> None:  # type: ignore[override]
         def as_sig(v: Union[Wire, Reg, Signal]) -> Signal:

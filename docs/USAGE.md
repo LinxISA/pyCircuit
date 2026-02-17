@@ -127,6 +127,19 @@ pyc-compile design.pyc --emit=verilog --out-dir out/
 pyc-compile design.pyc --emit=cpp --out-dir out/
 ```
 
+For C++ split control and compile manifest output:
+
+```bash
+pyc-compile design.pyc --emit=cpp --out-dir out/ \
+  --cpp-split=module \
+  --cpp-shard-threshold-lines=120000 \
+  --cpp-shard-threshold-bytes=4194304 \
+  --cpp-manifest=out/cpp_compile_manifest.json
+```
+
+This emits per-module `*.hpp` + `*.cpp` files and a `cpp_compile_manifest.json`
+that downstream build scripts can use for parallel TU compilation.
+
 #### C++ backend optimization: instance eval cache (default-on)
 
 For generated C++ only, `pyc-compile` emits an input-change cache for each
@@ -134,6 +147,10 @@ For generated C++ only, `pyc-compile` emits an input-change cache for each
 invoked only when at least one instance input has changed since the previous
 parent `eval()` pass. Outputs are still re-driven every pass from the submodule
 state, so behavior remains stable while reducing redundant recomputation.
+
+Across clock ticks, cache validity now stays live for provably combinational
+submodules (no sequential primitives in their hierarchy). Stateful submodules
+are still invalidated at `tick_commit()` for correctness.
 
 This optimization is enabled by default. To disable it for differential
 performance checks:
@@ -238,6 +255,18 @@ def tb(t: Tb) -> None:
     t.expect("out_valid", True, at=3)
     t.sva_assert(sva.rose("in_valid"), clock="clk", reset="rst", name="in_valid_rose")
     t.finish(at=10)
+
+### 2.9 DFX probe helpers (pipeview)
+
+For stage/lane-heavy tracing, prefer grouped helpers instead of many manual `debug(...)` calls:
+
+```python
+m.debug_bundle("lsu", {"valid": v, "rob": rob_idx, "pc": pc})
+m.debug_probe("e1", 0, {"valid": v, "uop_uid": uid, "pc": pc, "rob": rob_idx, "kind": kind, "parent_uid": puid})
+m.debug_occ("iq", 1, {"valid": iq_v, "uop_uid": iq_uid, "pc": iq_pc, "rob": iq_rob, "stall": iq_stall, "stall_cause": iq_stall_cause})
+```
+
+These are additive wrappers over `Circuit.debug(...)` and keep legacy behavior unchanged.
 ```
 
 Generate split RTL plus C++/SystemVerilog testbenches:
@@ -440,6 +469,22 @@ Generated Verilog/C++ tries to keep readable identifiers:
 
 For running the generated Verilog through open-source tools (Icarus/Verilator/GTKWave),
 see `docs/VERILOG_FLOW.md`.
+
+### 9.4 C++ simulator performance controls
+
+Generated C++ models expose additive runtime controls:
+
+- `PYC_SIM_STATS=1` enables internal eval/cache counters.
+- `PYC_SIM_STATS_PATH=<path>` writes counters to a file.
+- `PYC_SIM_FAST=1` enables fast scheduling path in fallback netlists
+  (fidelity mode remains default with `PYC_SIM_FAST=0`).
+
+Compile-time bisect flags:
+
+- `-DPYC_DISABLE_INSTANCE_EVAL_CACHE`
+- `-DPYC_DISABLE_PRIMITIVE_EVAL_CACHE`
+- `-DPYC_DISABLE_SCC_WORKLIST_EVAL`
+- `-DPYC_DISABLE_VERSIONED_INPUT_CACHE`
 
 ---
 

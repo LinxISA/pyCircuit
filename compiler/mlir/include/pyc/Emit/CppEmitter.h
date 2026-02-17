@@ -7,7 +7,16 @@
 
 namespace pyc {
 
-struct CppEmitterOptions {};
+struct CppEmitterOptions {
+  enum class SplitMode {
+    None,
+    Module,
+  };
+
+  SplitMode splitMode = SplitMode::None;
+  unsigned shardThresholdLines = 120000;
+  unsigned shardThresholdBytes = 4 * 1024 * 1024;
+};
 
 ::mlir::LogicalResult emitCpp(::mlir::ModuleOp module, ::llvm::raw_ostream &os,
                               const CppEmitterOptions &opts = {});

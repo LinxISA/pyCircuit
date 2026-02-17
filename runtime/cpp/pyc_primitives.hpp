@@ -141,12 +141,21 @@ public:
 
   // Combinational ready/valid generation.
   void eval() {
+    const bool outReadyNow = out_ready.toBool();
+    if (evalValid_ && lastEvalCount_ == count_ && lastEvalRd_ == rd_ && lastEvalOutReady_ == outReadyNow)
+      return;
+
     bool out_valid_int = (count_ != 0);
-    bool in_ready_int = (count_ < Depth) || (out_valid_int && out_ready.toBool());
+    bool in_ready_int = (count_ < Depth) || (out_valid_int && outReadyNow);
 
     in_ready = Wire<1>(in_ready_int ? 1u : 0u);
     out_valid = Wire<1>(out_valid_int ? 1u : 0u);
     out_data = storage_[rd_];
+
+    evalValid_ = true;
+    lastEvalCount_ = count_;
+    lastEvalRd_ = rd_;
+    lastEvalOutReady_ = outReadyNow;
   }
 
   void tick_compute() {
@@ -233,6 +242,10 @@ public:
 
   bool clkPrev = false;
   bool pending = false;
+  bool evalValid_ = false;
+  bool lastEvalOutReady_ = false;
+  unsigned lastEvalCount_ = 0;
+  unsigned lastEvalRd_ = 0;
 
 private:
   Wire<Width> storage_[Depth]{};

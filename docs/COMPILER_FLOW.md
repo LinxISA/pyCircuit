@@ -58,12 +58,24 @@ Escape hatch:
 
 `Circuit.debug(name, signal)` exports stable debug outputs named as `dbg__*` ports. These probes are intended for direct TB/tracing visibility and remain observable to optimization passes through normal module outputs.
 
+Additional helpers for large probe sets:
+
+- `Circuit.debug_bundle(prefix, fields)` emits `dbg__<prefix>_<field>` for each mapping entry.
+- `Circuit.debug_probe(stage, lane, fields, family="pv")` emits canonical pipeview names:
+  - `dbg__<family>_<stage>_<field>_lane<k>_<stage>`
+- `Circuit.debug_occ(stage, lane, fields)` is a convenience wrapper for:
+  - `dbg__occ_<stage>_<field>_lane<k>_<stage>`
+
 ## 4) `pyc-compile` modes and outputs
 
 ## 4.1 Core CLI options
 
 - `--emit=verilog|cpp`
 - `--out-dir=<dir>` (split-per-module output + `manifest.json`)
+- `--cpp-split=module|none` (default `module` for `--emit=cpp --out-dir`)
+- `--cpp-shard-threshold-lines=<N>` (default `120000`)
+- `--cpp-shard-threshold-bytes=<N>` (default `4194304`)
+- `--cpp-manifest=<path>` (default `<out-dir>/cpp_compile_manifest.json`)
 - `-o <file>` (single-file emission)
 - `--sim-mode=default|cpp-only`
 - `--cpp-only-preserve-ops`
@@ -85,7 +97,19 @@ Escape hatch:
 All compiles report stats in stderr summary and JSON:
 
 - `--out-dir=<dir>` writes `<dir>/compile_stats.json`
+- `--emit=cpp --out-dir=<dir>` also writes `<dir>/cpp_compile_manifest.json`
 - `-o <file>` writes `<file>.stats.json`
+
+`cpp_compile_manifest.json` schema:
+
+- `version`
+- `target_name`
+- `cxx_standard`
+- `include_dirs`
+- `compile_defines`
+- `sources[]` with `{path,module,shard,kind}`
+- `top_header`
+- `deterministic_hash`
 
 Current JSON fields:
 
@@ -210,11 +234,26 @@ CollectCompileStats
 - Counts registers/memories and bit totals.
 - Emits attrs consumed by final stats summary/JSON.
 
-## 7) Non-default pass
+## 9) C++ Runtime Scheduling Notes
+
+Generated C++ `eval()` uses:
+
+- topological single-pass schedule when acyclic;
+- fallback fixed-point for cyclic graphs (fidelity default);
+- optional SCC worklist fallback when `PYC_SIM_FAST=1` (or disabled with
+  `-DPYC_DISABLE_SCC_WORKLIST_EVAL`).
+
+Perf/debug runtime controls:
+
+- `PYC_SIM_STATS=1`
+- `PYC_SIM_STATS_PATH=<path>`
+- `PYC_SIM_FAST=1`
+
+## 10) Non-default pass
 
 `PrunePorts` (`pyc-prune-ports`) exists but is intentionally OFF in default `pyc-compile` pipeline because it changes public module interfaces by deleting unused function arguments and rewriting callsites.
 
-## 8) Out-of-tree generated artifact policy
+## 11) Out-of-tree generated artifact policy
 
 Generated outputs are local artifacts and must not be checked into git.
 

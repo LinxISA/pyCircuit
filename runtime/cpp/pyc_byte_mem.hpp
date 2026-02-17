@@ -36,6 +36,9 @@ public:
 
   void eval() {
     std::size_t base = toIndex(raddr);
+    if (evalValid && !dataDirty && base == lastEvalRaddr)
+      return;
+
     Wire<DataWidth> v = Wire<DataWidth>(0);
     for (unsigned i = 0; i < StrbWidth; i++) {
       std::size_t ai = base + static_cast<std::size_t>(i);
@@ -44,6 +47,9 @@ public:
       v = v | shl<DataWidth>(byteW, 8u * i);
     }
     rdata = v;
+    lastEvalRaddr = base;
+    evalValid = true;
+    dataDirty = false;
   }
 
   void tick_compute() {
@@ -77,6 +83,7 @@ public:
         Wire<8> byte = extract<8, DataWidth>(latchedData, 8u * i);
         mem_[ai] = static_cast<std::uint8_t>(byte.value() & 0xFFu);
       }
+      dataDirty = true;
     }
     pendingWrite = false;
     eval();
@@ -84,8 +91,10 @@ public:
 
   // Convenience for testbenches.
   void pokeByte(std::size_t addr, std::uint8_t value) {
-    if (addr < DepthBytes)
+    if (addr < DepthBytes) {
       mem_[addr] = value;
+      dataDirty = true;
+    }
   }
   std::uint8_t peekByte(std::size_t addr) const { return (addr < DepthBytes) ? mem_[addr] : 0u; }
 
@@ -116,6 +125,9 @@ public:
   std::size_t latchedAddr = 0;
   Wire<DataWidth> latchedData{};
   Wire<StrbWidth> latchedStrb{};
+  bool evalValid = false;
+  bool dataDirty = true;
+  std::size_t lastEvalRaddr = 0;
 
   std::vector<std::uint8_t> mem_;
 
