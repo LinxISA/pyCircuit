@@ -182,8 +182,21 @@ When C++ is emitted from MLIR (`pyc-compile --emit=cpp`), hierarchical
 - if all instance inputs are unchanged in a parent `eval()` pass, generated
   code skips that submodule's `eval()`;
 - instance outputs are still assigned to parent wires every pass.
+- across `tick_commit()`, cache validity is preserved for combinational-only
+  submodule hierarchies and invalidated only for stateful submodules.
 
 This is a codegen/runtime performance optimization for large software workloads
 on cycle models. To disable it for A/B comparisons, compile generated C++ with:
 
 - `-DPYC_DISABLE_INSTANCE_EVAL_CACHE`
+
+Additional scheduler/cache bisect flags:
+
+- `-DPYC_DISABLE_PRIMITIVE_EVAL_CACHE`
+- `-DPYC_DISABLE_SCC_WORKLIST_EVAL`
+- `-DPYC_DISABLE_VERSIONED_INPUT_CACHE`
+
+Runtime perf stats controls:
+
+- `PYC_SIM_STATS=1`
+- `PYC_SIM_STATS_PATH=<path>`

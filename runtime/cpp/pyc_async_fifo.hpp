@@ -56,9 +56,15 @@ public:
   }
 
   void eval() {
+    if (evalValid_ && lastEvalWfull_ == wfull_ && lastEvalOutValid_ == out_valid_r_ && lastEvalOutData_ == out_data_r_)
+      return;
     in_ready = Wire<1>(wfull_ ? 0u : 1u);
     out_valid = Wire<1>(out_valid_r_ ? 1u : 0u);
     out_data = out_data_r_;
+    evalValid_ = true;
+    lastEvalWfull_ = wfull_;
+    lastEvalOutValid_ = out_valid_r_;
+    lastEvalOutData_ = out_data_r_;
   }
 
   void tick_compute() {
@@ -123,6 +129,10 @@ private:
 
     inClkPrev_ = false;
     outClkPrev_ = false;
+    evalValid_ = false;
+    lastEvalWfull_ = false;
+    lastEvalOutValid_ = false;
+    lastEvalOutData_ = Wire<Width>(0);
   }
 
   void tick_compute_in() {
@@ -275,6 +285,10 @@ private:
   bool out_valid_r_ = false;
   Wire<Width> out_data_r_{};
   bool outClkPrev_ = false;
+  bool evalValid_ = false;
+  bool lastEvalWfull_ = false;
+  bool lastEvalOutValid_ = false;
+  Wire<Width> lastEvalOutData_{};
 
   // Next-state storage (computed in tick_compute).
   bool pendingIn_ = false;
@@ -297,4 +311,3 @@ private:
 };
 
 } // namespace pyc::cpp
-
