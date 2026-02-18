@@ -1867,15 +1867,48 @@ static LogicalResult emitFunc(func::FuncOp f, llvm::raw_ostream &os) {
   os << "  }\n\n";
 
   // tick_compute/tick_commit: two-phase sequential update (hierarchy-aware).
+  //
+  // Large designs can produce enormous tick bodies (notably JanusBccBackendCompat), which
+  // makes a single translation unit fragile and slow to compile. Split tick into helper
+  // parts so --cpp-split=module can shard tick across multiple .cpp files.
+  constexpr unsigned kTickChunk = 256;
+
+  auto emitTickComputePart = [&](unsigned begin, unsigned end, unsigned partIdx) {
+    os << "  inline void tick_compute_part_" << partIdx << "() {\n";
+    // Sub-modules (inputs + tick_compute).
+    for (unsigned i = begin; i < end && i < instInfos.size(); ++i) {
+      const auto &ii = instInfos[i];
+      auto inst = ii.op;
+      for (unsigned j = 0; j < inst.getNumOperands(); ++j)
+        os << "    " << ii.member << "." << ii.inPorts[j] << " = " << nt.get(inst.getOperand(j)) << ";\n";
+      os << "    " << ii.member << ".tick_compute();\n";
+    }
+    os << "  }\n\n";
+  };
+
+  auto emitTickCommitPart = [&](unsigned begin, unsigned end, unsigned partIdx) {
+    os << "  inline void tick_commit_part_" << partIdx << "() {\n";
+    // Sub-modules.
+    for (unsigned i = begin; i < end && i < instInfos.size(); ++i)
+      os << "    " << instInfos[i].member << ".tick_commit();\n";
+    os << "  }\n\n";
+  };
+
+  // Emit chunked submodule tick helpers.
+  unsigned subParts = 0;
+  if (!instInfos.empty()) {
+    for (unsigned b = 0; b < instInfos.size(); b += kTickChunk)
+      emitTickComputePart(b, std::min<unsigned>(static_cast<unsigned>(instInfos.size()), b + kTickChunk), subParts++);
+    unsigned commitParts = 0;
+    for (unsigned b = 0; b < instInfos.size(); b += kTickChunk)
+      emitTickCommitPart(b, std::min<unsigned>(static_cast<unsigned>(instInfos.size()), b + kTickChunk), commitParts++);
+  }
+
   os << "  void tick_compute() {\n";
   if (!instInfos.empty()) {
     os << "    // Sub-modules.\n";
-    for (const auto &ii : instInfos) {
-      auto inst = ii.op;
-      for (unsigned i = 0; i < inst.getNumOperands(); ++i)
-        os << "    " << ii.member << "." << ii.inPorts[i] << " = " << nt.get(inst.getOperand(i)) << ";\n";
-      os << "    " << ii.member << ".tick_compute();\n";
-    }
+    for (unsigned i = 0; i < subParts; ++i)
+      os << "    tick_compute_part_" << i << "();\n";
   }
   os << "    // Local sequential primitives.\n";
   for (auto r : regs)
@@ -1897,8 +1930,9 @@ static LogicalResult emitFunc(func::FuncOp f, llvm::raw_ostream &os) {
   os << "  void tick_commit() {\n";
   if (!instInfos.empty()) {
     os << "    // Sub-modules.\n";
-    for (const auto &ii : instInfos)
-      os << "    " << ii.member << ".tick_commit();\n";
+    unsigned commitParts = (static_cast<unsigned>(instInfos.size()) + kTickChunk - 1) / kTickChunk;
+    for (unsigned i = 0; i < commitParts; ++i)
+      os << "    tick_commit_part_" << i << "();\n";
   }
   os << "    // Local sequential primitives.\n";
   for (auto r : regs)
