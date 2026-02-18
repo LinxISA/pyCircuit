@@ -90,6 +90,11 @@ static llvm::cl::opt<bool> cppOnlyPreserveOps(
     llvm::cl::desc("Preserve operation-granular C++ scheduling in --sim-mode=cpp-only (disables comb fusion)"),
     llvm::cl::init(false));
 
+static llvm::cl::opt<bool> noInline(
+    "noinline",
+    llvm::cl::desc("Disable MLIR inliner to preserve module boundaries (prevents merge/flatten)"),
+    llvm::cl::init(false));
+
 static std::string topSymbol(ModuleOp module) {
   if (auto topAttr = module->getAttrOfType<FlatSymbolRefAttr>("pyc.top"))
     return topAttr.getValue().str();
@@ -860,7 +865,8 @@ int main(int argc, char **argv) {
 
   // Cleanup + optimization pipeline tuned for netlist-style emission.
   PassManager pm(&ctx);
-  pm.addPass(createInlinerPass());
+  if (!noInline)
+    pm.addPass(createInlinerPass());
   pm.addPass(createCanonicalizerPass());
   pm.addPass(createCSEPass());
   pm.addPass(createSCCPPass());
