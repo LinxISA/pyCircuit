@@ -190,6 +190,10 @@ OP_B_IOR = 146
 OP_B_ATTR = 147
 OP_B_DIM = 148
 
+# --- system register ops (bring-up no-op semantics in the pyc core model) ---
+OP_SSRSET = 149
+OP_HL_SSRSET = 150
+
 REG_INVALID = 0x3F
 
 ST_IF = 0

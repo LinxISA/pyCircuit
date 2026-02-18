@@ -2,7 +2,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pycircuit import Circuit, Wire, cat, jit_inline
 from pycircuit import unsigned
-from .isa import OP_ADDTPC, OP_ADDI, OP_ADDIW, OP_ADD, OP_ADDW, OP_AND, OP_ANDI, OP_ANDIW, OP_BSTART_STD_COND, OP_BSTART_STD_DIRECT, OP_BSTART_STD_FALL, OP_ANDW, OP_BXS, OP_BXU, OP_BSTART_STD_CALL, OP_CMP_EQ, OP_CMP_EQI, OP_CMP_NE, OP_CMP_NEI, OP_CMP_ANDI, OP_CMP_ORI, OP_CMP_LT, OP_CMP_LTI, OP_CMP_LTUI, OP_CMP_LTU, OP_CMP_GEI, OP_CMP_GEUI, OP_C_ADD, OP_C_ADDI, OP_C_AND, OP_C_OR, OP_C_SUB, OP_CSEL, OP_C_BSTART_DIRECT, OP_C_BSTOP, OP_C_BSTART_COND, OP_C_BSTART_STD, OP_C_LDI, OP_C_LWI, OP_C_MOVI, OP_C_MOVR, OP_C_SETC_EQ, OP_C_SETC_NE, OP_C_SETC_TGT, OP_C_SDI, OP_C_SEXT_W, OP_C_SETRET, OP_C_SWI, OP_C_ZEXT_W, OP_EBREAK, OP_FENTRY, OP_FEXIT, OP_FRET_RA, OP_FRET_STK, OP_MCOPY, OP_MSET, OP_BSTART_TMA, OP_B_TEXT, OP_B_IOT, OP_B_IOTI, OP_B_IOR, OP_HL_LB_PCR, OP_HL_LBU_PCR, OP_HL_LD_PCR, OP_HL_LH_PCR, OP_HL_LHU_PCR, OP_HL_LW_PCR, OP_HL_LUI, OP_HL_LWU_PCR, OP_HL_SB_PCR, OP_HL_SD_PCR, OP_HL_SH_PCR, OP_HL_SW_PCR, OP_INVALID, OP_LB, OP_LBI, OP_LBU, OP_LBUI, OP_LD, OP_LH, OP_LHI, OP_LHU, OP_LHUI, OP_LDI, OP_LUI, OP_LW, OP_LWI, OP_LWU, OP_LWUI, OP_MADD, OP_MADDW, OP_MUL, OP_MULW, OP_OR, OP_ORI, OP_ORIW, OP_ORW, OP_XOR, OP_XORIW, OP_DIV, OP_DIVU, OP_DIVW, OP_DIVUW, OP_REM, OP_REMU, OP_REMW, OP_REMUW, OP_SB, OP_SETC_AND, OP_SETC_EQ, OP_SETC_GE, OP_SETC_GEI, OP_SETC_GEU, OP_SETC_GEUI, OP_SETC_LT, OP_SETC_LTI, OP_SETC_LTU, OP_SETC_LTUI, OP_SETC_NE, OP_SETC_NEI, OP_SETC_OR, OP_SETC_ORI, OP_SETC_ANDI, OP_SETC_EQI, OP_SETRET, OP_SBI, OP_SD, OP_SH, OP_SHI, OP_SDI, OP_SLL, OP_SLLI, OP_SLLIW, OP_SRL, OP_SRA, OP_SRAIW, OP_SRLIW, OP_SW, OP_SUB, OP_SUBI, OP_SUBIW, OP_SUBW, OP_SWI, OP_XORW, REG_INVALID
+from .isa import OP_ADDTPC, OP_ADDI, OP_ADDIW, OP_ADD, OP_ADDW, OP_AND, OP_ANDI, OP_ANDIW, OP_BSTART_STD_COND, OP_BSTART_STD_DIRECT, OP_BSTART_STD_FALL, OP_ANDW, OP_BXS, OP_BXU, OP_BSTART_STD_CALL, OP_CMP_EQ, OP_CMP_EQI, OP_CMP_NE, OP_CMP_NEI, OP_CMP_ANDI, OP_CMP_ORI, OP_CMP_LT, OP_CMP_LTI, OP_CMP_LTUI, OP_CMP_LTU, OP_CMP_GEI, OP_CMP_GEUI, OP_C_ADD, OP_C_ADDI, OP_C_AND, OP_C_OR, OP_C_SUB, OP_CSEL, OP_C_BSTART_DIRECT, OP_C_BSTOP, OP_C_BSTART_COND, OP_C_BSTART_STD, OP_C_LDI, OP_C_LWI, OP_C_MOVI, OP_C_MOVR, OP_C_SETC_EQ, OP_C_SETC_NE, OP_C_SETC_TGT, OP_C_SDI, OP_C_SEXT_W, OP_C_SETRET, OP_C_SWI, OP_C_ZEXT_W, OP_EBREAK, OP_FENTRY, OP_FEXIT, OP_FRET_RA, OP_FRET_STK, OP_MCOPY, OP_MSET, OP_BSTART_TMA, OP_B_TEXT, OP_B_IOT, OP_B_IOTI, OP_B_IOR, OP_HL_SSRSET, OP_HL_LB_PCR, OP_HL_LBU_PCR, OP_HL_LD_PCR, OP_HL_LH_PCR, OP_HL_LHU_PCR, OP_HL_LW_PCR, OP_HL_LUI, OP_HL_LWU_PCR, OP_HL_SB_PCR, OP_HL_SD_PCR, OP_HL_SH_PCR, OP_HL_SW_PCR, OP_INVALID, OP_LB, OP_LBI, OP_LBU, OP_LBUI, OP_LD, OP_LH, OP_LHI, OP_LHU, OP_LHUI, OP_LDI, OP_LUI, OP_LW, OP_LWI, OP_LWU, OP_LWUI, OP_MADD, OP_MADDW, OP_MUL, OP_MULW, OP_OR, OP_ORI, OP_ORIW, OP_ORW, OP_XOR, OP_XORIW, OP_DIV, OP_DIVU, OP_DIVW, OP_DIVUW, OP_REM, OP_REMU, OP_REMW, OP_REMUW, OP_SB, OP_SETC_AND, OP_SETC_EQ, OP_SETC_GE, OP_SETC_GEI, OP_SETC_GEU, OP_SETC_GEUI, OP_SETC_LT, OP_SETC_LTI, OP_SETC_LTU, OP_SETC_LTUI, OP_SETC_NE, OP_SETC_NEI, OP_SETC_OR, OP_SETC_ORI, OP_SETC_ANDI, OP_SETC_EQI, OP_SETRET, OP_SBI, OP_SD, OP_SH, OP_SHI, OP_SDI, OP_SLL, OP_SLLI, OP_SLLIW, OP_SRL, OP_SRA, OP_SRAIW, OP_SRLIW, OP_SSRSET, OP_SW, OP_SUB, OP_SUBI, OP_SUBIW, OP_SUBW, OP_SWI, OP_XORW, REG_INVALID
 from .util import masked_eq
 
 @dataclass(frozen=True)
@@ -206,6 +206,19 @@ def decode_window(m: Circuit, window: Wire) -> Decode:
         op = OP_C_BSTART_COND
         len_bytes = 2
         imm = simm12_s64_c.shl(amount=1)
+    # C.BSTART.{SYS,MPAR,MSEQ,VPAR,VSEQ} FALL fixed forms.
+    # pyCircuit models these as standard fall-through block starts.
+    cond = in16 & (
+        masked_eq(insn16, mask=0xFFFF, match=0x0840)
+        | masked_eq(insn16, mask=0xFFFF, match=0x08C0)
+        | masked_eq(insn16, mask=0xFFFF, match=0x48C0)
+        | masked_eq(insn16, mask=0xFFFF, match=0x88C0)
+        | masked_eq(insn16, mask=0xFFFF, match=0xC8C0)
+    )
+    if cond:
+        op = OP_C_BSTART_STD
+        len_bytes = 2
+        imm = 0
     cond = in16 & masked_eq(insn16, mask=51199, match=0)
     if cond:
         op = OP_C_BSTART_STD
@@ -265,24 +278,49 @@ def decode_window(m: Circuit, window: Wire) -> Decode:
         srcl = rs1_32
         srcr = rs2_32
         imm = unsigned(srcp_32)
-    cond = in32 & masked_eq(insn32, mask=32767, match=4481)
+    # Decoupled/tile/vector headers.
+    # The pyc core currently reuses one decoupled-header control path (OP_BSTART_TMA)
+    # for these header families.
+    cond = in32 & masked_eq(insn32, mask=0x060FFFFF, match=0x00011181)  # BSTART.TMA
     if cond:
         op = OP_BSTART_TMA
         len_bytes = 4
-    cond = in32 & masked_eq(insn32, mask=28799, match=4099)
+    cond = in32 & masked_eq(insn32, mask=0xFBFFFFFF, match=0x00001181)  # BSTART.MPAR
+    if cond:
+        op = OP_BSTART_TMA
+        len_bytes = 4
+    cond = in32 & masked_eq(insn32, mask=0xFBFFFFFF, match=0x00009181)  # BSTART.MSEQ
+    if cond:
+        op = OP_BSTART_TMA
+        len_bytes = 4
+    cond = in32 & masked_eq(insn32, mask=0xFBFFFFFF, match=0x00021181)  # BSTART.VPAR
+    if cond:
+        op = OP_BSTART_TMA
+        len_bytes = 4
+    cond = in32 & masked_eq(insn32, mask=0xFBFFFFFF, match=0x00029181)  # BSTART.VSEQ
+    if cond:
+        op = OP_BSTART_TMA
+        len_bytes = 4
+    cond = in32 & masked_eq(insn32, mask=0x060FFFFF, match=0x00031181)  # BSTART.CUBE
+    if cond:
+        op = OP_BSTART_TMA
+        len_bytes = 4
+    # Decoupled body pointer: B.TEXT (simm25 in halfwords; target = PC + (simm25 << 1)).
+    # QEMU metadata: mask=0x7f, match=0x03.
+    cond = in32 & masked_eq(insn32, mask=0x0000007F, match=0x00000003)
     if cond:
         op = OP_B_TEXT
         len_bytes = 4
         imm = insn32[7:32].as_signed()
-    cond = in32 & masked_eq(insn32, mask=28799, match=16403)
+    cond = in32 & masked_eq(insn32, mask=0x0000607F, match=0x00004013)
     if cond:
         op = OP_B_IOT
         len_bytes = 4
-    cond = in32 & masked_eq(insn32, mask=28799, match=24595)
+    cond = in32 & masked_eq(insn32, mask=0x0000607F, match=0x00006013)
     if cond:
         op = OP_B_IOTI
         len_bytes = 4
-    cond = in32 & masked_eq(insn32, mask=28799, match=19)
+    cond = in32 & masked_eq(insn32, mask=0x0600707F, match=0x00000013)
     if cond:
         op = OP_B_IOR
         len_bytes = 4
@@ -1015,6 +1053,13 @@ def decode_window(m: Circuit, window: Wire) -> Decode:
         srcl = rs1_32
         srcr = rs2_32
         srcr_type = srcr_type_32
+    # SSRSET: write SrcL to SSR_ID (base 32-bit form).
+    cond = in32 & masked_eq(insn32, mask=0x00007FFF, match=0x0000103B)
+    if cond:
+        op = OP_SSRSET
+        len_bytes = 4
+        srcl = rs1_32
+        imm = unsigned(insn32[20:32])
     cond = in32 & masked_eq(insn32, mask=4043309055, match=1052715)
     if cond:
         op = OP_EBREAK
@@ -1057,6 +1102,15 @@ def decode_window(m: Circuit, window: Wire) -> Decode:
         op = OP_BSTART_STD_CALL
         len_bytes = 6
         imm = hl_bstart_off
+    # HL.SSRSET: write SrcL to extended SSR_ID.
+    cond = is_hl & masked_eq(insn48, mask=0x00007FFF000F, match=0x0000103B000E)
+    if cond:
+        op = OP_HL_SSRSET
+        len_bytes = 6
+        srcl = main32[15:20]
+        imm_hi12 = unsigned(pfx16[4:16])
+        imm_lo12 = unsigned(main32[20:32])
+        imm = imm_hi12.shl(amount=12) | imm_lo12
     cond = is_hl & masked_eq(insn48, mask=8323087, match=3735566)
     if cond:
         len_bytes = 6
