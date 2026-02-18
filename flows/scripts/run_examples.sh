@@ -22,6 +22,12 @@ count=0
 for ex in "${EX_DIR}"/*.py; do
   [[ -f "${ex}" ]] || continue
   bn="$(basename "${ex}" .py)"
+
+  # Skip package init modules; examples should be runnable design entrypoints.
+  if [[ "${bn}" == "__init__" ]]; then
+    continue
+  fi
+
   count=$((count+1))
   out_root="$(pyc_out_root)/example-smoke/${bn}"
   rm -rf "${out_root}" >/dev/null 2>&1 || true
