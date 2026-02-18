@@ -1135,10 +1135,10 @@ int main(int argc, char **argv) {
               return 1;
             if (!coreMethods.empty())
               wroteAny = true;
-            if (failed(writeSourceFile(moduleName + "__tick.cpp", "tick", "tick", tickMethods)))
+            // tick methods can be enormous for large top-level modules (e.g. JanusBccBackendCompat).
+            // Allow sharding to avoid compiler instability/timeouts on a single huge TU.
+            if (failed(writeMaybeShardedMethods("tick", "tick", tickMethods, /*allowSharding=*/true)))
               return 1;
-            if (!tickMethods.empty())
-              wroteAny = true;
 
             auto writeMaybeShardedMethods = [&](llvm::StringRef stem,
                                                 llvm::StringRef kind,
