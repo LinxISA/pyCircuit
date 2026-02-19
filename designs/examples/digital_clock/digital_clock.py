@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from pycircuit import Circuit, cat, compile_design, function, module, u
+from pycircuit import Circuit, cat, compile, function, module, u
 
 MODE_RUN = 0
 MODE_SET_HOUR = 1
@@ -82,4 +82,4 @@ def build(m: Circuit, clk_freq: int = 50_000_000) -> None:
 
 
 if __name__ == "__main__":
-    print(compile_design(build, name="digital_clock", clk_freq=50_000_000).emit_mlir())
+    print(compile(build, name="digital_clock", clk_freq=50_000_000).emit_mlir())

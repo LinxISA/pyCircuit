@@ -6,6 +6,7 @@ import json
 from dataclasses import dataclass
 from typing import Any, Callable, Iterable, Mapping, TYPE_CHECKING
 
+from .api_contract import FRONTEND_API_VERSION
 from .dsl import Module
 
 if TYPE_CHECKING:
@@ -55,17 +56,17 @@ def function(_fn: Any | None = None, *, name: str | None = None) -> Callable[[An
     return deco(_fn)
 
 
-def template(_fn: Any | None = None, *, name: str | None = None) -> Callable[[Any], Any] | Any:
-    """Mark a function as compile-time template logic.
+def const(_fn: Any | None = None, *, name: str | None = None) -> Callable[[Any], Any] | Any:
+    """Mark a function as compile-time metaprogramming logic.
 
-    Template calls execute in Python during JIT and must be pure: they may not
+    `@const` calls execute in Python during JIT and must be pure: they may not
     emit IR or mutate module interfaces.
     """
 
     def deco(fn: Any) -> Any:
         if isinstance(name, str) and name.strip():
             setattr(fn, "__pycircuit_module_name__", str(name).strip())
-        setattr(fn, "__pycircuit_kind__", "template")
+        setattr(fn, "__pycircuit_kind__", "const")
         setattr(fn, "__pycircuit_inline__", True)
         setattr(fn, "__pycircuit_emit_structural__", False)
         return fn
@@ -124,7 +125,9 @@ def _kind_of(fn: Any) -> str:
     k = getattr(fn, "__pycircuit_kind__", None)
     if isinstance(k, str):
         kk = k.strip().lower()
-        if kk in {"module", "function", "template"}:
+        if kk in {"module", "function", "const"}:
+            if kk == "const":
+                return "template"
             return kk
     return "module"
 
@@ -174,7 +177,7 @@ class Design:
         #
         # `pyc.top` is a FlatSymbolRefAttr for tools to find the top module.
         parts: list[str] = []
-        parts.append(f"module attributes {{pyc.top = @{self.top}}} {{\n")
+        parts.append(f'module attributes {{pyc.top = @{self.top}, pyc.frontend.api = "{FRONTEND_API_VERSION}"}} {{\n')
         for cm in self._mods.values():
             parts.append(cm.mod.emit_func_mlir())
             parts.append("\n")
@@ -285,7 +288,7 @@ class DesignContext:
         params: Mapping[str, Any],
         port_specs: Mapping[str, Any] | None = None,
     ) -> Module:
-        from .jit import compile as jit_compile
+        from .jit import compile_module as jit_compile
 
         return jit_compile(fn, module_name=sym_name, design_ctx=self, port_specs=port_specs, **params)
 
@@ -296,6 +299,7 @@ class DesignContext:
             mod.set_func_attr("pyc.params", params_json)
             mod.set_func_attr("pyc.kind", _kind_of(fn))
             mod.set_func_attr("pyc.inline", "true" if _inline_of(fn) else "false")
+            mod.set_func_attr("pyc.frontend.api", FRONTEND_API_VERSION)
             if _emit_structural_of(fn):
                 mod.set_func_attr("pyc.emit.structural", "true")
         except Exception as e:

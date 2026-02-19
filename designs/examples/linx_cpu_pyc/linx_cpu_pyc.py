@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from pycircuit import Circuit, ct, module, template, u
+from pycircuit import Circuit, ct, module, const, u
 
 
-@template
+@const
 def _layout_cfg(m: Circuit, *, mem_bytes: int, icache_bytes: int, dcache_bytes: int) -> tuple[int, int, int]:
     _ = m
     mem = ct.pow2_ceil(max(1, int(mem_bytes)))

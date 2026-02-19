@@ -10,6 +10,9 @@ This directory contains small frontend demos and larger reference designs.
 - `jit_control_flow.py`: static `if/for` lowering
 - `jit_pipeline_vec.py`: staged pipeline with vectors
 - `hier_modules.py`: multi-module hierarchy/instantiation
+- `template_struct_transform_demo.py`: immutable struct-transform metaprogramming
+- `template_module_collection_demo.py`: module-family vector elaboration
+- `template_instance_map_demo.py`: keyed module-map/module-dict elaboration
 - `issue_queue_2picker.py`: issue queue example
 - `linx_cpu_pyc/`: in-order Linx CPU reference
 - `fastfwd_pyc/`: FastFwd reference + TBs

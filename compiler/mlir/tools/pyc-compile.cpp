@@ -100,6 +100,11 @@ static llvm::cl::opt<std::string> emitStructuralMode(
     llvm::cl::desc("Structural emission policy for comb fusion: auto|on|off"),
     llvm::cl::init("auto"));
 
+static llvm::cl::opt<std::string> requireFrontendApi(
+    "require-frontend-api",
+    llvm::cl::desc("Required frontend API epoch marker (module/func attr `pyc.frontend.api`)"),
+    llvm::cl::init("v3.4"));
+
 static std::string topSymbol(ModuleOp module) {
   if (auto topAttr = module->getAttrOfType<FlatSymbolRefAttr>("pyc.top"))
     return topAttr.getValue().str();
@@ -895,6 +900,7 @@ int main(int argc, char **argv) {
 
   // Cleanup + optimization pipeline tuned for netlist-style emission.
   PassManager pm(&ctx);
+  pm.addPass(pyc::createCheckFrontendContractPass(requireFrontendApi));
   pm.addPass(pyc::createInlineFunctionsPass());
   pm.addPass(createSymbolDCEPass());
   if (!noInline)

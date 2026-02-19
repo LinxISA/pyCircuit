@@ -75,6 +75,12 @@ trap 'rm -rf "${TMP_DIR}"' EXIT
 
 cd "${ROOT_DIR}"
 
+python3 "${ROOT_DIR}/flows/tools/check_api_hygiene.py" \
+  compiler/frontend/pycircuit \
+  designs/examples/linx_cpu_pyc \
+  docs \
+  README.md
+
 GEN_DIR="$(pyc_out_root)/examples/linx_cpu_pyc"
 mkdir -p "${GEN_DIR}"
 PYC_PATH="${GEN_DIR}/linx_cpu_pyc.pyc"

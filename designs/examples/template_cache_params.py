@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from pycircuit import Circuit, compile_design, ct, module, template, u
+from pycircuit import Circuit, compile, ct, module, const, u
 
 
-@template
+@const
 def _cache_cfg(
     m: Circuit,
     *,
@@ -57,7 +57,7 @@ def build(
 
 if __name__ == "__main__":
     print(
-        compile_design(
+        compile(
             build,
             name="template_cache_params",
             ways=4,

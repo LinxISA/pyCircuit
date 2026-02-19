@@ -1,12 +1,12 @@
-# LinxCore DSE Guide (v3.2)
+# LinxCore DSE Guide (v3.4)
 
-This guide defines the v3.2 migration direction for a parameterized LinxCore frontend.
+This guide defines the v3.4 migration direction for a parameterized LinxCore frontend.
 
 ## Objectives
 
-- Move structural config derivation into `@template` code.
+- Move structural config derivation into `@const` code.
 - Represent interface/stage contracts with `meta` specs.
-- Reduce manual port/instance wiring with `instance_bind` + spec-driven helpers.
+- Reduce manual port/instance wiring with `new` + spec-driven helpers.
 - Keep deterministic parameter-space expansion for reproducible sweeps.
 
 ## Recommended structure
@@ -20,8 +20,8 @@ This guide defines the v3.2 migration direction for a parameterized LinxCore fro
 - Export helpers consumed by top/stage modules.
 
 3. top-level composition
-- Use spec declarations (`io_in/io_out`) for external ports.
-- Use `instance_bind` for repeated interface wiring paths.
+- Use spec declarations (`inputs/outputs`) for external ports.
+- Use `new` for repeated interface wiring paths.
 
 4. sweep scripts
 - Use `meta.dse.product/grid/filter` to generate variant sets.
@@ -39,13 +39,13 @@ This guide defines the v3.2 migration direction for a parameterized LinxCore fro
 - `/Users/zhoubot/LinxCore/src/top/top.py`
 - `/Users/zhoubot/LinxCore/src/bcc/backend/engine.py`
 - `/Users/zhoubot/LinxCore/src/bcc/backend/rob.py`
-- Primary migration: `meta.BundleSpec` + `m.io_in/m.io_out` + `m.instance_bind`.
+- Primary migration: `meta.BundleSpec` + `m.inputs/m.outputs` + `m.new`.
 
 2. Repeated slot/lane logic
 - `/Users/zhoubot/LinxCore/src/bcc/backend/engine.py`
 - `/Users/zhoubot/LinxCore/src/common/exec_uop.py`
 - `/Users/zhoubot/LinxCore/src/bcc/backend/issue.py`
-- Primary migration: `@template` loops that emit immutable lane/index plans and parameterized `ParamSet`-driven unroll factors.
+- Primary migration: `@const` loops that emit immutable lane/index plans and parameterized `ParamSet`-driven unroll factors.
 
 3. Decode/control rule density
 - `/Users/zhoubot/LinxCore/src/common/decode.py`

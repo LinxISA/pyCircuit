@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from pycircuit import Circuit, compile_design, function, module, u
+from pycircuit import Circuit, compile, function, module, u
 
 
 @function
@@ -59,4 +59,4 @@ def build(m: Circuit) -> None:
 
 
 if __name__ == "__main__":
-    print(compile_design(build, name="issue_queue_2picker").emit_mlir())
+    print(compile(build, name="issue_queue_2picker").emit_mlir())

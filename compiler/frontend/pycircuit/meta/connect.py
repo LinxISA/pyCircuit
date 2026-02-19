@@ -3,11 +3,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Mapping
 
-from ..connectors import Connector, ConnectorBundle, ConnectorError
+from ..connectors import Connector, ConnectorBundle, ConnectorError, ConnectorStruct
 from ..dsl import Signal
 from ..hw import Circuit
 from ..literals import LiteralValue
-from .types import BundleSpec, InterfaceSpec, StagePipeSpec
+from .types import BundleSpec, InterfaceSpec, StagePipeSpec, StructSpec
 
 
 @dataclass(frozen=True)
@@ -18,11 +18,14 @@ class _I1Field:
 
 @dataclass(frozen=True)
 class SpecBinding:
-    spec: BundleSpec | InterfaceSpec | StagePipeSpec
-    value: ConnectorBundle | Mapping[str, Any]
+    spec: BundleSpec | InterfaceSpec | StagePipeSpec | StructSpec
+    value: ConnectorBundle | ConnectorStruct | Mapping[str, Any]
 
 
-def bind(spec: BundleSpec | InterfaceSpec | StagePipeSpec, value: ConnectorBundle | Mapping[str, Any]) -> SpecBinding:
+def bind(
+    spec: BundleSpec | InterfaceSpec | StagePipeSpec | StructSpec,
+    value: ConnectorBundle | ConnectorStruct | Mapping[str, Any],
+) -> SpecBinding:
     return SpecBinding(spec=spec, value=value)
 
 
@@ -31,7 +34,11 @@ def _normalize_prefix(prefix: str | None) -> str:
     return p
 
 
-def _iter_fields(spec: BundleSpec | InterfaceSpec | StagePipeSpec) -> list[tuple[str, Any, str]]:
+def _path_port_name(path: str) -> str:
+    return str(path).replace(".", "_")
+
+
+def _iter_fields(spec: BundleSpec | InterfaceSpec | StagePipeSpec | StructSpec) -> list[tuple[str, Any, str]]:
     out: list[tuple[str, Any, str]] = []
     if isinstance(spec, BundleSpec):
         for f in spec.fields:
@@ -54,7 +61,19 @@ def _iter_fields(spec: BundleSpec | InterfaceSpec | StagePipeSpec) -> list[tuple
             out.append((spec.ready_name, _I1Field(), spec.ready_name))
         return out
 
-    raise TypeError(f"expected BundleSpec/InterfaceSpec/StagePipeSpec, got {type(spec).__name__}")
+    if isinstance(spec, StructSpec):
+        seen_ports: set[str] = set()
+        for path, fld in spec.flatten_fields():
+            pname = _path_port_name(path)
+            if pname in seen_ports:
+                raise ConnectorError(
+                    f"struct {spec.name!r} has colliding port name {pname!r}; use unique field paths"
+                )
+            seen_ports.add(pname)
+            out.append((path, fld, pname))
+        return out
+
+    raise TypeError(f"expected BundleSpec/InterfaceSpec/StagePipeSpec/StructSpec, got {type(spec).__name__}")
 
 
 def _port_name(prefix: str | None, local_name: str) -> str:
@@ -82,24 +101,34 @@ def _connector_signed(c: Connector) -> bool:
     return bool(getattr(rv, "signed", False))
 
 
-def declare_inputs(m: Circuit, spec: BundleSpec | InterfaceSpec | StagePipeSpec, *, prefix: str | None = None) -> ConnectorBundle:
+def _values_mapping(values: ConnectorBundle | ConnectorStruct | Mapping[str, Any]) -> Mapping[str, Any]:
+    if isinstance(values, ConnectorBundle):
+        return {k: v for k, v in values.items()}
+    if isinstance(values, ConnectorStruct):
+        return values.flatten()
+    return dict(values)
+
+
+def _inputs_bundle(
+    m: Circuit,
+    spec: BundleSpec | InterfaceSpec | StagePipeSpec | StructSpec,
+    *,
+    prefix: str | None = None,
+) -> ConnectorBundle:
     out: dict[str, Connector] = {}
     for key, f, pname in _iter_fields(spec):
         out[key] = m.input_connector(_port_name(prefix, pname), width=int(f.width), signed=bool(getattr(f, "signed", False)))
     return ConnectorBundle(out)
 
 
-def declare_outputs(
+def _outputs_bundle(
     m: Circuit,
-    spec: BundleSpec | InterfaceSpec | StagePipeSpec,
-    values: ConnectorBundle | Mapping[str, Any],
+    spec: BundleSpec | InterfaceSpec | StagePipeSpec | StructSpec,
+    values: ConnectorBundle | ConnectorStruct | Mapping[str, Any],
     *,
     prefix: str | None = None,
 ) -> ConnectorBundle:
-    if isinstance(values, ConnectorBundle):
-        vals: Mapping[str, Any] = {k: v for k, v in values.items()}
-    else:
-        vals = dict(values)
+    vals = dict(_values_mapping(values))
 
     exp = [k for k, _, _ in _iter_fields(spec)]
     got = sorted(str(k) for k in vals.keys())
@@ -111,7 +140,7 @@ def declare_outputs(
             parts.append("missing: " + ", ".join(missing))
         if extra:
             parts.append("extra: " + ", ".join(extra))
-        raise ConnectorError(f"declare_outputs key mismatch ({'; '.join(parts)})")
+        raise ConnectorError(f"outputs key mismatch ({'; '.join(parts)})")
 
     out: dict[str, Connector] = {}
     for key, f, pname in _iter_fields(spec):
@@ -119,12 +148,12 @@ def declare_outputs(
         got_w = _connector_width(c)
         exp_w = int(f.width)
         if got_w != exp_w:
-            raise ConnectorError(f"declare_outputs[{key!r}] width mismatch: expected i{exp_w}, got i{got_w}")
+            raise ConnectorError(f"outputs[{key!r}] width mismatch: expected i{exp_w}, got i{got_w}")
         exp_signed = bool(getattr(f, "signed", False))
         got_signed = _connector_signed(c)
         if got_signed != exp_signed:
             raise ConnectorError(
-                f"declare_outputs[{key!r}] signedness mismatch: expected signed={exp_signed}, got signed={got_signed}"
+                f"outputs[{key!r}] signedness mismatch: expected signed={exp_signed}, got signed={got_signed}"
             )
         out[key] = m.output_connector(_port_name(prefix, pname), c)
     return ConnectorBundle(out)
@@ -151,9 +180,9 @@ def _resolve_init(init: Mapping[str, Any] | Any, key: str) -> Any:
     return init
 
 
-def declare_state_regs(
+def _state_bundle(
     m: Circuit,
-    spec: BundleSpec | InterfaceSpec | StagePipeSpec,
+    spec: BundleSpec | InterfaceSpec | StagePipeSpec | StructSpec,
     *,
     clk: Connector | Signal,
     rst: Connector | Signal,
@@ -161,8 +190,8 @@ def declare_state_regs(
     init: Mapping[str, Any] | Any = 0,
     en: Connector | Signal | int | LiteralValue = 1,
 ) -> ConnectorBundle:
-    clk_sig = _as_signal(clk, ctx="declare_state_regs(clk)")
-    rst_sig = _as_signal(rst, ctx="declare_state_regs(rst)")
+    clk_sig = _as_signal(clk, ctx="_state_bundle(clk)")
+    rst_sig = _as_signal(rst, ctx="_state_bundle(rst)")
     out: dict[str, Connector] = {}
     for key, f, pname in _iter_fields(spec):
         out[key] = m.reg_connector(
@@ -176,30 +205,98 @@ def declare_state_regs(
     return ConnectorBundle(out)
 
 
-def bind_instance_ports(
+def _inputs_struct(m: Circuit, spec: StructSpec, *, prefix: str | None = None) -> ConnectorStruct:
+    if not isinstance(spec, StructSpec):
+        raise TypeError(f"inputs expects StructSpec, got {type(spec).__name__}")
+    bundle = _inputs_bundle(m, spec, prefix=prefix)
+    return ConnectorStruct.from_flat({k: v for k, v in bundle.items()}, spec=spec)
+
+
+def _outputs_struct(
     m: Circuit,
-    spec_bindings: Mapping[str, Connector | ConnectorBundle | Mapping[str, Any] | SpecBinding | tuple[Any, Any]],
+    spec: StructSpec,
+    values: ConnectorStruct | Mapping[str, Any],
+    *,
+    prefix: str | None = None,
+) -> ConnectorStruct:
+    if not isinstance(spec, StructSpec):
+        raise TypeError(f"outputs expects StructSpec, got {type(spec).__name__}")
+    bundle = _outputs_bundle(m, spec, values, prefix=prefix)
+    return ConnectorStruct.from_flat({k: v for k, v in bundle.items()}, spec=spec)
+
+
+def _state_struct(
+    m: Circuit,
+    spec: StructSpec,
+    *,
+    clk: Connector | Signal,
+    rst: Connector | Signal,
+    prefix: str | None = None,
+    init: Mapping[str, Any] | Any = 0,
+    en: Connector | Signal | int | LiteralValue = 1,
+) -> ConnectorStruct:
+    if not isinstance(spec, StructSpec):
+        raise TypeError(f"state expects StructSpec, got {type(spec).__name__}")
+    bundle = _state_bundle(m, spec, clk=clk, rst=rst, prefix=prefix, init=init, en=en)
+    return ConnectorStruct.from_flat({k: v for k, v in bundle.items()}, spec=spec)
+
+
+def inputs(
+    m: Circuit,
+    spec: BundleSpec | InterfaceSpec | StagePipeSpec | StructSpec,
+    *,
+    prefix: str | None = None,
+) -> ConnectorBundle | ConnectorStruct:
+    if isinstance(spec, StructSpec):
+        return _inputs_struct(m, spec, prefix=prefix)
+    return _inputs_bundle(m, spec, prefix=prefix)
+
+
+def outputs(
+    m: Circuit,
+    spec: BundleSpec | InterfaceSpec | StagePipeSpec | StructSpec,
+    values: ConnectorBundle | ConnectorStruct | Mapping[str, Any],
+    *,
+    prefix: str | None = None,
+) -> ConnectorBundle | ConnectorStruct:
+    if isinstance(spec, StructSpec):
+        return _outputs_struct(m, spec, values, prefix=prefix)
+    return _outputs_bundle(m, spec, values, prefix=prefix)
+
+
+def state(
+    m: Circuit,
+    spec: BundleSpec | InterfaceSpec | StagePipeSpec | StructSpec,
+    *,
+    clk: Connector | Signal,
+    rst: Connector | Signal,
+    prefix: str | None = None,
+    init: Mapping[str, Any] | Any = 0,
+    en: Connector | Signal | int | LiteralValue = 1,
+) -> ConnectorBundle | ConnectorStruct:
+    if isinstance(spec, StructSpec):
+        return _state_struct(m, spec, clk=clk, rst=rst, prefix=prefix, init=init, en=en)
+    return _state_bundle(m, spec, clk=clk, rst=rst, prefix=prefix, init=init, en=en)
+
+
+def ports(
+    m: Circuit,
+    spec_bindings: Mapping[
+        str,
+        Connector | ConnectorBundle | ConnectorStruct | Mapping[str, Any] | SpecBinding | tuple[Any, Any],
+    ],
 ) -> dict[str, Connector]:
     out: dict[str, Connector] = {}
     for pname, bound in spec_bindings.items():
         p = str(pname)
         if isinstance(bound, tuple) and len(bound) == 2:
             sp0, sp1 = bound
-            if isinstance(sp0, (BundleSpec, InterfaceSpec, StagePipeSpec)):
+            if isinstance(sp0, (BundleSpec, InterfaceSpec, StagePipeSpec, StructSpec)):
                 bound = SpecBinding(spec=sp0, value=sp1)
 
         if isinstance(bound, SpecBinding):
             spec = bound.spec
-            vals: Mapping[str, Any]
-            if isinstance(bound.value, ConnectorBundle):
-                vals = {k: v for k, v in bound.value.items()}
-            elif isinstance(bound.value, Mapping):
-                vals = dict(bound.value)
-            else:
-                raise ConnectorError(
-                    "bind_instance_ports: spec binding value must be ConnectorBundle or mapping, "
-                    + f"got {type(bound.value).__name__}"
-                )
+            vals = dict(_values_mapping(bound.value))
 
             exp_keys = [k for k, _, _ in _iter_fields(spec)]
             got_keys = sorted(str(k) for k in vals.keys())
@@ -211,22 +308,22 @@ def bind_instance_ports(
                     parts.append("missing: " + ", ".join(missing))
                 if extra:
                     parts.append("extra: " + ", ".join(extra))
-                raise ConnectorError(f"bind_instance_ports[{p!r}] key mismatch ({'; '.join(parts)})")
+                raise ConnectorError(f"ports[{p!r}] key mismatch ({'; '.join(parts)})")
 
-            for key, field, _ in _iter_fields(spec):
-                port = f"{p}_{key}"
+            for key, field, pname_local in _iter_fields(spec):
+                port = f"{p}_{pname_local}"
                 c = m.as_connector(vals[key], name=port)
                 exp_w = int(getattr(field, "width", 0))
                 got_w = _connector_width(c)
                 if got_w != exp_w:
                     raise ConnectorError(
-                        f"bind_instance_ports[{p!r}][{key!r}] width mismatch: expected i{exp_w}, got i{got_w}"
+                        f"ports[{p!r}][{key!r}] width mismatch: expected i{exp_w}, got i{got_w}"
                     )
                 exp_signed = bool(getattr(field, "signed", False))
                 got_signed = _connector_signed(c)
                 if exp_signed != got_signed:
                     raise ConnectorError(
-                        f"bind_instance_ports[{p!r}][{key!r}] signedness mismatch: "
+                        f"ports[{p!r}][{key!r}] signedness mismatch: "
                         + f"expected signed={exp_signed}, got signed={got_signed}"
                     )
                 out[port] = c
@@ -240,32 +337,62 @@ def bind_instance_ports(
                 port = f"{p}_{k}"
                 out[port] = m.as_connector(v, name=port)
             continue
+        if isinstance(bound, ConnectorStruct):
+            for k, v in bound.items():
+                port = f"{p}_{_path_port_name(k)}"
+                out[port] = m.as_connector(v, name=port)
+            continue
         if isinstance(bound, Mapping):
             for k, v in bound.items():
                 port = f"{p}_{str(k)}"
                 out[port] = m.as_connector(v, name=port)
             continue
         raise ConnectorError(
-            f"bind_instance_ports: value for {p!r} must be Connector/ConnectorBundle/mapping, got {type(bound).__name__}"
+            "ports: value for "
+            + f"{p!r} must be Connector/ConnectorBundle/ConnectorStruct/mapping, got {type(bound).__name__}"
         )
     return out
 
 
-def connect_like(
+def connect(
     m: Circuit,
-    dst: Connector | ConnectorBundle,
-    src: Connector | ConnectorBundle,
+    dst: Connector | ConnectorBundle | ConnectorStruct,
+    src: Connector | ConnectorBundle | ConnectorStruct,
     *,
     when: Signal | Connector | int | LiteralValue = 1,
 ) -> None:
+    if isinstance(dst, ConnectorStruct) and isinstance(src, ConnectorStruct):
+        dkeys = sorted(dst.keys())
+        skeys = sorted(src.keys())
+        if dkeys != skeys:
+            raise ConnectorError(f"connect key mismatch: dst={dkeys} src={skeys}")
+        for k in dkeys:
+            dw = _connector_width(dst.flatten()[k])
+            sw = _connector_width(src.flatten()[k])
+            if dw != sw:
+                raise ConnectorError(f"connect[{k!r}] width mismatch: dst=i{dw} src=i{sw}")
+        for k in dkeys:
+            m.connect(dst.flatten()[k], src.flatten()[k], when=when)
+        return
+
     if isinstance(dst, ConnectorBundle) and isinstance(src, ConnectorBundle):
         dkeys = sorted(dst.keys())
         skeys = sorted(src.keys())
         if dkeys != skeys:
-            raise ConnectorError(f"connect_like key mismatch: dst={dkeys} src={skeys}")
+            raise ConnectorError(f"connect key mismatch: dst={dkeys} src={skeys}")
         for k in dkeys:
             dw = _connector_width(dst[k])
             sw = _connector_width(src[k])
             if dw != sw:
-                raise ConnectorError(f"connect_like[{k!r}] width mismatch: dst=i{dw} src=i{sw}")
+                raise ConnectorError(f"connect[{k!r}] width mismatch: dst=i{dw} src=i{sw}")
     m.connect(dst, src, when=when)
+
+
+def _connect_struct_only(
+    m: Circuit,
+    dst: ConnectorStruct,
+    src: ConnectorStruct,
+    *,
+    when: Signal | Connector | int | LiteralValue = 1,
+) -> None:
+    connect(m, dst, src, when=when)

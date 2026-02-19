@@ -1,6 +1,6 @@
-# Meta Structures (v3.2)
+# Meta Structures (v3.4)
 
-`pycircuit.meta` provides immutable compile-time structures used by `@template` code.
+`pycircuit.meta` provides immutable compile-time structures consumed by `@const` and hardened during JIT elaboration.
 
 ## Core types
 
@@ -8,32 +8,45 @@
 - `BundleSpec(name, fields)`
 - `InterfaceSpec(name, bundles)`
 - `StagePipeSpec(name, payload, has_valid=True, has_ready=False, ...)`
+- `StructFieldSpec(name, width=..., signed=...)` or nested `StructFieldSpec(name, struct=...)`
+- `StructSpec(name, fields)`
 - `ParamSpec(name, default, min_value=None, max_value=None, choices=...)`
 - `ParamSet(values, name=None)`
 - `ParamSpace(variants)`
 - `DecodeRule(name, mask, match, updates, priority=0)`
 
-All are immutable and export canonical template values via `__pyc_template_value__()`.
+All types are immutable and canonicalizable via `__pyc_template_value__()`.
 
-## Builders
+## Struct builder and transforms
 
-- `meta.bundle("name").field(...).build()`
-- `meta.iface("name").bundle(...).build()`
-- `meta.stage_pipe(...)`
-- `meta.params().add(...).build(...)`
-- `meta.ruleset().rule(...).build()`
+Builder:
+- `meta.struct("name").field("a.b", width=...).field("x", width=...).build()`
+
+Transforms (immutable):
+- `add_field(path, ...)`
+- `remove_field(path)`
+- `rename_field(path, new_name)`
+- `select_fields(paths)`
+- `drop_fields(paths)`
+- `merge(other)`
+- `with_prefix(prefix)`
+- `with_suffix(suffix)`
+
+Paths use dot notation (`payload.word`, `ctrl.valid`).
 
 ## Wiring helpers
 
-- `meta.declare_inputs(m, spec, prefix=...)`
-- `meta.declare_outputs(m, spec, values, prefix=...)`
-- `meta.declare_state_regs(m, spec, clk=..., rst=..., ...)`
-- `meta.bind(spec, value)` -> spec-checked binding token for `instance_bind`
-- `meta.bind_instance_ports(m, spec_bindings)`
-- `meta.connect_like(m, dst, src, when=...)`
+Meta-level helpers:
+- `meta.inputs(m, spec, prefix=...)`
+- `meta.outputs(m, spec, values, prefix=...)`
+- `meta.state(m, spec, clk=..., rst=..., init=..., en=..., prefix=...)`
+- `meta.bind(spec, value)`
+- `meta.ports(m, bind)`
+- `meta.connect(m, dst, src, when=...)`
 
-`Circuit` wraps these as grammar-candy methods:
-- `m.io_in`, `m.io_out`, `m.state_regs`, `m.pipe_regs`, `m.instance_bind`
+Circuit wrappers:
+- `m.inputs(...)`, `m.outputs(...)`, `m.state(...)`, `m.pipe(...)`
+- `m.new(...)`, `m.array(...)`
 
 ## DSE helpers
 
@@ -42,4 +55,4 @@ All are immutable and export canonical template values via `__pyc_template_value
 - `meta.dse.filter(space, pred)`
 - `meta.dse.named_variant(name, **values)`
 
-All DSE helpers keep deterministic ordering for stable artifact naming.
+All DSE helpers preserve deterministic ordering for stable artifact naming.

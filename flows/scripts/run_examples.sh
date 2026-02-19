@@ -16,6 +16,13 @@ fi
 
 pyc_log "using pyc-compile: ${PYC_COMPILE}"
 
+pyc_log "running strict API hygiene gate"
+python3 "${PYC_ROOT_DIR}/flows/tools/check_api_hygiene.py" \
+  compiler/frontend/pycircuit \
+  designs/examples \
+  docs \
+  README.md
+
 fail=0
 count=0
 

@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Iterable, Iterator, Mapping, MutableMapping
 
+from .meta.types import StructSpec
+
 
 class ConnectorError(TypeError):
     pass
@@ -204,6 +206,97 @@ class ConnectorBundle:
         return self.fields.keys()
 
 
+class ConnectorStruct:
+    """Nested/flattened connector group for structured inter-module wiring."""
+
+    def __init__(self, fields: Mapping[str, Any], *, spec: StructSpec | None = None) -> None:
+        self.spec = spec
+        flat: dict[str, Connector] = {}
+        self._flatten_input(fields, out=flat)
+        if not flat:
+            raise ConnectorError("ConnectorStruct requires at least one field")
+
+        owners = {id(v.owner): v.owner for v in flat.values()}
+        if len(owners) != 1:
+            raise ConnectorError("ConnectorStruct fields must belong to the same Circuit")
+
+        if spec is not None:
+            exp = set(spec.leaf_paths())
+            got = set(flat.keys())
+            missing = sorted(exp - got)
+            extra = sorted(got - exp)
+            if missing or extra:
+                parts: list[str] = []
+                if missing:
+                    parts.append("missing: " + ", ".join(missing))
+                if extra:
+                    parts.append("extra: " + ", ".join(extra))
+                raise ConnectorError(f"ConnectorStruct spec mismatch ({'; '.join(parts)})")
+
+        self.fields: dict[str, Connector] = dict(sorted(flat.items(), key=lambda kv: kv[0]))
+
+    @staticmethod
+    def _flatten_input(v: Mapping[str, Any], *, out: dict[str, Connector], prefix: str = "") -> None:
+        for raw_k, raw_v in v.items():
+            k = str(raw_k)
+            if not k:
+                raise ConnectorError("ConnectorStruct field name must be non-empty")
+            path = f"{prefix}.{k}" if prefix else k
+
+            if isinstance(raw_v, Connector):
+                out[path] = raw_v
+                continue
+            if isinstance(raw_v, ConnectorBundle):
+                for kk, vv in raw_v.items():
+                    out[f"{path}.{kk}"] = vv
+                continue
+            if isinstance(raw_v, ConnectorStruct):
+                for kk, vv in raw_v.items():
+                    out[f"{path}.{kk}"] = vv
+                continue
+            if isinstance(raw_v, Mapping):
+                ConnectorStruct._flatten_input(raw_v, out=out, prefix=path)
+                continue
+            raise ConnectorError(f"ConnectorStruct field {path!r}: expected Connector/mapping, got {type(raw_v).__name__}")
+
+    @classmethod
+    def from_flat(
+        cls,
+        fields: Mapping[str, Connector],
+        *,
+        spec: StructSpec | None = None,
+    ) -> "ConnectorStruct":
+        return cls(dict(fields), spec=spec)
+
+    def flatten(self) -> dict[str, Connector]:
+        return dict(self.fields)
+
+    def __getitem__(self, key: str) -> Connector | "ConnectorStruct":
+        k = str(key)
+        if k in self.fields:
+            return self.fields[k]
+        prefix = f"{k}."
+        sub = {kk[len(prefix) :]: vv for kk, vv in self.fields.items() if kk.startswith(prefix)}
+        if not sub:
+            raise KeyError(k)
+        return ConnectorStruct.from_flat(sub)
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(self.fields)
+
+    def __len__(self) -> int:
+        return len(self.fields)
+
+    def items(self) -> Iterable[tuple[str, Connector]]:
+        return self.fields.items()
+
+    def values(self) -> Iterable[Connector]:
+        return self.fields.values()
+
+    def keys(self) -> Iterable[str]:
+        return self.fields.keys()
+
+
 @dataclass(frozen=True)
 class ModuleInstanceHandle:
     name: str
@@ -212,7 +305,26 @@ class ModuleInstanceHandle:
     outputs: Connector | ConnectorBundle
 
 
-ConnectorLike = Connector | ConnectorBundle
+@dataclass(frozen=True)
+class ModuleCollectionHandle:
+    name: str
+    instances: Mapping[str, ModuleInstanceHandle]
+    outputs: Mapping[str, Connector | ConnectorBundle | ConnectorStruct]
+
+    def __getitem__(self, key: str) -> ModuleInstanceHandle:
+        return self.instances[str(key)]
+
+    def keys(self) -> Iterable[str]:
+        return self.instances.keys()
+
+    def items(self) -> Iterable[tuple[str, ModuleInstanceHandle]]:
+        return self.instances.items()
+
+    def output(self, key: str) -> Connector | ConnectorBundle | ConnectorStruct:
+        return self.outputs[str(key)]
+
+
+ConnectorLike = Connector | ConnectorBundle | ConnectorStruct
 
 
 def is_connector(v: Any) -> bool:
@@ -221,6 +333,10 @@ def is_connector(v: Any) -> bool:
 
 def is_connector_bundle(v: Any) -> bool:
     return isinstance(v, ConnectorBundle)
+
+
+def is_connector_struct(v: Any) -> bool:
+    return isinstance(v, ConnectorStruct)
 
 
 def connector_owner(v: ConnectorLike) -> Any | None:
@@ -234,6 +350,15 @@ def connector_owner(v: ConnectorLike) -> Any | None:
                 continue
             if c.owner is not owner:
                 raise ConnectorError("connector bundle fields must belong to the same Circuit")
+        return owner
+    if isinstance(v, ConnectorStruct):
+        owner: Any | None = None
+        for c in v.values():
+            if owner is None:
+                owner = c.owner
+                continue
+            if c.owner is not owner:
+                raise ConnectorError("connector struct fields must belong to the same Circuit")
         return owner
     return None
 

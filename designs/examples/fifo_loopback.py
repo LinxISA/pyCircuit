@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from pycircuit import Circuit, compile_design, module
+from pycircuit import Circuit, compile, module
 
 
 @module
@@ -22,4 +22,4 @@ def build(m: Circuit, depth: int = 2) -> None:
 
 
 if __name__ == "__main__":
-    print(compile_design(build, name="fifo_loopback", depth=2).emit_mlir())
+    print(compile(build, name="fifo_loopback", depth=2).emit_mlir())

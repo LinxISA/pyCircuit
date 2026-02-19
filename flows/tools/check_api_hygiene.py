@@ -2,29 +2,21 @@
 from __future__ import annotations
 
 import argparse
-import re
+import sys
 from pathlib import Path
 
-FORBIDDEN_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
-    ("jit_inline", re.compile(r"\bjit_inline\b")),
-    ("public compile import", re.compile(r"from\s+pycircuit\s+import[^\n]*\bcompile\b")),
-    ("pycircuit.compile", re.compile(r"\bpycircuit\.compile\b")),
-)
 
-EXAMPLES_ONLY_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
-    ("forbidden api .eq(", re.compile(r"\.eq\(")),
-    ("forbidden api .lt(", re.compile(r"\.lt\(")),
-    ("forbidden api .select(", re.compile(r"\.select\(")),
-    ("forbidden api mux(", re.compile(r"\bmux\(")),
-    ("forbidden api cond(", re.compile(r"\bcond\(")),
-    ("forbidden api .trunc(", re.compile(r"\.trunc\(")),
-    ("forbidden api .zext(", re.compile(r"\.zext\(")),
-    ("forbidden api .sext(", re.compile(r"\.sext\(")),
-    ("forbidden api m.const(", re.compile(r"\bm\.const\(")),
-    ("forbidden api CycleAware", re.compile(r"\bCycleAware[A-Za-z_]*\b")),
-    ("forbidden api compile_cycle_aware", re.compile(r"\bcompile_cycle_aware\b")),
-    ("forbidden api .as_unsigned(", re.compile(r"\.as_unsigned\(")),
-)
+def _repo_root() -> Path:
+    return Path(__file__).resolve().parents[2]
+
+
+ROOT = _repo_root()
+FRONTEND = ROOT / "compiler" / "frontend"
+if str(FRONTEND) not in sys.path:
+    sys.path.insert(0, str(FRONTEND))
+
+from pycircuit.api_contract import TEXT_RULES, TextRule, scan_text  # noqa: E402
+from pycircuit.diagnostics import render_diagnostic  # noqa: E402
 
 DEFAULT_TARGETS: tuple[str, ...] = (
     "compiler/frontend/pycircuit",
@@ -46,7 +38,16 @@ TEXT_SUFFIXES = {
     ".sh",
 }
 
-SKIP_DIRS = {".git", ".pycircuit_out", "__pycache__", "build", "build-top", "compiler/mlir/build2"}
+SKIP_DIRS = {
+    ".git",
+    ".pycircuit_out",
+    "__pycache__",
+    "build",
+    "build-top",
+    "compiler/mlir/build2",
+}
+
+FRONTEND_RELAX_CODES = {"PYC415", "PYC416", "PYC417", "PYC418"}
 
 
 def iter_target_files(path: Path) -> list[Path]:
@@ -60,7 +61,7 @@ def iter_target_files(path: Path) -> list[Path]:
             continue
         if any(part in SKIP_DIRS for part in f.parts):
             continue
-        if f.name == "check_api_hygiene.py":
+        if f.name in {"check_api_hygiene.py", "api_contract.py"}:
             continue
         if f.suffix and f.suffix.lower() not in TEXT_SUFFIXES:
             continue
@@ -68,24 +69,17 @@ def iter_target_files(path: Path) -> list[Path]:
     return out
 
 
-def scan_file(path: Path, *, extra_patterns: tuple[tuple[str, re.Pattern[str]], ...] = ()) -> list[tuple[int, int, str]]:
-    hits: list[tuple[int, int, str]] = []
+def scan_file(path: Path, *, rules: tuple[TextRule, ...] = TEXT_RULES) -> list[str]:
     try:
         text = path.read_text(encoding="utf-8")
     except UnicodeDecodeError:
-        return hits
-    pats = (*FORBIDDEN_PATTERNS, *extra_patterns)
-    for line_no, line in enumerate(text.splitlines(), start=1):
-        for label, pattern in pats:
-            for m in pattern.finditer(line):
-                hits.append((line_no, m.start() + 1, label))
-    return hits
+        return []
+    diags = scan_text(path=path, text=text, stage="api-hygiene", rules=rules)
+    return [render_diagnostic(d) for d in diags]
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(
-        description="Fail if stale/forbidden pyCircuit frontend API tokens are present."
-    )
+    ap = argparse.ArgumentParser(description="Fail if stale/forbidden pyCircuit frontend API tokens are present.")
     ap.add_argument(
         "--scan-root",
         default=None,
@@ -99,28 +93,22 @@ def main() -> int:
     )
     args = ap.parse_args()
 
-    root = Path(__file__).resolve().parents[2]
-    scan_root = Path(args.scan_root).resolve() if args.scan_root else root
+    scan_root = Path(args.scan_root).resolve() if args.scan_root else ROOT
     if not scan_root.exists():
         raise SystemExit(f"--scan-root does not exist: {scan_root}")
-    violations = 0
 
+    violations = 0
     for target in args.targets:
         tp = (scan_root / target).resolve() if not Path(target).is_absolute() else Path(target)
         for f in iter_target_files(tp):
             rel = f.relative_to(scan_root) if f.is_relative_to(scan_root) else f
             rel_posix = rel.as_posix() if isinstance(rel, Path) else str(rel)
-            extra = (
-                EXAMPLES_ONLY_PATTERNS
-                if (
-                    rel_posix.startswith("designs/examples/")
-                    or rel_posix.startswith("docs/")
-                    or rel_posix == "README.md"
-                )
-                else ()
-            )
-            for line_no, col, label in scan_file(f, extra_patterns=extra):
-                print(f"{rel}:{line_no}:{col}: forbidden API token `{label}`")
+            rules = TEXT_RULES
+            if rel_posix.startswith("compiler/frontend/pycircuit/"):
+                rules = tuple(r for r in TEXT_RULES if r.code not in FRONTEND_RELAX_CODES)
+            msgs = scan_file(f, rules=rules)
+            for m in msgs:
+                print(m)
                 violations += 1
 
     if violations:

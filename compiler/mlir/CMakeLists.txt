@@ -67,6 +67,7 @@ target_link_libraries(pyc_dialect PUBLIC
 )
 
 add_library(pyc_transforms
+  lib/Transforms/CheckFrontendContractPass.cpp
   lib/Transforms/CheckFlatTypesPass.cpp
   lib/Transforms/CheckLogicDepthPass.cpp
   lib/Transforms/CheckNoDynamicPass.cpp

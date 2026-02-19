@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from pycircuit import Circuit, Connector, compile_design, module
+from pycircuit import Circuit, Connector, compile, module
 
 
 @module
@@ -19,4 +19,4 @@ def build(m: Circuit, width: int = 8, stages: int = 3) -> None:
 
 
 if __name__ == "__main__":
-    print(compile_design(build, name="hier_modules", width=8, stages=3).emit_mlir())
+    print(compile(build, name="hier_modules", width=8, stages=3).emit_mlir())

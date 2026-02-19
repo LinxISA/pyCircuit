@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from pycircuit import Cache, Circuit, Connector, compile_design, ct, function, meta, module, template, u
+from pycircuit import Cache, Circuit, Connector, compile, ct, function, meta, module, const, u
 
 
 @function
@@ -11,14 +11,33 @@ def _mix3(m: Circuit, a, b, c):
     return x[0:w]
 
 
-@template
+@const
 def _lane_pipe_spec(m: Circuit, *, width: int):
     _ = m
     payload = meta.bundle("lane_payload").field("data", width=width).build()
     return meta.stage_pipe("lane_pipe", payload=payload, has_valid=True, has_ready=False)
 
 
-@template
+@const
+def _top_in_struct(m: Circuit, *, width: int):
+    _ = m
+    return (
+        meta.struct("top_in")
+        .field("seed", width=width)
+        .field("enable", width=1)
+        .build()
+        .drop_fields(["enable"])
+    )
+
+
+@const
+def _top_out_struct(m: Circuit, *, width: int):
+    _ = m
+    base = meta.struct("top_out").field("value", width=width).field("hit", width=1).build()
+    return base.rename_field("value", "out").drop_fields(["hit"]).add_field("cache_hit", width=1)
+
+
+@const
 def _stress_cfg(
     m: Circuit,
     *,
@@ -57,7 +76,7 @@ def _leaf(m: Circuit, clk, rst, x, *, width: int = 64):
     clk_c = m.as_connector(clk_v, name="clk")
     rst_c = m.as_connector(rst_v, name="rst")
     ps = _lane_pipe_spec(m, width=width)
-    staged = m.pipe_regs(
+    staged = m.pipe(
         ps,
         m.bundle_connector(
             data=m.as_connector(x_v, name="data"),
@@ -123,8 +142,8 @@ def build(
     clk_c = m.as_connector(clk, name="clk")
     rst_c = m.as_connector(rst, name="rst")
 
-    in_spec = meta.bundle("top_in").field("seed", width=width).build()
-    top_in = m.io_in(in_spec, prefix="")
+    in_spec = _top_in_struct(m, width=width)
+    top_in = m.inputs(in_spec, prefix="")
 
     cfg = _stress_cfg(
         m,
@@ -141,17 +160,27 @@ def build(
     ways_cfg = int(cfg["cache_ways"])
     sets_cfg = int(cfg["cache_sets"])
 
-    cur = top_in["seed"]
-    for _ in range(nmods):
-        cur = _node(
-            m,
-            clk=clk_c,
-            rst=rst_c,
-            x=cur,
-            width=width,
-            fanout=fan_cfg,
-            depth=depth_cfg,
-        )
+    family = meta.module_family("stress_node", module=_node, params={"width": int(width), "fanout": fan_cfg, "depth": depth_cfg})
+    node_list = family.list(max(1, nmods), name="stress_nodes")
+
+    per_instance: dict[str, dict[str, object]] = {}
+    seed = top_in["seed"].read()
+    for key in node_list.keys():
+        idx = int(key)
+        x_i = m.as_connector((seed + u(width, idx + 1))[0:width], name=f"x_{idx}")
+        per_instance[str(key)] = {"x": x_i}
+
+    nodes = m.array(
+        node_list,
+        name="stress_node",
+        bind={"clk": clk_c, "rst": rst_c},
+        per=per_instance,
+    )
+
+    cur = seed
+    for i in range(len(node_list.keys())):
+        yi = nodes.output(str(i))
+        cur = _mix3(m, cur, yi.read(), cur.lshr(amount=(i % max(1, width // 8)) + 1))
 
     req_wmask_w = max(1, width // 8)
     cache_req_wmask = m.as_connector(u(req_wmask_w, ct.bitmask(req_wmask_w)), name="wmask")
@@ -162,9 +191,9 @@ def build(
         clk=clk_c,
         rst=rst_c,
         req_valid=cache_req_valid,
-        req_addr=cur,
+        req_addr=m.as_connector(cur, name="req_addr"),
         req_write=cache_req_write,
-        req_wdata=cur,
+        req_wdata=m.as_connector(cur, name="req_wdata"),
         req_wmask=cache_req_wmask,
         ways=ways_cfg,
         sets=sets_cfg,
@@ -172,16 +201,16 @@ def build(
         data_width=width,
     )
 
-    hit_mask = u(width, 1) if cache["resp_hit"].read() else u(width, 0)
-    out_v = _mix3(m, cur.read(), cache["resp_data"].read(), hit_mask)
+    hit_mask = cache["resp_hit"].read()
+    out_v = _mix3(m, cur, cache["resp_data"].read(), hit_mask)
 
-    out_spec = meta.bundle("top_out").field("out", width=width).build()
-    m.io_out(out_spec, {"out": out_v}, prefix="")
+    out_spec = _top_out_struct(m, width=width)
+    m.outputs(out_spec, {"out": out_v, "cache_hit": cache["resp_hit"]}, prefix="")
 
 
 if __name__ == "__main__":
     print(
-        compile_design(
+        compile(
             build,
             name="huge_hierarchy_stress",
             width=64,

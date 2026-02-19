@@ -66,6 +66,12 @@ trap 'rm -rf "${WORK_DIR}"' EXIT
 
 cd "${ROOT_DIR}"
 
+python3 "${ROOT_DIR}/flows/tools/check_api_hygiene.py" \
+  compiler/frontend/pycircuit \
+  designs/examples/fastfwd_pyc \
+  docs \
+  README.md
+
 EMIT_ARGS=()
 N_FE=""
 ENG_PER_LANE=1

@@ -78,6 +78,18 @@ def _run(
     return elapsed, out
 
 
+def _run_hygiene(root: Path) -> None:
+    cmd = [
+        sys.executable,
+        str(root / "flows" / "tools" / "check_api_hygiene.py"),
+        "compiler/frontend/pycircuit",
+        "designs/examples",
+        "docs",
+        "README.md",
+    ]
+    subprocess.run(cmd, cwd=str(root), check=True)
+
+
 def _count_lines(path: Path) -> int:
     with path.open("r", encoding="utf-8", errors="ignore") as f:
         return sum(1 for _ in f)
@@ -330,6 +342,7 @@ def main() -> int:
     ap.add_argument("--perf-max-cycles", type=int, default=4096)
     args = ap.parse_args()
 
+    _run_hygiene(root)
     pyc_compile = _detect_pyc_compile(root)
     result = {
         "timestamp_utc": datetime.now(timezone.utc).isoformat(),

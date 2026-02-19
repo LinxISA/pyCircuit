@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from pycircuit import Circuit, compile_design, meta, module, template, u
+from pycircuit import Circuit, compile, meta, module, const, u
 
 
-@template
+@const
 def _decode_rules(m: Circuit):
     _ = m
     return (
@@ -34,4 +34,4 @@ build.__pycircuit_name__ = "template_decode_rules_demo"
 
 
 if __name__ == "__main__":
-    print(compile_design(build, name="template_decode_rules_demo").emit_mlir())
+    print(compile(build, name="template_decode_rules_demo").emit_mlir())

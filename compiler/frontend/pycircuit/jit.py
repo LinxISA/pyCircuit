@@ -6,7 +6,9 @@ import inspect
 from dataclasses import dataclass
 from typing import Any, Hashable, Mapping, get_args, get_origin
 
+from .api_contract import removed_call_diagnostic
 from .connectors import Connector, ConnectorBundle, is_connector, is_connector_bundle
+from .diagnostics import Diagnostic, make_diagnostic, render_diagnostic, snippet_from_text
 from .dsl import Signal
 from .hw import (
     Bundle,
@@ -20,7 +22,14 @@ from .literals import LiteralValue
 
 
 class JitError(RuntimeError):
-    pass
+    def __init__(self, message: str, *, diagnostic: Diagnostic | None = None) -> None:
+        self.diagnostic = diagnostic
+        text = render_diagnostic(diagnostic) if diagnostic is not None else str(message)
+        super().__init__(text)
+
+    @classmethod
+    def from_diagnostic(cls, diagnostic: Diagnostic) -> "JitError":
+        return cls(diagnostic.message, diagnostic=diagnostic)
 
 
 class _InlineReturn(RuntimeError):
@@ -29,41 +38,35 @@ class _InlineReturn(RuntimeError):
         self.value = value
 
 
-_REMOVED_METHOD_HINTS: dict[str, str] = {
-    "eq": "use `lhs == rhs`",
-    "lt": "use `lhs < rhs`",
-    "mux": "use `true_val if cond else false_val`",
-    "cond": "use Python control flow (`if` / `a if cond else b`)",
-    "select": "use `true_val if cond else false_val`",
-    "trunc": "remove explicit cast; use slicing (`x[0:W]`) only when narrowing is required",
-    "zext": "remove explicit cast and rely on width inference/assignment coercion",
-    "sext": "remove explicit cast and rely on signed intent + inference",
-    "const": "replace with literals (`0`, `0xFF`) or explicit helpers (`u(width, value)` / `s(width, value)`)",
-}
-
 _HAS_AST_MATCH = hasattr(ast, "Match")
 
 
-def _removed_api_error(name: str) -> JitError:
-    hint = _REMOVED_METHOD_HINTS.get(name)
-    if hint is None:
-        return JitError(f"removed API `{name}` is not supported")
-    return JitError(f"removed API `{name}` is not supported; {hint}")
-
-
-def _check_removed_api_call(node: ast.Call) -> None:
+def _check_removed_api_call(node: ast.Call, *, compiler: "_Compiler") -> None:
     if not isinstance(node.func, ast.Attribute):
         return
     attr = str(node.func.attr)
-    if attr in _REMOVED_METHOD_HINTS:
-        raise _removed_api_error(attr)
+    line = compiler._abs_lineno(node)
+    col = getattr(node, "col_offset", None)
+    col_out = (int(col) + 1) if isinstance(col, int) else None
+    diag = removed_call_diagnostic(
+        attr=attr,
+        path=compiler.source_file,
+        line=line,
+        col=col_out,
+        source_text=compiler.source_text,
+        stage="jit",
+    )
+    if diag is not None:
+        raise JitError.from_diagnostic(diag)
 
 
 def _call_kind(fn: Any) -> str | None:
     k = getattr(fn, "__pycircuit_kind__", None)
     if isinstance(k, str):
         kk = k.strip().lower()
-        if kk in {"module", "function", "template"}:
+        if kk in {"module", "function", "const"}:
+            if kk == "const":
+                return "template"
             return kk
     if bool(getattr(fn, "__pycircuit_inline__", False)):
         return "function"
@@ -203,7 +206,7 @@ def _validate_template_return(v: Any, *, where: str = "return") -> None:
     if v is None or isinstance(v, (bool, int, str, LiteralValue)):
         return
     if isinstance(v, (Wire, Reg, Signal, Connector, ConnectorBundle, Bundle, Vec)):
-        raise JitError(f"@template {where} cannot be a hardware value ({type(v).__name__})")
+        raise JitError(f"@const {where} cannot be a hardware value ({type(v).__name__})")
     if isinstance(v, (list, tuple)):
         for i, elem in enumerate(v):
             _validate_template_return(elem, where=f"{where}[{i}]")
@@ -212,11 +215,11 @@ def _validate_template_return(v: Any, *, where: str = "return") -> None:
         for k, elem in v.items():
             if not isinstance(k, (str, int, bool)):
                 raise JitError(
-                    f"@template {where} dict keys must be str/int/bool, got {type(k).__name__}"
+                    f"@const {where} dict keys must be str/int/bool, got {type(k).__name__}"
                 )
             _validate_template_return(elem, where=f"{where}[{k!r}]")
         return
-    raise JitError(f"@template {where} has unsupported value type: {type(v).__name__}")
+    raise JitError(f"@const {where} has unsupported value type: {type(v).__name__}")
 
 
 def _emit_scf_yield(m: Circuit, values: list[Wire]) -> None:
@@ -275,12 +278,16 @@ class _Compiler:
         params: dict[str, Any],
         *,
         globals_: dict[str, Any],
+        source_file: str | None = None,
+        source_text: str | None = None,
         source_stem: str | None = None,
         line_offset: int = 0,
     ) -> None:
         self.m = m
         self.env: dict[str, Any] = dict(params)
         self.globals = globals_
+        self.source_file = source_file
+        self.source_text = source_text
         self.source_stem = source_stem
         self.line_offset = int(line_offset)
         self._inline_stack: list[Any] = []
@@ -347,6 +354,31 @@ class _Compiler:
             return None
         return self.line_offset + line
 
+    @staticmethod
+    def _node_col(node: ast.AST) -> int | None:
+        col = getattr(node, "col_offset", None)
+        if not isinstance(col, int) or col < 0:
+            return None
+        return int(col) + 1
+
+    def _error_with_node(self, node: ast.AST, err: Exception, *, code: str = "PYC500", hint: str | None = None) -> JitError:
+        if isinstance(err, JitError) and err.diagnostic is not None:
+            return err
+        message = str(err) if str(err).strip() else err.__class__.__name__
+        line = self._abs_lineno(node)
+        snippet = snippet_from_text(self.source_text, line) if (self.source_text is not None and line is not None) else None
+        diag = make_diagnostic(
+            code=code,
+            stage="jit",
+            path=self.source_file,
+            line=line,
+            col=self._node_col(node),
+            message=message,
+            hint=hint,
+            snippet=snippet,
+        )
+        return JitError.from_diagnostic(diag)
+
     def _name_with_loc(self, name: str, node: ast.AST) -> str:
         line = self._abs_lineno(node)
         if line is None:
@@ -382,7 +414,7 @@ class _Compiler:
         mod = getattr(fn, "__module__", None)
         if not isinstance(mod, str):
             return False
-        return mod.startswith("pycircuit.hw") or mod.startswith("pycircuit.meta.connect")
+        return mod.startswith("pycircuit.hw") or mod.startswith("pycircuit.meta")
 
     @staticmethod
     def _return_annotation_blocks_instance(ret_ann: Any) -> bool:
@@ -1028,7 +1060,7 @@ class _Compiler:
         raise JitError(f"unsupported expression: {ast.dump(node, include_attributes=False)}")
 
     def eval_call(self, node: ast.Call) -> Any:
-        _check_removed_api_call(node)
+        _check_removed_api_call(node, compiler=self)
         if isinstance(node.func, ast.Name) and node.func.id == "range":
             raise JitError("range() is only supported in for-loops")
 
@@ -1040,7 +1072,7 @@ class _Compiler:
             if has_hw and inspect.isfunction(fn) and kind is None and not self._is_frontend_intrinsic_helper(fn):
                 raise JitError(
                     f"hardware-carrying call to undecorated function {getattr(fn, '__name__', fn)!r}; "
-                    "use @module for hierarchy boundaries, @function for inline helpers, or @template for compile-time metaprogramming"
+                    "use @module for hierarchy boundaries, @function for inline helpers, or @const for compile-time metaprogramming"
                 )
 
             if kind == "module":
@@ -1111,6 +1143,8 @@ class _Compiler:
             self.m,
             params=dict(bound.arguments),
             globals_=getattr(fn, "__globals__", {}),
+            source_file=meta.source_file,
+            source_text=meta.source,
             source_stem=meta.source_stem,
             line_offset=int(meta.start_line - 1),
         )
@@ -1129,8 +1163,7 @@ class _Compiler:
             except _InlineReturn as ret:
                 return ret.value
             except Exception as e:  # noqa: BLE001
-                line = getattr(stmt, "lineno", "?")
-                raise JitError(f"inline call {fn_name!r} failed at line {line}: {e}") from e
+                raise child._error_with_node(stmt, e, code="PYC510", hint=f"inline call target: {fn_name!r}") from e
 
         # No explicit return => None.
         return None
@@ -1196,15 +1229,15 @@ class _Compiler:
             bound = sig.bind(*args, **kwargs)
             bound.apply_defaults()
         except TypeError as e:
-            raise JitError(f"@template call failed for {fn_name!r}: {e}") from e
+            raise JitError(f"@const call failed for {fn_name!r}: {e}") from e
 
         ps = list(sig.parameters.values())
         if not ps:
-            raise JitError(f"@template {fn_name!r} must take at least one argument (the current Circuit builder)")
+            raise JitError(f"@const {fn_name!r} must take at least one argument (the current Circuit builder)")
 
         builder_arg = ps[0].name
         if bound.arguments.get(builder_arg) is not self.m:
-            raise JitError(f"@template {fn_name!r} must be called with the current Circuit as first argument")
+            raise JitError(f"@const {fn_name!r} must be called with the current Circuit as first argument")
 
         args_key = tuple(_template_identity_snapshot(a) for a in args)
         kwargs_key = tuple((str(k), _template_identity_snapshot(v)) for k, v in sorted(kwargs.items()))
@@ -1225,10 +1258,10 @@ class _Compiler:
             self._restore_template_purity_state(snap)
             details = ", ".join(muts)
             raise JitError(
-                f"@template {fn_name!r} must be compile-time pure and emit no IR; mutated module state: {details}"
+                f"@const {fn_name!r} must be compile-time pure and emit no IR; mutated module state: {details}"
             )
         if call_err is not None:
-            raise JitError(f"@template call failed for {fn_name!r}: {call_err}") from call_err
+            raise JitError(f"@const call failed for {fn_name!r}: {call_err}") from call_err
 
         _validate_template_return(result)
         self._template_cache[cache_key] = copy.deepcopy(result)
@@ -1237,7 +1270,12 @@ class _Compiler:
     # ---- statement compilation ----
     def compile_block(self, stmts: list[ast.stmt]) -> None:
         for s in stmts:
-            self.compile_stmt(s)
+            try:
+                self.compile_stmt(s)
+            except _InlineReturn:
+                raise
+            except Exception as e:  # noqa: BLE001
+                raise self._error_with_node(s, e) from e
 
     def compile_stmt(self, node: ast.stmt) -> None:
         if isinstance(node, ast.Pass):
@@ -1401,6 +1439,8 @@ class _Compiler:
             self.m,
             {},
             globals_=self.globals,
+            source_file=self.source_file,
+            source_text=self.source_text,
             source_stem=self.source_stem,
             line_offset=self.line_offset,
         )
@@ -1420,6 +1460,8 @@ class _Compiler:
             self.m,
             {},
             globals_=self.globals,
+            source_file=self.source_file,
+            source_text=self.source_text,
             source_stem=self.source_stem,
             line_offset=self.line_offset,
         )
@@ -1644,7 +1686,7 @@ class _Compiler:
                 self.env.pop(n, None)
 
 
-def compile(
+def compile_module(
     fn: Any,
     *,
     module_name: str | None = None,
@@ -1653,7 +1695,7 @@ def compile(
     port_specs: Mapping[str, Any] | None = None,
     **params: Any,
 ) -> Circuit:
-    """Compile a restricted Python function into a static pyCircuit Module.
+    """Compile one hardware function into a static pyCircuit Module.
 
     The function is *not executed*; it is parsed via `ast` and lowered into
     MLIR SCF + PYC ops, then `pyc-compile` will lower SCF into static muxes and
@@ -1677,7 +1719,7 @@ def compile(
 
     fdef = meta.fdef
     if _call_kind(fn) == "template":
-        raise JitError(f"cannot compile @template function {getattr(fn, '__name__', fn)!r} as a hardware module")
+        raise JitError(f"cannot compile @const function {getattr(fn, '__name__', fn)!r} as a hardware module")
 
     sig = meta.signature
     ps = list(sig.parameters.values())
@@ -1718,6 +1760,8 @@ def compile(
         m,
         params=dict(bound_params),
         globals_=fn.__globals__,
+        source_file=meta.source_file,
+        source_text=meta.source,
         source_stem=meta.source_stem,
         line_offset=int(meta.start_line - 1),
     )
@@ -1755,13 +1799,19 @@ def compile(
         if isinstance(stmt, ast.Return):
             if stmt.value is None:
                 break
-            v = c.eval_expr(stmt.value)
+            try:
+                v = c.eval_expr(stmt.value)
+            except Exception as e:  # noqa: BLE001
+                raise c._error_with_node(stmt, e, code="PYC520") from e
             if isinstance(v, tuple):
                 returned.extend(v)
             else:
                 returned.append(v)
             break
-        c.compile_stmt(stmt)
+        try:
+            c.compile_stmt(stmt)
+        except Exception as e:  # noqa: BLE001
+            raise c._error_with_node(stmt, e, code="PYC520") from e
 
     if returned and getattr(m, "_results", []):  # noqa: SLF001
         raise JitError("cannot mix `return` and explicit `m.output(...)`")
@@ -1787,7 +1837,7 @@ def compile(
 
 
 
-def compile_design(top_fn: Any, *, name: str | None = None, **top_params: Any):
+def compile(top_fn: Any, *, name: str | None = None, **top_params: Any):
     """Compile a multi-module Design rooted at `top_fn`.
 
     The returned Design contains multiple `func.func`s and preserves hierarchy

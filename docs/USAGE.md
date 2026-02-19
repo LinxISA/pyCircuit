@@ -1,28 +1,44 @@
-# pyCircuit v3.2 Usage
+# pyCircuit v3.4 Usage
 
 ## 1) Required contracts
 
 - Top entrypoint must be `@module`.
-- Helper logic must be explicitly tagged as `@function` or `@template`.
+- Helper logic must be `@function` or `@const`.
 - Inter-module links must use connectors.
+- Removed APIs fail at source/JIT compile stage.
 
 ## 2) Decorators
 
 - `@module`: hierarchy-preserving boundary
 - `@function`: inline hardware helper
-- `@template`: compile-time pure helper; may not emit IR or mutate module interface state
+- `@const`: compile-time pure helper; may not emit IR or mutate module state
 
-## 3) Connector APIs
+## 3) Circuit API
 
-Core connector methods on `Circuit`:
+Core connectors:
 - `input_connector`, `output_connector`, `reg_connector`, `bundle_connector`, `as_connector`, `connect`
 
-Instance APIs:
-- `instance(...)`
-- `instance_handle(...)`
-- `instance_bind(...)` (v3.2 grammar-candy)
+Spec-driven grammar:
+- `inputs(spec, prefix=...)`
+- `outputs(spec, values, prefix=...)`
+- `state(spec, clk=..., rst=..., prefix=..., init=..., en=...)`
+- `pipe(spec, src_values, clk=..., rst=..., en=..., flush=..., prefix=..., init=...)`
 
-## 4) Compile-time helpers
+Instantiation:
+- `new(fn, name=..., bind=..., params=..., module_name=...)`
+- `array(fn_or_collection, name=..., bind=..., keys=..., per=..., params=..., module_name=...)`
+
+## 4) Top-level compile API
+
+Use:
+- `from pycircuit import compile`
+- `compile(build, name="Top", **jit_params)`
+
+Removed:
+- legacy compile entrypoint
+- legacy template decorator alias
+
+## 5) Compile-time helpers
 
 ### `ct`
 
@@ -32,42 +48,50 @@ Arithmetic helpers include:
 
 ### `meta`
 
-`pycircuit.meta` includes immutable template data structures and builders:
+Types:
 - `FieldSpec`, `BundleSpec`, `InterfaceSpec`, `StagePipeSpec`
+- `StructFieldSpec`, `StructSpec`
 - `ParamSpec`, `ParamSet`, `ParamSpace`, `DecodeRule`
-- Builders: `bundle(...)`, `iface(...)`, `stage_pipe(...)`, `params(...)`, `ruleset(...)`
-- Wiring helpers: `declare_inputs`, `declare_outputs`, `declare_state_regs`, `bind`, `bind_instance_ports`, `connect_like`
-- DSE helpers: `meta.dse.grid`, `meta.dse.product`, `meta.dse.filter`, `meta.dse.named_variant`
+- `ModuleFamilySpec`, `ModuleListSpec`, `ModuleVectorSpec`, `ModuleMapSpec`, `ModuleDictSpec`
 
-## 5) v3.2 grammar-candy methods
+Builders:
+- `bundle(...)`, `iface(...)`, `struct(...)`, `stage_pipe(...)`, `params(...)`, `ruleset(...)`, `module_family(...)`, `valueclass`
 
-- `m.io_in(spec, prefix=...)`
-- `m.io_out(spec, values, prefix=...)`
-- `m.state_regs(spec, clk=..., rst=..., prefix=..., init=..., en=...)`
-- `m.pipe_regs(stage_spec, in_bundle, clk=..., rst=..., en=..., flush=...)`
-- `m.instance_bind(fn, name=..., spec_bindings=..., params=...)`
-  - Use `meta.bind(spec, value)` in `spec_bindings` for strict key/width/signed validation.
+Connect helpers:
+- `meta.bind(...)`, `meta.ports(...)`
+- `meta.inputs(...)`, `meta.outputs(...)`, `meta.state(...)`
+- `meta.connect(...)`
 
 ## 6) Minimal example
 
 ```python
-from pycircuit import Circuit, compile_design, meta, module, template
+from pycircuit import Circuit, compile, meta, module, const
 
-@template
+@const
 def lane_spec(m: Circuit, width: int):
     _ = m
-    return meta.bundle("lane").field("data", width=width).field("valid", width=1).build()
+    return meta.struct("lane").field("data", width=width).field("valid", width=1).build()
 
 @module
 def build(m: Circuit, width: int = 32):
     spec = lane_spec(m, width)
-    inp = m.io_in(spec, prefix="in_")
-    m.io_out(spec, {"data": inp["data"], "valid": inp["valid"]}, prefix="out_")
+    inp = m.inputs(spec, prefix="in_")
+    m.outputs(spec, {"data": inp["data"], "valid": inp["valid"]}, prefix="out_")
 
-print(compile_design(build, name="demo").emit_mlir())
+print(compile(build, name="demo").emit_mlir())
 ```
 
-## 7) Fresh-start policy
+## 7) API hygiene
 
-v3+ is a hard break. Removed APIs (old inline helper decorator and public `compile`) are not supported.
-Use `/Users/zhoubot/pyCircuit/flows/tools/check_api_hygiene.py` to enforce source/docs hygiene.
+Run strict source contract checks:
+
+```bash
+python3 /Users/zhoubot/pyCircuit/flows/tools/check_api_hygiene.py
+```
+
+For external projects:
+
+```bash
+python3 /Users/zhoubot/pyCircuit/flows/tools/check_api_hygiene.py \
+  --scan-root /Users/zhoubot/LinxCore src
+```

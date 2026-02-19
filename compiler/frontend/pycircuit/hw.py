@@ -9,11 +9,14 @@ from .connectors import (
     Connector,
     ConnectorBundle,
     ConnectorError,
+    ConnectorStruct,
+    ModuleCollectionHandle,
     ModuleInstanceHandle,
     RegConnector,
     WireConnector,
     is_connector,
     is_connector_bundle,
+    is_connector_struct,
 )
 from .dsl import Module, Signal
 from .literals import LiteralValue, infer_literal_width
@@ -988,11 +991,31 @@ class Circuit(Module):
 
     def connect(
         self,
-        dst: Connector | ConnectorBundle,
-        src: Connector | ConnectorBundle | Wire | Reg | Signal,
+        dst: Connector | ConnectorBundle | ConnectorStruct,
+        src: Connector | ConnectorBundle | ConnectorStruct | Wire | Reg | Signal,
         *,
         when: Union[Wire, Signal, int, LiteralValue] = 1,
     ) -> None:
+        if isinstance(dst, ConnectorStruct):
+            if not isinstance(src, ConnectorStruct):
+                raise ConnectorError("struct connect requires ConnectorStruct source")
+            dkeys = set(dst.keys())
+            skeys = set(src.keys())
+            if dkeys != skeys:
+                missing = sorted(dkeys - skeys)
+                extra = sorted(skeys - dkeys)
+                parts: list[str] = []
+                if missing:
+                    parts.append("missing: " + ", ".join(missing))
+                if extra:
+                    parts.append("extra: " + ", ".join(extra))
+                raise ConnectorError(f"struct connect key mismatch ({'; '.join(parts)})")
+            dflat = dst.flatten()
+            sflat = src.flatten()
+            for k in sorted(dkeys):
+                self.connect(dflat[k], sflat[k], when=when)
+            return
+
         if isinstance(dst, ConnectorBundle):
             if not isinstance(src, ConnectorBundle):
                 raise ConnectorError("bundle connect requires ConnectorBundle source")
@@ -1021,25 +1044,25 @@ class Circuit(Module):
             raise ConnectorError("conditional connect (`when=...`) is only supported for RegConnector destinations")
         self.assign(d.read(), s.read())
 
-    def io_in(self, spec: Any, *, prefix: str | None = None) -> ConnectorBundle:
+    def inputs(self, spec: Any, *, prefix: str | None = None) -> ConnectorBundle | ConnectorStruct:
         """Declare connector-backed input ports from a meta spec."""
-        from .meta.connect import declare_inputs
+        from .meta.connect import inputs
 
-        return declare_inputs(self, spec, prefix=prefix)
+        return inputs(self, spec, prefix=prefix)
 
-    def io_out(
+    def outputs(
         self,
         spec: Any,
-        values: ConnectorBundle | Mapping[str, Any],
+        values: ConnectorBundle | ConnectorStruct | Mapping[str, Any],
         *,
         prefix: str | None = None,
-    ) -> ConnectorBundle:
+    ) -> ConnectorBundle | ConnectorStruct:
         """Declare connector-backed output ports from a meta spec."""
-        from .meta.connect import declare_outputs
+        from .meta.connect import outputs
 
-        return declare_outputs(self, spec, values, prefix=prefix)
+        return outputs(self, spec, values, prefix=prefix)
 
-    def state_regs(
+    def state(
         self,
         spec: Any,
         *,
@@ -1048,11 +1071,11 @@ class Circuit(Module):
         prefix: str | None = None,
         init: Mapping[str, Any] | Any = 0,
         en: Connector | Signal | int | LiteralValue = 1,
-    ) -> ConnectorBundle:
-        """Declare register connectors from a meta spec."""
-        from .meta.connect import declare_state_regs
+    ) -> ConnectorBundle | ConnectorStruct:
+        """Declare state register connectors from a meta spec."""
+        from .meta.connect import state
 
-        return declare_state_regs(
+        return state(
             self,
             spec,
             clk=clk,
@@ -1062,10 +1085,10 @@ class Circuit(Module):
             en=en,
         )
 
-    def pipe_regs(
+    def pipe(
         self,
-        stage_spec: Any,
-        in_bundle: ConnectorBundle | Mapping[str, Any],
+        spec: Any,
+        src_values: ConnectorBundle | ConnectorStruct | Mapping[str, Any],
         *,
         clk: Connector | Signal,
         rst: Connector | Signal,
@@ -1073,18 +1096,35 @@ class Circuit(Module):
         flush: Connector | Signal | int | LiteralValue | None = None,
         prefix: str | None = None,
         init: Mapping[str, Any] | Any = 0,
-    ) -> ConnectorBundle:
-        """Register a stage payload bundle and connect inputs with optional flush."""
-        regs = self.state_regs(stage_spec, clk=clk, rst=rst, prefix=prefix, init=init, en=en)
+    ) -> ConnectorBundle | ConnectorStruct:
+        """Register a stage payload and connect inputs with optional flush."""
+        regs = self.state(spec, clk=clk, rst=rst, prefix=prefix, init=init, en=en)
 
-        src: Mapping[str, Any]
-        if isinstance(in_bundle, ConnectorBundle):
-            src = {k: v for k, v in in_bundle.items()}
+        if isinstance(regs, ConnectorStruct):
+            if not isinstance(src_values, ConnectorStruct):
+                if isinstance(src_values, Mapping):
+                    src = ConnectorStruct(src_values)
+                else:
+                    raise ConnectorError("pipe(struct): source must be ConnectorStruct or mapping")
+            else:
+                src = src_values
+            self.connect(regs, src, when=en)
+            if flush is not None:
+                for _, r in regs.items():
+                    if isinstance(r, RegConnector):
+                        r.set(0, when=flush)
+            return regs
+
+        src_map: Mapping[str, Any]
+        if isinstance(src_values, ConnectorBundle):
+            src_map = {k: v for k, v in src_values.items()}
+        elif isinstance(src_values, Mapping):
+            src_map = dict(src_values)
         else:
-            src = dict(in_bundle)
+            raise ConnectorError("pipe(bundle): source must be ConnectorBundle or mapping")
 
         dkeys = set(regs.keys())
-        skeys = set(str(k) for k in src.keys())
+        skeys = set(str(k) for k in src_map.keys())
         missing = sorted(dkeys - skeys)
         extra = sorted(skeys - dkeys)
         if missing or extra:
@@ -1093,10 +1133,10 @@ class Circuit(Module):
                 parts.append("missing: " + ", ".join(missing))
             if extra:
                 parts.append("extra: " + ", ".join(extra))
-            raise ConnectorError(f"pipe_regs key mismatch ({'; '.join(parts)})")
+            raise ConnectorError(f"pipe key mismatch ({'; '.join(parts)})")
 
         for key in sorted(dkeys):
-            self.connect(regs[key], self.as_connector(src[key], name=key), when=en)
+            self.connect(regs[key], self.as_connector(src_map[key], name=key), when=en)
         if flush is not None:
             for key in sorted(dkeys):
                 r = regs[key]
@@ -1104,32 +1144,25 @@ class Circuit(Module):
                     r.set(0, when=flush)
         return regs
 
-    def instance_bind(
+    def new(
         self,
         fn: Any,
         *,
         name: str,
-        spec_bindings: Mapping[str, Connector | ConnectorBundle | Mapping[str, Any] | Any],
+        bind: Mapping[str, Connector | ConnectorBundle | ConnectorStruct | Mapping[str, Any] | Any],
         params: dict[str, Any] | None = None,
         module_name: str | None = None,
     ) -> ModuleInstanceHandle:
-        """Instantiate a module from connector/spec bindings.
+        """Instantiate a module from connector/spec bindings."""
+        from .meta.connect import ports
 
-        `spec_bindings` values may be:
-        - `Connector`: bound directly to a single callee port
-        - `ConnectorBundle`/mapping: expanded as `<binding_key>_<field>`
-        - `meta.bind(spec, value)` or `(spec, value)`: expanded with strict
-          key/width/signed checks against the provided spec
-        """
-        from .meta.connect import bind_instance_ports
-
-        ports = bind_instance_ports(self, spec_bindings)
+        bound_ports = ports(self, bind)
         return self.instance_handle(
             fn,
             name=str(name),
             params=params,
             module_name=module_name,
-            **ports,
+            **bound_ports,
         )
 
     def instance_auto(
@@ -1151,11 +1184,117 @@ class Circuit(Module):
             **wrapped,
         )
 
+    @staticmethod
+    def _sanitize_instance_key(key: Any) -> str:
+        raw = str(key)
+        if not raw:
+            return "k"
+        out = []
+        for ch in raw:
+            if ch.isalnum() or ch == "_":
+                out.append(ch)
+            else:
+                out.append("_")
+        s = "".join(out).strip("_")
+        return s or "k"
+
+    def _resolve_keyed_binding(self, v: Any, key: str) -> Any:
+        if callable(v):
+            return v(key)
+        return v
+
+    def array(
+        self,
+        fn_or_collection: Any,
+        *,
+        name: str,
+        bind: Mapping[str, Any],
+        keys: Iterable[Any] | None = None,
+        per: Mapping[str, Mapping[str, Any]] | None = None,
+        params: dict[str, Any] | None = None,
+        module_name: str | None = None,
+    ) -> ModuleCollectionHandle:
+        """Instantiate a deterministic collection of module instances.
+
+        `fn_or_collection` may be:
+        - a `@module` function (requires `keys`)
+        - a `meta.Module*Spec` collection (fn/keys inferred)
+        """
+        from .meta.types import (
+            ModuleDictSpec,
+            ModuleFamilySpec,
+            ModuleListSpec,
+            ModuleMapSpec,
+            ModuleVectorSpec,
+            iter_module_collection,
+        )
+
+        fn = fn_or_collection
+        key_list: list[tuple[str, dict[str, Any] | None]] = []
+        base_params = dict(params or {})
+
+        if isinstance(fn_or_collection, ModuleFamilySpec):
+            fn = fn_or_collection.module
+            if keys is None:
+                raise TypeError("array(ModuleFamilySpec, ...) requires `keys=`")
+            if fn_or_collection.params is not None:
+                base_params.update(fn_or_collection.params.as_dict())
+            key_list = [(str(k), None) for k in sorted((str(x) for x in keys), key=lambda x: x)]
+        elif isinstance(fn_or_collection, (ModuleListSpec, ModuleVectorSpec, ModuleMapSpec, ModuleDictSpec)):
+            family = fn_or_collection.family
+            fn = family.module
+            if family.params is not None:
+                base_params.update(family.params.as_dict())
+            for k, ps in iter_module_collection(fn_or_collection):
+                key_list.append((str(k), None if ps is None else ps.as_dict()))
+        else:
+            if keys is None:
+                raise TypeError("array(fn, ...) requires `keys=`")
+            key_list = [(str(k), None) for k in sorted((str(x) for x in keys), key=lambda x: x)]
+
+        if not key_list:
+            raise ValueError("array requires at least one key")
+
+        keyed_bindings = dict(per or {})
+        instances: dict[str, ModuleInstanceHandle] = {}
+        outputs: dict[str, Connector | ConnectorBundle | ConnectorStruct] = {}
+
+        for key, param_override in key_list:
+            merged_bindings: dict[str, Any] = {}
+            for pname, vv in bind.items():
+                merged_bindings[str(pname)] = self._resolve_keyed_binding(vv, key)
+            if key in keyed_bindings:
+                for pname, vv in keyed_bindings[key].items():
+                    merged_bindings[str(pname)] = self._resolve_keyed_binding(vv, key)
+
+            inst_params = dict(base_params)
+            if param_override:
+                inst_params.update(param_override)
+
+            inst_name = f"{str(name)}_{self._sanitize_instance_key(key)}"
+            inst = self.new(
+                fn,
+                name=inst_name,
+                bind=merged_bindings,
+                params=inst_params,
+                module_name=module_name,
+            )
+            instances[key] = inst
+            outputs[key] = inst.outputs
+
+        return ModuleCollectionHandle(
+            name=str(name),
+            instances=instances,
+            outputs=outputs,
+        )
+
     def _coerce_instance_connector(self, v: Any, *, port: str) -> Connector:
         from .design import DesignError
 
         if is_connector_bundle(v):
             raise DesignError(f"instance port {port!r}: ConnectorBundle is not valid for a single callee port")
+        if is_connector_struct(v):
+            raise DesignError(f"instance port {port!r}: ConnectorStruct is not valid for a single callee port")
         if not is_connector(v):
             raise DesignError(
                 f"instance port {port!r}: expected Connector, got {type(v).__name__}; "
@@ -1176,7 +1315,7 @@ class Circuit(Module):
         """Instantiate a specialized sub-module and return a rich instance handle."""
 
         if self._design_ctx is None:
-            raise TypeError("Circuit.instance requires a design context (compile via pycircuit.jit.compile_design)")
+            raise TypeError("Circuit.instance requires a design context (compile via pycircuit.jit.compile)")
 
         from .design import DesignContext, DesignError
 

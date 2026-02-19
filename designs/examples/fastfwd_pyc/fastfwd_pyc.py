@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from pycircuit import Circuit, ct, module, template, u
+from pycircuit import Circuit, ct, module, const, u
 
 
-@template
+@const
 def _total_engines(m: Circuit, n_fe: int | None, eng_per_lane: int) -> int:
     _ = m
     if n_fe is not None:
