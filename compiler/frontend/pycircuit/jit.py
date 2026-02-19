@@ -382,7 +382,7 @@ class _Compiler:
         mod = getattr(fn, "__module__", None)
         if not isinstance(mod, str):
             return False
-        return mod.startswith("pycircuit.hw")
+        return mod.startswith("pycircuit.hw") or mod.startswith("pycircuit.meta.connect")
 
     @staticmethod
     def _return_annotation_blocks_instance(ret_ann: Any) -> bool:
@@ -532,6 +532,25 @@ class _Compiler:
                 raise JitError("cannot assign index values into hardware variables")
             self.env[target.id] = self._alias_if_wire(value, base_name=target.id, node=node)
             return
+        if isinstance(target, ast.Subscript):
+            if isinstance(target.slice, ast.Slice):
+                raise JitError("slice assignment is not supported")
+            container = self.eval_expr(target.value)
+            idx_v = self.eval_expr(target.slice)
+            if isinstance(idx_v, LiteralValue):
+                idx_v = int(idx_v.value)
+            if isinstance(container, list):
+                if not isinstance(idx_v, int):
+                    raise JitError("list assignment index must be an int")
+                try:
+                    container[idx_v] = value
+                except IndexError as e:
+                    raise JitError(f"list assignment index out of range: {idx_v}") from e
+                return
+            if isinstance(container, dict):
+                container[idx_v] = value
+                return
+            raise JitError("subscript assignment target must be a list or dict variable")
         if isinstance(target, (ast.Tuple, ast.List)):
             if isinstance(value, Vec):
                 value = list(value.elems)
@@ -542,7 +561,7 @@ class _Compiler:
             for sub_t, sub_v in zip(target.elts, value):
                 self._assign_wire_target(sub_t, sub_v, node=node)
             return
-        raise JitError("assignment target must be a name or tuple/list of names")
+        raise JitError("assignment target must be a name, subscript, or tuple/list of targets")
 
     # ---- constant evaluation (for range bounds, widths, etc) ----
     def eval_const(self, node: ast.AST) -> int:
@@ -743,12 +762,39 @@ class _Compiler:
                     return _expect_wire(base, ctx="wire slice")[slice(lo, hi, None)]
                 bit = int(self.eval_const(sl))
                 return _expect_wire(base, ctx="wire subscript")[bit]
+            if isinstance(base, dict):
+                key = self.eval_expr(sl)
+                if isinstance(key, LiteralValue):
+                    key = int(key.value)
+                try:
+                    return base[key]
+                except Exception as e:  # noqa: BLE001
+                    raise JitError(f"dict subscript failed: {e}") from e
             if isinstance(base, (list, tuple)):
                 return base[int(self.eval_const(sl))]
+            if hasattr(base, "__getitem__"):
+                if isinstance(sl, ast.Slice):
+                    if sl.step is not None:
+                        raise JitError("slice step is not supported for generic subscript bases")
+                    lo = None if sl.lower is None else self.eval_const(sl.lower)
+                    hi = None if sl.upper is None else self.eval_const(sl.upper)
+                    idx = slice(lo, hi, None)
+                else:
+                    idx = self.eval_expr(sl)
+                    if isinstance(idx, LiteralValue):
+                        idx = int(idx.value)
+                try:
+                    return base[idx]
+                except Exception as e:  # noqa: BLE001
+                    raise JitError(f"subscript failed for {type(base).__name__}: {e}") from e
             raise JitError(f"unsupported subscript base type: {type(base).__name__}")
         if isinstance(node, ast.BinOp):
             lhs = self.eval_expr(node.left)
             rhs = self.eval_expr(node.right)
+            if isinstance(lhs, Connector):
+                lhs = lhs.read()
+            if isinstance(rhs, Connector):
+                rhs = rhs.read()
 
             def _as_py_int(v: Any) -> int:
                 if isinstance(v, LiteralValue):
@@ -835,6 +881,8 @@ class _Compiler:
                 return _as_py_int(lhs) >> _as_py_int(rhs)
         if isinstance(node, ast.UnaryOp):
             v = self.eval_expr(node.operand)
+            if isinstance(v, Connector):
+                v = v.read()
             if isinstance(node.op, ast.Invert):
                 w = _expect_wire(v, ctx="~")
                 return ~w
@@ -848,8 +896,12 @@ class _Compiler:
         if isinstance(node, ast.BoolOp):
             if isinstance(node.op, ast.And):
                 out = self.eval_expr(node.values[0])
+                if isinstance(out, Connector):
+                    out = out.read()
                 for nxt in node.values[1:]:
                     b = self.eval_expr(nxt)
+                    if isinstance(b, Connector):
+                        b = b.read()
                     if isinstance(out, (Wire, Reg)) or isinstance(b, (Wire, Reg)):
                         if isinstance(out, (Wire, Reg)):
                             out = _expect_wire(out, ctx="and") & b
@@ -860,8 +912,12 @@ class _Compiler:
                 return out
             if isinstance(node.op, ast.Or):
                 out = self.eval_expr(node.values[0])
+                if isinstance(out, Connector):
+                    out = out.read()
                 for nxt in node.values[1:]:
                     b = self.eval_expr(nxt)
+                    if isinstance(b, Connector):
+                        b = b.read()
                     if isinstance(out, (Wire, Reg)) or isinstance(b, (Wire, Reg)):
                         if isinstance(out, (Wire, Reg)):
                             out = _expect_wire(out, ctx="or") | b
@@ -882,64 +938,84 @@ class _Compiler:
             false_v = self.eval_expr(node.orelse)
             return _wire_ifexpr(cond, true_v, false_v)
         if isinstance(node, ast.Compare):
-            if len(node.ops) != 1 or len(node.comparators) != 1:
-                raise JitError("only single comparisons are supported")
-            lhs = self.eval_expr(node.left)
-            rhs = self.eval_expr(node.comparators[0])
-            op = node.ops[0]
             def _py_cmp_value(v: Any) -> Any:
                 if isinstance(v, LiteralValue):
                     return int(v.value)
                 return v
-            if isinstance(op, ast.Is):
-                return lhs is rhs
-            if isinstance(op, ast.IsNot):
-                return lhs is not rhs
-            if isinstance(op, ast.Eq):
-                if not isinstance(lhs, (Wire, Reg)) and not isinstance(rhs, (Wire, Reg)):
-                    return _py_cmp_value(lhs) == _py_cmp_value(rhs)
-                w = _expect_wire(lhs, ctx="==") if isinstance(lhs, (Wire, Reg)) else _expect_wire(rhs, ctx="==")
-                return w == (rhs if isinstance(lhs, (Wire, Reg)) else lhs)
-            if isinstance(op, ast.NotEq):
-                if not isinstance(lhs, (Wire, Reg)) and not isinstance(rhs, (Wire, Reg)):
-                    return _py_cmp_value(lhs) != _py_cmp_value(rhs)
-                w = _expect_wire(lhs, ctx="!=") if isinstance(lhs, (Wire, Reg)) else _expect_wire(rhs, ctx="!=")
-                eq = w == (rhs if isinstance(lhs, (Wire, Reg)) else lhs)
-                return ~eq
-            if isinstance(op, ast.Lt):
-                if isinstance(lhs, (Wire, Reg)):
-                    return _expect_wire(lhs, ctx="<") < rhs
-                if isinstance(rhs, (Wire, Reg)):
-                    # a < b  ==>  b > a
-                    return _expect_wire(rhs, ctx="<") > lhs
-                lhs_i = int(lhs.value) if isinstance(lhs, LiteralValue) else int(lhs)
-                rhs_i = int(rhs.value) if isinstance(rhs, LiteralValue) else int(rhs)
-                return lhs_i < rhs_i
-            if isinstance(op, ast.LtE):
-                if isinstance(lhs, (Wire, Reg)):
-                    return _expect_wire(lhs, ctx="<=") <= rhs
-                if isinstance(rhs, (Wire, Reg)):
-                    return _expect_wire(rhs, ctx="<=") >= lhs
-                lhs_i = int(lhs.value) if isinstance(lhs, LiteralValue) else int(lhs)
-                rhs_i = int(rhs.value) if isinstance(rhs, LiteralValue) else int(rhs)
-                return lhs_i <= rhs_i
-            if isinstance(op, ast.Gt):
-                if isinstance(lhs, (Wire, Reg)):
-                    return _expect_wire(lhs, ctx=">") > rhs
-                if isinstance(rhs, (Wire, Reg)):
-                    # a > b  ==>  b < a
-                    return _expect_wire(rhs, ctx=">") < lhs
-                lhs_i = int(lhs.value) if isinstance(lhs, LiteralValue) else int(lhs)
-                rhs_i = int(rhs.value) if isinstance(rhs, LiteralValue) else int(rhs)
-                return lhs_i > rhs_i
-            if isinstance(op, ast.GtE):
-                if isinstance(lhs, (Wire, Reg)):
-                    return _expect_wire(lhs, ctx=">=") >= rhs
-                if isinstance(rhs, (Wire, Reg)):
-                    return _expect_wire(rhs, ctx=">=") <= lhs
-                lhs_i = int(lhs.value) if isinstance(lhs, LiteralValue) else int(lhs)
-                rhs_i = int(rhs.value) if isinstance(rhs, LiteralValue) else int(rhs)
-                return lhs_i >= rhs_i
+            def _eval_single_compare(op: ast.cmpop, lhs: Any, rhs: Any) -> Any:
+                if isinstance(op, ast.Is):
+                    return lhs is rhs
+                if isinstance(op, ast.IsNot):
+                    return lhs is not rhs
+                if isinstance(op, ast.Eq):
+                    if not isinstance(lhs, (Wire, Reg)) and not isinstance(rhs, (Wire, Reg)):
+                        return _py_cmp_value(lhs) == _py_cmp_value(rhs)
+                    w = _expect_wire(lhs, ctx="==") if isinstance(lhs, (Wire, Reg)) else _expect_wire(rhs, ctx="==")
+                    return w == (rhs if isinstance(lhs, (Wire, Reg)) else lhs)
+                if isinstance(op, ast.NotEq):
+                    if not isinstance(lhs, (Wire, Reg)) and not isinstance(rhs, (Wire, Reg)):
+                        return _py_cmp_value(lhs) != _py_cmp_value(rhs)
+                    w = _expect_wire(lhs, ctx="!=") if isinstance(lhs, (Wire, Reg)) else _expect_wire(rhs, ctx="!=")
+                    eq = w == (rhs if isinstance(lhs, (Wire, Reg)) else lhs)
+                    return ~eq
+                if isinstance(op, ast.Lt):
+                    if isinstance(lhs, (Wire, Reg)):
+                        return _expect_wire(lhs, ctx="<") < rhs
+                    if isinstance(rhs, (Wire, Reg)):
+                        # a < b  ==>  b > a
+                        return _expect_wire(rhs, ctx="<") > lhs
+                    lhs_i = int(lhs.value) if isinstance(lhs, LiteralValue) else int(lhs)
+                    rhs_i = int(rhs.value) if isinstance(rhs, LiteralValue) else int(rhs)
+                    return lhs_i < rhs_i
+                if isinstance(op, ast.LtE):
+                    if isinstance(lhs, (Wire, Reg)):
+                        return _expect_wire(lhs, ctx="<=") <= rhs
+                    if isinstance(rhs, (Wire, Reg)):
+                        return _expect_wire(rhs, ctx="<=") >= lhs
+                    lhs_i = int(lhs.value) if isinstance(lhs, LiteralValue) else int(lhs)
+                    rhs_i = int(rhs.value) if isinstance(rhs, LiteralValue) else int(rhs)
+                    return lhs_i <= rhs_i
+                if isinstance(op, ast.Gt):
+                    if isinstance(lhs, (Wire, Reg)):
+                        return _expect_wire(lhs, ctx=">") > rhs
+                    if isinstance(rhs, (Wire, Reg)):
+                        # a > b  ==>  b < a
+                        return _expect_wire(rhs, ctx=">") < lhs
+                    lhs_i = int(lhs.value) if isinstance(lhs, LiteralValue) else int(lhs)
+                    rhs_i = int(rhs.value) if isinstance(rhs, LiteralValue) else int(rhs)
+                    return lhs_i > rhs_i
+                if isinstance(op, ast.GtE):
+                    if isinstance(lhs, (Wire, Reg)):
+                        return _expect_wire(lhs, ctx=">=") >= rhs
+                    if isinstance(rhs, (Wire, Reg)):
+                        return _expect_wire(rhs, ctx=">=") <= lhs
+                    lhs_i = int(lhs.value) if isinstance(lhs, LiteralValue) else int(lhs)
+                    rhs_i = int(rhs.value) if isinstance(rhs, LiteralValue) else int(rhs)
+                    return lhs_i >= rhs_i
+                raise JitError(f"unsupported comparison operator: {op.__class__.__name__}")
+
+            lhs = self.eval_expr(node.left)
+            if isinstance(lhs, Connector):
+                lhs = lhs.read()
+            chain_out: Any | None = None
+            for op, rhs_node in zip(node.ops, node.comparators):
+                rhs = self.eval_expr(rhs_node)
+                if isinstance(rhs, Connector):
+                    rhs = rhs.read()
+                cmp_out = _eval_single_compare(op, lhs, rhs)
+                if chain_out is None:
+                    chain_out = cmp_out
+                elif isinstance(chain_out, (Wire, Reg)) or isinstance(cmp_out, (Wire, Reg)):
+                    if isinstance(chain_out, (Wire, Reg)):
+                        chain_out = _expect_wire(chain_out, ctx="comparison chain") & cmp_out
+                    else:
+                        chain_out = _expect_wire(cmp_out, ctx="comparison chain") & chain_out
+                else:
+                    chain_out = bool(chain_out) and bool(cmp_out)
+                lhs = rhs
+            if chain_out is None:
+                raise JitError("comparison expression is empty")
+            return chain_out
         if isinstance(node, ast.Call):
             return self.eval_call(node)
         if isinstance(node, ast.Attribute):

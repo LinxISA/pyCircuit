@@ -26,7 +26,7 @@ def build(m: Circuit, *, width: int = 16):
         pair_add,
         name="pair_add0",
         params={"width": int(width)},
-        spec_bindings={"in": top_in},
+        spec_bindings={"in": meta.bind(in_spec, top_in)},
     )
 
     out_spec = _pair_spec(m, width=width)

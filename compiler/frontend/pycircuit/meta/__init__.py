@@ -1,6 +1,6 @@
 from . import dse
 from .builders import bundle, filtered, iface, params, ruleset, stage_pipe
-from .connect import bind_instance_ports, connect_like, declare_inputs, declare_outputs, declare_state_regs
+from .connect import SpecBinding, bind, bind_instance_ports, connect_like, declare_inputs, declare_outputs, declare_state_regs
 from .types import (
     BundleSpec,
     DecodeRule,
@@ -22,6 +22,8 @@ __all__ = [
     "ParamSpace",
     "ParamSpec",
     "StagePipeSpec",
+    "SpecBinding",
+    "bind",
     "bind_instance_ports",
     "bundle",
     "connect_like",

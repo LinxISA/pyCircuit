@@ -76,7 +76,7 @@ module tb_fastfwd_pyc;
   int out_trace_fd;
   int unsigned out_index;
 
-  // Expected model (fixed-size ring to avoid SV queues for tool compatibility).
+  // Expected model (fixed-size ring to avoid SV queues for broad tool support).
   localparam int unsigned MAX_PKTS = 32768;
   reg [127:0] expected_by_seq [0:MAX_PKTS-1];
   reg [127:0] expected_q [0:MAX_PKTS-1];
@@ -91,7 +91,7 @@ module tb_fastfwd_pyc;
   int unsigned cyc;
   int unsigned out_ptr;
 
-  // Scratch vars (declared at module scope for Icarus compatibility).
+  // Scratch vars (declared at module scope for Icarus support).
   integer lane;
   integer k;
   integer produced;

@@ -28,6 +28,7 @@ All are immutable and export canonical template values via `__pyc_template_value
 - `meta.declare_inputs(m, spec, prefix=...)`
 - `meta.declare_outputs(m, spec, values, prefix=...)`
 - `meta.declare_state_regs(m, spec, clk=..., rst=..., ...)`
+- `meta.bind(spec, value)` -> spec-checked binding token for `instance_bind`
 - `meta.bind_instance_ports(m, spec_bindings)`
 - `meta.connect_like(m, dst, src, when=...)`
 

@@ -16,6 +16,16 @@ class _I1Field:
     signed: bool = False
 
 
+@dataclass(frozen=True)
+class SpecBinding:
+    spec: BundleSpec | InterfaceSpec | StagePipeSpec
+    value: ConnectorBundle | Mapping[str, Any]
+
+
+def bind(spec: BundleSpec | InterfaceSpec | StagePipeSpec, value: ConnectorBundle | Mapping[str, Any]) -> SpecBinding:
+    return SpecBinding(spec=spec, value=value)
+
+
 def _normalize_prefix(prefix: str | None) -> str:
     p = "" if prefix is None else str(prefix)
     return p
@@ -168,11 +178,60 @@ def declare_state_regs(
 
 def bind_instance_ports(
     m: Circuit,
-    spec_bindings: Mapping[str, Connector | ConnectorBundle | Mapping[str, Any]],
+    spec_bindings: Mapping[str, Connector | ConnectorBundle | Mapping[str, Any] | SpecBinding | tuple[Any, Any]],
 ) -> dict[str, Connector]:
     out: dict[str, Connector] = {}
     for pname, bound in spec_bindings.items():
         p = str(pname)
+        if isinstance(bound, tuple) and len(bound) == 2:
+            sp0, sp1 = bound
+            if isinstance(sp0, (BundleSpec, InterfaceSpec, StagePipeSpec)):
+                bound = SpecBinding(spec=sp0, value=sp1)
+
+        if isinstance(bound, SpecBinding):
+            spec = bound.spec
+            vals: Mapping[str, Any]
+            if isinstance(bound.value, ConnectorBundle):
+                vals = {k: v for k, v in bound.value.items()}
+            elif isinstance(bound.value, Mapping):
+                vals = dict(bound.value)
+            else:
+                raise ConnectorError(
+                    "bind_instance_ports: spec binding value must be ConnectorBundle or mapping, "
+                    + f"got {type(bound.value).__name__}"
+                )
+
+            exp_keys = [k for k, _, _ in _iter_fields(spec)]
+            got_keys = sorted(str(k) for k in vals.keys())
+            missing = sorted(set(exp_keys) - set(got_keys))
+            extra = sorted(set(got_keys) - set(exp_keys))
+            if missing or extra:
+                parts: list[str] = []
+                if missing:
+                    parts.append("missing: " + ", ".join(missing))
+                if extra:
+                    parts.append("extra: " + ", ".join(extra))
+                raise ConnectorError(f"bind_instance_ports[{p!r}] key mismatch ({'; '.join(parts)})")
+
+            for key, field, _ in _iter_fields(spec):
+                port = f"{p}_{key}"
+                c = m.as_connector(vals[key], name=port)
+                exp_w = int(getattr(field, "width", 0))
+                got_w = _connector_width(c)
+                if got_w != exp_w:
+                    raise ConnectorError(
+                        f"bind_instance_ports[{p!r}][{key!r}] width mismatch: expected i{exp_w}, got i{got_w}"
+                    )
+                exp_signed = bool(getattr(field, "signed", False))
+                got_signed = _connector_signed(c)
+                if exp_signed != got_signed:
+                    raise ConnectorError(
+                        f"bind_instance_ports[{p!r}][{key!r}] signedness mismatch: "
+                        + f"expected signed={exp_signed}, got signed={got_signed}"
+                    )
+                out[port] = c
+            continue
+
         if isinstance(bound, Connector):
             out[p] = m.as_connector(bound, name=p)
             continue

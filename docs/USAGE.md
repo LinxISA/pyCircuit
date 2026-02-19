@@ -36,7 +36,7 @@ Arithmetic helpers include:
 - `FieldSpec`, `BundleSpec`, `InterfaceSpec`, `StagePipeSpec`
 - `ParamSpec`, `ParamSet`, `ParamSpace`, `DecodeRule`
 - Builders: `bundle(...)`, `iface(...)`, `stage_pipe(...)`, `params(...)`, `ruleset(...)`
-- Wiring helpers: `declare_inputs`, `declare_outputs`, `declare_state_regs`, `bind_instance_ports`, `connect_like`
+- Wiring helpers: `declare_inputs`, `declare_outputs`, `declare_state_regs`, `bind`, `bind_instance_ports`, `connect_like`
 - DSE helpers: `meta.dse.grid`, `meta.dse.product`, `meta.dse.filter`, `meta.dse.named_variant`
 
 ## 5) v3.2 grammar-candy methods
@@ -46,6 +46,7 @@ Arithmetic helpers include:
 - `m.state_regs(spec, clk=..., rst=..., prefix=..., init=..., en=...)`
 - `m.pipe_regs(stage_spec, in_bundle, clk=..., rst=..., en=..., flush=...)`
 - `m.instance_bind(fn, name=..., spec_bindings=..., params=...)`
+  - Use `meta.bind(spec, value)` in `spec_bindings` for strict key/width/signed validation.
 
 ## 6) Minimal example
 

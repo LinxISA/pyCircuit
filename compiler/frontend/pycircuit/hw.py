@@ -1109,7 +1109,7 @@ class Circuit(Module):
         fn: Any,
         *,
         name: str,
-        spec_bindings: Mapping[str, Connector | ConnectorBundle | Mapping[str, Any]],
+        spec_bindings: Mapping[str, Connector | ConnectorBundle | Mapping[str, Any] | Any],
         params: dict[str, Any] | None = None,
         module_name: str | None = None,
     ) -> ModuleInstanceHandle:
@@ -1118,6 +1118,8 @@ class Circuit(Module):
         `spec_bindings` values may be:
         - `Connector`: bound directly to a single callee port
         - `ConnectorBundle`/mapping: expanded as `<binding_key>_<field>`
+        - `meta.bind(spec, value)` or `(spec, value)`: expanded with strict
+          key/width/signed checks against the provided spec
         """
         from .meta.connect import bind_instance_ports
 

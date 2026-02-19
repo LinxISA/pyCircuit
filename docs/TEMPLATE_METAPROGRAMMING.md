@@ -42,6 +42,7 @@ Templates are memoized per compile invocation by:
 
 - Use templates to build immutable interface/pipe/param specs.
 - Use templates to derive widths, masks, and unroll counts.
+- Use chained compare expressions and subscripted meta objects naturally in template/JIT code (`lo <= x <= hi`, `cfg["sets"]`).
 - Keep all hardware emission in `@module` / `@function` code.
 
 See also:
