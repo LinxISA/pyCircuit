@@ -1090,10 +1090,34 @@ def _cmd_build(args: argparse.Namespace) -> int:
             check=True,
         )
         build_type = "Release" if str(args.profile) == "release" else "RelWithDebInfo"
-        subprocess.run(
-            ["cmake", "-G", "Ninja", "-S", str(cmake_src), "-B", str(cmake_build), f"-DCMAKE_BUILD_TYPE={build_type}"],
-            check=True,
-        )
+
+        # Windows/MSYS2: `ninja.exe --version` can intermittently fail with
+        # STATUS_DLL_INIT_FAILED in subprocesses. Prefer Makefiles here for
+        # robustness.
+        cmake_cmd = [
+            "cmake",
+            "-G",
+            "Ninja",
+            "-S",
+            str(cmake_src),
+            "-B",
+            str(cmake_build),
+            f"-DCMAKE_BUILD_TYPE={build_type}",
+        ]
+        if os.name == "nt":
+            cmake_cmd = [
+                "cmake",
+                "-G",
+                "MinGW Makefiles",
+                "-S",
+                str(cmake_src),
+                "-B",
+                str(cmake_build),
+                f"-DCMAKE_BUILD_TYPE={build_type}",
+                "-DCMAKE_MAKE_PROGRAM=mingw32-make",
+            ]
+
+        subprocess.run(cmake_cmd, check=True)
         subprocess.run(["cmake", "--build", str(cmake_build), "-j", str(jobs)], check=True)
         manifest["cpp_executable"] = str(cmake_build / "pyc_tb")
 
@@ -1125,8 +1149,29 @@ def _cmd_build(args: argparse.Namespace) -> int:
         manifest["verilator_manifest"] = str(sim_manifest.relative_to(out_dir))
         if bool(args.run_verilator):
             vbuild = out_dir / "verilator_build"
+
+            # On Windows, MSYS2's `verilator` is typically a script (shebang) and
+            # cannot be launched via CreateProcess directly. Prefer the real exe.
+            verilator_exe = "verilator"
+            if os.name == "nt":
+                verilator_exe = (
+                    shutil.which("verilator_bin.exe")
+                    or shutil.which("verilator_bin")
+                    or "verilator_bin.exe"
+                )
+
+            # Verilator needs a valid VERILATOR_ROOT on Windows; otherwise it may
+            # form mixed /path\\include\\... strings and fail to locate std SV.
+            run_env = None
+            if os.name == "nt":
+                run_env = os.environ.copy()
+                vb = shutil.which(str(verilator_exe))
+                if vb:
+                    prefix = Path(vb).resolve().parents[1]
+                    run_env["VERILATOR_ROOT"] = str(prefix / "share" / "verilator")
+
             cmd = [
-                "verilator",
+                verilator_exe,
                 "--binary",
                 "-Wall",
                 "-Wno-fatal",
@@ -1134,7 +1179,7 @@ def _cmd_build(args: argparse.Namespace) -> int:
                 "-Wno-UNUSEDSIGNAL",
                 "-Wno-WIDTHEXPAND",
                 "--quiet",
-                "--quiet-build",
+                # MSYS2/Windows Verilator wrapper does not support --quiet-build.
                 "--timing",
                 "--trace",
                 "--top-module",
@@ -1144,8 +1189,12 @@ def _cmd_build(args: argparse.Namespace) -> int:
                 str(tb_sv_out),
                 *verilog_sources,
             ]
-            subprocess.run(cmd, check=True)
+            subprocess.run(cmd, check=True, env=run_env)
             vbin = vbuild / f"V{tb_name}"
+            if os.name == "nt" and not vbin.is_file():
+                vbin_exe = vbin.with_suffix(".exe")
+                if vbin_exe.is_file():
+                    vbin = vbin_exe
             manifest["verilator_binary"] = str(vbin)
             if not vbin.is_file():
                 raise SystemExit(f"build(verilator): expected binary not found: {vbin}")

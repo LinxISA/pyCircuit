@@ -21,10 +21,20 @@ pyc_find_pycc() {
     return 0
   fi
 
+  local exe_suffix=""
+  case "$(uname -s 2>/dev/null || true)" in
+    MINGW*|MSYS*|CYGWIN*) exe_suffix=".exe";;
+  esac
+
   local candidates=(
     # Preferred: current MLIR build dir.
-    "${PYC_ROOT_DIR}/compiler/mlir/build2/bin/pycc"
+    "${PYC_ROOT_DIR}/compiler/mlir/build2/bin/pycc${exe_suffix}"
     # Alternate build dirs still used in some local workflows.
+    "${PYC_ROOT_DIR}/build/bin/pycc${exe_suffix}"
+    "${PYC_ROOT_DIR}/compiler/mlir/build/bin/pycc${exe_suffix}"
+    "${PYC_ROOT_DIR}/build-top/bin/pycc${exe_suffix}"
+    # Also allow non-suffixed name in case the environment provides it.
+    "${PYC_ROOT_DIR}/compiler/mlir/build2/bin/pycc"
     "${PYC_ROOT_DIR}/build/bin/pycc"
     "${PYC_ROOT_DIR}/compiler/mlir/build/bin/pycc"
     "${PYC_ROOT_DIR}/build-top/bin/pycc"
@@ -58,6 +68,12 @@ pyc_find_pycc() {
   if command -v pycc >/dev/null 2>&1; then
     export PYCC
     PYCC="$(command -v pycc)"
+    return 0
+  fi
+
+  if command -v pycc.exe >/dev/null 2>&1; then
+    export PYCC
+    PYCC="$(command -v pycc.exe)"
     return 0
   fi
 

@@ -931,6 +931,11 @@ int main(int argc, char **argv) {
   mlir::func::registerInlinerExtension(registry);
 
   MLIRContext ctx(registry);
+#ifdef _WIN32
+  // MSYS2/MinGW builds can hit non-deterministic crashes when running nested
+  // pass pipelines with multithreading enabled. Bring-up prefers robustness.
+  ctx.disableMultithreading();
+#endif
   ctx.loadAllAvailableDialects();
 
   llvm::SourceMgr sm;
