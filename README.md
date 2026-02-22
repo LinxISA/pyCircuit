@@ -1,58 +1,41 @@
 # pyCircuit
 
-pyCircuit is a strict Python frontend for generating hardware from a small MLIR
-dialect ("PYC") and emitting:
-- Verilog netlists
-- a cycle-accurate C++ model
+## Scope
+`tools/pyCircuit` is the pyCircuit workspace mirror used for LinxISA model generation, compiler/frontend flows, and differential validation support.
 
-## Model
+## Upstream
+- Repository: `https://github.com/LinxISA/pyCircuit`
+- Merge-back target branch: `main`
 
-- `@module`: hierarchy boundary
-- `@function`: inline hardware helper
-- `@const`: compile-time pure helper (no IR emission, no module mutation)
-- `@testbench`: host-side cycle test program carried as a `.pyc` payload
+## What This Submodule Owns
+- pyCircuit frontend/model pipeline (`pyc` flows)
+- Build/sim scripts used by Linx bring-up
+- Model-side tooling for trace and integration checks
 
-Compile-time + wiring helpers:
-- `pycircuit.spec` (compile-time shapes/params)
-- `pycircuit.wiring` (binding/unflatten helpers)
-- `pycircuit.logic` (combinational helpers)
-- `pycircuit.lib` (standard blocks/signatures)
-
-## Quickstart
-
-Build the backend tool (`pycc`):
+## Canonical Build and Test Commands
+Run from `/Users/zhoubot/linx-isa/tools/pyCircuit`.
 
 ```bash
-bash /Users/zhoubot/pyCircuit/flows/scripts/pyc build
+bash flows/scripts/pyc build
+bash flows/scripts/run_examples.sh
+bash flows/scripts/run_sims.sh
 ```
 
-Run compiler smoke:
+Optional superproject differential suite:
 
 ```bash
-bash /Users/zhoubot/pyCircuit/flows/scripts/run_examples.sh
+python3 /Users/zhoubot/linx-isa/tools/bringup/run_model_diff_suite.py \
+  --root /Users/zhoubot/linx-isa \
+  --suite /Users/zhoubot/linx-isa/avs/model/linx_model_diff_suite.yaml \
+  --profile release-strict
 ```
 
-Run simulation smoke (Verilator + `@testbench`):
+## LinxISA Integration Touchpoints
+- Model parity support for bring-up gates
+- Shared trace/debug workflows with `rtl/LinxCore`
+- Invoked by selected superproject bring-up scripts
 
-```bash
-bash /Users/zhoubot/pyCircuit/flows/scripts/run_sims.sh
-```
-
-## Main docs
-
-- `/Users/zhoubot/pyCircuit/docs/QUICKSTART.md`
-- `/Users/zhoubot/pyCircuit/docs/FRONTEND_API.md`
-- `/Users/zhoubot/pyCircuit/docs/PIPELINE.md`
-- `/Users/zhoubot/pyCircuit/docs/TESTBENCH.md`
-- `/Users/zhoubot/pyCircuit/docs/CONST_METAPROGRAMMING.md`
-- `/Users/zhoubot/pyCircuit/docs/SPEC_STRUCTURES.md`
-- `/Users/zhoubot/pyCircuit/docs/SPEC_COLLECTIONS.md`
-- `/Users/zhoubot/pyCircuit/docs/IR_SPEC.md`
-- `/Users/zhoubot/pyCircuit/docs/PRIMITIVES.md`
-- `/Users/zhoubot/pyCircuit/docs/DIAGNOSTICS.md`
-
-## Regressions
-
-- `bash /Users/zhoubot/pyCircuit/flows/scripts/run_examples.sh`
-- `bash /Users/zhoubot/pyCircuit/flows/scripts/run_sims.sh`
-
+## Related Docs
+- `/Users/zhoubot/linx-isa/docs/project/navigation.md`
+- `/Users/zhoubot/linx-isa/docs/bringup/`
+- `/Users/zhoubot/linx-isa/avs/model/`
