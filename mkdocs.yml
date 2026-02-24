@@ -1,0 +1,117 @@
+# pyCircuit Documentation Configuration
+
+site_name: pyCircuit
+site_description: "A Python-based hardware description framework that compiles Python functions to synthesizable RTL through MLIR"
+site_author: LinxISA Contributors
+site_url: https://github.com/LinxISA/pyCircuit
+
+repo_url: https://github.com/LinxISA/pyCircuit
+repo_name: LinxISA/pyCircuit
+
+copyright: "Copyright &copy; 2024 LinxISA Contributors"
+
+# Configuration
+docs_dir: docs
+site_dir: _build/html
+
+# Theme
+theme:
+  name: material
+  palette:
+    - scheme: default
+      primary: blue
+      accent: blue
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - scheme: slate
+      primary: blue
+      accent: blue
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+  features:
+    - navigation.instant
+    - navigation.tracking
+    - navigation.tabs
+    - navigation.sections
+    - navigation.top
+    - search.suggest
+    - search.highlight
+    - content.code.annotate
+  icon:
+    repo: fontawesome/brands/github
+
+# Markdown extensions
+markdown_extensions:
+  - abbr
+  - admonition
+  - attr_list
+  - def_list
+  - footnotes
+  - meta
+  - md_in_html
+  - toc
+  - pymdownx.details
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang: python
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+
+# Navigation
+nav:
+  - Home: index.md
+  - Getting Started:
+      - getting-started/index.md
+      - getting-started/installation.md
+      - getting-started/quickstart.md
+      - getting-started/first-design.md
+  - Tutorial:
+      - tutorial/index.md
+      - tutorial/unified-signal-model.md
+      - tutorial/cycle-aware-computing.md
+      - tutorial/primitives.md
+      - tutorial/testbench.md
+  - Examples:
+      - examples/index.md
+      - examples/counter.md
+      - examples/calculator.md
+      - examples/fifo.md
+      - examples/linx-cpu.md
+  - API Reference:
+      - api/frontend-api.md
+      - api/ir-spec.md
+      - api/diagnostics.md
+  - Development:
+      - development/contributing.md
+      - development/testing.md
+      - development/build.md
+
+# Plugins
+plugins:
+  - search:
+      lang: en
+  - mdx_gh_link:
+      repo: LinxISA/pyCircuit
+      repo_url: https://github.com/LinxISA/pyCircuit
+      icon: github
+
+# Extra
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/LinxISA/pyCircuit
+    - icon: fontawesome/brands/python
+      link: https://python.org
+
+# Google Analytics
+google_analytics:
+  - UA-XXXXX
+  - auto
