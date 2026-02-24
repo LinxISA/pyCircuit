@@ -13,7 +13,7 @@ SRC="${1:-$DEFAULT_SRC}"
 LLVM_BUILD="${LLVM_BUILD:-$HOME/llvm-project/build-linxisa-clang}"
 LLVM_MC="${LLVM_MC:-$LLVM_BUILD/bin/llvm-mc}"
 
-QEMU_BIN="${QEMU_BIN:-/Users/zhoubot/qemu/build/qemu-system-linx64}"
+QEMU_BIN="${QEMU_BIN:-$LINX_ROOT/emulator/qemu/build/qemu-system-linx64}"
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/linx-diff.XXXXXX")"
 trap 'rm -rf "$WORK"' EXIT
