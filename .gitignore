@@ -223,9 +223,9 @@ __marimo__/
 
 # pyCircuit generated outputs (local artifacts only; never checked in)
 .pycircuit_out/
+examples/
+janus/
 **/generated/
 designs/**/generated/
 designs/examples/generated/**/verilator/
 designs/janus/generated/
-examples/generated/
-janus/generated/

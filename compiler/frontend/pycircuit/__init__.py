@@ -1,4 +1,5 @@
 from . import ct
+from . import hierarchical
 from . import lib
 from . import logic
 from . import spec
@@ -29,6 +30,7 @@ __all__ = [
     "Circuit",
     "ClockDomain",
     "const",
+    "hierarchical",
     "JitError",
     "LiteralValue",
     "ModuleInstanceHandle",
