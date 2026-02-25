@@ -351,5 +351,27 @@ def build(m: Circuit, *, base_addr: int = 0x80000000) -> None:
     m.output("queue_full", queue_full)
     m.output("queue_empty", queue_empty)
 
+    # --- Commit Trace Outputs (for co-sim validation) ---
+    # Following LinxCore retire trace contract pattern
+    with m.scope("COMMIT_TRACE"):
+        # Uop commit signals (when systolic array writes to ACC)
+        m.output("commit_fire", sa_write_valid)
+        m.output("commit_acc_idx", sa_write_acc_idx)
+        m.output("commit_is_first", sa_write_is_first)
+        m.output("commit_is_last", sa_write_is_last)
+
+        # Issue queue status for debugging
+        m.output("commit_queue_entries", entries_used)
+
+        # Decoder state for debugging
+        m.output("commit_gen_done", gen_done)
+        m.output("commit_uop_valid", uop_valid)
+
+        # Pipeline status
+        m.output("commit_sa_busy", sa_busy)
+
+        # Cycle counter for performance analysis
+        m.output("commit_cycle_count", main_state.cycle_count.out())
+
 
 build.__pycircuit_name__ = "janus_cube_pyc"
