@@ -3,6 +3,8 @@
 ## Core decorators
 
 - `@module`: hierarchy-preserving boundary (materializes `pyc.instance`)
+  - boundary-dynamic value ports: `@module(value_params={"gain": "i8", "sel": "i1"})`
+  - `value_params` are runtime module IO values (not specialization params)
 - `@function`: inline helper (inlined into the caller)
 - `@const`: compile-time helper (pure; may not emit IR or mutate the module)
 - `@testbench`: host-side cycle test program lowered via a `.pyc` payload
@@ -54,4 +56,3 @@ Wiring:
 `lib`:
 - `lib.StreamSig(...)` (ready/valid signature builder)
 - plus structural blocks under `pycircuit.lib.*`
-

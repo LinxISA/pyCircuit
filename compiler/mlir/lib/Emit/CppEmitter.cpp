@@ -140,6 +140,23 @@ static std::string getPortName(func::FuncOp f, unsigned idx, bool isResult) {
   return "out" + std::to_string(idx);
 }
 
+static std::string getPortCanonicalFieldPath(func::FuncOp f, unsigned idx, bool isResult) {
+  if (!isResult) {
+    if (auto names = f->getAttrOfType<ArrayAttr>("arg_names")) {
+      if (idx < names.size())
+        if (auto s = dyn_cast<StringAttr>(names[idx]))
+          return s.getValue().str();
+    }
+    return "arg" + std::to_string(idx);
+  }
+  if (auto names = f->getAttrOfType<ArrayAttr>("result_names")) {
+    if (idx < names.size())
+      if (auto s = dyn_cast<StringAttr>(names[idx]))
+        return s.getValue().str();
+  }
+  return "out" + std::to_string(idx);
+}
+
 static void computeUniquePortNames(func::FuncOp f, std::vector<std::string> &inNames, std::vector<std::string> &outNames) {
   NameTable nt;
   inNames.clear();
@@ -396,6 +413,30 @@ static LogicalResult emitCombAssign(Operation &op, llvm::raw_ostream &os, NameTa
        << sh.getAmountAttr().getInt() << "u);\n";
     return success();
   }
+  if (auto sh = dyn_cast<pyc::ShlOp>(op)) {
+    unsigned w = bitWidth(sh.getResult().getType());
+    if (w == 0)
+      return sh.emitError("invalid shl width");
+    os << "    " << nt.get(sh.getResult()) << " = pyc::cpp::shl<" << w << ">(" << nt.get(sh.getIn())
+       << ", static_cast<unsigned>(" << nt.get(sh.getAmount()) << ".value()));\n";
+    return success();
+  }
+  if (auto sh = dyn_cast<pyc::LshrOp>(op)) {
+    unsigned w = bitWidth(sh.getResult().getType());
+    if (w == 0)
+      return sh.emitError("invalid lshr width");
+    os << "    " << nt.get(sh.getResult()) << " = pyc::cpp::lshr<" << w << ">(" << nt.get(sh.getIn())
+       << ", static_cast<unsigned>(" << nt.get(sh.getAmount()) << ".value()));\n";
+    return success();
+  }
+  if (auto sh = dyn_cast<pyc::AshrOp>(op)) {
+    unsigned w = bitWidth(sh.getResult().getType());
+    if (w == 0)
+      return sh.emitError("invalid ashr width");
+    os << "    " << nt.get(sh.getResult()) << " = pyc::cpp::ashr<" << w << ">(" << nt.get(sh.getIn())
+       << ", static_cast<unsigned>(" << nt.get(sh.getAmount()) << ".value()));\n";
+    return success();
+  }
   if (auto c = dyn_cast<pyc::ConcatOp>(op)) {
     unsigned w = bitWidth(c.getResult().getType());
     if (w == 0)
@@ -444,7 +485,7 @@ static LogicalResult emitCombMethod(pyc::CombOp comb, llvm::raw_ostream &os, Nam
   return success();
 }
 
-static LogicalResult emitFunc(func::FuncOp f, llvm::raw_ostream &os) {
+static LogicalResult emitFunc(func::FuncOp f, llvm::raw_ostream &os, const CppEmitterOptions &opts) {
   NameTable nt;
 
   if (!llvm::hasSingleElement(f.getBody()))
@@ -456,14 +497,23 @@ static LogicalResult emitFunc(func::FuncOp f, llvm::raw_ostream &os) {
   os << "struct " << structName << " {\n";
 
   // Ports.
+  std::vector<std::string> inNames;
+  inNames.reserve(f.getNumArguments());
+  std::vector<std::string> inCanon;
+  inCanon.reserve(f.getNumArguments());
   std::vector<std::string> outNames;
   outNames.reserve(f.getNumResults());
+  std::vector<std::string> outCanon;
+  outCanon.reserve(f.getNumResults());
   for (auto [i, arg] : llvm::enumerate(f.getArguments())) {
+    inCanon.push_back(getPortCanonicalFieldPath(f, i, /*isResult=*/false));
     std::string name = nt.unique(getPortName(f, i, /*isResult=*/false));
+    inNames.push_back(name);
     nt.names.try_emplace(arg, name);
     os << "  " << cppType(arg.getType()) << " " << name << "{};\n";
   }
   for (unsigned i = 0; i < f.getNumResults(); ++i) {
+    outCanon.push_back(getPortCanonicalFieldPath(f, i, /*isResult=*/true));
     std::string name = nt.unique(getPortName(f, i, /*isResult=*/true));
     outNames.push_back(name);
     os << "  " << cppType(f.getResultTypes()[i]) << " " << name << "{};\n";
@@ -562,6 +612,7 @@ static LogicalResult emitFunc(func::FuncOp f, llvm::raw_ostream &os) {
     pyc::InstanceOp op;
     func::FuncOp callee;
     std::string member;
+    std::string seg;
     std::vector<std::string> inPorts;
     std::vector<std::string> outPorts;
   };
@@ -599,11 +650,12 @@ static LogicalResult emitFunc(func::FuncOp f, llvm::raw_ostream &os) {
         base = sanitizeId(nameAttr.getValue());
       else
         base = sanitizeId(callee.getSymName()) + std::string("_inst");
+      std::string seg = base;
       std::string member = nt.unique(base);
 
       unsigned idx = static_cast<unsigned>(instInfos.size());
       instIndex.try_emplace(inst.getOperation(), idx);
-      instInfos.push_back(InstInfo{inst, callee, std::move(member), std::move(inPorts), std::move(outPorts)});
+      instInfos.push_back(InstInfo{inst, callee, std::move(member), std::move(seg), std::move(inPorts), std::move(outPorts)});
     }
 
     llvm::DenseMap<Operation *, SeqStateKind> seqMemo{};
@@ -617,14 +669,15 @@ static LogicalResult emitFunc(func::FuncOp f, llvm::raw_ostream &os) {
   llvm::DenseMap<Operation *, std::string> syncMemInstName;
   llvm::DenseMap<Operation *, std::string> syncMemDPInstName;
 
-  if (!instInfos.empty()) {
-    os << "  // Sub-modules.\n";
-    for (const auto &ii : instInfos) {
-      auto callee = ii.callee;
-      os << "  std::shared_ptr<" << sanitizeId(callee.getSymName()) << "> " << ii.member
-         << " = std::make_shared<" << sanitizeId(callee.getSymName()) << ">();\n";
-    }
-    os << "\n";
+	  if (!instInfos.empty()) {
+	    os << "  // Sub-modules.\n";
+	    for (const auto &ii : instInfos) {
+	      auto callee = ii.callee;
+	      // Decision 0012: Parent SimObjects own children via unique_ptr.
+	      os << "  std::unique_ptr<" << sanitizeId(callee.getSymName()) << "> " << ii.member
+	         << " = std::make_unique<" << sanitizeId(callee.getSymName()) << ">();\n";
+	    }
+	    os << "\n";
 
     os << "  // Sub-module eval cache (default-on in C++; can be disabled with\n";
     os << "  // -DPYC_DISABLE_INSTANCE_EVAL_CACHE).\n";
@@ -644,10 +697,88 @@ static LogicalResult emitFunc(func::FuncOp f, llvm::raw_ostream &os) {
     os << "\n";
   }
 
-  for (auto r : regs) {
-    unsigned w = bitWidth(r.getQ().getType());
-    if (w == 0)
-      return r.emitError("invalid reg width");
+	  // DFX trace registration (Decision 0145).
+	  os << "  template <typename TbT, typename EnabledInstT, typename EnabledSigT>\n";
+	  os << "  void pyc_trace_vcd(TbT &tb, const std::string &prefix, EnabledInstT &&enabledInst, EnabledSigT &&enabledSig) {\n";
+	  os << "    auto trace_port = [&](auto &sig, const char *leaf) {\n";
+  os << "      std::string p = prefix;\n";
+  // Decision 0023: canonical_path uses <instance_path>:<field_path>.
+  os << "      p += \":\";\n";
+  os << "      p += leaf;\n";
+		  os << "      if (enabledSig(p)) tb.vcdTrace(sig, p);\n";
+	  os << "    };\n";
+	  for (unsigned i = 0; i < inNames.size(); ++i)
+	    os << "    trace_port(" << inNames[i] << ", " << cppStringLiteral(inCanon[i]) << ");\n";
+	  for (unsigned i = 0; i < outNames.size(); ++i)
+	    os << "    trace_port(" << outNames[i] << ", " << cppStringLiteral(outCanon[i]) << ");\n";
+	  if (!instInfos.empty()) {
+	    os << "    auto trace_child = [&](auto &child, const char *seg) {\n";
+	    os << "      std::string p = prefix;\n";
+	    os << "      p += \".\";\n";
+    os << "      p += seg;\n";
+    os << "      if (enabledInst(p) && child) child->pyc_trace_vcd(tb, p, enabledInst, enabledSig);\n";
+    os << "    };\n";
+    for (const auto &ii : instInfos)
+      os << "    trace_child(" << ii.member << ", \"" << ii.seg << "\");\n";
+  }
+	  os << "  }\n\n";
+
+	  // ProbeRegistry registration (Decisions 0004, 0018-0021).
+	  os << "  void pyc_register_probes(pyc::cpp::ProbeRegistry &reg, const std::string &prefix) {\n";
+	  os << "    auto reg_path = [&](const char *leaf) {\n";
+	  os << "      std::string p = prefix;\n";
+	  // Decision 0023: canonical_path uses <instance_path>:<field_path>.
+	  os << "      p += \":\";\n";
+	  os << "      p += leaf;\n";
+	  os << "      return p;\n";
+	  os << "    };\n";
+		  for (auto [i, arg] : llvm::enumerate(f.getArguments())) {
+		    unsigned w = bitWidth(arg.getType());
+		    if (w == 0)
+		      return f.emitError("invalid input port width for ProbeRegistry: ") << getPortCanonicalFieldPath(f, i, /*isResult=*/false);
+		    os << "    reg.addWire<" << w << ">(reg_path(" << cppStringLiteral(inCanon[static_cast<unsigned>(i)]) << "), &"
+		       << inNames[static_cast<unsigned>(i)] << ");\n";
+		  }
+		  for (unsigned i = 0; i < f.getNumResults(); ++i) {
+		    unsigned w = bitWidth(f.getResultTypes()[i]);
+		    if (w == 0)
+		      return f.emitError("invalid output port width for ProbeRegistry: ") << getPortCanonicalFieldPath(f, i, /*isResult=*/true);
+		    os << "    reg.addWire<" << w << ">(reg_path(" << cppStringLiteral(outCanon[i]) << "), &" << outNames[i] << ");\n";
+		  }
+		  for (auto mem : byteMems) {
+		    std::string instName = nt.get(mem.getRdata()) + "_inst";
+		    if (auto nameAttr = mem->getAttrOfType<StringAttr>("name"))
+	      instName = sanitizeId(nameAttr.getValue());
+	    os << "    reg.addMem(reg_path(\"" << instName << "\"), &" << instName << ");\n";
+	  }
+	  for (auto mem : syncMems) {
+	    std::string instName = nt.get(mem.getRdata()) + "_inst";
+	    if (auto nameAttr = mem->getAttrOfType<StringAttr>("name"))
+	      instName = sanitizeId(nameAttr.getValue());
+	    os << "    if (" << instName << ") reg.addMem(reg_path(\"" << instName << "\"), " << instName << ");\n";
+	  }
+	  for (auto mem : syncMemDPs) {
+	    std::string instName = nt.get(mem.getRdata0()) + "_inst";
+	    if (auto nameAttr = mem->getAttrOfType<StringAttr>("name"))
+	      instName = sanitizeId(nameAttr.getValue());
+	    os << "    if (" << instName << ") reg.addMem(reg_path(\"" << instName << "\"), " << instName << ");\n";
+	  }
+	  if (!instInfos.empty()) {
+	    os << "    auto reg_child = [&](auto &child, const char *seg) {\n";
+	    os << "      std::string p = prefix;\n";
+	    os << "      p += \".\";\n";
+	    os << "      p += seg;\n";
+	    os << "      if (child) child->pyc_register_probes(reg, p);\n";
+	    os << "    };\n";
+	    for (const auto &ii : instInfos)
+	      os << "    reg_child(" << ii.member << ", \"" << ii.seg << "\");\n";
+	  }
+	  os << "  }\n\n";
+
+	  for (auto r : regs) {
+	    unsigned w = bitWidth(r.getQ().getType());
+	    if (w == 0)
+	      return r.emitError("invalid reg width");
     os << "  pyc::cpp::pyc_reg<" << w << "> *" << nt.get(r.getQ()) << "_inst = nullptr;\n";
   }
   for (auto fifo : fifos) {
@@ -1161,6 +1292,9 @@ static LogicalResult emitFunc(func::FuncOp f, llvm::raw_ostream &os) {
             pyc::ShliOp,
             pyc::LshriOp,
             pyc::AshriOp,
+            pyc::ShlOp,
+            pyc::LshrOp,
+            pyc::AshrOp,
             arith::SelectOp>(*op)) {
       if (failed(emitCombAssign(*op, os, nt)))
         return failure();
@@ -1546,6 +1680,9 @@ static LogicalResult emitFunc(func::FuncOp f, llvm::raw_ostream &os) {
             pyc::ShliOp,
             pyc::LshriOp,
             pyc::AshriOp,
+            pyc::ShlOp,
+            pyc::LshrOp,
+            pyc::AshrOp,
             arith::SelectOp>(*op)) {
       if (failed(emitCombAssign(*op, os, nt)))
         return failure();
@@ -1872,11 +2009,34 @@ static LogicalResult emitFunc(func::FuncOp f, llvm::raw_ostream &os) {
     }
   }
 
+  std::vector<std::string> topoEvalMethods;
+  if (hasFullTopo && !fullOrdered.empty()) {
+    unsigned evalTopoChunkNodes = std::max(1u, opts.evalTopoChunkNodes);
+    if (fullOrdered.size() > evalTopoChunkNodes) {
+      topoEvalMethods.reserve((fullOrdered.size() + evalTopoChunkNodes - 1) / evalTopoChunkNodes);
+      for (unsigned begin = 0, chunkIdx = 0; begin < fullOrdered.size(); begin += evalTopoChunkNodes, ++chunkIdx) {
+        unsigned end = std::min<unsigned>(static_cast<unsigned>(fullOrdered.size()), begin + evalTopoChunkNodes);
+        std::string methodName = "eval_topo_part_" + std::to_string(chunkIdx);
+        topoEvalMethods.push_back(methodName);
+        os << "  inline void " << methodName << "() {\n";
+        for (unsigned i = begin; i < end; ++i)
+          if (failed(emitEvalNode(fullOrdered[i], "    ")))
+            return failure();
+        os << "  }\n\n";
+      }
+    }
+  }
+
   os << "  void eval() {\n";
   if (hasFullTopo) {
-    for (Operation *op : fullOrdered)
-      if (failed(emitEvalNode(op, "    ")))
-        return failure();
+    if (!topoEvalMethods.empty()) {
+      for (const std::string &methodName : topoEvalMethods)
+        os << "    " << methodName << "();\n";
+    } else {
+      for (Operation *op : fullOrdered)
+        if (failed(emitEvalNode(op, "    ")))
+          return failure();
+    }
   } else {
     os << "    eval_comb_pass();\n";
     unsigned numPrims = static_cast<unsigned>(instInfos.size() + fifos.size() + asyncFifos.size() + byteMems.size());
@@ -1999,23 +2159,30 @@ static LogicalResult emitFunc(func::FuncOp f, llvm::raw_ostream &os) {
     os << "    " << nt.get(fifo.getInReady()) << "_inst_eval_cache_valid = false;\n";
   for (auto mem : byteMems)
     os << "    " << byteMemInstName.lookup(mem.getOperation()) << "_eval_cache_valid = false;\n";
-  for (auto fifo : asyncFifos)
-    os << "    " << nt.get(fifo.getInReady()) << "_inst_eval_cache_valid = false;\n";
-  os << "  }\n\n";
+	  for (auto fifo : asyncFifos)
+	    os << "    " << nt.get(fifo.getInReady()) << "_inst_eval_cache_valid = false;\n";
+	  os << "  }\n\n";
 
-  // tick(): back-compat wrapper.
-  os << "  void tick() {\n";
-  os << "    tick_compute();\n";
-  os << "    tick_commit();\n";
-  os << "  }\n";
+	  // Decision 0027: provide explicit comb/tick/commit APIs + high-level step().
+	  // Decision 0001: expose transfer() as an alias of commit().
+	  os << "  void comb() { eval(); }\n";
+	  os << "  void tick() { tick_compute(); }\n";
+	  os << "  void commit() { tick_commit(); }\n";
+	  os << "  void transfer() { tick_commit(); }\n";
+	  os << "  void step() {\n";
+	  os << "    comb();\n";
+	  os << "    tick();\n";
+	  os << "    commit();\n";
+	  os << "    comb();\n";
+	  os << "  }\n";
 
-  os << "};\n\n";
-  return success();
-}
+	  os << "};\n\n";
+	  return success();
+	}
 
 } // namespace
 
-LogicalResult emitCpp(ModuleOp module, llvm::raw_ostream &os, const CppEmitterOptions &) {
+LogicalResult emitCpp(ModuleOp module, llvm::raw_ostream &os, const CppEmitterOptions &opts) {
   os << "// pyCircuit C++ emission (prototype)\n";
   os << "#include <cstdlib>\n";
   os << "#include <cstdint>\n";
@@ -2082,7 +2249,7 @@ LogicalResult emitCpp(ModuleOp module, llvm::raw_ostream &os, const CppEmitterOp
     return module.emitError("C++ emitter: module instance graph has a cycle");
 
   for (unsigned idx : order) {
-    if (failed(emitFunc(funcs[idx], os)))
+    if (failed(emitFunc(funcs[idx], os, opts)))
       return failure();
   }
 
@@ -2090,9 +2257,9 @@ LogicalResult emitCpp(ModuleOp module, llvm::raw_ostream &os, const CppEmitterOp
   return success();
 }
 
-LogicalResult emitCppFunc(ModuleOp module, func::FuncOp f, llvm::raw_ostream &os, const CppEmitterOptions &) {
+LogicalResult emitCppFunc(ModuleOp module, func::FuncOp f, llvm::raw_ostream &os, const CppEmitterOptions &opts) {
   (void)module;
-  return emitFunc(f, os);
+  return emitFunc(f, os, opts);
 }
 
 } // namespace pyc

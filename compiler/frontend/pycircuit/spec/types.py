@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import hashlib
+import json
 from typing import Any, Callable, Iterable, Mapping, Sequence
 
 
 _ALLOWED_PARAM_TYPES = (bool, int, str)
 _ALLOWED_PORT_DIRS = ("in", "out")
+_DEFAULT_LOGIC_KIND = "logic"
 
 
 def _check_name(name: str, *, ctx: str) -> str:
@@ -20,6 +23,13 @@ def _check_dir(direction: str, *, ctx: str) -> str:
     if d not in _ALLOWED_PORT_DIRS:
         raise ValueError(f"{ctx} direction must be 'in' or 'out', got {direction!r}")
     return d
+
+
+def _check_logic_kind(kind: str, *, ctx: str) -> str:
+    k = str(kind).strip().lower()
+    if not k:
+        raise ValueError(f"{ctx} logic_kind must be non-empty")
+    return k
 
 
 def _as_leaf_field(v: "StructFieldSpec") -> tuple[int, bool]:
@@ -50,11 +60,42 @@ def _canonical_key(v: bool | int | str) -> str:
     return str(v)
 
 
+def _canonical_layout_payload(kind: str, fields: Sequence[tuple[str, int, bool, str]]) -> str:
+    payload = {
+        "kind": str(kind),
+        "fields": [
+            {
+                "path": str(path),
+                "width": int(width),
+                "signed": bool(signed),
+                "logic_kind": str(logic_kind),
+            }
+            for path, width, signed, logic_kind in fields
+        ],
+    }
+    return json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+
+
+def _layout_id(kind: str, fields: Sequence[tuple[str, int, bool, str]]) -> str:
+    text = _canonical_layout_payload(kind, fields)
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
+
+
+def _field_slices(fields: Sequence[tuple[str, int, bool, str]]) -> dict[str, tuple[int, int]]:
+    out: dict[str, tuple[int, int]] = {}
+    lsb = 0
+    for path, width, _signed, _logic_kind in reversed(fields):
+        out[str(path)] = (int(lsb), int(width))
+        lsb += int(width)
+    return out
+
+
 @dataclass(frozen=True)
 class FieldSpec:
     name: str
     width: int
     signed: bool = False
+    logic_kind: str = _DEFAULT_LOGIC_KIND
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "name", _check_name(self.name, ctx="field"))
@@ -63,9 +104,16 @@ class FieldSpec:
             raise ValueError("field width must be > 0")
         object.__setattr__(self, "width", w)
         object.__setattr__(self, "signed", bool(self.signed))
+        object.__setattr__(self, "logic_kind", _check_logic_kind(self.logic_kind, ctx=f"field {self.name!r}"))
 
     def __pyc_template_value__(self) -> dict[str, Any]:
-        return {"kind": "field", "name": self.name, "width": self.width, "signed": self.signed}
+        return {
+            "kind": "field",
+            "name": self.name,
+            "width": self.width,
+            "signed": self.signed,
+            "logic_kind": self.logic_kind,
+        }
 
 
 @dataclass(frozen=True)
@@ -93,6 +141,18 @@ class BundleSpec:
             "name": self.name,
             "fields": [f.__pyc_template_value__() for f in self.fields],
         }
+
+    def layout_fields(self) -> tuple[tuple[str, int, bool, str], ...]:
+        return tuple((f.name, int(f.width), bool(f.signed), str(f.logic_kind)) for f in self.fields)
+
+    def total_width(self) -> int:
+        return sum(int(f.width) for f in self.fields)
+
+    def layout_id(self) -> str:
+        return _layout_id("bundle", self.layout_fields())
+
+    def field_slices(self) -> dict[str, tuple[int, int]]:
+        return _field_slices(self.layout_fields())
 
 @dataclass(frozen=True)
 class StagePipeSpec:
@@ -123,6 +183,24 @@ class StagePipeSpec:
             "ready_name": self.ready_name,
         }
 
+    def layout_fields(self) -> tuple[tuple[str, int, bool, str], ...]:
+        out: list[tuple[str, int, bool, str]] = []
+        out.extend(list(self.payload.layout_fields()))
+        if self.has_valid:
+            out.append((str(self.valid_name), 1, False, "control"))
+        if self.has_ready:
+            out.append((str(self.ready_name), 1, False, "control"))
+        return tuple(out)
+
+    def total_width(self) -> int:
+        return sum(int(w) for _p, w, _s, _k in self.layout_fields())
+
+    def layout_id(self) -> str:
+        return _layout_id("stage_pipe", self.layout_fields())
+
+    def field_slices(self) -> dict[str, tuple[int, int]]:
+        return _field_slices(self.layout_fields())
+
 
 @dataclass(frozen=True)
 class StructFieldSpec:
@@ -130,6 +208,7 @@ class StructFieldSpec:
     width: int | None = None
     signed: bool = False
     struct: "StructSpec | None" = None
+    logic_kind: str = _DEFAULT_LOGIC_KIND
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "name", _check_name(self.name, ctx="struct field"))
@@ -141,6 +220,7 @@ class StructFieldSpec:
                 raise ValueError(f"struct field {self.name!r}: nested struct cannot also set width")
             object.__setattr__(self, "width", None)
             object.__setattr__(self, "signed", False)
+            object.__setattr__(self, "logic_kind", "aggregate")
             return
 
         if self.width is None:
@@ -150,6 +230,7 @@ class StructFieldSpec:
             raise ValueError(f"struct field {self.name!r}: width must be > 0")
         object.__setattr__(self, "width", w)
         object.__setattr__(self, "signed", bool(self.signed))
+        object.__setattr__(self, "logic_kind", _check_logic_kind(self.logic_kind, ctx=f"struct field {self.name!r}"))
 
     @property
     def is_leaf(self) -> bool:
@@ -162,6 +243,7 @@ class StructFieldSpec:
                 "name": self.name,
                 "width": int(self.width or 0),
                 "signed": bool(self.signed),
+                "logic_kind": str(self.logic_kind),
             }
         return {
             "kind": "struct_field",
@@ -432,6 +514,21 @@ class StructSpec:
             "name": self.name,
             "fields": [f.__pyc_template_value__() for f in self.fields],
         }
+
+    def layout_fields(self) -> tuple[tuple[str, int, bool, str], ...]:
+        return tuple(
+            (path, int(f.width or 0), bool(f.signed), str(getattr(f, "logic_kind", _DEFAULT_LOGIC_KIND)))
+            for path, f in self.flatten_fields()
+        )
+
+    def total_width(self) -> int:
+        return sum(int(w) for _p, w, _s, _k in self.layout_fields())
+
+    def layout_id(self) -> str:
+        return _layout_id("struct", self.layout_fields())
+
+    def field_slices(self) -> dict[str, tuple[int, int]]:
+        return _field_slices(self.layout_fields())
 
 
 @dataclass(frozen=True)

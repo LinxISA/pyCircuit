@@ -1,0 +1,24 @@
+{
+  "version": 1,
+  "rules": [
+    {
+      "instances": [
+        "dut"
+      ],
+      "probes": {
+        "families": [
+          "pv"
+        ],
+        "stages": [
+          "ex"
+        ],
+        "lanes": [
+          0
+        ],
+        "at": [
+          "tick"
+        ]
+      }
+    }
+  ]
+}

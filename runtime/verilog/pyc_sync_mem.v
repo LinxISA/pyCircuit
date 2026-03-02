@@ -5,8 +5,8 @@
 //   rising edge of `clk`.
 // - Write is synchronous with byte enables `wstrb`.
 //
-// Note: Read-during-write to the same address returns the written data
-// ("write-first") via simple forwarding.
+// Note: Read-during-write to the same address returns the pre-write data
+// ("old-data") by default.
 module pyc_sync_mem #(
   parameter ADDR_WIDTH = 64,
   parameter DATA_WIDTH = 64,
@@ -51,6 +51,15 @@ module pyc_sync_mem #(
   reg [DATA_WIDTH-1:0] mem [0:DEPTH-1];
   `endif
 
+  `ifndef SYNTHESIS
+  // Deterministic simulation init: keep C++/Verilog equivalence stable.
+  integer init_i;
+  initial begin
+    for (init_i = 0; init_i < DEPTH; init_i = init_i + 1)
+      mem[init_i] = {DATA_WIDTH{1'b0}};
+  end
+  `endif
+
   integer i;
   reg [DATA_WIDTH-1:0] rd_word;
   wire [ADDR_BITS-1:0] ra = raddr[ADDR_BITS-1:0];
@@ -82,25 +91,12 @@ module pyc_sync_mem #(
         `ifndef SYNTHESIS
         if (ra < DEPTH) begin
           rd_word = mem[ra];
-          // Forward in-cycle writes to the read result when addresses match.
-          if (wvalid && (wa == ra)) begin
-            for (i = 0; i < STRB_WIDTH; i = i + 1) begin
-              if (wstrb[i])
-                rd_word[8 * i +: 8] = wdata[8 * i +: 8];
-            end
-          end
           rdata <= rd_word;
         end else begin
           rdata <= {DATA_WIDTH{1'b0}};
         end
         `else
         rd_word = mem[ra];
-        if (wvalid && (wa == ra)) begin
-          for (i = 0; i < STRB_WIDTH; i = i + 1) begin
-            if (wstrb[i])
-              rd_word[8 * i +: 8] = wdata[8 * i +: 8];
-          end
-        end
         rdata <= rd_word;
         `endif
       end

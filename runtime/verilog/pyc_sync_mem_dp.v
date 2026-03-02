@@ -3,8 +3,7 @@
 // - `DEPTH` is in entries (not bytes).
 // - Both reads are synchronous (registered outputs).
 // - One write port with byte enables `wstrb`.
-// - Read-during-write to the same address returns written data ("write-first")
-//   via forwarding.
+// - Read-during-write to the same address returns pre-write data ("old-data") by default.
 module pyc_sync_mem_dp #(
   parameter ADDR_WIDTH = 64,
   parameter DATA_WIDTH = 64,
@@ -50,6 +49,15 @@ module pyc_sync_mem_dp #(
   reg [DATA_WIDTH-1:0] mem [0:DEPTH-1];
   `endif
 
+  `ifndef SYNTHESIS
+  // Deterministic simulation init: keep C++/Verilog equivalence stable.
+  integer init_i;
+  initial begin
+    for (init_i = 0; init_i < DEPTH; init_i = init_i + 1)
+      mem[init_i] = {DATA_WIDTH{1'b0}};
+  end
+  `endif
+
   integer i;
   reg [DATA_WIDTH-1:0] rd0;
   reg [DATA_WIDTH-1:0] rd1;
@@ -84,24 +92,12 @@ module pyc_sync_mem_dp #(
         `ifndef SYNTHESIS
         if (ra0 < DEPTH) begin
           rd0 = mem[ra0];
-          if (wvalid && (wa == ra0)) begin
-            for (i = 0; i < STRB_WIDTH; i = i + 1) begin
-              if (wstrb[i])
-                rd0[8 * i +: 8] = wdata[8 * i +: 8];
-            end
-          end
           rdata0 <= rd0;
         end else begin
           rdata0 <= {DATA_WIDTH{1'b0}};
         end
         `else
         rd0 = mem[ra0];
-        if (wvalid && (wa == ra0)) begin
-          for (i = 0; i < STRB_WIDTH; i = i + 1) begin
-            if (wstrb[i])
-              rd0[8 * i +: 8] = wdata[8 * i +: 8];
-          end
-        end
         rdata0 <= rd0;
         `endif
       end
@@ -111,24 +107,12 @@ module pyc_sync_mem_dp #(
         `ifndef SYNTHESIS
         if (ra1 < DEPTH) begin
           rd1 = mem[ra1];
-          if (wvalid && (wa == ra1)) begin
-            for (i = 0; i < STRB_WIDTH; i = i + 1) begin
-              if (wstrb[i])
-                rd1[8 * i +: 8] = wdata[8 * i +: 8];
-            end
-          end
           rdata1 <= rd1;
         end else begin
           rdata1 <= {DATA_WIDTH{1'b0}};
         end
         `else
         rd1 = mem[ra1];
-        if (wvalid && (wa == ra1)) begin
-          for (i = 0; i < STRB_WIDTH; i = i + 1) begin
-            if (wstrb[i])
-              rd1[8 * i +: 8] = wdata[8 * i +: 8];
-          end
-        end
         rdata1 <= rd1;
         `endif
       end

@@ -4,6 +4,11 @@
 - frontend emits a TB `.pyc` payload (JSON encoded in module attrs)
 - backend (`pycc`) lowers that payload to C++ or SystemVerilog testbench text
 
+Observation points (pyc4.0):
+
+- `phase="pre"` samples at **TICK-OBS** (after combinational settle, before state commit).
+- `phase="post"` samples at **XFER-OBS** (after state commit).
+
 ## Authoring
 
 Write a module `build` and a decorated testbench:
@@ -38,4 +43,3 @@ def tb(t: Tb):
 - `t.print(fmt, at=cycle, ports=[...])`
 - `t.print_every(fmt, start=0, every=1, ports=[...])`
 - `t.sva_assert(expr, clock=..., reset=..., name=..., msg=...)`
-

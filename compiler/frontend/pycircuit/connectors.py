@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Iterable, Iterator, Mapping, MutableMapping
 
-from .spec.types import StructSpec
+from .spec.types import BundleSpec, StagePipeSpec, StructSpec
 
 
 class ConnectorError(TypeError):
@@ -216,7 +216,8 @@ class RegConnector(Connector):
 
 
 class ConnectorBundle:
-    def __init__(self, fields: Mapping[str, Any]) -> None:
+    def __init__(self, fields: Mapping[str, Any], *, spec: BundleSpec | StagePipeSpec | None = None) -> None:
+        self.spec = spec
         out: MutableMapping[str, Connector] = {}
         owner_hint = _scan_owner_tree(fields, ctx="ConnectorBundle")
         for k, v in fields.items():
@@ -237,6 +238,30 @@ class ConnectorBundle:
             out[key] = c
             owner_hint = _merge_owner(owner_hint, c.owner, ctx=f"ConnectorBundle[{key!r}]")
         self.fields: dict[str, Connector] = dict(out)
+
+        if spec is not None:
+            exp: set[str]
+            if isinstance(spec, BundleSpec):
+                exp = {f.name for f in spec.fields}
+            elif isinstance(spec, StagePipeSpec):
+                exp = {f.name for f in spec.payload.fields}
+                if spec.has_valid:
+                    exp.add(str(spec.valid_name))
+                if spec.has_ready:
+                    exp.add(str(spec.ready_name))
+            else:
+                raise ConnectorError(f"ConnectorBundle spec must be BundleSpec or StagePipeSpec, got {type(spec).__name__}")
+
+            got = set(self.fields.keys())
+            missing = sorted(exp - got)
+            extra = sorted(got - exp)
+            if missing or extra:
+                parts: list[str] = []
+                if missing:
+                    parts.append("missing: " + ", ".join(missing))
+                if extra:
+                    parts.append("extra: " + ", ".join(extra))
+                raise ConnectorError(f"ConnectorBundle spec mismatch ({'; '.join(parts)})")
 
     def __getitem__(self, key: str) -> Connector:
         return self.fields[str(key)]

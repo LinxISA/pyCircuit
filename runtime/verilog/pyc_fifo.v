@@ -44,7 +44,8 @@ module pyc_fifo #(
 
   assign in_ready  = (count < DEPTH) || (out_ready && out_valid);
   assign out_valid = (count != 0);
-  assign out_data  = storage[rd_ptr];
+  // Define out_data when empty to keep C++/Verilog equivalence deterministic.
+  assign out_data  = out_valid ? storage[rd_ptr] : {WIDTH{1'b0}};
 
   wire do_pop;
   wire do_push;

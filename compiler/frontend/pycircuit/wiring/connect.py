@@ -73,6 +73,64 @@ def _port_name(prefix: str | None, local_name: str) -> str:
     p = _normalize_prefix(prefix)
     return f"{p}{local_name}"
 
+def _spec_kind(spec: BundleSpec | StagePipeSpec | StructSpec) -> str:
+    if isinstance(spec, BundleSpec):
+        return "bundle"
+    if isinstance(spec, StagePipeSpec):
+        return "stage_pipe"
+    if isinstance(spec, StructSpec):
+        return "struct"
+    raise TypeError(f"unsupported spec type: {type(spec).__name__}")
+
+
+def _spec_layout_meta(spec: BundleSpec | StagePipeSpec | StructSpec) -> dict[str, Any]:
+    fields = list(getattr(spec, "layout_fields")())
+    slices = dict(getattr(spec, "field_slices")())
+    fields_out: list[dict[str, Any]] = []
+    field_map: dict[str, list[int]] = {}
+    for path, width, signed, logic_kind in fields:
+        lsb, w2 = slices[str(path)]
+        if int(w2) != int(width):
+            raise ConnectorError(f"internal: field slice width mismatch for {path!r}: slice={w2} field={width}")
+        field_map[str(path)] = [int(lsb), int(width)]
+        fields_out.append(
+            {
+                "path": str(path),
+                "lsb": int(lsb),
+                "width": int(width),
+                "signed": bool(signed),
+                "logic_kind": str(logic_kind),
+            }
+        )
+    return {
+        "kind": _spec_kind(spec),
+        "name": str(getattr(spec, "name", "")),
+        "layout_id": str(getattr(spec, "layout_id")()),
+        "total_width": int(getattr(spec, "total_width")()),
+        "field_map": field_map,
+        "fields": fields_out,
+    }
+
+
+def _maybe_record_layout_group(
+    m: Circuit,
+    *,
+    usage: str,
+    spec: BundleSpec | StagePipeSpec | StructSpec,
+    prefix: str | None,
+    ports: Mapping[str, str],
+) -> None:
+    hook = getattr(m, "_record_hardened_layout_group", None)
+    if not callable(hook):
+        return
+    group = {
+        "usage": str(usage),
+        "prefix": _normalize_prefix(prefix),
+        "spec": _spec_layout_meta(spec),
+        "ports": {str(k): str(v) for k, v in dict(ports).items()},
+    }
+    hook(group)
+
 
 def _connector_width(c: Connector) -> int:
     ty = str(c.ty)
@@ -109,9 +167,14 @@ def _inputs_bundle(
     prefix: str | None = None,
 ) -> ConnectorBundle:
     out: dict[str, Connector] = {}
+    ports: dict[str, str] = {}
     for key, f, pname in _iter_fields(spec):
-        out[key] = m.input_connector(_port_name(prefix, pname), width=int(f.width), signed=bool(getattr(f, "signed", False)))
-    return ConnectorBundle(out)
+        port = _port_name(prefix, pname)
+        ports[str(key)] = port
+        out[key] = m.input_connector(port, width=int(f.width), signed=bool(getattr(f, "signed", False)))
+    _maybe_record_layout_group(m, usage="inputs", spec=spec, prefix=prefix, ports=ports)
+    bundle_spec = spec if isinstance(spec, (BundleSpec, StagePipeSpec)) else None
+    return ConnectorBundle(out, spec=bundle_spec)
 
 
 def _outputs_bundle(
@@ -136,6 +199,7 @@ def _outputs_bundle(
         raise ConnectorError(f"outputs key mismatch ({'; '.join(parts)})")
 
     out: dict[str, Connector] = {}
+    ports: dict[str, str] = {}
     for key, f, pname in _iter_fields(spec):
         c = m.as_connector(vals[key], name=key)
         got_w = _connector_width(c)
@@ -148,8 +212,12 @@ def _outputs_bundle(
             raise ConnectorError(
                 f"outputs[{key!r}] signedness mismatch: expected signed={exp_signed}, got signed={got_signed}"
             )
-        out[key] = m.output_connector(_port_name(prefix, pname), c)
-    return ConnectorBundle(out)
+        port = _port_name(prefix, pname)
+        ports[str(key)] = port
+        out[key] = m.output_connector(port, c)
+    _maybe_record_layout_group(m, usage="outputs", spec=spec, prefix=prefix, ports=ports)
+    bundle_spec = spec if isinstance(spec, (BundleSpec, StagePipeSpec)) else None
+    return ConnectorBundle(out, spec=bundle_spec)
 
 
 def _as_signal(v: Connector | Signal, *, ctx: str) -> Signal:
@@ -187,15 +255,17 @@ def _state_bundle(
     rst_sig = _as_signal(rst, ctx="_state_bundle(rst)")
     out: dict[str, Connector] = {}
     for key, f, pname in _iter_fields(spec):
+        name = _port_name(prefix, pname)
         out[key] = m.reg_connector(
-            _port_name(prefix, pname),
+            name,
             clk=clk_sig,
             rst=rst_sig,
             width=int(f.width),
             init=_resolve_init(init, key),
             en=en,
         )
-    return ConnectorBundle(out)
+    bundle_spec = spec if isinstance(spec, (BundleSpec, StagePipeSpec)) else None
+    return ConnectorBundle(out, spec=bundle_spec)
 
 
 def _inputs_struct(m: Circuit, spec: StructSpec, *, prefix: str | None = None) -> ConnectorStruct:

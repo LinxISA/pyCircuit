@@ -67,7 +67,15 @@ def main() -> int:
     lines.append("\n")
 
     out = out_dir / "CMakeLists.txt"
-    out.write_text("".join(lines), encoding="utf-8")
+    text = "".join(lines)
+    if out.is_file():
+        try:
+            if out.read_text(encoding="utf-8") == text:
+                print(str(out))
+                return 0
+        except OSError:
+            pass
+    out.write_text(text, encoding="utf-8")
     print(str(out))
     return 0
 

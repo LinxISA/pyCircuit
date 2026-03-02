@@ -206,6 +206,30 @@ def PYC_AshriOp : PYC_Op<"ashri", [Pure, SameOperandsAndResultType]> {
   let hasFolder = 1;
 }
 
+def PYC_ShlOp : PYC_Op<"shl", [Pure, AllTypesMatch<["in", "result"]>]> {
+  let summary = "Shift-left by value";
+  let arguments = (ins AnyInteger:$in, AnyInteger:$amount);
+  let results = (outs AnyInteger:$result);
+  let hasVerifier = 1;
+  let assemblyFormat = "$in `,` $amount attr-dict `:` type($result) `,` type($amount)";
+}
+
+def PYC_LshrOp : PYC_Op<"lshr", [Pure, AllTypesMatch<["in", "result"]>]> {
+  let summary = "Logical shift-right by value";
+  let arguments = (ins AnyInteger:$in, AnyInteger:$amount);
+  let results = (outs AnyInteger:$result);
+  let hasVerifier = 1;
+  let assemblyFormat = "$in `,` $amount attr-dict `:` type($result) `,` type($amount)";
+}
+
+def PYC_AshrOp : PYC_Op<"ashr", [Pure, AllTypesMatch<["in", "result"]>]> {
+  let summary = "Arithmetic shift-right by value";
+  let arguments = (ins AnyInteger:$in, AnyInteger:$amount);
+  let results = (outs AnyInteger:$result);
+  let hasVerifier = 1;
+  let assemblyFormat = "$in `,` $amount attr-dict `:` type($result) `,` type($amount)";
+}
+
 def PYC_ConcatOp : PYC_Op<"concat", [Pure]> {
   let summary = "Concatenate integers (MSB-first)";
   let arguments = (ins Variadic<AnyInteger>:$inputs);

@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import json
+import re
 from typing import Callable
+
+_IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
 @dataclass(frozen=True)
@@ -28,20 +31,34 @@ class Module:
         # Values are stored as MLIR attribute literals (e.g. `"foo"`).
         self._func_attrs: dict[str, str] = {}
 
-    def set_func_attr(self, key: str, value: str) -> None:
-        """Set a `func.func` attribute (string value).
-
-        This is intended for attaching debug/metadata attributes such as:
-        - `pyc.base = "Core"`
-        - `pyc.params = "{\"WIDTH\":32}"`
-        """
+    def _set_func_attr_impl(self, key: str, value_literal: str) -> None:
         if self._finalized:
             raise RuntimeError("cannot set func attributes after emit_mlir()")
         k = str(key).strip()
         if not k:
             raise ValueError("func attribute key must be non-empty")
+        v = str(value_literal).strip()
+        if not v:
+            raise ValueError("func attribute literal must be non-empty")
+        self._func_attrs[k] = v
+
+    def set_func_attr(self, key: str, value: str) -> None:
+        """Set a `func.func` string attribute.
+
+        This is intended for attaching debug/metadata attributes such as:
+        - `pyc.base = "Core"`
+        - `pyc.params = "{\"WIDTH\":32}"`
+        """
         # MLIR string attributes use double quotes; reuse JSON escaping.
-        self._func_attrs[k] = json.dumps(str(value), ensure_ascii=False)
+        self._set_func_attr_impl(key, json.dumps(str(value), ensure_ascii=False))
+
+    def set_func_attr_literal(self, key: str, value_literal: str) -> None:
+        """Set a `func.func` attribute using a raw MLIR attribute literal."""
+        self._set_func_attr_impl(key, value_literal)
+
+    def set_func_attr_json(self, key: str, value: object) -> None:
+        """Set a `func.func` attribute using JSON-compatible MLIR literal syntax."""
+        self._set_func_attr_impl(key, json.dumps(value, ensure_ascii=False))
 
     # --- types ---
     def clock(self, name: str) -> Signal:
@@ -224,6 +241,27 @@ class Module:
         self._emit(f"{tmp} = pyc.ashri {a.ref} {{amount = {int(amount)}}} : {a.ty}")
         return Signal(ref=tmp, ty=a.ty)
 
+    def shl(self, a: Signal, amount: Signal) -> Signal:
+        if not a.ty.startswith("i") or not amount.ty.startswith("i"):
+            raise TypeError("shl requires integer inputs")
+        tmp = self._tmp()
+        self._emit(f"{tmp} = pyc.shl {a.ref}, {amount.ref} : {a.ty}, {amount.ty}")
+        return Signal(ref=tmp, ty=a.ty)
+
+    def lshr(self, a: Signal, amount: Signal) -> Signal:
+        if not a.ty.startswith("i") or not amount.ty.startswith("i"):
+            raise TypeError("lshr requires integer inputs")
+        tmp = self._tmp()
+        self._emit(f"{tmp} = pyc.lshr {a.ref}, {amount.ref} : {a.ty}, {amount.ty}")
+        return Signal(ref=tmp, ty=a.ty)
+
+    def ashr(self, a: Signal, amount: Signal) -> Signal:
+        if not a.ty.startswith("i") or not amount.ty.startswith("i"):
+            raise TypeError("ashr requires integer inputs")
+        tmp = self._tmp()
+        self._emit(f"{tmp} = pyc.ashr {a.ref}, {amount.ref} : {a.ty}, {amount.ty}")
+        return Signal(ref=tmp, ty=a.ty)
+
     def concat(self, *inputs: Signal) -> Signal:
         """Concatenate integer signals into a packed bus (MSB-first)."""
         if not inputs:
@@ -375,7 +413,7 @@ class Module:
         wstrb: Signal,
         *,
         depth: int,
-        name: str | None = None,
+        name: str,
     ) -> Signal:
         """Byte-addressed memory (async read + sync write, prototype)."""
         if clk.ty != "!pyc.clock":
@@ -392,12 +430,11 @@ class Module:
             raise TypeError("byte_mem wstrb must be an integer type")
         if depth <= 0:
             raise ValueError("byte_mem depth must be > 0")
+        if not isinstance(name, str) or not name.strip() or not _IDENT_RE.match(name):
+            raise ValueError("byte_mem name must match [A-Za-z_][A-Za-z0-9_]* (Decision 0025)")
 
         tmp = self._tmp()
-        attrs = f"{{depth = {int(depth)}"
-        if name is not None:
-            attrs += f', name = "{name}"'
-        attrs += "}"
+        attrs = f'{{depth = {int(depth)}, name = "{name}"}}'
         self._emit(
             f"{tmp} = pyc.byte_mem {clk.ref}, {rst.ref}, {raddr.ref}, {wvalid.ref}, {waddr.ref}, {wdata.ref}, {wstrb.ref} "
             + f"{attrs} : {raddr.ty}, {wdata.ty}, {wstrb.ty}"
@@ -416,7 +453,7 @@ class Module:
         wstrb: Signal,
         *,
         depth: int,
-        name: str | None = None,
+        name: str,
     ) -> Signal:
         """Synchronous 1R1W memory (registered read data, prototype)."""
         if clk.ty != "!pyc.clock":
@@ -431,12 +468,11 @@ class Module:
             raise TypeError("sync_mem raddr/waddr must have the same type")
         if depth <= 0:
             raise ValueError("sync_mem depth must be > 0")
+        if not isinstance(name, str) or not name.strip() or not _IDENT_RE.match(name):
+            raise ValueError("sync_mem name must match [A-Za-z_][A-Za-z0-9_]* (Decision 0025)")
 
         tmp = self._tmp()
-        attrs = f"{{depth = {int(depth)}"
-        if name is not None:
-            attrs += f', name = "{name}"'
-        attrs += "}"
+        attrs = f'{{depth = {int(depth)}, name = "{name}"}}'
         self._emit(
             f"{tmp} = pyc.sync_mem {clk.ref}, {rst.ref}, {ren.ref}, {raddr.ref}, {wvalid.ref}, {waddr.ref}, {wdata.ref}, {wstrb.ref} "
             + f"{attrs} : {raddr.ty}, {wdata.ty}, {wstrb.ty}"
@@ -457,7 +493,7 @@ class Module:
         wstrb: Signal,
         *,
         depth: int,
-        name: str | None = None,
+        name: str,
     ) -> tuple[Signal, Signal]:
         """Synchronous 2R1W memory (registered outputs, prototype)."""
         if clk.ty != "!pyc.clock":
@@ -472,13 +508,12 @@ class Module:
             raise TypeError("sync_mem_dp raddr0/raddr1/waddr must have the same type")
         if depth <= 0:
             raise ValueError("sync_mem_dp depth must be > 0")
+        if not isinstance(name, str) or not name.strip() or not _IDENT_RE.match(name):
+            raise ValueError("sync_mem_dp name must match [A-Za-z_][A-Za-z0-9_]* (Decision 0025)")
 
         out0 = self._tmp()
         out1 = self._tmp()
-        attrs = f"{{depth = {int(depth)}"
-        if name is not None:
-            attrs += f', name = "{name}"'
-        attrs += "}"
+        attrs = f'{{depth = {int(depth)}, name = "{name}"}}'
         self._emit(
             f"{out0}, {out1} = pyc.sync_mem_dp {clk.ref}, {rst.ref}, {ren0.ref}, {raddr0.ref}, {ren1.ref}, {raddr1.ref}, "
             + f"{wvalid.ref}, {waddr.ref}, {wdata.ref}, {wstrb.ref} {attrs} : {raddr0.ty}, {wdata.ty}, {wstrb.ty}"

@@ -6,6 +6,7 @@
 #include <iostream>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "pyc_bits.hpp"
@@ -76,9 +77,19 @@ public:
   std::size_t numClocks() const { return clocks_.size(); }
   std::uint64_t timeSteps() const { return time_; }
 
+  // Restrict VCD dumping to an inclusive time-step window.
+  // Useful for bounded trace capture around a trigger (Decision 0145).
+  void setVcdWindow(std::uint64_t beginStep, std::uint64_t endStep) {
+    if (beginStep > endStep)
+      std::swap(beginStep, endStep);
+    vcd_window_.emplace(beginStep, endStep);
+  }
+
+  void clearVcdWindow() { vcd_window_.reset(); }
+
   void step() {
     // Drive combinational logic before clock edges.
-    dut_.eval();
+    dut_.comb();
 
     // Toggle all clocks that have an edge on this step.
     for (const auto &c : clocks_) {
@@ -88,11 +99,12 @@ public:
 
     // Sequential update (modules detect posedges internally).
     dut_.tick();
+    dut_.transfer();
 
     // Re-evaluate combinational logic after state updates.
-    dut_.eval();
+    dut_.comb();
 
-    if (vcd_)
+    if (shouldDumpVcd(time_))
       vcd_->dump(time_);
 
     time_++;
@@ -160,42 +172,57 @@ private:
     if (vcd_) {
       for (std::uint64_t i = 0; i < cycles; i++) {
         // Posedge phase.
-        dut_.eval();
+        dut_.comb();
         c.set(true);
         dut_.tick();
-        dut_.eval();
-        vcd_->dump(time_);
+        dut_.transfer();
+        dut_.comb();
+        if (shouldDumpVcd(time_))
+          vcd_->dump(time_);
         time_++;
 
         // Negedge bookkeeping (no extra combinational settle needed here).
         c.set(false);
         dut_.tick();
-        vcd_->dump(time_);
+        dut_.transfer();
+        if (shouldDumpVcd(time_))
+          vcd_->dump(time_);
         time_++;
       }
       return;
     }
 
     for (std::uint64_t i = 0; i < cycles; i++) {
-      dut_.eval();
+      dut_.comb();
       c.set(true);
       dut_.tick();
-      dut_.eval();
+      dut_.transfer();
+      dut_.comb();
       time_++;
       c.set(false);
       dut_.tick();
+      dut_.transfer();
       time_++;
     }
   }
   void stepNoDump() {
-    dut_.eval();
+    dut_.comb();
     for (const auto &c : clocks_) {
       if (c.shouldToggle(time_))
         c.toggle();
     }
     dut_.tick();
-    dut_.eval();
+    dut_.transfer();
+    dut_.comb();
     time_++;
+  }
+
+  bool shouldDumpVcd(std::uint64_t step) const {
+    if (!vcd_)
+      return false;
+    if (!vcd_window_)
+      return true;
+    return step >= vcd_window_->first && step <= vcd_window_->second;
   }
 
   Dut &dut_;
@@ -203,6 +230,7 @@ private:
   std::uint64_t time_ = 0;
   bool fast_clock0_enabled_ = false;
   std::optional<VcdWriter> vcd_{};
+  std::optional<std::pair<std::uint64_t, std::uint64_t>> vcd_window_{};
   std::optional<std::ofstream> log_{};
 };
 

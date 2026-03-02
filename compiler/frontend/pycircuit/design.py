@@ -4,7 +4,7 @@ import hashlib
 import inspect
 import json
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, fields, is_dataclass
 from typing import Any, Callable, Iterable, Mapping, TYPE_CHECKING
 
 from .api_contract import FRONTEND_CONTRACT
@@ -18,7 +18,94 @@ class DesignError(RuntimeError):
     pass
 
 
-def module(_fn: Any | None = None, *, name: str | None = None, structural: bool = False) -> Callable[[Any], Any] | Any:
+_CANON_PATH_IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+def _canon_path_key(path: str, key: str) -> str:
+    if not path:
+        return str(key)
+    if _CANON_PATH_IDENT_RE.match(str(key)):
+        return f"{path}.{key}"
+    return f"{path}[{key!r}]"
+
+
+def _canon_path_index(path: str, idx: int) -> str:
+    if not path:
+        return f"[{int(idx)}]"
+    return f"{path}[{int(idx)}]"
+
+
+def _normalize_value_param_ty(ty: str) -> str:
+    raw = str(ty).strip()
+    if raw == "clock":
+        return "!pyc.clock"
+    if raw == "reset":
+        return "!pyc.reset"
+    if raw in {"!pyc.clock", "!pyc.reset"}:
+        return raw
+    if raw.startswith("i"):
+        try:
+            w = int(raw[1:])
+        except ValueError as e:
+            raise DesignError(f"invalid value-param type {ty!r}: expected iN/clock/reset") from e
+        if w <= 0:
+            raise DesignError(f"invalid value-param type {ty!r}: iN width must be > 0")
+        return f"i{w}"
+    raise DesignError(f"invalid value-param type {ty!r}: expected iN/clock/reset")
+
+
+def _normalize_value_params_decl(value_params: Mapping[str, str] | None) -> dict[str, str]:
+    if not value_params:
+        return {}
+    out: dict[str, str] = {}
+    for raw_k in sorted(value_params.keys(), key=lambda x: str(x)):
+        k = str(raw_k).strip()
+        if not k:
+            raise DesignError("value_params keys must be non-empty strings")
+        out[k] = _normalize_value_param_ty(value_params[raw_k])
+    return out
+
+
+def value_params_of(fn: Any) -> dict[str, str]:
+    raw = getattr(fn, "__pycircuit_value_params__", None)
+    if raw is None:
+        return {}
+    if not isinstance(raw, Mapping):
+        raise DesignError(
+            f"invalid __pycircuit_value_params__ on {getattr(fn, '__name__', fn)!r}: expected mapping"
+        )
+    return _normalize_value_params_decl(raw)
+
+
+def _ordered_value_params(fn: Any) -> tuple[tuple[str, str], ...]:
+    vp = value_params_of(fn)
+    if not vp:
+        return ()
+
+    try:
+        sig = inspect.signature(fn)
+        ps = list(sig.parameters.values())
+    except (TypeError, ValueError):
+        return tuple((k, vp[k]) for k in sorted(vp.keys()))
+
+    ordered: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for p in ps[1:]:
+        if p.name in vp:
+            ordered.append((p.name, vp[p.name]))
+            seen.add(p.name)
+    for name in sorted(set(vp.keys()) - seen):
+        ordered.append((name, vp[name]))
+    return tuple(ordered)
+
+
+def module(
+    _fn: Any | None = None,
+    *,
+    name: str | None = None,
+    structural: bool = False,
+    value_params: Mapping[str, str] | None = None,
+) -> Callable[[Any], Any] | Any:
     """Mark a function as a hierarchy-preserving module boundary.
 
     Module callsites are materialized as `pyc.instance` and are not inlined by
@@ -27,10 +114,12 @@ def module(_fn: Any | None = None, *, name: str | None = None, structural: bool 
 
     def deco(fn: Any) -> Any:
         module_name = str(name).strip() if isinstance(name, str) and name.strip() else getattr(fn, "__name__", "Module")
+        vp = _normalize_value_params_decl(value_params)
         setattr(fn, "__pycircuit_module_name__", str(module_name))
         setattr(fn, "__pycircuit_kind__", "module")
         setattr(fn, "__pycircuit_inline__", False)
         setattr(fn, "__pycircuit_emit_structural__", bool(structural))
+        setattr(fn, "__pycircuit_value_params__", dict(vp))
         return fn
 
     if _fn is None:
@@ -50,6 +139,7 @@ def function(_fn: Any | None = None, *, name: str | None = None) -> Callable[[An
         setattr(fn, "__pycircuit_kind__", "function")
         setattr(fn, "__pycircuit_inline__", True)
         setattr(fn, "__pycircuit_emit_structural__", False)
+        setattr(fn, "__pycircuit_value_params__", {})
         return fn
 
     if _fn is None:
@@ -70,6 +160,7 @@ def const(_fn: Any | None = None, *, name: str | None = None) -> Callable[[Any],
         setattr(fn, "__pycircuit_kind__", "const")
         setattr(fn, "__pycircuit_inline__", True)
         setattr(fn, "__pycircuit_emit_structural__", False)
+        setattr(fn, "__pycircuit_value_params__", {})
         return fn
 
     if _fn is None:
@@ -89,6 +180,7 @@ def testbench(_fn: Any | None = None, *, name: str | None = None) -> Callable[[A
             setattr(fn, "__pycircuit_module_name__", str(name).strip())
         setattr(fn, "__pycircuit_testbench__", True)
         setattr(fn, "__pycircuit_kind__", "testbench")
+        setattr(fn, "__pycircuit_value_params__", {})
         return fn
 
     if _fn is None:
@@ -96,37 +188,66 @@ def testbench(_fn: Any | None = None, *, name: str | None = None) -> Callable[[A
     return deco(_fn)
 
 
-def _canon_param(v: Any) -> Any:
-    # Deterministic, JSON-compatible subset.
+def _canon_param(v: Any, *, path: str) -> Any:
+    # Deterministic, JSON-compatible subset (Decision 0139/0144).
     if v is None:
         return None
     if isinstance(v, (bool, int, str)):
         return v
     if isinstance(v, (tuple, list)):
-        return [_canon_param(x) for x in v]
+        return [_canon_param(x, path=_canon_path_index(path, i)) for i, x in enumerate(v)]
     if isinstance(v, dict):
         out: dict[str, Any] = {}
         for k in sorted(v.keys(), key=lambda x: str(x)):
             if not isinstance(k, str):
-                raise DesignError(f"param dict keys must be str, got {type(k).__name__}")
-            out[k] = _canon_param(v[k])
+                raise DesignError(
+                    f"{path}: dict keys must be str for caching/canonicalization, got {type(k).__name__} "
+                    "(hint: use string keys or map to a list/tuple of items)"
+                )
+            out[str(k)] = _canon_param(v[k], path=_canon_path_key(path, str(k)))
         return out
+    fn = getattr(v, "__pyc_template_value__", None)
+    if callable(fn):
+        try:
+            rep = fn()
+        except Exception as e:  # noqa: BLE001
+            raise DesignError(f"{path}.__pyc_template_value__(): template value hook failed for {type(v).__name__}: {e}") from e
+        return _canon_param(rep, path=f"{path}.__pyc_template_value__()")
+    if is_dataclass(v):
+        params = getattr(v, "__dataclass_params__", None)
+        if params is not None and hasattr(params, "frozen") and not bool(params.frozen):
+            raise DesignError(
+                f"{path}: dataclass params must be frozen for caching/canonicalization: {type(v).__name__} "
+                "(hint: use @dataclass(frozen=True) or implement __pyc_template_value__())"
+            )
+        out_fields: dict[str, Any] = {}
+        for f in fields(v):
+            fname = str(f.name)
+            out_fields[fname] = _canon_param(getattr(v, f.name), path=_canon_path_key(path, fname))
+        return {
+            "kind": "dataclass",
+            "type": f"{type(v).__module__}.{type(v).__qualname__}",
+            "fields": out_fields,
+        }
     raise DesignError(
-        "unsupported param type for specialization/caching: "
-        f"{type(v).__name__} (allowed: bool/int/str, list/tuple, dict[str,...])"
+        f"{path}: unsupported param type for specialization/caching: {type(v).__name__} "
+        "(allowed: bool/int/str/None, list/tuple, dict[str,...], frozen dataclass, __pyc_template_value__())"
     )
 
 
-def _params_json(params: Mapping[str, Any]) -> str:
-    canon = _canon_param(dict(params))
+def canonical_params_json(params: Mapping[str, Any], *, path: str = "params") -> str:
+    canon = _canon_param(dict(params), path=str(path))
     return json.dumps(canon, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+
+
+def _params_json(params: Mapping[str, Any]) -> str:
+    return canonical_params_json(params, path="params")
 
 
 def _port_specs_json(port_specs: Mapping[str, Any] | None) -> str:
     if not port_specs:
         return "{}"
-    canon = _canon_param(dict(port_specs))
-    return json.dumps(canon, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return canonical_params_json(port_specs, path="port_specs")
 
 
 def _params_hash8(params_json: str) -> str:
@@ -172,6 +293,8 @@ class CompiledModule:
     arg_types: tuple[str, ...]
     result_names: tuple[str, ...]
     result_types: tuple[str, ...]
+    value_param_names: tuple[str, ...]
+    value_param_types: tuple[str, ...]
 
 
 class Design:
@@ -243,8 +366,11 @@ class Design:
         base_esc = json.dumps(base, ensure_ascii=False)
         arg_names_esc = json.dumps(list(cm.arg_names), ensure_ascii=False)
         result_names_esc = json.dumps(list(cm.result_names), ensure_ascii=False)
+        value_param_names_esc = json.dumps(list(cm.value_param_names), ensure_ascii=False)
+        value_param_types_esc = json.dumps(list(cm.value_param_types), ensure_ascii=False)
         attrs = (
             f'attributes {{arg_names = {arg_names_esc}, result_names = {result_names_esc}, '
+            f"pyc.value_params = {value_param_names_esc}, pyc.value_param_types = {value_param_types_esc}, "
             f'pyc.kind = "{kind}", pyc.inline = "{inline}", pyc.params = {params_esc}, '
             f"pyc.base = {base_esc}"
         )
@@ -271,6 +397,8 @@ class Design:
                     "arg_types": list(cm.arg_types),
                     "result_names": list(cm.result_names),
                     "result_types": list(cm.result_types),
+                    "value_param_names": list(cm.value_param_names),
+                    "value_param_types": list(cm.value_param_types),
                 }
             )
 
@@ -287,7 +415,7 @@ class DesignContext:
 
     def __init__(self, design: Design) -> None:
         self.design = design
-        self._cache: dict[tuple[int, str, str, str | None], CompiledModule] = {}
+        self._cache: dict[tuple[int, str, str, str, str | None], CompiledModule] = {}
         self._used_sym_names: set[str] = set()
 
     def _unique_sym(self, base: str, *, cache_sig_json: str, module_name: str | None) -> str:
@@ -303,12 +431,19 @@ class DesignContext:
         self._used_sym_names.add(sym)
         return sym
 
-    def _bind_params(self, fn: Any, params: Mapping[str, Any], *, port_names: set[str] | None = None) -> dict[str, Any]:
+    def _bind_params(
+        self,
+        fn: Any,
+        params: Mapping[str, Any],
+        *,
+        port_names: set[str] | None = None,
+        value_param_names: set[str] | None = None,
+    ) -> dict[str, Any]:
         sig = inspect.signature(fn)
         ps = list(sig.parameters.values())
         if not ps:
             raise DesignError("module function must accept at least one argument (Circuit builder)")
-        ports = set(port_names or ())
+        ports = set(port_names or ()) | set(value_param_names or ())
         # The first argument is the builder; bind remaining by name.
         bound: dict[str, Any] = {}
         for p in ps[1:]:
@@ -349,16 +484,39 @@ class DesignContext:
         port_specs: Mapping[str, Any] | None = None,
     ) -> CompiledModule:
         port_specs_dict = dict(port_specs or {})
-        params_bound = self._bind_params(fn, params, port_names=set(port_specs_dict.keys()))
+        value_params_map = value_params_of(fn)
+        value_param_names = set(value_params_map.keys())
+        overlap_params = sorted(value_param_names & set(params.keys()))
+        if overlap_params:
+            raise DesignError(
+                f"value-param(s) must be connected as instance ports, not specialization params: {', '.join(overlap_params)}"
+            )
+        overlap_ports = sorted(value_param_names & set(port_specs_dict.keys()))
+        if overlap_ports:
+            raise DesignError(
+                f"value-param(s) must not appear in signature-bound port_specs: {', '.join(overlap_ports)}"
+            )
+
+        params_bound = self._bind_params(
+            fn,
+            params,
+            port_names=set(port_specs_dict.keys()),
+            value_param_names=value_param_names,
+        )
         params_json = _params_json(params_bound)
         port_specs_json = _port_specs_json(port_specs_dict)
-        key = (id(fn), params_json, port_specs_json, module_name)
+        value_params_json = json.dumps(value_params_map, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+        key = (id(fn), params_json, port_specs_json, value_params_json, module_name)
         if key in self._cache:
             return self._cache[key]
 
         base = _base_name(fn)
         cache_sig_json = json.dumps(
-            {"params": json.loads(params_json), "ports": json.loads(port_specs_json)},
+            {
+                "params": json.loads(params_json),
+                "ports": json.loads(port_specs_json),
+                "value_params": json.loads(value_params_json),
+            },
             sort_keys=True,
             separators=(",", ":"),
             ensure_ascii=False,
@@ -371,7 +529,13 @@ class DesignContext:
                 return existing
         sym_name = self._unique_sym(base, cache_sig_json=cache_sig_json, module_name=module_name)
 
-        mod = self._compile_module(fn, sym_name=sym_name, params=params_bound, port_specs=port_specs_dict)
+        mod = self._compile_module(
+            fn,
+            sym_name=sym_name,
+            params=params_bound,
+            port_specs=port_specs_dict,
+            value_params=value_params_map,
+        )
         cm = self._finalize_compiled(fn, sym_name=sym_name, params_json=params_json, base=base, mod=mod)
         self.design.add(cm)
         self._cache[key] = cm
@@ -384,18 +548,31 @@ class DesignContext:
         sym_name: str,
         params: Mapping[str, Any],
         port_specs: Mapping[str, Any] | None = None,
+        value_params: Mapping[str, str] | None = None,
     ) -> Module:
         from .jit import compile_module as jit_compile
 
-        return jit_compile(fn, module_name=sym_name, design_ctx=self, port_specs=port_specs, **params)
+        return jit_compile(
+            fn,
+            module_name=sym_name,
+            design_ctx=self,
+            port_specs=port_specs,
+            value_params=value_params,
+            **params,
+        )
 
     def _finalize_compiled(self, fn: Any, *, sym_name: str, params_json: str, base: str, mod: Module) -> CompiledModule:
+        value_param_pairs = _ordered_value_params(fn)
+        value_param_names = tuple(name for name, _ in value_param_pairs)
+        value_param_types = tuple(ty for _, ty in value_param_pairs)
         # Attach debug attributes (emitted in func.func header).
         try:
             mod.set_func_attr("pyc.base", base)
             mod.set_func_attr("pyc.params", params_json)
             mod.set_func_attr("pyc.kind", _kind_of(fn))
             mod.set_func_attr("pyc.inline", "true" if _inline_of(fn) else "false")
+            mod.set_func_attr_json("pyc.value_params", list(value_param_names))
+            mod.set_func_attr_json("pyc.value_param_types", list(value_param_types))
             if _emit_structural_of(fn):
                 mod.set_func_attr("pyc.emit.structural", "true")
         except Exception as e:
@@ -415,4 +592,6 @@ class DesignContext:
             arg_types=arg_types,
             result_names=res_names,
             result_types=res_types,
+            value_param_names=value_param_names,
+            value_param_types=value_param_types,
         )

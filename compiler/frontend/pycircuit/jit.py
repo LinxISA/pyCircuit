@@ -75,6 +75,40 @@ def _call_kind(fn: Any) -> str | None:
     return None
 
 
+def _normalize_value_param_ty(ty: str) -> str:
+    raw = str(ty).strip()
+    if raw == "clock":
+        return "!pyc.clock"
+    if raw == "reset":
+        return "!pyc.reset"
+    if raw in {"!pyc.clock", "!pyc.reset"}:
+        return raw
+    if raw.startswith("i"):
+        try:
+            w = int(raw[1:])
+        except ValueError as e:
+            raise JitError(f"invalid value-param type {ty!r}: expected iN/clock/reset") from e
+        if w <= 0:
+            raise JitError(f"invalid value-param type {ty!r}: iN width must be > 0")
+        return f"i{w}"
+    raise JitError(f"invalid value-param type {ty!r}: expected iN/clock/reset")
+
+
+def _value_params_of(fn: Any) -> dict[str, str]:
+    raw = getattr(fn, "__pycircuit_value_params__", None)
+    if raw is None:
+        return {}
+    if not isinstance(raw, Mapping):
+        raise JitError(f"invalid value_params metadata on {getattr(fn, '__name__', fn)!r}: expected mapping")
+    out: dict[str, str] = {}
+    for k in sorted(raw.keys(), key=lambda x: str(x)):
+        name = str(k).strip()
+        if not name:
+            raise JitError("value_params contains an empty key")
+        out[name] = _normalize_value_param_ty(str(raw[k]))
+    return out
+
+
 @dataclass(frozen=True)
 class _IndexValue:
     """Placeholder for an SCF induction variable (index-typed SSA value)."""
@@ -282,6 +316,8 @@ class _Compiler:
         source_text: str | None = None,
         source_stem: str | None = None,
         line_offset: int = 0,
+        value_param_names: set[str] | None = None,
+        value_param_types: Mapping[str, str] | None = None,
     ) -> None:
         self.m = m
         self.env: dict[str, Any] = dict(params)
@@ -294,6 +330,8 @@ class _Compiler:
         self._callsite_counts: dict[tuple[str, int | None], int] = {}
         self._allow_auto_instance = True
         self._template_cache: dict[_TemplateKey, Any] = {}
+        self._value_param_names: set[str] = set(value_param_names or ())
+        self._value_param_types: dict[str, str] = dict(value_param_types or {})
 
     @staticmethod
     def _ty_width(ty: str) -> int:
@@ -460,8 +498,34 @@ class _Compiler:
         if not args or args[0] is not self.m:
             return None
 
+        callee_value_params = _value_params_of(fn)
+
         has_hw = any(self._is_hw_value(a) for a in args) or any(self._is_hw_value(v) for v in kwargs.values())
-        if not has_hw:
+        # Value-params are always runtime boundary values, even when callsites
+        # pass Python literals. Such calls must still materialize as instances.
+        has_value_param_bindings = False
+        if callee_value_params:
+            try:
+                sig_for_probe = get_signature(fn)
+                ps_probe = list(sig_for_probe.parameters.values())
+                pnames_probe = [
+                    p.name
+                    for p in ps_probe[1:]
+                    if p.kind not in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD)
+                ]
+                for i, _ in enumerate(args[1:]):
+                    if i < len(pnames_probe) and pnames_probe[i] in callee_value_params:
+                        has_value_param_bindings = True
+                        break
+                if not has_value_param_bindings:
+                    for k in kwargs:
+                        if str(k) in callee_value_params:
+                            has_value_param_bindings = True
+                            break
+            except Exception:  # noqa: BLE001
+                has_value_param_bindings = False
+
+        if not has_hw and not callee_value_params and not has_value_param_bindings:
             return None
 
         sig = get_signature(fn)
@@ -510,7 +574,14 @@ class _Compiler:
             raise JitError(f"too many positional arguments for auto-instance call to {getattr(fn, '__name__', fn)!r}")
         for i, v in enumerate(args_for_params):
             pname = param_names[i]
-            if is_connector(v):
+            if pname in callee_value_params:
+                if is_connector_bundle(v):
+                    raise JitError(
+                        f"@module value-param {pname!r} cannot be a ConnectorBundle; "
+                        "bind a scalar value/connector"
+                    )
+                ports[pname] = v
+            elif is_connector(v):
                 ports[pname] = v
             elif is_connector_bundle(v):
                 raise JitError(
@@ -524,7 +595,15 @@ class _Compiler:
 
         # Keyword split: hardware values are ports, others are specialization params.
         for k, v in kwargs.items():
-            if is_connector(v):
+            key = str(k)
+            if key in callee_value_params:
+                if is_connector_bundle(v):
+                    raise JitError(
+                        f"@module value-param {key!r} cannot be a ConnectorBundle; "
+                        "bind a scalar value/connector"
+                    )
+                ports[key] = v
+            elif is_connector(v):
                 ports[str(k)] = v
             elif is_connector_bundle(v):
                 raise JitError(
@@ -603,6 +682,11 @@ class _Compiler:
                 return int(node.value)
             raise JitError(f"unsupported constant in const-eval: {node.value!r}")
         if isinstance(node, ast.Name):
+            if node.id in self._value_param_names:
+                raise JitError(
+                    f"value parameter {node.id!r} cannot be used in a compile-time context "
+                    "(range bounds/widths/indices must be static)"
+                )
             v = self.env.get(node.id, self.globals.get(node.id))
             if isinstance(v, bool):
                 return int(v)
@@ -777,13 +861,25 @@ class _Compiler:
                 idx_i = self.eval_const(sl)
                 return base[int(idx_i)]
             if isinstance(base, Bundle):
-                if isinstance(sl, ast.Constant) and isinstance(sl.value, str):
-                    return base[str(sl.value)]
-                raise JitError("Bundle subscript must be a constant string key")
+                if isinstance(sl, ast.Name) and sl.id in self._value_param_names:
+                    raise JitError(
+                        f"value parameter {sl.id!r} cannot be used as a bundle key; "
+                        "bundle keys must be compile-time constant strings"
+                    )
+                key_v = self.eval_expr(sl)
+                if isinstance(key_v, str):
+                    return base[key_v]
+                raise JitError("Bundle subscript must resolve to a compile-time constant string key")
             if isinstance(base, ConnectorBundle):
-                if isinstance(sl, ast.Constant) and isinstance(sl.value, str):
-                    return base[str(sl.value)]
-                raise JitError("ConnectorBundle subscript must be a constant string key")
+                if isinstance(sl, ast.Name) and sl.id in self._value_param_names:
+                    raise JitError(
+                        f"value parameter {sl.id!r} cannot be used as a bundle key; "
+                        "bundle keys must be compile-time constant strings"
+                    )
+                key_v = self.eval_expr(sl)
+                if isinstance(key_v, str):
+                    return base[key_v]
+                raise JitError("ConnectorBundle subscript must resolve to a compile-time constant string key")
             if isinstance(base, (Wire, Reg)):
                 if isinstance(sl, ast.Slice):
                     if sl.step is not None:
@@ -1146,6 +1242,8 @@ class _Compiler:
             source_text=meta.source,
             source_stem=meta.source_stem,
             line_offset=int(meta.start_line - 1),
+            value_param_names=set(self._value_param_names),
+            value_param_types=dict(self._value_param_types),
         )
         if not require_builder:
             child._allow_auto_instance = False
@@ -1442,6 +1540,8 @@ class _Compiler:
             source_text=self.source_text,
             source_stem=self.source_stem,
             line_offset=self.line_offset,
+            value_param_names=set(self._value_param_names),
+            value_param_types=dict(self._value_param_types),
         )
         then_comp._inline_stack = list(self._inline_stack)
         then_comp.env = dict(pre_env)
@@ -1463,6 +1563,8 @@ class _Compiler:
             source_text=self.source_text,
             source_stem=self.source_stem,
             line_offset=self.line_offset,
+            value_param_names=set(self._value_param_names),
+            value_param_types=dict(self._value_param_types),
         )
         else_comp._inline_stack = list(self._inline_stack)
         else_comp.env = dict(pre_env)
@@ -1692,6 +1794,7 @@ def compile_module(
     name: str | None = None,
     design_ctx: Any | None = None,
     port_specs: Mapping[str, Any] | None = None,
+    value_params: Mapping[str, str] | None = None,
     **params: Any,
 ) -> Circuit:
     """Compile one hardware function into a static pyCircuit Module.
@@ -1730,20 +1833,51 @@ def compile_module(
 
     builder_arg = ps[0].name
     port_specs_dict = dict(port_specs or {})
+    declared_value_params = _value_params_of(fn)
+    if value_params is not None:
+        explicit_vp = {str(k): _normalize_value_param_ty(str(v)) for k, v in value_params.items()}
+        if declared_value_params and explicit_vp != declared_value_params:
+            raise JitError(
+                f"value_params mismatch for {getattr(fn, '__name__', fn)!r}: "
+                "decorator declaration differs from compile-time declaration"
+            )
+        declared_value_params = explicit_vp
+    value_param_names = set(declared_value_params.keys())
+
     param_names = {p.name for p in ps[1:]}
     unknown_ports = set(port_specs_dict.keys()) - param_names
     if unknown_ports:
         raise JitError(
             f"unknown signature-bound port(s) for {getattr(fn, '__name__', fn)!r}: {', '.join(sorted(unknown_ports))}"
         )
+    unknown_value_params = value_param_names - param_names
+    if unknown_value_params:
+        raise JitError(
+            f"unknown value-param declaration(s) for {getattr(fn, '__name__', fn)!r}: "
+            + ", ".join(sorted(unknown_value_params))
+        )
+    overlap_port_value = set(port_specs_dict.keys()) & value_param_names
+    if overlap_port_value:
+        raise JitError(
+            "value-param(s) must not be provided as signature-bound port specs: "
+            + ", ".join(sorted(overlap_port_value))
+        )
+    overlap_param_value = set(params.keys()) & value_param_names
+    if overlap_param_value:
+        raise JitError(
+            "value-param(s) must be connected as module input ports, not specialization params: "
+            + ", ".join(sorted(overlap_param_value))
+        )
 
-    extra_params = set(params.keys()) - {p.name for p in ps[1:] if p.name not in port_specs_dict}
+    extra_params = set(params.keys()) - {
+        p.name for p in ps[1:] if p.name not in port_specs_dict and p.name not in value_param_names
+    }
     if extra_params:
         raise JitError(f"unknown JIT param(s) for {getattr(fn, '__name__', fn)!r}: {', '.join(sorted(extra_params))}")
 
     bound_params: dict[str, Any] = {}
     for p in ps[1:]:
-        if p.name in port_specs_dict:
+        if p.name in port_specs_dict or p.name in value_param_names:
             continue
         if p.name in params:
             bound_params[p.name] = params[p.name]
@@ -1763,9 +1897,25 @@ def compile_module(
         source_text=meta.source,
         source_stem=meta.source_stem,
         line_offset=int(meta.start_line - 1),
+        value_param_names=set(value_param_names),
+        value_param_types=dict(declared_value_params),
     )
     c.env[builder_arg] = m
     for p in ps[1:]:
+        if p.name in declared_value_params:
+            decl_ty = declared_value_params[p.name]
+            if decl_ty == "!pyc.clock":
+                c.env[p.name] = m.clock(p.name)
+                continue
+            if decl_ty == "!pyc.reset":
+                c.env[p.name] = m.reset(p.name)
+                continue
+            if decl_ty.startswith("i"):
+                width = int(decl_ty[1:])
+                c.env[p.name] = m.input(p.name, width=width, signed=False)
+                continue
+            raise JitError(f"unsupported value-param type for {p.name!r}: {decl_ty!r}")
+
         if p.name not in port_specs_dict:
             continue
         spec = port_specs_dict[p.name]

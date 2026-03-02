@@ -9,6 +9,7 @@
 #include "mlir/IR/Operation.h"
 #include "mlir/IR/Value.h"
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/SmallSet.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/StringRef.h"
@@ -38,7 +39,17 @@ static std::string vLiteral(IntegerAttr a, Type dstTy) {
   if (!intTy)
     return "0";
   unsigned w = intTy.getWidth();
-  return std::to_string(w) + "'d" + std::to_string(a.getValue().getZExtValue());
+  const llvm::APInt v = a.getValue();
+  // Decimal formatting is fine for small constants; wide values may exceed 64b
+  // and cannot use APInt::getZExtValue().
+  if (v.getActiveBits() <= 64) {
+    return std::to_string(w) + "'d" + std::to_string(v.getZExtValue());
+  }
+  llvm::SmallString<256> hex;
+  v.toStringUnsigned(hex, /*Radix=*/16);
+  if (hex.empty())
+    hex = "0";
+  return std::to_string(w) + "'h" + hex.str().str();
 }
 
 static std::string vZero(Type dstTy) {
@@ -318,6 +329,18 @@ static LogicalResult emitComb(pyc::CombOp comb, raw_ostream &os, NameTable &nt) 
          << sh.getAmountAttr().getInt() << ");\n";
       continue;
     }
+    if (auto sh = dyn_cast<pyc::ShlOp>(op)) {
+      os << "assign " << nt.get(sh.getResult()) << " = (" << nt.get(sh.getIn()) << " << " << nt.get(sh.getAmount()) << ");\n";
+      continue;
+    }
+    if (auto sh = dyn_cast<pyc::LshrOp>(op)) {
+      os << "assign " << nt.get(sh.getResult()) << " = (" << nt.get(sh.getIn()) << " >> " << nt.get(sh.getAmount()) << ");\n";
+      continue;
+    }
+    if (auto sh = dyn_cast<pyc::AshrOp>(op)) {
+      os << "assign " << nt.get(sh.getResult()) << " = ($signed(" << nt.get(sh.getIn()) << ") >>> " << nt.get(sh.getAmount()) << ");\n";
+      continue;
+    }
     if (auto c = dyn_cast<pyc::ConcatOp>(op)) {
       os << "assign " << nt.get(c.getResult()) << " = {";
       for (auto [i, v] : llvm::enumerate(c.getInputs())) {
@@ -574,6 +597,9 @@ static LogicalResult emitFunc(func::FuncOp f, raw_ostream &os, const VerilogEmit
               pyc::ShliOp,
               pyc::LshriOp,
               pyc::AshriOp,
+              pyc::ShlOp,
+              pyc::LshrOp,
+              pyc::AshrOp,
               pyc::ConcatOp>(op)) {
         combAssignOps.push_back(&op);
         continue;
@@ -795,6 +821,18 @@ static LogicalResult emitFunc(func::FuncOp f, raw_ostream &os, const VerilogEmit
       if (auto sh = dyn_cast<pyc::AshriOp>(op)) {
         os << "assign " << nt.get(sh.getResult()) << " = ($signed(" << nt.get(sh.getIn()) << ") >>> "
            << sh.getAmountAttr().getInt() << ");\n";
+        continue;
+      }
+      if (auto sh = dyn_cast<pyc::ShlOp>(op)) {
+        os << "assign " << nt.get(sh.getResult()) << " = (" << nt.get(sh.getIn()) << " << " << nt.get(sh.getAmount()) << ");\n";
+        continue;
+      }
+      if (auto sh = dyn_cast<pyc::LshrOp>(op)) {
+        os << "assign " << nt.get(sh.getResult()) << " = (" << nt.get(sh.getIn()) << " >> " << nt.get(sh.getAmount()) << ");\n";
+        continue;
+      }
+      if (auto sh = dyn_cast<pyc::AshrOp>(op)) {
+        os << "assign " << nt.get(sh.getResult()) << " = ($signed(" << nt.get(sh.getIn()) << ") >>> " << nt.get(sh.getAmount()) << ");\n";
         continue;
       }
       if (auto c = dyn_cast<pyc::ConcatOp>(op)) {

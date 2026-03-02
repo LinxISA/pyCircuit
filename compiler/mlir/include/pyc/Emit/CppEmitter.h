@@ -16,6 +16,9 @@ struct CppEmitterOptions {
   SplitMode splitMode = SplitMode::None;
   unsigned shardThresholdLines = 120000;
   unsigned shardThresholdBytes = 4 * 1024 * 1024;
+  // Chunk full-topology eval bodies to avoid mega-functions that are expensive
+  // for downstream C++ compilers.
+  unsigned evalTopoChunkNodes = 256;
 };
 
 ::mlir::LogicalResult emitCpp(::mlir::ModuleOp module, ::llvm::raw_ostream &os,
