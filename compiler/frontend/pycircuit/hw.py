@@ -1408,6 +1408,7 @@ class Circuit(Module):
         fn: Any,
         *,
         name: str,
+        short_name: str | None = None,
         bind: Mapping[str, Connector | ConnectorBundle | ConnectorStruct | Mapping[str, Any] | Any],
         params: dict[str, Any] | None = None,
         module_name: str | None = None,
@@ -1419,6 +1420,7 @@ class Circuit(Module):
         return self.instance_handle(
             fn,
             name=str(name),
+            short_name=None if short_name is None else str(short_name),
             params=params,
             module_name=module_name,
             **bound_ports,
@@ -1429,6 +1431,7 @@ class Circuit(Module):
         fn: Any,
         *,
         name: str,
+        short_name: str | None = None,
         params: dict[str, Any] | None = None,
         module_name: str | None = None,
         **ports: Any,
@@ -1438,6 +1441,7 @@ class Circuit(Module):
         return self.instance(
             fn,
             name=str(name),
+            short_name=None if short_name is None else str(short_name),
             params=params,
             module_name=module_name,
             **wrapped,
@@ -1567,6 +1571,7 @@ class Circuit(Module):
         fn: Any,
         *,
         name: str,
+        short_name: str | None = None,
         params: dict[str, Any] | None = None,
         module_name: str | None = None,
         **ports: Any,
@@ -1688,7 +1693,13 @@ class Circuit(Module):
         for pname, pty in zip(cm.arg_names, cm.arg_types):
             operands.append(coerce_to_sig(normalized_ports[pname], expected_ty=pty, port=pname))
 
-        outs = self.instance_op(cm.sym_name, *operands, result_types=list(cm.result_types), name=str(name))
+        outs = self.instance_op(
+            cm.sym_name,
+            *operands,
+            result_types=list(cm.result_types),
+            name=str(name),
+            short_name=None if short_name is None else str(short_name),
+        )
         out_fields: dict[str, Connector] = {}
         for oname, sig in zip(cm.result_names, outs):
             out_fields[oname] = WireConnector(owner=self, name=oname, wire=Wire(self, sig))
@@ -1719,6 +1730,7 @@ class Circuit(Module):
         fn: Any,
         *,
         name: str,
+        short_name: str | None = None,
         params: dict[str, Any] | None = None,
         module_name: str | None = None,
         **ports: Any,
@@ -1736,6 +1748,7 @@ class Circuit(Module):
         return self.instance_handle(
             fn,
             name=name,
+            short_name=short_name,
             params=params,
             module_name=module_name,
             **ports,

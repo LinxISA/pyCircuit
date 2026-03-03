@@ -34,9 +34,15 @@ def tb(t: Tb) -> None:
     t.expect("y0", 0x34, at=1, phase="post")
     t.expect("y1", 0x34, at=1, phase="post")
 
+    # Cycle 2: stable drive (committed output holds; trace still records Write intent; Decision 0053).
+    t.drive("in_x", 0x34, at=2)
+    t.expect("y0", 0x34, at=2, phase="pre")
+    t.expect("y1", 0x34, at=2, phase="pre")
+    t.expect("y0", 0x34, at=2, phase="post")
+    t.expect("y1", 0x34, at=2, phase="post")
+
     t.finish(at=int(p["finish"]))
 
 
 if __name__ == "__main__":
     print(compile(build, name="tb_trace_dsl_smoke_top", **DEFAULT_PARAMS).emit_mlir())
-

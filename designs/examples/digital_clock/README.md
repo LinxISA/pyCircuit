@@ -11,17 +11,15 @@
 
 ## Build + run
 
-Emit + compile model:
+Build generated project (recommended):
 
 ```bash
-PYTHONPATH=compiler/frontend python3 -m pycircuit.cli emit \
-  designs/examples/digital_clock/digital_clock.py \
-  -o .pycircuit_out/examples/digital_clock/digital_clock.pyc
-
-build/bin/pycc \
-  .pycircuit_out/examples/digital_clock/digital_clock.pyc \
-  --emit=cpp \
-  -o .pycircuit_out/examples/digital_clock/digital_clock_gen.hpp
+PYTHONPATH=compiler/frontend \
+python3 -m pycircuit.cli build \
+  designs/examples/digital_clock/tb_digital_clock.py \
+  --out-dir .pycircuit_out/examples/digital_clock_build \
+  --target cpp \
+  --jobs 4
 ```
 
 Build shared lib:
@@ -29,7 +27,7 @@ Build shared lib:
 ```bash
 cd designs/examples/digital_clock
 c++ -std=c++17 -O2 -shared -fPIC \
-  -I../../runtime -I../../../.pycircuit_out/examples/digital_clock \
+  -I../../runtime -I../../../.pycircuit_out/examples/digital_clock_build/device/cpp \
   -o libdigital_clock_sim.dylib digital_clock_capi.cpp
 ```
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from dataclasses import field
 import fnmatch
 import json
 import re
@@ -8,6 +9,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from .design import Design
+from .path_shortening import shorten_instance_path
 from .tb import _sanitize_id
 
 
@@ -194,6 +196,7 @@ class TracePlan:
     version: int
     enabled_signals: tuple[str, ...]
     enabled_instances: tuple[str, ...]
+    signal_obs: dict[str, str] = field(default_factory=dict)
     window: TraceWindow | None = None
     config: TraceConfig | None = None
 
@@ -203,6 +206,8 @@ class TracePlan:
             "enabled_instances": list(self.enabled_instances),
             "enabled_signals": list(self.enabled_signals),
         }
+        if self.signal_obs:
+            out["signal_obs"] = dict(self.signal_obs)
         if self.window is not None:
             out["window"] = self.window.as_dict()
         if self.config is not None:
@@ -305,6 +310,7 @@ def parse_trace_config(obj: Any, *, source_json: str | None = None) -> TraceConf
 
 _INSTANCE_CALLEE_RE = re.compile(r"\bcallee\s*=\s*@([A-Za-z_][A-Za-z0-9_\$]*)\b")
 _INSTANCE_NAME_RE = re.compile(r'\bname\s*=\s*"((?:\\.|[^"\\])*)"')
+_INSTANCE_SHORT_NAME_RE = re.compile(r'\bshort_name\s*=\s*"((?:\\.|[^"\\])*)"')
 
 
 def _instance_ops_in_func_mlir(func_mlir: str) -> list[tuple[str, str]]:
@@ -316,12 +322,14 @@ def _instance_ops_in_func_mlir(func_mlir: str) -> list[tuple[str, str]]:
         if not m_callee:
             continue
         callee = str(m_callee.group(1))
+        raw_name = callee
         m_name = _INSTANCE_NAME_RE.search(line)
         if m_name:
-            name = json.loads('"' + m_name.group(1) + '"')
-        else:
-            name = callee
-        out.append((str(name), callee))
+            raw_name = json.loads('"' + m_name.group(1) + '"')
+        m_short = _INSTANCE_SHORT_NAME_RE.search(line)
+        if m_short:
+            raw_name = json.loads('"' + m_short.group(1) + '"')
+        out.append((str(raw_name), callee))
     return out
 
 
@@ -420,10 +428,11 @@ def compute_trace_plan_from_artifacts(
             probe_table = _probe_table_from_pyc_text(sym, text)
         module_probes[sym] = probe_table
 
-    instances: list[tuple[str, str]] = []
+    instances: list[tuple[str, str, str]] = []
 
-    def visit(sym: str, path: str, stack: tuple[str, ...]) -> None:
-        instances.append((path, sym))
+    def visit(sym: str, full_path: str, stack: tuple[str, ...]) -> None:
+        ipath = shorten_instance_path(full_path)
+        instances.append((ipath, sym, full_path))
         if sym in stack:
             return
         pyc_path = module_paths.get(sym)
@@ -436,13 +445,15 @@ def compute_trace_plan_from_artifacts(
         children = _instance_ops_in_func_mlir(func_mlir)
         for raw_name, callee in sorted(children, key=lambda x: (_sanitize_id(x[0]), x[1])):
             seg = _sanitize_id(raw_name)
-            child_path = f"{path}.{seg}"
-            visit(str(callee), child_path, stack=(*stack, sym))
+            child_full = f"{full_path}.{seg}"
+            visit(str(callee), child_full, stack=(*stack, sym))
 
     visit(str(top), "dut", stack=())
 
     enabled: set[str] = set()
-    for ipath, sym in instances:
+    enabled_full_paths: set[str] = set()
+    signal_obs: dict[str, str] = {}
+    for ipath, sym, full_path in instances:
         ports = module_ports.get(sym, [])
         probes = module_probes.get(sym, {})
 
@@ -454,26 +465,33 @@ def compute_trace_plan_from_artifacts(
                     continue
                 if rule.port_globs:
                     enabled.add(f"{ipath}:{port}")
+                    enabled_full_paths.add(full_path)
             if rule.probes is not None:
                 for port, meta in probes.items():
                     if rule.probes.matches(meta):
                         unique_out = module_out_port_name.get(sym, {}).get(port, str(port))
-                        enabled.add(f"{ipath}:{unique_out}")
+                        sig = f"{ipath}:{unique_out}"
+                        enabled.add(sig)
+                        enabled_full_paths.add(full_path)
+                        at = meta.get("at", None)
+                        if isinstance(at, str) and at.strip():
+                            signal_obs[sig] = at.strip().lower()
 
     enabled_signals = tuple(sorted(enabled))
+    signal_obs = {s: v for s, v in signal_obs.items() if s in enabled_signals}
 
     enabled_instances_set: set[str] = set()
-    for s in enabled_signals:
-        inst_path, _, _field_path = str(s).partition(":")
-        parts = [p for p in inst_path.split(".") if p]
+    for full_path in enabled_full_paths:
+        parts = [p for p in str(full_path).split(".") if p]
         for i in range(1, len(parts) + 1):
-            enabled_instances_set.add(".".join(parts[:i]))
+            enabled_instances_set.add(shorten_instance_path(".".join(parts[:i])))
     enabled_instances = tuple(sorted(enabled_instances_set))
 
     return TracePlan(
         version=1,
         enabled_signals=enabled_signals,
         enabled_instances=enabled_instances,
+        signal_obs=signal_obs,
         window=config.window,
         config=config,
     )
@@ -502,10 +520,11 @@ def compute_trace_plan(*, design: Design, config: TraceConfig) -> TracePlan:
         module_probes[cm.sym_name] = probe_table
 
     # Build a flat instance list from the top module by parsing `pyc.instance`.
-    instances: list[tuple[str, str]] = []
+    instances: list[tuple[str, str, str]] = []
 
-    def visit(sym: str, path: str, stack: tuple[str, ...]) -> None:
-        instances.append((path, sym))
+    def visit(sym: str, full_path: str, stack: tuple[str, ...]) -> None:
+        ipath = shorten_instance_path(full_path)
+        instances.append((ipath, sym, full_path))
         cm = design.lookup(sym)
         if cm is None:
             return
@@ -515,13 +534,15 @@ def compute_trace_plan(*, design: Design, config: TraceConfig) -> TracePlan:
         # Deterministic order independent of frontend call order.
         for raw_name, callee in sorted(children, key=lambda x: (_sanitize_id(x[0]), x[1])):
             seg = _sanitize_id(raw_name)
-            child_path = f"{path}.{seg}"
-            visit(str(callee), child_path, stack=(*stack, sym))
+            child_full = f"{full_path}.{seg}"
+            visit(str(callee), child_full, stack=(*stack, sym))
 
     visit(str(design.top), "dut", stack=())
 
     enabled: set[str] = set()
-    for ipath, sym in instances:
+    enabled_full_paths: set[str] = set()
+    signal_obs: dict[str, str] = {}
+    for ipath, sym, full_path in instances:
         ports = module_ports.get(sym, [])
         probes = module_probes.get(sym, {})
 
@@ -534,28 +555,34 @@ def compute_trace_plan(*, design: Design, config: TraceConfig) -> TracePlan:
                     continue
                 if rule.port_globs:
                     enabled.add(f"{ipath}:{port}")
+                    enabled_full_paths.add(full_path)
             # Probe tag selectors.
             if rule.probes is not None:
                 for port, meta in probes.items():
                     if rule.probes.matches(meta):
                         unique_out = module_out_port_name.get(sym, {}).get(port, str(port))
-                        enabled.add(f"{ipath}:{unique_out}")
+                        sig = f"{ipath}:{unique_out}"
+                        enabled.add(sig)
+                        enabled_full_paths.add(full_path)
+                        at = meta.get("at", None)
+                        if isinstance(at, str) and at.strip():
+                            signal_obs[sig] = at.strip().lower()
 
     enabled_signals = tuple(sorted(enabled))
+    signal_obs = {s: v for s, v in signal_obs.items() if s in enabled_signals}
 
     enabled_instances_set: set[str] = set()
-    for s in enabled_signals:
-        inst_path, _, _field_path = str(s).partition(":")
-        parts = [p for p in inst_path.split(".") if p]
-        # "dut.<inst>:<field>" => enable "dut" and "dut.<inst>".
+    for full_path in enabled_full_paths:
+        parts = [p for p in str(full_path).split(".") if p]
         for i in range(1, len(parts) + 1):
-            enabled_instances_set.add(".".join(parts[:i]))
+            enabled_instances_set.add(shorten_instance_path(".".join(parts[:i])))
     enabled_instances = tuple(sorted(enabled_instances_set))
 
     return TracePlan(
         version=1,
         enabled_signals=enabled_signals,
         enabled_instances=enabled_instances,
+        signal_obs=signal_obs,
         window=config.window,
         config=config,
     )

@@ -878,6 +878,8 @@ static LogicalResult emitFunc(func::FuncOp f, raw_ostream &os, const VerilogEmit
       std::string instName = "inst";
       if (auto nameAttr = op->getAttrOfType<StringAttr>("name"))
         instName = sanitizeId(nameAttr.getValue());
+      if (auto shortAttr = op->getAttrOfType<StringAttr>("short_name"))
+        instName = sanitizeId(shortAttr.getValue());
       instName = nt.unique(instName);
 
       os << callee.getSymName() << " " << instName << " (\n";

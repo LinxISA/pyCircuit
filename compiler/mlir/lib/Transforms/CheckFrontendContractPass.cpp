@@ -261,6 +261,8 @@ public:
       }
 
       // Decision 0025: instance `name` must be a strict identifier (no escaping).
+      // Decision 0017: optional `short_name` is preferred for path segments.
+      llvm::StringSet<> segUsed;
       f.walk([&](pyc::InstanceOp inst) {
         auto nameAttr = inst->getAttrOfType<StringAttr>("name");
         if (!nameAttr) {
@@ -273,6 +275,25 @@ public:
         if (!isValidIdent(v)) {
           inst.emitError() << "[PYC940] invalid instance name `" << v
                            << "` (expected [A-Za-z_][A-Za-z0-9_]*; no escaping supported)";
+          ok = false;
+        }
+
+        llvm::StringRef seg = v;
+        if (auto shortAttr = inst->getAttrOfType<StringAttr>("short_name")) {
+          llvm::StringRef sv = shortAttr.getValue();
+          if (!isValidIdent(sv)) {
+            inst.emitError() << "[PYC946] invalid instance short_name `" << sv
+                             << "` (expected [A-Za-z_][A-Za-z0-9_]*; no escaping supported)";
+            ok = false;
+          } else {
+            seg = sv;
+          }
+        }
+
+        if (!segUsed.insert(seg).second) {
+          inst.emitError() << "[PYC947] duplicate instance path segment `" << seg
+                           << "` within module (hint: instance name/short_name must be unique per parent for stable "
+                              "canonical paths)";
           ok = false;
         }
       });

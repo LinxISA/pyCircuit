@@ -17,15 +17,30 @@ fi
 
 pyc_log "using pycc: ${PYCC}"
 
+gate_run_id="${PYC_GATE_RUN_ID:-$(date +%Y%m%d-%H%M%S)}"
+gate_out_dir="$(pyc_out_root)/gates/${gate_run_id}"
+docs_gate_dir="${PYC_ROOT_DIR}/docs/gates/logs/${gate_run_id}"
+mkdir -p "${gate_out_dir}" "${docs_gate_dir}"
+fail=0
+count=0
+
+cat > "${docs_gate_dir}/commands.txt" <<EOF
+bash flows/scripts/run_examples.sh
+python3 flows/tools/check_api_hygiene.py compiler/frontend/pycircuit designs/examples docs README.md
+python3 flows/tools/check_decision_status.py --status docs/gates/decision_status_v40.md --out .pycircuit_out/gates/${gate_run_id}/decision_status_report.json --require-no-deferred --require-all-verified --require-concrete-evidence --require-existing-evidence
+PYC_GATE_RUN_ID=${gate_run_id} bash flows/scripts/run_semantic_regressions_v40.sh
+EOF
+
 pyc_log "running strict API hygiene gate"
-python3 "${PYC_ROOT_DIR}/flows/tools/check_api_hygiene.py" \
+if ! python3 "${PYC_ROOT_DIR}/flows/tools/check_api_hygiene.py" \
   compiler/frontend/pycircuit \
   designs/examples \
   docs \
-  README.md
-
-fail=0
-count=0
+  README.md \
+  >"${docs_gate_dir}/api_hygiene.stdout" 2>"${docs_gate_dir}/api_hygiene.stderr"; then
+  pyc_warn "API hygiene gate failed"
+  fail=1
+fi
 
 while IFS=$'\t' read -r bn design _tb _cfg _tier; do
   [[ -n "${bn}" ]] || continue
@@ -185,8 +200,12 @@ for bex in counter huge_hierarchy_stress boundary_value_ports bundle_probe_expan
     --target cpp
     --jobs "${PYC_EXAMPLE_JOBS:-4}"
     --logic-depth "${PYC_EXAMPLE_LOGIC_DEPTH:-256}")
+  if [[ "${bex}" == "huge_hierarchy_stress" ]]; then
+    # Decision 0017: force deep hierarchy so instance path shortening is exercised.
+    build_cmd+=(--param module_count=1 --param fanout=1 --param hierarchy_depth=50)
+  fi
   trace_cfg=""
-  if [[ "${bex}" == "trace_dsl_smoke" || "${bex}" == "bundle_probe_expand" ]]; then
+  if [[ "${bex}" == "trace_dsl_smoke" || "${bex}" == "bundle_probe_expand" || "${bex}" == "huge_hierarchy_stress" ]]; then
     trace_cfg="${EX_DIR}/${bex}/${bex}_trace.json"
     build_cmd+=(--trace-config "${trace_cfg}")
   fi
@@ -198,6 +217,64 @@ for bex in counter huge_hierarchy_stress boundary_value_ports bundle_probe_expan
   if [[ ! -f "${out_root}/project_manifest.json" ]]; then
     pyc_warn "missing project_manifest.json: ${bex}"
     fail=1
+  fi
+
+  if [[ "${bex}" == "huge_hierarchy_stress" ]]; then
+    pyc_log "[${count}] check Decision 0017 path shortening ${bex}"
+    if [[ ! -f "${out_root}/trace_plan.json" ]]; then
+      pyc_warn "missing trace_plan.json: ${bex}"
+      fail=1
+      continue
+    fi
+    if ! python3 - "${out_root}" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+out_root = Path(sys.argv[1]).resolve()
+plan = json.loads((out_root / "trace_plan.json").read_text(encoding="utf-8"))
+sigs = plan.get("enabled_signals", [])
+if not isinstance(sigs, list) or not sigs:
+    raise SystemExit("expected non-empty enabled_signals for huge_hierarchy_stress trace config")
+
+if not any("._h" in str(s) for s in sigs):
+    raise SystemExit("expected at least one shortened instance path (missing '._h' in enabled_signals)")
+
+probe = json.loads((out_root / "probe_manifest.json").read_text(encoding="utf-8"))
+probes = probe.get("probes", [])
+if not isinstance(probes, list) or not probes:
+    raise SystemExit("expected non-empty probe_manifest probes list")
+
+paths = {p.get("canonical_path", "") for p in probes if isinstance(p, dict)}
+missing = [s for s in sigs if str(s) not in paths]
+if missing:
+    raise SystemExit(f"probe_manifest missing {len(missing)} enabled_signals; first={missing[0]!r}")
+
+if not any("._h" in str(p.get("instance_path", "")) for p in probes if isinstance(p, dict)):
+    raise SystemExit("expected at least one shortened instance_path in probe_manifest probes")
+
+pol = probe.get("instance_path_policy", {})
+max_segments = int(pol.get("max_segments", 16))
+max_chars = int(pol.get("max_chars", 240))
+for p in probes:
+    if not isinstance(p, dict):
+        continue
+    ip = str(p.get("instance_path", ""))
+    if not ip:
+        raise SystemExit("probe_manifest entry missing instance_path")
+    segs = [x for x in ip.split(".") if x]
+    if len(segs) > max_segments:
+        raise SystemExit(f"instance_path exceeds max_segments: {ip!r} segs={len(segs)} max={max_segments}")
+    if len(ip) > max_chars:
+        raise SystemExit(f"instance_path exceeds max_chars: {ip!r} len={len(ip)} max={max_chars}")
+
+print("ok: huge_hierarchy_stress path shortening + trace plan alignment")
+PY
+    then
+      pyc_warn "Decision 0017 shortening gate failed: ${bex}"
+      fail=1
+      continue
+    fi
   fi
 
   if [[ "${bex}" == "trace_dsl_smoke" ]]; then
@@ -222,11 +299,47 @@ if sig != [
 ]:
     raise SystemExit(f"enabled_signals mismatch: got {sig!r}")
 
+mod_pyc = out_root / "device" / "modules" / "trace_dsl_smoke.pyc"
+mod_mlir = mod_pyc.read_text(encoding="utf-8")
+if 'name = "unit0_long_name"' not in mod_mlir or 'short_name = "u0"' not in mod_mlir:
+    raise SystemExit("expected trace_dsl_smoke instance u0 to use name+short_name (Decision 0017)")
+if 'name = "unit1_long_name"' not in mod_mlir or 'short_name = "u1"' not in mod_mlir:
+    raise SystemExit("expected trace_dsl_smoke instance u1 to use name+short_name (Decision 0017)")
+
 probe = json.loads((out_root / "probe_manifest.json").read_text(encoding="utf-8"))
-paths = [p.get("canonical_path", "") for p in probe.get("probes", []) if isinstance(p, dict)]
+entries = [p for p in probe.get("probes", []) if isinstance(p, dict)]
+paths = [p.get("canonical_path", "") for p in entries]
 for exp in sig:
     if exp not in paths:
         raise SystemExit(f"probe_manifest missing canonical_path: {exp!r}")
+by_path = {str(p.get("canonical_path", "")): p for p in entries}
+for exp in sig:
+    ent = by_path.get(exp, {})
+    kind = str(ent.get("kind", ""))
+    subkind = str(ent.get("subkind", ""))
+    if kind != "state" or subkind != "reg":
+        raise SystemExit(
+            f"expected probe_manifest kind='state' subkind='reg' for {exp!r}, got kind={kind!r} subkind={subkind!r}"
+        )
+
+# Decision 0140: probe_manifest must preserve hardened probe obs-point + tags
+# for debug/probe ports.
+pv = by_path.get("dut.u0:dbg__pv_leaf_q_lane0_leaf", {})
+if str(pv.get("obs", "")) != "tick":
+    raise SystemExit(f"expected obs='tick' for pv probe, got {pv.get('obs')!r}")
+tags = pv.get("tags", None)
+if not isinstance(tags, dict):
+    raise SystemExit("expected tags dict for pv probe")
+if tags.get("family") != "pv":
+    raise SystemExit(f"expected tags.family='pv', got {tags.get('family')!r}")
+if tags.get("stage") != "leaf":
+    raise SystemExit(f"expected tags.stage='leaf', got {tags.get('stage')!r}")
+if tags.get("lane") != 0:
+    raise SystemExit(f"expected tags.lane=0, got {tags.get('lane')!r}")
+if tags.get("field") != "q":
+    raise SystemExit(f"expected tags.field='q', got {tags.get('field')!r}")
+if tags.get("kind") != "probe":
+    raise SystemExit(f"expected tags.kind='probe', got {tags.get('kind')!r}")
 
 w = plan.get("window", {})
 if w.get("begin_cycle") != 1 or w.get("end_cycle") != 3:
@@ -1101,6 +1214,47 @@ else
       fail=1
     fi
   fi
+fi
+
+pyc_log "running decision status coverage gate"
+decision_status="${PYC_ROOT_DIR}/docs/gates/decision_status_v40.md"
+decision_report="${gate_out_dir}/decision_status_report.json"
+decision_status_strict="${PYC_DECISION_STATUS_STRICT:-1}"
+decision_status_args=(
+  --status "${decision_status}"
+  --out "${decision_report}"
+)
+if [[ "${decision_status_strict}" == "1" ]]; then
+  decision_status_args+=(
+    --require-no-deferred
+    --require-all-verified
+    --require-concrete-evidence
+    --require-existing-evidence
+  )
+fi
+if ! python3 "${PYC_ROOT_DIR}/flows/tools/check_decision_status.py" \
+  "${decision_status_args[@]}" \
+  >"${docs_gate_dir}/decision_status.stdout" 2>"${docs_gate_dir}/decision_status.stderr"; then
+  pyc_warn "decision status gate failed"
+  fail=1
+fi
+cp -f "${decision_report}" "${docs_gate_dir}/decision_status_report.json" >/dev/null 2>&1 || true
+
+pyc_log "running v4.0 semantic regression lane"
+if ! PYC_GATE_RUN_ID="${gate_run_id}" bash "${PYC_ROOT_DIR}/flows/scripts/run_semantic_regressions_v40.sh" \
+  >"${docs_gate_dir}/semantic_regressions.stdout" 2>"${docs_gate_dir}/semantic_regressions.stderr"; then
+  pyc_warn "semantic regression lane failed"
+  fail=1
+fi
+
+if [[ "${fail}" -eq 0 ]]; then
+  cat > "${docs_gate_dir}/summary.json" <<EOF
+{"run_id":"${gate_run_id}","script":"run_examples.sh","status":"pass"}
+EOF
+else
+  cat > "${docs_gate_dir}/summary.json" <<EOF
+{"run_id":"${gate_run_id}","script":"run_examples.sh","status":"fail"}
+EOF
 fi
 
 if [[ "${fail}" -ne 0 ]]; then

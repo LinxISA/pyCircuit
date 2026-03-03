@@ -651,6 +651,8 @@ static LogicalResult emitFunc(func::FuncOp f, llvm::raw_ostream &os, const CppEm
       else
         base = sanitizeId(callee.getSymName()) + std::string("_inst");
       std::string seg = base;
+      if (auto shortAttr = inst->getAttrOfType<StringAttr>("short_name"))
+        seg = sanitizeId(shortAttr.getValue());
       std::string member = nt.unique(base);
 
       unsigned idx = static_cast<unsigned>(instInfos.size());
@@ -700,8 +702,9 @@ static LogicalResult emitFunc(func::FuncOp f, llvm::raw_ostream &os, const CppEm
 	  // DFX trace registration (Decision 0145).
 	  os << "  template <typename TbT, typename EnabledInstT, typename EnabledSigT>\n";
 	  os << "  void pyc_trace_vcd(TbT &tb, const std::string &prefix, EnabledInstT &&enabledInst, EnabledSigT &&enabledSig) {\n";
+	  os << "    std::string inst = pyc::cpp::shortenInstancePath(prefix);\n";
 	  os << "    auto trace_port = [&](auto &sig, const char *leaf) {\n";
-  os << "      std::string p = prefix;\n";
+  os << "      std::string p = inst;\n";
   // Decision 0023: canonical_path uses <instance_path>:<field_path>.
   os << "      p += \":\";\n";
   os << "      p += leaf;\n";
@@ -713,10 +716,11 @@ static LogicalResult emitFunc(func::FuncOp f, llvm::raw_ostream &os, const CppEm
 	    os << "    trace_port(" << outNames[i] << ", " << cppStringLiteral(outCanon[i]) << ");\n";
 	  if (!instInfos.empty()) {
 	    os << "    auto trace_child = [&](auto &child, const char *seg) {\n";
-	    os << "      std::string p = prefix;\n";
-	    os << "      p += \".\";\n";
-    os << "      p += seg;\n";
-    os << "      if (enabledInst(p) && child) child->pyc_trace_vcd(tb, p, enabledInst, enabledSig);\n";
+	    os << "      std::string full = prefix;\n";
+	    os << "      full += \".\";\n";
+    os << "      full += seg;\n";
+    os << "      std::string inst_path = pyc::cpp::shortenInstancePath(full);\n";
+    os << "      if (enabledInst(inst_path) && child) child->pyc_trace_vcd(tb, full, enabledInst, enabledSig);\n";
     os << "    };\n";
     for (const auto &ii : instInfos)
       os << "    trace_child(" << ii.member << ", \"" << ii.seg << "\");\n";
@@ -725,13 +729,68 @@ static LogicalResult emitFunc(func::FuncOp f, llvm::raw_ostream &os, const CppEm
 
 	  // ProbeRegistry registration (Decisions 0004, 0018-0021).
 	  os << "  void pyc_register_probes(pyc::cpp::ProbeRegistry &reg, const std::string &prefix) {\n";
+	  os << "    std::string inst = pyc::cpp::shortenInstancePath(prefix);\n";
 	  os << "    auto reg_path = [&](const char *leaf) {\n";
-	  os << "      std::string p = prefix;\n";
+	  os << "      std::string p = inst;\n";
 	  // Decision 0023: canonical_path uses <instance_path>:<field_path>.
 	  os << "      p += \":\";\n";
 	  os << "      p += leaf;\n";
 	  os << "      return p;\n";
 	  os << "    };\n";
+
+    // Decision 0003 / 0051-0052: infer probe kind for module results.
+    // A result is considered stateful iff it directly returns the q output of a
+    // local pyc.reg (through optional pyc.alias wrappers).
+    std::vector<bool> outIsReg(f.getNumResults(), false);
+    std::vector<Value> outRegQ(f.getNumResults(), Value());
+    if (!f.isDeclaration()) {
+      auto ret = dyn_cast_or_null<func::ReturnOp>(f.getBody().front().getTerminator());
+      if (!ret)
+        return f.emitError("missing return");
+      auto findRegQ = [&](Value v) -> Value {
+        llvm::SmallVector<Value, 8> seen;
+        while (true) {
+          for (Value prev : seen) {
+            if (prev == v)
+              return Value();
+          }
+          seen.push_back(v);
+          while (auto a = v.getDefiningOp<pyc::AliasOp>())
+            v = a.getIn();
+          if (auto rop = v.getDefiningOp<pyc::RegOp>())
+            return rop.getQ();
+          auto comb = v.getDefiningOp<pyc::CombOp>();
+          if (!comb)
+            return Value();
+
+          auto res = dyn_cast<OpResult>(v);
+          if (!res)
+            return Value();
+          auto yield = dyn_cast_or_null<pyc::YieldOp>(comb.getBody().front().getTerminator());
+          if (!yield)
+            return Value();
+          if (res.getResultNumber() >= yield.getNumOperands())
+            return Value();
+
+          Value y = yield.getOperand(res.getResultNumber());
+          while (auto a = y.getDefiningOp<pyc::AliasOp>())
+            y = a.getIn();
+          auto barg = dyn_cast<BlockArgument>(y);
+          if (!barg)
+            return Value();
+          if (barg.getOwner() != &comb.getBody().front())
+            return Value();
+          if (barg.getArgNumber() >= comb.getNumOperands())
+            return Value();
+          v = comb.getOperand(barg.getArgNumber());
+        }
+      };
+      for (unsigned i = 0; i < f.getNumResults() && i < ret.getNumOperands(); ++i)
+        outRegQ[i] = findRegQ(ret.getOperand(i));
+      for (unsigned i = 0; i < f.getNumResults(); ++i)
+        outIsReg[i] = static_cast<bool>(outRegQ[i]);
+    }
+
 		  for (auto [i, arg] : llvm::enumerate(f.getArguments())) {
 		    unsigned w = bitWidth(arg.getType());
 		    if (w == 0)
@@ -743,25 +802,36 @@ static LogicalResult emitFunc(func::FuncOp f, llvm::raw_ostream &os, const CppEm
 		    unsigned w = bitWidth(f.getResultTypes()[i]);
 		    if (w == 0)
 		      return f.emitError("invalid output port width for ProbeRegistry: ") << getPortCanonicalFieldPath(f, i, /*isResult=*/true);
-		    os << "    reg.addWire<" << w << ">(reg_path(" << cppStringLiteral(outCanon[i]) << "), &" << outNames[i] << ");\n";
+		    if (outIsReg[i]) {
+		      os << "    reg.addReg<" << w << ">(reg_path(" << cppStringLiteral(outCanon[i]) << "), &" << outNames[i]
+		         << ", &" << nt.get(outRegQ[i]) << "_inst->pending, &" << nt.get(outRegQ[i]) << "_inst->qNext);\n";
+		    } else {
+		      os << "    reg.addWire<" << w << ">(reg_path(" << cppStringLiteral(outCanon[i]) << "), &" << outNames[i] << ");\n";
+		    }
 		  }
 		  for (auto mem : byteMems) {
 		    std::string instName = nt.get(mem.getRdata()) + "_inst";
 		    if (auto nameAttr = mem->getAttrOfType<StringAttr>("name"))
 	      instName = sanitizeId(nameAttr.getValue());
-	    os << "    reg.addMem(reg_path(\"" << instName << "\"), &" << instName << ");\n";
+	    os << "    reg.addMem(reg_path(\"" << instName << "\"), &" << instName << ", &" << instName
+	       << ".pendingWrite, &" << instName << ".latchedAddr, &" << instName << ".latchedData, &" << instName
+	       << ".latchedStrb);\n";
 	  }
 	  for (auto mem : syncMems) {
 	    std::string instName = nt.get(mem.getRdata()) + "_inst";
 	    if (auto nameAttr = mem->getAttrOfType<StringAttr>("name"))
 	      instName = sanitizeId(nameAttr.getValue());
-	    os << "    if (" << instName << ") reg.addMem(reg_path(\"" << instName << "\"), " << instName << ");\n";
+	    os << "    if (" << instName << ") reg.addMem(reg_path(\"" << instName << "\"), " << instName << ", &" << instName
+	       << "->pendingWrite, &" << instName << "->latchedWaddr, &" << instName << "->latchedWdata, &" << instName
+	       << "->latchedWstrb);\n";
 	  }
 	  for (auto mem : syncMemDPs) {
 	    std::string instName = nt.get(mem.getRdata0()) + "_inst";
 	    if (auto nameAttr = mem->getAttrOfType<StringAttr>("name"))
 	      instName = sanitizeId(nameAttr.getValue());
-	    os << "    if (" << instName << ") reg.addMem(reg_path(\"" << instName << "\"), " << instName << ");\n";
+	    os << "    if (" << instName << ") reg.addMem(reg_path(\"" << instName << "\"), " << instName << ", &" << instName
+	       << "->pendingWrite, &" << instName << "->latchedWaddr, &" << instName << "->latchedWdata, &" << instName
+	       << "->latchedWstrb);\n";
 	  }
 	  if (!instInfos.empty()) {
 	    os << "    auto reg_child = [&](auto &child, const char *seg) {\n";
@@ -1166,7 +1236,7 @@ static LogicalResult emitFunc(func::FuncOp f, llvm::raw_ostream &os, const CppEm
     }
 
     // Multiple drivers to the same wire are not supported by the topo scheduler
-    // (imperative evaluation becomes ambiguous); fall back to the legacy fixpoint.
+    // (imperative evaluation becomes ambiguous); fall back to bounded fixpoint.
     for (auto &it : wireAssignCount) {
       if (it.second > 1)
         return false;
@@ -1888,7 +1958,7 @@ static LogicalResult emitFunc(func::FuncOp f, llvm::raw_ostream &os, const CppEm
   }
 
   // eval(): attempt a single-pass topological netlist schedule; if the graph has
-  // cycles, fall back to a small fixed-point iteration (legacy behavior).
+  // cycles, fall back to a bounded fixed-point iteration.
   if (!hasFullTopo) {
     unsigned numPrims = static_cast<unsigned>(instInfos.size() + fifos.size() + asyncFifos.size() + byteMems.size());
 
@@ -1937,7 +2007,7 @@ static LogicalResult emitFunc(func::FuncOp f, llvm::raw_ostream &os, const CppEm
         closeGroup();
     }
 
-    os << "  inline void eval_legacy_fallback_path() {\n";
+    os << "  inline void eval_fixpoint_fallback_path() {\n";
     if (numPrims > 0) {
       os << "    for (unsigned _i = 0; _i < " << numPrims << "u; ++_i) {\n";
       os << "      if (_pyc_sim_stats_enable) _pyc_sim_stats.fallback_iterations++;\n";
@@ -2045,13 +2115,13 @@ static LogicalResult emitFunc(func::FuncOp f, llvm::raw_ostream &os, const CppEm
       os << "      #ifndef PYC_DISABLE_SCC_WORKLIST_EVAL\n";
       os << "      eval_fast_scc_path();\n";
       os << "      #else\n";
-      os << "      eval_legacy_fallback_path();\n";
+      os << "      eval_fixpoint_fallback_path();\n";
       os << "      #endif\n";
       os << "    } else {\n";
-      os << "      eval_legacy_fallback_path();\n";
+      os << "      eval_fixpoint_fallback_path();\n";
       os << "    }\n";
     } else {
-      os << "    eval_legacy_fallback_path();\n";
+      os << "    eval_fixpoint_fallback_path();\n";
     }
   }
 

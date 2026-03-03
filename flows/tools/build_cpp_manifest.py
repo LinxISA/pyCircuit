@@ -94,6 +94,10 @@ def main() -> int:
         if not isinstance(p, str):
             continue
         include_dirs.append(_resolve_dir(manifest_dir, p))
+    for p in manifest.get("runtime_include_dirs", []):
+        if not isinstance(p, str):
+            continue
+        include_dirs.append(_resolve_dir(manifest_dir, p))
     for p in args.extra_include:
         include_dirs.append(Path(p).resolve())
 
@@ -122,6 +126,9 @@ def main() -> int:
         if not isinstance(p, str) or not p:
             continue
         srcs.append(_resolve_dir(manifest_dir, p))
+    for p in manifest.get("runtime_sources", []):
+        if isinstance(p, str) and p:
+            srcs.append(_resolve_dir(manifest_dir, p))
 
     tbs = [Path(p).resolve() for p in args.tb]
     srcs.extend(tbs)

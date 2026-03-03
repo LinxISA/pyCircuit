@@ -27,6 +27,7 @@ add_definitions(${LLVM_DEFINITIONS})
 
 set(PYC_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
 set(PYC_BINARY_DIR "${CMAKE_CURRENT_BINARY_DIR}")
+get_filename_component(PYC_REPO_ROOT "${PYC_SOURCE_DIR}/../.." ABSOLUTE)
 
 # TableGen files include via `include "pyc/..."`, so ensure the project `include/`
 # directory is on the TableGen include path.
@@ -130,6 +131,7 @@ set_target_properties(pycc PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_D
 target_include_directories(pycc PRIVATE
   "${PYC_SOURCE_DIR}/include"
   "${PYC_BINARY_DIR}/include"
+  "${PYC_REPO_ROOT}/runtime"
 )
 target_link_libraries(pycc PRIVATE
   pyc_dialect

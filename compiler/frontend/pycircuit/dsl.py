@@ -283,7 +283,14 @@ class Module:
         self._emit(f"{tmp} = pyc.concat ({op_list}) : ({ty_list}) -> {out_ty}")
         return Signal(ref=tmp, ty=out_ty)
 
-    def instance_op(self, callee: str, *inputs: Signal, result_types: list[str], name: str | None = None) -> list[Signal]:
+    def instance_op(
+        self,
+        callee: str,
+        *inputs: Signal,
+        result_types: list[str],
+        name: str | None = None,
+        short_name: str | None = None,
+    ) -> list[Signal]:
         """Instantiate a sub-module by symbol (pyc.instance).
 
         `callee` is the referenced `func.func` symbol name.
@@ -308,6 +315,8 @@ class Module:
         attrs = f"{{callee = @{callee}"
         if name is not None:
             attrs += f', name = {json.dumps(str(name), ensure_ascii=False)}'
+        if short_name is not None:
+            attrs += f', short_name = {json.dumps(str(short_name), ensure_ascii=False)}'
         attrs += "}"
 
         in_ty_sig = ", ".join(s.ty for s in inputs)

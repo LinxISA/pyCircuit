@@ -56,7 +56,6 @@ markdown_extensions:
   - pymdownx.highlight:
       anchor_linenums: true
       line_spans: __span
-      pygments_lang: python
   - pymdownx.inlinehilite
   - pymdownx.snippets
   - pymdownx.superfences:
@@ -77,31 +76,32 @@ nav:
       - tutorial/index.md
       - tutorial/unified-signal-model.md
       - tutorial/cycle-aware-computing.md
-      - tutorial/primitives.md
-      - tutorial/testbench.md
-  - Examples:
-      - examples/index.md
-      - examples/counter.md
-      - examples/calculator.md
-      - examples/fifo.md
-      - examples/linx-cpu.md
+      - pyCircuit_Tutorial.md
+  - Core Docs:
+      - QUICKSTART.md
+      - FRONTEND_API.md
+      - TESTBENCH.md
+      - PRIMITIVES.md
+      - SPEC_STRUCTURES.md
+      - SPEC_COLLECTIONS.md
+      - CONST_METAPROGRAMMING.md
+      - IR_SPEC.md
+      - DIAGNOSTICS.md
+      - PIPELINE.md
   - API Reference:
-      - api/frontend-api.md
-      - api/ir-spec.md
-      - api/diagnostics.md
-  - Development:
-      - development/contributing.md
-      - development/testing.md
-      - development/build.md
+      - api/index.md
+  - Development: development/index.md
+  - Upgrade:
+      - updatePLAN.md
+      - rfcs/pyc4.0-decisions.md
+  - Gates:
+      - gates/README.md
+      - gates/decision_status_v40.md
 
 # Plugins
 plugins:
   - search:
       lang: en
-  - mdx_gh_link:
-      repo: LinxISA/pyCircuit
-      repo_url: https://github.com/LinxISA/pyCircuit
-      icon: github
 
 # Extra
 extra:
@@ -110,8 +110,3 @@ extra:
       link: https://github.com/LinxISA/pyCircuit
     - icon: fontawesome/brands/python
       link: https://python.org
-
-# Google Analytics
-google_analytics:
-  - UA-XXXXX
-  - auto

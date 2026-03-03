@@ -7,11 +7,14 @@
 #include <iomanip>
 #include <map>
 
-#include <zlib.h>
 #include <set>
 #include <sstream>
 #include <string>
 #include <vector>
+
+#if defined(PYC_RUNTIME_ENABLE_ZLIB_TRACE)
+#include <zlib.h>
+#endif
 
 namespace pyc::cpp {
 
@@ -20,17 +23,34 @@ public:
   bool open(const std::filesystem::path &path, std::uint64_t startCycle) {
     close();
     path_ = path;
+    actual_path_ = path_;
     gzip_ = (path_.extension() == ".gz");
 
+#if !defined(PYC_RUNTIME_ENABLE_ZLIB_TRACE)
     if (gzip_) {
+      actual_path_ = path_;
+      actual_path_.replace_extension("");
+      if (actual_path_ == path_) {
+        actual_path_ = std::filesystem::path(path_.string() + ".txt");
+      }
+      gzip_ = false;
+    }
+#endif
+
+    if (gzip_) {
+#if defined(PYC_RUNTIME_ENABLE_ZLIB_TRACE)
       // zlib expects a narrow C string path.
-      gz_ = gzopen(path_.string().c_str(), "wb");
+      gz_ = gzopen(actual_path_.string().c_str(), "wb");
       if (!gz_) {
         opened_ = false;
         return false;
       }
+#else
+      opened_ = false;
+      return false;
+#endif
     } else {
-      out_.open(path_, std::ios::out | std::ios::trunc);
+      out_.open(actual_path_, std::ios::out | std::ios::trunc);
       if (!out_.is_open()) {
         opened_ = false;
         return false;
@@ -47,11 +67,13 @@ public:
       return;
     }
     if (gzip_) {
+#if defined(PYC_RUNTIME_ENABLE_ZLIB_TRACE)
       if (gz_) {
         gzflush(gz_, Z_FINISH);
         gzclose(gz_);
         gz_ = nullptr;
       }
+#endif
     } else {
       if (out_.is_open()) {
         out_.flush();
@@ -68,7 +90,14 @@ public:
   bool isOpen() const {
     if (!opened_)
       return false;
-    return gzip_ ? (gz_ != nullptr) : out_.is_open();
+    if (gzip_) {
+#if defined(PYC_RUNTIME_ENABLE_ZLIB_TRACE)
+      return gz_ != nullptr;
+#else
+      return false;
+#endif
+    }
+    return out_.is_open();
   }
 
   void atCycle(std::uint64_t cycle) {
@@ -79,13 +108,6 @@ public:
       return;
     }
     cur_cycle_ = cycle;
-  }
-
-  // Backward-compatible helper.
-  void insn(std::uint64_t rowId, std::uint64_t simId, std::uint64_t threadId) {
-    std::ostringstream uid;
-    uid << "0x" << std::hex << simId << std::dec;
-    insnV5(rowId, uid.str(), threadId, "0x0", "normal");
   }
 
   void insnV5(std::uint64_t rowId, const std::string &uidHex, std::uint64_t threadId,
@@ -141,14 +163,6 @@ public:
     writeLine(ss.str());
   }
 
-  // Kept for source compatibility with existing writers.
-  void stageStart(std::uint64_t id, int laneId, const std::string &stage) {
-    presence(id, laneId, stage, 0, "0");
-  }
-
-  // Kept for source compatibility with existing writers.
-  void stageEnd(std::uint64_t, int, const std::string &) {}
-
   void retire(std::uint64_t rowId, std::uint64_t retireId, int type) {
     if (!isOpen()) {
       return;
@@ -194,21 +208,6 @@ public:
        << ",\"stage_id\":\"" << jsonEscape(stageId) << "\""
        << ",\"stall\":" << (stall ? 1 : 0)
        << ",\"cause\":\"" << jsonEscape(sanitizeText(stallCause)) << "\""
-       << "}";
-    writeLine(ss.str());
-  }
-
-  // Kept for source compatibility; dependency rendering is handled by external tools.
-  void dep(std::uint64_t consumerId, std::uint64_t producerId, int type) {
-    if (!isOpen()) {
-      return;
-    }
-    std::ostringstream ss;
-    ss << "{\"type\":\"DEP\""
-       << ",\"cycle\":" << cur_cycle_
-       << ",\"consumer_row_id\":" << consumerId
-       << ",\"producer_row_id\":" << producerId
-       << ",\"dep_type\":" << type
        << "}";
     writeLine(ss.str());
   }
@@ -342,19 +341,22 @@ private:
       return;
     }
     if (gzip_) {
+#if defined(PYC_RUNTIME_ENABLE_ZLIB_TRACE)
       const std::string payload = line + "\n";
       // gzwrite returns number of uncompressed bytes written.
       (void)gzwrite(gz_, payload.data(), static_cast<unsigned>(payload.size()));
       return;
+#endif
     }
     out_ << line << "\n";
   }
 
   void writeMetaSidecar() {
-    if (path_.empty()) {
+    if (actual_path_.empty() && path_.empty()) {
       return;
     }
-    std::filesystem::path metaPath = deriveMetaPath(path_);
+    const std::filesystem::path eventPath = actual_path_.empty() ? path_ : actual_path_;
+    std::filesystem::path metaPath = deriveMetaPath(eventPath);
     if (metaPath.has_parent_path()) {
       std::filesystem::create_directories(metaPath.parent_path());
     }
@@ -454,9 +456,12 @@ private:
   }
 
   std::ofstream out_{};
+#if defined(PYC_RUNTIME_ENABLE_ZLIB_TRACE)
   gzFile gz_ = nullptr;
+#endif
   bool gzip_ = false;
   std::filesystem::path path_{};
+  std::filesystem::path actual_path_{};
   bool opened_ = false;
   std::uint64_t cur_cycle_ = 0;
   std::map<std::uint64_t, RowInfo> rows_{};

@@ -431,9 +431,13 @@ def _render_tb_cpp(iface: _TopIface, t: Tb, *, trace_plan: TracePlan | None = No
     if trace_plan and trace_plan.enabled_signals:
         sigs = list(trace_plan.enabled_signals)
         insts = list(trace_plan.enabled_instances)
+        sig_obs = dict(getattr(trace_plan, "signal_obs", {}) or {})
         # Ensure stable ordering for reproducible generated TB text.
         sigs = sorted(set(str(s) for s in sigs))
         insts = sorted(set(str(s) for s in insts))
+        sig_obs = {str(k): str(v).strip().lower() for k, v in sig_obs.items() if str(k) in set(sigs)}
+        tick_sigs = sorted([k for k, v in sig_obs.items() if v == "tick"])
+        xfer_sigs = sorted([k for k, v in sig_obs.items() if v == "xfer"])
         lines.append("    // Trace config selected signals (generated from trace DSL).\n")
         lines.append("    static constexpr std::string_view kEnabledInstances[] = {\n")
         for s in insts:
@@ -441,6 +445,19 @@ def _render_tb_cpp(iface: _TopIface, t: Tb, *, trace_plan: TracePlan | None = No
         lines.append("    };\n")
         lines.append("    static constexpr std::string_view kEnabledSignals[] = {\n")
         for s in sigs:
+            lines.append(f"      {json.dumps(s)},\n")
+        lines.append("    };\n")
+        lines.append("    // Per-signal observation points (Decision 0113 / 0140).\n")
+        lines.append(
+            f"    static constexpr std::array<std::string_view, {len(tick_sigs)}> kTickObsSignals = {{\n"
+        )
+        for s in tick_sigs:
+            lines.append(f"      {json.dumps(s)},\n")
+        lines.append("    };\n")
+        lines.append(
+            f"    static constexpr std::array<std::string_view, {len(xfer_sigs)}> kXferObsSignals = {{\n"
+        )
+        for s in xfer_sigs:
             lines.append(f"      {json.dumps(s)},\n")
         lines.append("    };\n")
         lines.append(
@@ -453,18 +470,31 @@ def _render_tb_cpp(iface: _TopIface, t: Tb, *, trace_plan: TracePlan | None = No
             "      return std::binary_search(std::begin(kEnabledSignals), std::end(kEnabledSignals), p);\n"
             "    };\n"
         )
+        lines.append(
+            "    auto sampleAtForSignal = [&](std::string_view p) -> pyc::cpp::PycTraceBinWriter::SampleAt {\n"
+            "      if (std::binary_search(kTickObsSignals.begin(), kTickObsSignals.end(), p))\n"
+            "        return pyc::cpp::PycTraceBinWriter::SampleAt::Tick;\n"
+            "      if (std::binary_search(kXferObsSignals.begin(), kXferObsSignals.end(), p))\n"
+            "        return pyc::cpp::PycTraceBinWriter::SampleAt::Commit;\n"
+            "      return pyc::cpp::PycTraceBinWriter::SampleAt::Auto;\n"
+            "    };\n"
+        )
         lines.append("    dut.pyc_trace_vcd(tb, /*prefix=*/\"dut\", enabledInstance, enabledSignal);\n")
         lines.append("    // Binary trace event stream (Decision 0016).\n")
         lines.append("    pyc::cpp::ProbeRegistry reg;\n")
         lines.append("    dut.pyc_register_probes(reg, /*prefix=*/\"dut\");\n")
         lines.append("    std::vector<const pyc::cpp::ProbeRegistry::Entry *> trace_probes;\n")
+        lines.append("    std::vector<pyc::cpp::PycTraceBinWriter::SampleAt> trace_sample_at;\n")
         lines.append("    trace_probes.reserve(std::size(kEnabledSignals));\n")
+        lines.append("    trace_sample_at.reserve(std::size(kEnabledSignals));\n")
         lines.append("    for (auto p : kEnabledSignals) {\n")
-        lines.append("      if (const auto *e = reg.findByPath(p)) trace_probes.push_back(e);\n")
+        lines.append(
+            "      if (const auto *e = reg.findByPath(p)) { trace_probes.push_back(e); trace_sample_at.push_back(sampleAtForSignal(p)); }\n"
+        )
         lines.append("    }\n")
         lines.append("    bin_trace.emplace();\n")
         lines.append(
-            f"    if (!bin_trace->open(out_dir / \"tb_{iface.sym}.pyctrace\", std::move(trace_probes))) {{\n"
+            f"    if (!bin_trace->open(out_dir / \"tb_{iface.sym}.pyctrace\", std::move(trace_probes), /*external_manifest=*/true, std::move(trace_sample_at))) {{\n"
         )
         lines.append("      std::cerr << \"WARN: failed to open pyc binary trace output\\n\";\n")
         lines.append("      bin_trace.reset();\n")
@@ -483,6 +513,24 @@ def _render_tb_cpp(iface: _TopIface, t: Tb, *, trace_plan: TracePlan | None = No
                 f"  tb.addClock(dut.{sn}, /*halfPeriodSteps=*/{int(c.half_period_steps)}, /*phaseSteps=*/{int(c.phase_steps)}, /*startHigh=*/{str(bool(c.start_high)).lower()});\n"
             )
     if has_reset:
+        lines.append("  if (bin_trace) {\n")
+        lines.append("    const std::uint64_t __pyc_reset_assert_cycle = 0ull;\n")
+        lines.append(
+            f"    const std::uint64_t __pyc_reset_deassert_cycle = ({int(ca)}ull == 0ull) ? 0ull : ({int(ca)}ull - 1ull);\n"
+        )
+        lines.append(
+            "    bin_trace->writeInvalidate(__pyc_reset_assert_cycle, pyc::cpp::PycTraceBinWriter::Phase::Tick, "
+            "\"global\", pyc::cpp::PycTraceBinWriter::InvalidateReason::WarmReset, \"global\", \"tb.reset\");\n"
+        )
+        lines.append(
+            "    bin_trace->writeResetAssert(__pyc_reset_assert_cycle, pyc::cpp::PycTraceBinWriter::Phase::Tick, "
+            "\"global\", pyc::cpp::PycTraceBinWriter::ResetKind::Warm);\n"
+        )
+        lines.append(
+            "    bin_trace->writeResetDeassert(__pyc_reset_deassert_cycle, pyc::cpp::PycTraceBinWriter::Phase::Tick, "
+            "\"global\", pyc::cpp::PycTraceBinWriter::ResetKind::Warm);\n"
+        )
+        lines.append("  }\n")
         lines.append(f"  tb.reset(dut.{rst_sn}, /*cyclesAsserted=*/{int(ca)}, /*cyclesDeasserted=*/{int(cd)});\n\n")
 
     if trace_plan and trace_plan.enabled_signals and trace_plan.window:
@@ -557,19 +605,21 @@ def _render_tb_cpp(iface: _TopIface, t: Tb, *, trace_plan: TracePlan | None = No
         lines.append("    }\n")
 
     if has_clocks:
-        lines.append("    tb.runCyclesAuto(1);\n")
+        if trace_plan and trace_plan.enabled_signals and trace_plan.window:
+            begin = trace_plan.window.begin_cycle
+            end = trace_plan.window.end_cycle
+            if begin is not None and end is not None:
+                lines.append(
+                    f"    tb.runCycleAutoTrace(cyc, (bin_trace && cyc >= {int(begin)}ull && cyc <= {int(end)}ull) ? &*bin_trace : nullptr);\n"
+                )
+            else:
+                lines.append("    tb.runCycleAutoTrace(cyc, bin_trace ? &*bin_trace : nullptr);\n")
+        else:
+            lines.append("    tb.runCycleAutoTrace(cyc, bin_trace ? &*bin_trace : nullptr);\n")
     else:
         lines.append("    tb.runSteps(1);\n")
 
-    if trace_plan and trace_plan.enabled_signals and trace_plan.window:
-        begin = trace_plan.window.begin_cycle
-        end = trace_plan.window.end_cycle
-        if begin is not None and end is not None:
-            lines.append(f"    if (bin_trace && cyc >= {int(begin)}ull && cyc <= {int(end)}ull) bin_trace->writeCycle(cyc);\n")
-        else:
-            lines.append("    if (bin_trace) bin_trace->writeCycle(cyc);\n")
-    else:
-        lines.append("    if (bin_trace) bin_trace->writeCycle(cyc);\n")
+    # Binary trace sampling is performed inside Testbench stepping (Decision 0113).
 
     if expects_post_by:
         lines.append("    // Post-step expects for this cycle.\n")
@@ -1376,11 +1426,17 @@ def _cmd_build(args: argparse.Namespace) -> int:
         cpp_headers = _gather_cpp_headers(device_cpp_root)
         include_dirs: list[str] = []
         include_dirs.append(str(device_cpp_root))
-        include_dirs.append(str(Path(__file__).resolve().parents[3] / "runtime"))
+        runtime_root = Path(__file__).resolve().parents[3] / "runtime"
+        include_dirs.append(str(runtime_root))
         for p in [*cpp_sources, *cpp_headers]:
             parent = str(p.parent)
             if parent not in include_dirs:
                 include_dirs.append(parent)
+
+        runtime_sources: list[str] = []
+        runtime_cpp_source = runtime_root / "cpp" / "pyc_runtime.cpp"
+        if runtime_cpp_source.is_file():
+            runtime_sources.append(str(runtime_cpp_source))
 
         build_manifest = {
             "version": 1,
@@ -1389,6 +1445,8 @@ def _cmd_build(args: argparse.Namespace) -> int:
             "sources": [str(p) for p in cpp_sources],
             "headers": [str(p) for p in cpp_headers],
             "include_dirs": include_dirs,
+            "runtime_sources": runtime_sources,
+            "runtime_include_dirs": [str(runtime_root)],
             "cxx_standard": "c++17",
             "profile": str(args.profile),
         }

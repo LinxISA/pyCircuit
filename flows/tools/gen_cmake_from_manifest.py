@@ -35,6 +35,8 @@ def main() -> int:
     srcs = [Path(s).resolve() for s in data.get("sources", []) if isinstance(s, str) and s]
     tb_cpp = Path(str(data.get("tb_cpp", ""))).resolve()
     incs = [Path(s).resolve() for s in data.get("include_dirs", []) if isinstance(s, str) and s]
+    runtime_srcs = [Path(s).resolve() for s in data.get("runtime_sources", []) if isinstance(s, str) and s]
+    runtime_incs = [Path(s).resolve() for s in data.get("runtime_include_dirs", []) if isinstance(s, str) and s]
     std = str(data.get("cxx_standard", "c++17"))
 
     if not srcs:
@@ -64,6 +66,18 @@ def main() -> int:
         for i in incs:
             lines.append(f"  \"{_rel(i, out_dir)}\"\n")
         lines.append(")\n")
+    if runtime_srcs:
+        lines.append("set(PYC_RUNTIME_SOURCES\n")
+        for s in runtime_srcs:
+            lines.append(f"  \"{_rel(s, out_dir)}\"\n")
+        lines.append(")\n")
+        lines.append("add_library(pyc4_runtime STATIC ${PYC_RUNTIME_SOURCES})\n")
+        if runtime_incs:
+            lines.append("target_include_directories(pyc4_runtime PUBLIC\n")
+            for i in runtime_incs:
+                lines.append(f"  \"{_rel(i, out_dir)}\"\n")
+            lines.append(")\n")
+        lines.append("target_link_libraries(pyc_tb PRIVATE pyc4_runtime)\n")
     lines.append("\n")
 
     out = out_dir / "CMakeLists.txt"

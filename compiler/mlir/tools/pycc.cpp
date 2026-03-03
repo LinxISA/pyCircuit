@@ -31,6 +31,8 @@
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/raw_ostream.h"
 
+#include "cpp/pyc_probe_registry.hpp"
+
 #include <algorithm>
 #include <chrono>
 #include <cctype>
@@ -145,7 +147,7 @@ static llvm::cl::opt<std::string> inlinePolicy(
 
 static llvm::cl::opt<std::string> hierarchyPolicy(
     "hierarchy-policy",
-    llvm::cl::desc("Module hierarchy policy: strict|legacy"),
+    llvm::cl::desc("Module hierarchy policy: strict"),
     llvm::cl::init("strict"));
 
 static llvm::cl::opt<unsigned> canonicalizeBudget(
@@ -362,10 +364,13 @@ struct ProbeManifestEntry {
   std::string field_path{};
   std::string module{};
   std::string kind{};
+  std::string subkind{};
   std::string dir{};
   std::uint32_t width_bits = 0;
   std::string ty{};
   std::uint64_t probe_id = 0;
+  std::optional<std::string> obs{};
+  llvm::json::Value tags = nullptr;
 };
 
 struct ProbeManifestIndex {
@@ -394,10 +399,20 @@ static LogicalResult writeProbeManifestJson(llvm::StringRef path,
                                            llvm::StringRef rootInstance,
                                            llvm::ArrayRef<ProbeManifestEntry> entries) {
   llvm::json::Object root;
-  root["version"] = 1;
+  root["version"] = 2;
   root["top"] = top.str();
   root["root_instance"] = rootInstance.str();
   root["probe_id_alg"] = "xxhash64(seed=0)";
+  root["instance_path_alg"] = "short_name+xxhash64(mid-elide,v1)";
+  {
+    pyc::cpp::InstancePathShorteningPolicy pol{};
+    llvm::json::Object obj;
+    obj["max_segments"] = static_cast<int64_t>(pol.max_segments);
+    obj["max_chars"] = static_cast<int64_t>(pol.max_chars);
+    obj["keep_head"] = static_cast<int64_t>(pol.keep_head);
+    obj["keep_tail"] = static_cast<int64_t>(pol.keep_tail);
+    root["instance_path_policy"] = std::move(obj);
+  }
   root["probe_count"] = static_cast<int64_t>(entries.size());
 
   llvm::json::Array probes;
@@ -407,12 +422,17 @@ static LogicalResult writeProbeManifestJson(llvm::StringRef path,
     obj["canonical_path"] = e.canonical_path;
     obj["probe_id"] = u64Hex(e.probe_id);
     obj["kind"] = e.kind;
+    obj["subkind"] = e.subkind;
     obj["dir"] = e.dir;
     obj["width_bits"] = static_cast<int64_t>(e.width_bits);
     obj["ty"] = e.ty;
     obj["module"] = e.module;
     obj["instance_path"] = e.instance_path;
     obj["field_path"] = e.field_path;
+    if (e.obs.has_value())
+      obj["obs"] = *e.obs;
+    if (e.tags.kind() != llvm::json::Value::Null)
+      obj["tags"] = e.tags;
     probes.push_back(std::move(obj));
   }
   root["probes"] = std::move(probes);
@@ -468,13 +488,94 @@ static LogicalResult emitProbeManifest(ModuleOp module, llvm::StringRef outPath)
     }
     stack.push_back(sym);
 
+    const std::string canonInstPath = pyc::cpp::shortenInstancePath(instPath);
+
+    struct HardenedProbeMeta {
+      std::string at{};
+      llvm::json::Value tags = nullptr;
+    };
+    llvm::StringMap<HardenedProbeMeta> probeMetaByPort;
+    if (auto hardenedAttr = f->getAttrOfType<StringAttr>("pyc.hardened")) {
+      llvm::Expected<llvm::json::Value> parsed = llvm::json::parse(hardenedAttr.getValue());
+      if (parsed) {
+        if (auto *obj = parsed->getAsObject()) {
+          if (auto *probeTable = obj->getObject("probe_table")) {
+            for (const auto &kv : *probeTable) {
+              auto metaObj = kv.second.getAsObject();
+              if (!metaObj)
+                continue;
+              HardenedProbeMeta meta;
+              if (auto at = metaObj->getString("at"))
+                meta.at = at->str();
+              if (auto *tags = metaObj->getObject("tags"))
+                meta.tags = llvm::json::Object(*tags);
+              probeMetaByPort.try_emplace(llvm::StringRef(kv.first), std::move(meta));
+            }
+          }
+        }
+      }
+    }
+
+    // Decision 0003 / 0051-0052: infer which module results directly expose a
+    // local state element (pyc.reg q). For declarations we conservatively treat
+    // all results as combinational.
+    std::vector<bool> outIsReg(f.getNumResults(), false);
+    if (!f.isDeclaration()) {
+      auto ret = dyn_cast_or_null<func::ReturnOp>(f.getBody().front().getTerminator());
+      if (!ret) {
+        f.emitError("[PYC975] probe manifest emission requires func.return terminator");
+        return failure();
+      }
+      auto isRegQ = [&](Value v) -> bool {
+        llvm::SmallVector<Value, 8> seen;
+        while (true) {
+          for (Value prev : seen) {
+            if (prev == v)
+              return false;
+          }
+          seen.push_back(v);
+          while (auto a = v.getDefiningOp<pyc::AliasOp>())
+            v = a.getIn();
+          if (v.getDefiningOp<pyc::RegOp>() != nullptr)
+            return true;
+          auto comb = v.getDefiningOp<pyc::CombOp>();
+          if (!comb)
+            return false;
+
+          auto res = dyn_cast<OpResult>(v);
+          if (!res)
+            return false;
+          auto yield = dyn_cast_or_null<pyc::YieldOp>(comb.getBody().front().getTerminator());
+          if (!yield)
+            return false;
+          if (res.getResultNumber() >= yield.getNumOperands())
+            return false;
+
+          Value y = yield.getOperand(res.getResultNumber());
+          while (auto a = y.getDefiningOp<pyc::AliasOp>())
+            y = a.getIn();
+          auto barg = dyn_cast<BlockArgument>(y);
+          if (!barg)
+            return false;
+          if (barg.getOwner() != &comb.getBody().front())
+            return false;
+          if (barg.getArgNumber() >= comb.getNumOperands())
+            return false;
+          v = comb.getOperand(barg.getArgNumber());
+        }
+      };
+      for (unsigned i = 0; i < f.getNumResults() && i < ret.getNumOperands(); ++i)
+        outIsReg[i] = isRegQ(ret.getOperand(i));
+    }
+
     for (auto [i, arg] : llvm::enumerate(f.getArguments())) {
       ProbeManifestEntry e;
-      e.instance_path = instPath;
+      e.instance_path = canonInstPath;
       e.field_path = getPortCanonicalFieldPath(f, i, /*isResult=*/false);
-      e.canonical_path = instPath + ":" + e.field_path;
+      e.canonical_path = canonInstPath + ":" + e.field_path;
       e.module = sym;
-      e.kind = "wire";
+      e.kind = "comb";
+      e.subkind = "wire";
       e.dir = "in";
       e.width_bits = bitWidth(arg.getType());
       e.ty = typeToString(arg.getType());
@@ -484,14 +585,22 @@ static LogicalResult emitProbeManifest(ModuleOp module, llvm::StringRef outPath)
 
     for (unsigned i = 0; i < f.getNumResults(); ++i) {
       ProbeManifestEntry e;
-      e.instance_path = instPath;
+      e.instance_path = canonInstPath;
       e.field_path = getPortCanonicalFieldPath(f, i, /*isResult=*/true);
-      e.canonical_path = instPath + ":" + e.field_path;
+      e.canonical_path = canonInstPath + ":" + e.field_path;
       e.module = sym;
-      e.kind = "wire";
+      e.kind = outIsReg[i] ? "state" : "comb";
+      e.subkind = outIsReg[i] ? "reg" : "wire";
       e.dir = "out";
       e.width_bits = bitWidth(f.getResultTypes()[i]);
       e.ty = typeToString(f.getResultTypes()[i]);
+      if (auto it = probeMetaByPort.find(e.field_path); it != probeMetaByPort.end()) {
+        const auto &meta = it->second;
+        if (!meta.at.empty())
+          e.obs = meta.at;
+        if (meta.tags.kind() != llvm::json::Value::Null)
+          e.tags = meta.tags;
+      }
       if (failed(addEntry(std::move(e))))
         return failure();
     }
@@ -523,11 +632,12 @@ static LogicalResult emitProbeManifest(ModuleOp module, llvm::StringRef outPath)
     const auto byteMems = collectMemNames([](Operation &op) { return isa<pyc::ByteMemOp>(op); });
     for (const auto &name : byteMems) {
       ProbeManifestEntry e;
-      e.instance_path = instPath;
+      e.instance_path = canonInstPath;
       e.field_path = name;
-      e.canonical_path = instPath + ":" + name;
+      e.canonical_path = canonInstPath + ":" + name;
       e.module = sym;
-      e.kind = "mem";
+      e.kind = "state";
+      e.subkind = "mem";
       e.dir = "mem";
       e.width_bits = 0;
       e.ty = "mem";
@@ -538,11 +648,12 @@ static LogicalResult emitProbeManifest(ModuleOp module, llvm::StringRef outPath)
     const auto syncMems = collectMemNames([](Operation &op) { return isa<pyc::SyncMemOp>(op); });
     for (const auto &name : syncMems) {
       ProbeManifestEntry e;
-      e.instance_path = instPath;
+      e.instance_path = canonInstPath;
       e.field_path = name;
-      e.canonical_path = instPath + ":" + name;
+      e.canonical_path = canonInstPath + ":" + name;
       e.module = sym;
-      e.kind = "mem";
+      e.kind = "state";
+      e.subkind = "mem";
       e.dir = "mem";
       e.width_bits = 0;
       e.ty = "mem";
@@ -553,11 +664,12 @@ static LogicalResult emitProbeManifest(ModuleOp module, llvm::StringRef outPath)
     const auto syncMemDPs = collectMemNames([](Operation &op) { return isa<pyc::SyncMemDPOp>(op); });
     for (const auto &name : syncMemDPs) {
       ProbeManifestEntry e;
-      e.instance_path = instPath;
+      e.instance_path = canonInstPath;
       e.field_path = name;
-      e.canonical_path = instPath + ":" + name;
+      e.canonical_path = canonInstPath + ":" + name;
       e.module = sym;
-      e.kind = "mem";
+      e.kind = "state";
+      e.subkind = "mem";
       e.dir = "mem";
       e.width_bits = 0;
       e.ty = "mem";
@@ -567,6 +679,7 @@ static LogicalResult emitProbeManifest(ModuleOp module, llvm::StringRef outPath)
 
     struct ChildInfo {
       std::string name;
+      std::string seg;
       func::FuncOp callee;
     };
     std::vector<ChildInfo> children;
@@ -583,14 +696,17 @@ static LogicalResult emitProbeManifest(ModuleOp module, llvm::StringRef outPath)
       auto callee = module.lookupSymbol<func::FuncOp>(calleeAttr.getValue());
       if (!callee)
         return inst.emitError("callee symbol not found: ") << calleeAttr.getValue();
-      children.push_back(ChildInfo{std::string(nameAttr.getValue()), callee});
+      std::string seg = nameAttr.getValue().str();
+      if (auto shortAttr = inst->getAttrOfType<StringAttr>("short_name"))
+        seg = shortAttr.getValue().str();
+      children.push_back(ChildInfo{std::string(nameAttr.getValue()), std::move(seg), callee});
     }
     std::sort(children.begin(), children.end(), [](const ChildInfo &a, const ChildInfo &b) { return a.name < b.name; });
 
     for (const auto &c : children) {
       std::string childPath = instPath;
       childPath.push_back('.');
-      childPath.append(c.name);
+      childPath.append(c.seg);
       if (failed(self(self, c.callee, std::move(childPath))))
         return failure();
     }
@@ -1712,14 +1828,10 @@ int main(int argc, char **argv) {
     }
   }
 
-  bool strictHierarchy = false;
-  if (hierarchyPolicy == "strict") {
-    strictHierarchy = true;
-  } else if (hierarchyPolicy == "legacy") {
-    strictHierarchy = false;
-  } else {
+  bool strictHierarchy = true;
+  if (hierarchyPolicy != "strict") {
     llvm::errs() << "error: unknown --hierarchy-policy: " << hierarchyPolicy
-                 << " (expected: strict|legacy)\n";
+                 << " (expected: strict)\n";
     return 1;
   }
 
@@ -1730,7 +1842,7 @@ int main(int argc, char **argv) {
   bool forceNoInline = noInline;
   if (forceNoInline) {
     inlineDecision.enableInline = false;
-    inlineDecision.reason = "legacy --noinline";
+    inlineDecision.reason = "cli --noinline";
   } else if (inlinePolicy == "default") {
     if (strictHierarchy) {
       inlineDecision.enableInline = false;
@@ -1865,7 +1977,7 @@ int main(int argc, char **argv) {
   auto buildProfileSummary = [&]() -> llvm::json::Object {
     llvm::json::Object obj;
     obj["build_profile"] = buildProfileNorm;
-    obj["hierarchy_policy"] = strictHierarchy ? "strict" : "legacy";
+    obj["hierarchy_policy"] = "strict";
     obj["module_count_before"] = static_cast<int64_t>(moduleSymbolsBefore.size());
     obj["module_count_after"] = static_cast<int64_t>(moduleSymbolsAfter.size());
     obj["hierarchy_preserved"] = hierarchyPreserved;
@@ -1913,7 +2025,7 @@ int main(int argc, char **argv) {
     inlineObj["reason"] = inlineDecision.reason;
     root["inline"] = std::move(inlineObj);
     llvm::json::Object hierarchyObj;
-    hierarchyObj["policy"] = strictHierarchy ? "strict" : "legacy";
+    hierarchyObj["policy"] = "strict";
     hierarchyObj["module_count_before"] = static_cast<int64_t>(moduleSymbolsBefore.size());
     hierarchyObj["module_count_after"] = static_cast<int64_t>(moduleSymbolsAfter.size());
     hierarchyObj["preserved"] = hierarchyPreserved;

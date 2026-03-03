@@ -98,12 +98,6 @@ public:
     pending = false;
   }
 
-  // Back-compat single-phase tick (compute + commit).
-  void tick() {
-    tick_compute();
-    tick_commit();
-  }
-
   Wire<1> &clk;
   Wire<1> &rst;
   Wire<1> &en;
@@ -211,13 +205,6 @@ public:
     for (unsigned i = 0; i < Depth; ++i)
       storage_[i] = storageNext_[i];
     pending = false;
-  }
-
-  // Back-compat single-phase tick (compute + commit + refresh outputs).
-  void tick() {
-    tick_compute();
-    tick_commit();
-    eval();
   }
 
 private:

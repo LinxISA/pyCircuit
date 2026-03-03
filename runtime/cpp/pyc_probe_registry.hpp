@@ -1,5 +1,7 @@
 #pragma once
 
+#include <algorithm>
+#include <cstddef>
 #include <cstdio>
 #include <cstdint>
 #include <cstring>
@@ -119,6 +121,151 @@ inline std::uint64_t xxhash64(std::string_view data, std::uint64_t seed = 0) {
   return h64;
 }
 
+// Decision 0017: Path shortening uses short_name first, then stable hashing if
+// still too long. This helper implements the shortening for *instance paths*
+// (the portion before ':' in Decision 0023 canonical paths).
+struct InstancePathShorteningPolicy {
+  std::size_t max_segments = 16;
+  std::size_t max_chars = 240;
+  std::size_t keep_head = 2;
+  std::size_t keep_tail = 2;
+};
+
+inline std::string shortenInstancePath(std::string_view full_path,
+                                       InstancePathShorteningPolicy policy = InstancePathShorteningPolicy{}) {
+  // Defensive: if a caller accidentally passes a canonical_path, only shorten
+  // the instance_path prefix.
+  if (auto colon = full_path.find(':'); colon != std::string_view::npos) {
+    std::string out = shortenInstancePath(full_path.substr(0, colon), policy);
+    out.append(full_path.substr(colon));
+    return out;
+  }
+
+  auto split = [](std::string_view s) -> std::vector<std::string_view> {
+    std::vector<std::string_view> segs;
+    std::size_t i = 0;
+    while (i < s.size()) {
+      std::size_t j = i;
+      while (j < s.size() && s[j] != '.')
+        ++j;
+      if (j != i)
+        segs.push_back(s.substr(i, j - i));
+      i = j + 1;
+    }
+    return segs;
+  };
+
+  const auto segs = split(full_path);
+  if (segs.size() <= policy.max_segments && full_path.size() <= policy.max_chars)
+    return std::string(full_path);
+
+  auto hex64 = [](std::uint64_t v) -> std::string {
+    static constexpr char kHex[] = "0123456789abcdef";
+    std::string out;
+    out.resize(16);
+    for (int i = 15; i >= 0; --i) {
+      out[15 - i] = kHex[(v >> (i * 4)) & 0xFULL];
+    }
+    return out;
+  };
+
+  const std::string hashSeg = std::string("_h") + hex64(xxhash64(full_path, /*seed=*/0));
+
+  auto join = [&](std::size_t head, std::size_t tail) -> std::string {
+    // Build: <head>.<hashSeg>.<tail>, dropping overlaps if head+tail > n.
+    const std::size_t n = segs.size();
+    if (n == 0)
+      return std::string(full_path);
+    if (head > n)
+      head = n;
+    if (tail > n - head)
+      tail = n - head;
+
+    std::size_t approx = hashSeg.size();
+    for (std::size_t i = 0; i < head; ++i)
+      approx += segs[i].size() + 1;
+    for (std::size_t i = 0; i < tail; ++i)
+      approx += segs[n - tail + i].size() + 1;
+
+    std::string out;
+    out.reserve(approx);
+    bool first = true;
+    auto appendSeg = [&](std::string_view seg) {
+      if (!first)
+        out.push_back('.');
+      out.append(seg.data(), seg.size());
+      first = false;
+    };
+    for (std::size_t i = 0; i < head; ++i)
+      appendSeg(segs[i]);
+    appendSeg(hashSeg);
+    for (std::size_t i = 0; i < tail; ++i)
+      appendSeg(segs[n - tail + i]);
+    return out;
+  };
+
+  // Prefer readability: preserve head/tail segments, but keep within both
+  // thresholds. The output segment count is <= head+1+tail.
+  const std::size_t n = segs.size();
+  const std::size_t maxOutSegs = std::max<std::size_t>(1, policy.max_segments);
+
+  struct Cand {
+    std::size_t head;
+    std::size_t tail;
+  };
+
+  const std::size_t wantHead = std::max<std::size_t>(1, policy.keep_head);
+  const std::size_t wantTail = std::max<std::size_t>(1, policy.keep_tail);
+
+  const Cand cands[] = {
+      {std::min(wantHead, n), std::min(wantTail, n)},
+      {2, 2},
+      {2, 1},
+      {1, 2},
+      {1, 1},
+      {1, 0},
+      {0, 1},
+      {0, 0},
+  };
+
+  for (const auto &c : cands) {
+    // For n==1, keep it (even if too long).
+    if (n <= 1)
+      return std::string(full_path);
+
+    // Ensure at least one user segment is preserved when possible (keep root).
+    std::size_t head = std::min<std::size_t>(c.head, n);
+    std::size_t tail = std::min<std::size_t>(c.tail, n);
+    if (head == 0 && n >= 1)
+      head = 1; // keep root segment (usually "dut")
+
+    // Ensure we don't exceed the segment budget.
+    while (head + 1 + tail > maxOutSegs) {
+      if (tail > 0)
+        --tail;
+      else if (head > 1)
+        --head;
+      else
+        break;
+    }
+
+    std::string out = join(head, tail);
+    if (out.size() <= policy.max_chars && split(out).size() <= policy.max_segments)
+      return out;
+  }
+
+  // Worst-case fallback: root + hash.
+  if (!segs.empty()) {
+    std::string out;
+    out.reserve(segs.front().size() + 1 + hashSeg.size());
+    out.append(segs.front().data(), segs.front().size());
+    out.push_back('.');
+    out.append(hashSeg);
+    return out;
+  }
+  return hashSeg;
+}
+
 enum class ProbeKind : std::uint8_t {
   Wire = 0,
   Reg = 1,
@@ -140,6 +287,19 @@ public:
     ProbeKind kind = ProbeKind::Wire;
     std::uint32_t width_bits = 0;
     void *ptr = nullptr;
+
+    // Optional write-intent metadata (Decisions 0053-0055).
+    bool *write_valid = nullptr;
+    const void *write_data_ptr = nullptr;
+    std::uint32_t write_width_bits = 0;
+    const std::size_t *write_addr = nullptr;
+    const void *write_mask_ptr = nullptr;
+    std::uint32_t write_mask_width_bits = 0;
+
+    const void *known_mask_ptr = nullptr;
+    std::uint32_t known_mask_width_bits = 0;
+    const void *z_mask_ptr = nullptr;
+    std::uint32_t z_mask_width_bits = 0;
   };
 
   static constexpr std::uint64_t kProbeIdSeed = 0;
@@ -159,9 +319,39 @@ public:
     return addImpl(std::move(path), kind, /*width_bits=*/W, static_cast<void *>(wire));
   }
 
+  template <unsigned W>
+  std::uint64_t addReg(std::string path, Wire<W> *q, bool *write_valid, Wire<W> *write_data) {
+    return addImpl(std::move(path),
+                   ProbeKind::Reg,
+                   /*width_bits=*/W,
+                   static_cast<void *>(q),
+                   write_valid,
+                   static_cast<const void *>(write_data),
+                   /*write_width_bits=*/W);
+  }
+
   template <typename MemT>
   std::uint64_t addMem(std::string path, MemT *mem) {
     return addImpl(std::move(path), ProbeKind::Mem, /*width_bits=*/0, static_cast<void *>(mem));
+  }
+
+  template <typename MemT, unsigned DataW, unsigned MaskW>
+  std::uint64_t addMem(std::string path,
+                       MemT *mem,
+                       bool *write_valid,
+                       const std::size_t *write_addr,
+                       Wire<DataW> *write_data,
+                       Wire<MaskW> *write_mask) {
+    return addImpl(std::move(path),
+                   ProbeKind::Mem,
+                   /*width_bits=*/0,
+                   static_cast<void *>(mem),
+                   write_valid,
+                   static_cast<const void *>(write_data),
+                   /*write_width_bits=*/DataW,
+                   write_addr,
+                   static_cast<const void *>(write_mask),
+                   /*write_mask_width_bits=*/MaskW);
   }
 
   const Entry *findByPath(std::string_view path) const {
@@ -232,7 +422,20 @@ private:
     return hash64ForPath(tmp);
   }
 
-  std::uint64_t addImpl(std::string path, ProbeKind kind, std::uint32_t width_bits, void *ptr) {
+  std::uint64_t addImpl(std::string path,
+                        ProbeKind kind,
+                        std::uint32_t width_bits,
+                        void *ptr,
+                        bool *write_valid = nullptr,
+                        const void *write_data_ptr = nullptr,
+                        std::uint32_t write_width_bits = 0,
+                        const std::size_t *write_addr = nullptr,
+                        const void *write_mask_ptr = nullptr,
+                        std::uint32_t write_mask_width_bits = 0,
+                        const void *known_mask_ptr = nullptr,
+                        std::uint32_t known_mask_width_bits = 0,
+                        const void *z_mask_ptr = nullptr,
+                        std::uint32_t z_mask_width_bits = 0) {
     if (const Entry *existing = findByPath(path))
       return existing->probe_id;
 
@@ -257,6 +460,17 @@ private:
 
     const std::size_t idx = entries_.size();
     entries_.push_back(Entry{std::move(path), id, kind, width_bits, ptr});
+    Entry &e = entries_.back();
+    e.write_valid = write_valid;
+    e.write_data_ptr = write_data_ptr;
+    e.write_width_bits = write_width_bits;
+    e.write_addr = write_addr;
+    e.write_mask_ptr = write_mask_ptr;
+    e.write_mask_width_bits = write_mask_width_bits;
+    e.known_mask_ptr = known_mask_ptr;
+    e.known_mask_width_bits = known_mask_width_bits;
+    e.z_mask_ptr = z_mask_ptr;
+    e.z_mask_width_bits = z_mask_width_bits;
     by_id_.emplace(id, idx);
     return id;
   }

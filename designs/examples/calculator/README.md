@@ -1,6 +1,6 @@
 # Calculator Example
 
-16-digit calculator implemented with the cycle-aware frontend + C++ simulation wrapper.
+16-digit calculator implemented with the pyc4.0 module flow and a C++ simulation wrapper.
 
 ## Files
 
@@ -10,17 +10,15 @@
 
 ## Build + run
 
-Emit + compile model:
+Build generated project (recommended):
 
 ```bash
-PYTHONPATH=compiler/frontend python3 -m pycircuit.cli emit \
-  designs/examples/calculator/calculator.py \
-  -o .pycircuit_out/examples/calculator/calculator.pyc
-
-build/bin/pycc \
-  .pycircuit_out/examples/calculator/calculator.pyc \
-  --emit=cpp \
-  -o .pycircuit_out/examples/calculator/calculator_gen.hpp
+PYTHONPATH=compiler/frontend \
+python3 -m pycircuit.cli build \
+  designs/examples/calculator/tb_calculator.py \
+  --out-dir .pycircuit_out/examples/calculator_build \
+  --target cpp \
+  --jobs 4
 ```
 
 Build shared lib:
@@ -28,7 +26,7 @@ Build shared lib:
 ```bash
 cd designs/examples/calculator
 c++ -std=c++17 -O2 -shared -fPIC \
-  -I../../runtime -I../../../.pycircuit_out/examples/calculator \
+  -I../../runtime -I../../../.pycircuit_out/examples/calculator_build/device/cpp \
   -o libcalculator_sim.dylib calculator_capi.cpp
 ```
 
