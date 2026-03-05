@@ -154,6 +154,40 @@ def _cmd_emit(args: argparse.Namespace) -> int:
 
     if isinstance(design, Design):
         out.write_text(design.emit_mlir(), encoding="utf-8")
+        if getattr(args, "module_graph_out", None):
+            root = Path(__file__).resolve().parents[3]
+            tool = root / "flows" / "tools" / "pyc_module_graph.py"
+            if not tool.is_file():
+                raise SystemExit(f"module-graph tool not found (expected in-tree): {tool}")
+            cmd = [
+                sys.executable,
+                str(tool),
+                "--pyc",
+                str(out),
+                "--out",
+                str(args.module_graph_out),
+                "--edge-label-mode",
+                str(getattr(args, "module_graph_edge_label_mode", "ports")),
+                "--edge-label-limit",
+                str(int(getattr(args, "module_graph_edge_label_limit", 4))),
+                "--max-nodes",
+                str(int(getattr(args, "module_graph_max_nodes", 500))),
+                "--max-edges",
+                str(int(getattr(args, "module_graph_max_edges", 2000))),
+            ]
+            if getattr(args, "module_graph_module", ""):
+                cmd += ["--module", str(args.module_graph_module)]
+            if bool(getattr(args, "module_graph_recursive", False)):
+                # "Recursive nest" = expand the full instance hierarchy (bounded by tool guardrails).
+                cmd += ["--hierarchical", "--expand-all", "--expand-depth", "64"]
+            r = subprocess.run(cmd, capture_output=True, text=True)
+            if r.returncode != 0:
+                raise SystemExit(
+                    "module-graph generation failed.\n"
+                    f"cmd: {' '.join(cmd)}\n"
+                    f"stdout:\n{r.stdout}\n"
+                    f"stderr:\n{r.stderr}\n"
+                )
         return 0
 
     raise SystemExit("internal error: compile did not return a Design")
@@ -1610,6 +1644,52 @@ def main(argv: list[str] | None = None) -> int:
         "--project-root",
         default=None,
         help="Optional project root for strict API contract scan (defaults to nearest .git/pyproject.toml).",
+    )
+    emit.add_argument(
+        "--module-graph-out",
+        dest="module_graph_out",
+        default=None,
+        help="Optional: emit a module-instance connectivity graph from the emitted .pyc (DOT/SVG via Graphviz).",
+    )
+    emit.add_argument(
+        "--module-graph-module",
+        dest="module_graph_module",
+        default="",
+        help="Target module symbol for the graph (default: module attribute pyc.top).",
+    )
+    emit.add_argument(
+        "--module-graph-recursive",
+        dest="module_graph_recursive",
+        action="store_true",
+        help="Recursively expand module instances (module nest) in the graph.",
+    )
+    emit.add_argument(
+        "--module-graph-edge-label-mode",
+        dest="module_graph_edge_label_mode",
+        choices=["ports", "count", "none"],
+        default="ports",
+        help="Edge label mode for module graph.",
+    )
+    emit.add_argument(
+        "--module-graph-edge-label-limit",
+        dest="module_graph_edge_label_limit",
+        type=int,
+        default=4,
+        help="Max port mappings per edge label (module graph).",
+    )
+    emit.add_argument(
+        "--module-graph-max-nodes",
+        dest="module_graph_max_nodes",
+        type=int,
+        default=500,
+        help="Max instance nodes before aborting (module graph).",
+    )
+    emit.add_argument(
+        "--module-graph-max-edges",
+        dest="module_graph_max_edges",
+        type=int,
+        default=2000,
+        help="Max instance edges before aborting (module graph).",
     )
     emit.set_defaults(fn=_cmd_emit)
 
