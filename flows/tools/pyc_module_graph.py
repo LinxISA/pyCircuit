@@ -507,14 +507,18 @@ def main() -> int:
             return False
         if inst.callee not in funcs:
             return False
-        if args.expand_all:
-            return True
         full_path = "/".join(prefix + (inst.name,))
-        if any(t in (inst.name, inst.callee, full_path) for t in expand_terms):
+        forced = any(t in (inst.name, inst.callee, full_path) for t in expand_terms)
+        if forced:
+            return True
+        callee_n = len(funcs[inst.callee].instances)
+        # Avoid generating empty clusters for leaf modules in recursive mode.
+        if callee_n == 0:
+            return False
+        if args.expand_all:
             return True
         if auto_expand_max <= 0:
             return False
-        callee_n = len(funcs[inst.callee].instances)
         return 0 < callee_n <= auto_expand_max
 
     def walk_context(sym: str, prefix: tuple[str, ...], *, level: int, mod_stack: tuple[str, ...]) -> None:
@@ -771,4 +775,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
