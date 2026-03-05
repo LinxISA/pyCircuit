@@ -430,6 +430,16 @@ def main() -> int:
         scc_members.update(c)
     largest_scc = max((len(c) for c in sccs), default=0)
 
+    # Port usage summary (helps record nodes stay readable).
+    in_ports_used: dict[str, set[str]] = {n: set() for n in node_names}
+    out_ports_used: dict[str, set[str]] = {n: set() for n in node_names}
+    for (src, dst), ent in edges.items():
+        for dst_port, src_port, _in_idx, _out_idx in ent["maps"]:
+            if src in out_ports_used:
+                out_ports_used[src].add(str(src_port))
+            if dst in in_ports_used:
+                in_ports_used[dst].add(str(dst_port))
+
     # Emit DOT + SVG (Graphviz required).
     _ensure_graphviz()
     import graphviz  # noqa: E402
@@ -448,34 +458,49 @@ def main() -> int:
         labeljust="c",
         pad="0.25",
     )
-    dot.attr("node", fontname="Helvetica", fontsize="8", style="filled", fillcolor="#F7F7F7")
+    # Use record nodes with explicit in/out "ports", and wrap everything in a module cluster.
+    dot.attr("node", fontname="Helvetica", fontsize="8", style="filled", fillcolor="#F7F7F7", shape="record")
     dot.attr("edge", fontsize="7", color="#9E9E9E", arrowsize="0.6")
 
     dot_id: dict[str, str] = {}
     used: set[str] = set()
-    for inst in instances_u:
-        base = _sanitize_dot_id(inst.name)
-        nid = base
-        k = 0
-        while nid in used:
-            k += 1
-            nid = f"{base}__{k}"
-        used.add(nid)
-        dot_id[inst.name] = nid
-
-        border = "#111111"
-        pen = "1.1"
-        if inst.name in scc_members:
-            border = "#D32F2F"
-            pen = "2.0"
-
-        dot.node(
-            nid,
-            label=f"{inst.name}\\n{inst.callee}",
-            shape="box",
-            color=border,
-            penwidth=pen,
+    cluster_name = f"cluster_{target_sym}"
+    with dot.subgraph(name=cluster_name) as c:
+        c.attr(
+            label=f"{target_sym}",
+            labelloc="t",
+            labeljust="l",
+            color="#BDBDBD",
+            style="rounded",
+            fontname="Helvetica",
+            fontsize="11",
         )
+        for inst in instances_u:
+            base = _sanitize_dot_id(inst.name)
+            nid = base
+            k = 0
+            while nid in used:
+                k += 1
+                nid = f"{base}__{k}"
+            used.add(nid)
+            dot_id[inst.name] = nid
+
+            border = "#111111"
+            pen = "1.1"
+            if inst.name in scc_members:
+                border = "#D32F2F"
+                pen = "2.0"
+
+            in_cnt = len(in_ports_used.get(inst.name, set()))
+            out_cnt = len(out_ports_used.get(inst.name, set()))
+            # record label: left=in, middle=inst, right=out.
+            label = "{<in> " + f"in({in_cnt})" + "|" + f"{inst.name}\\n{inst.callee}" + "|<out> " + f"out({out_cnt})" + "}"
+            c.node(
+                nid,
+                label=label,
+                color=border,
+                penwidth=pen,
+            )
 
     def edge_label(ent: dict[str, Any]) -> str:
         cnt = int(ent["count"])
@@ -496,9 +521,9 @@ def main() -> int:
             continue
         lbl = edge_label(ent)
         if lbl:
-            dot.edge(dot_id[src], dot_id[dst], label=lbl)
+            dot.edge(f"{dot_id[src]}:out", f"{dot_id[dst]}:in", label=lbl)
         else:
-            dot.edge(dot_id[src], dot_id[dst])
+            dot.edge(f"{dot_id[src]}:out", f"{dot_id[dst]}:in")
 
     dot_path.write_text(dot.source, encoding="utf-8")
 
