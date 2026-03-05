@@ -610,6 +610,8 @@ def main() -> int:
     dot = graphviz.Digraph(name=f"{target_sym}_module_graph", format="svg", engine="dot")
     dot.attr(
         rankdir="LR",
+        # Cluster graphs are common here; newrank avoids dot rank init failures.
+        newrank="true",
         fontname="Helvetica",
         fontsize="10",
         nodesep="0.2",
