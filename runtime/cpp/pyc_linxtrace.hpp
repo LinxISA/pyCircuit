@@ -6,15 +6,11 @@
 #include <fstream>
 #include <iomanip>
 #include <map>
-
 #include <set>
 #include <sstream>
 #include <string>
+#include <system_error>
 #include <vector>
-
-#if defined(PYC_RUNTIME_ENABLE_ZLIB_TRACE)
-#include <zlib.h>
-#endif
 
 namespace pyc::cpp {
 
@@ -23,38 +19,21 @@ public:
   bool open(const std::filesystem::path &path, std::uint64_t startCycle) {
     close();
     path_ = path;
-    actual_path_ = path_;
-    gzip_ = (path_.extension() == ".gz");
-
-#if !defined(PYC_RUNTIME_ENABLE_ZLIB_TRACE)
-    if (gzip_) {
-      actual_path_ = path_;
-      actual_path_.replace_extension("");
-      if (actual_path_ == path_) {
-        actual_path_ = std::filesystem::path(path_.string() + ".txt");
-      }
-      gzip_ = false;
-    }
-#endif
-
-    if (gzip_) {
-#if defined(PYC_RUNTIME_ENABLE_ZLIB_TRACE)
-      // zlib expects a narrow C string path.
-      gz_ = gzopen(actual_path_.string().c_str(), "wb");
-      if (!gz_) {
-        opened_ = false;
-        return false;
-      }
-#else
+    if (path_.extension() != ".linxtrace") {
       opened_ = false;
       return false;
-#endif
-    } else {
-      out_.open(actual_path_, std::ios::out | std::ios::trunc);
-      if (!out_.is_open()) {
-        opened_ = false;
-        return false;
-      }
+    }
+    if (path_.has_parent_path()) {
+      std::filesystem::create_directories(path_.parent_path());
+    }
+    rows_.clear();
+    stages_.clear();
+    lanes_.clear();
+    event_tmp_path_ = std::filesystem::path(path_.string() + ".events.tmp");
+    event_out_.open(event_tmp_path_, std::ios::out | std::ios::trunc);
+    if (!event_out_.is_open()) {
+      opened_ = false;
+      return false;
     }
 
     cur_cycle_ = startCycle;
@@ -66,38 +45,22 @@ public:
     if (!opened_) {
       return;
     }
-    if (gzip_) {
-#if defined(PYC_RUNTIME_ENABLE_ZLIB_TRACE)
-      if (gz_) {
-        gzflush(gz_, Z_FINISH);
-        gzclose(gz_);
-        gz_ = nullptr;
-      }
-#endif
-    } else {
-      if (out_.is_open()) {
-        out_.flush();
-        out_.close();
-      }
+    if (event_out_.is_open()) {
+      event_out_.flush();
+      event_out_.close();
     }
-    writeMetaSidecar();
+    finalizeTraceFile();
+    std::error_code ec{};
+    std::filesystem::remove(event_tmp_path_, ec);
+    event_tmp_path_.clear();
+    path_.clear();
     opened_ = false;
-    gzip_ = false;
   }
 
   ~LinxTraceWriter() { close(); }
 
   bool isOpen() const {
-    if (!opened_)
-      return false;
-    if (gzip_) {
-#if defined(PYC_RUNTIME_ENABLE_ZLIB_TRACE)
-      return gz_ != nullptr;
-#else
-      return false;
-#endif
-    }
-    return out_.is_open();
+    return opened_ && event_out_.is_open();
   }
 
   void atCycle(std::uint64_t cycle) {
@@ -134,6 +97,7 @@ public:
        << ",\"row_kind\":\"" << jsonEscape(row.row_kind) << "\""
        << ",\"core_id\":" << threadId
        << ",\"kind\":\"" << jsonEscape(row.kind) << "\""
+       << ",\"row_sid\":\"" << jsonEscape(row.uop_uid.empty() ? "0x0" : row.uop_uid) << "\""
        << ",\"uop_uid\":\"" << jsonEscape(row.uop_uid.empty() ? "0x0" : row.uop_uid) << "\""
        << ",\"parent_uid\":\"" << jsonEscape(row.parent_uid.empty() ? "0x0" : row.parent_uid) << "\""
        << ",\"block_uid\":\"" << jsonEscape(row.block_uid.empty() ? "0x0" : row.block_uid) << "\""
@@ -324,42 +288,30 @@ private:
     return h;
   }
 
-  static std::filesystem::path deriveMetaPath(const std::filesystem::path &eventPath) {
-    std::string s = eventPath.string();
-    if (s.size() >= 3 && s.compare(s.size() - 3, 3, ".gz") == 0) {
-      s = s.substr(0, s.size() - 3);
-    }
-    const std::string suffix = ".linxtrace.jsonl";
-    if (s.size() >= suffix.size() && s.compare(s.size() - suffix.size(), suffix.size(), suffix) == 0) {
-      return std::filesystem::path(s.substr(0, s.size() - suffix.size()) + ".linxtrace.meta.json");
-    }
-    return std::filesystem::path(s + ".meta.json");
-  }
-
   void writeLine(const std::string &line) {
     if (!isOpen()) {
       return;
     }
-    if (gzip_) {
-#if defined(PYC_RUNTIME_ENABLE_ZLIB_TRACE)
-      const std::string payload = line + "\n";
-      // gzwrite returns number of uncompressed bytes written.
-      (void)gzwrite(gz_, payload.data(), static_cast<unsigned>(payload.size()));
-      return;
-#endif
-    }
-    out_ << line << "\n";
+    event_out_ << line << "\n";
   }
 
-  void writeMetaSidecar() {
-    if (actual_path_.empty() && path_.empty()) {
+  void finalizeTraceFile() {
+    if (path_.empty() || event_tmp_path_.empty()) {
       return;
     }
-    const std::filesystem::path eventPath = actual_path_.empty() ? path_ : actual_path_;
-    std::filesystem::path metaPath = deriveMetaPath(eventPath);
-    if (metaPath.has_parent_path()) {
-      std::filesystem::create_directories(metaPath.parent_path());
+    std::ofstream out(path_, std::ios::out | std::ios::trunc);
+    if (!out.is_open()) {
+      return;
     }
+    writeMetaRecord(out);
+    std::ifstream events(event_tmp_path_, std::ios::in);
+    if (!events.is_open()) {
+      return;
+    }
+    out << events.rdbuf();
+  }
+
+  void writeMetaRecord(std::ostream &out) const {
     std::vector<std::string> stageList(stages_.begin(), stages_.end());
     std::vector<std::string> laneList(lanes_.begin(), lanes_.end());
 
@@ -387,7 +339,9 @@ private:
     contractSeed << "|linxtrace.v1";
     const std::uint64_t h = fnv1a64(contractSeed.str());
     std::ostringstream idHex;
-    idHex << schemaId << "-" << std::uppercase << std::hex << h;
+    // Keep the contract hash fixed-width so consumers can string-compare reliably.
+    idHex << schemaId << "-" << std::uppercase << std::hex << std::setw(16) << std::setfill('0')
+          << h;
     const std::string stageCsv = [&]() {
       std::ostringstream ss;
       for (std::size_t i = 0; i < stageList.size(); ++i) {
@@ -397,71 +351,58 @@ private:
       return ss.str();
     }();
 
-    std::ofstream meta(metaPath, std::ios::out | std::ios::trunc);
-    if (!meta.is_open()) {
-      return;
-    }
-
-    meta << "{\n";
-    meta << "  \"format\": \"linxtrace.v1\",\n";
-    meta << "  \"contract_id\": \"" << idHex.str() << "\",\n";
-    meta << "  \"pipeline_schema_id\": \"" << schemaId << "\",\n";
-    meta << "  \"stage_order_csv\": \"" << jsonEscape(stageCsv) << "\",\n";
-    meta << "  \"stage_catalog\": [\n";
+    out << "{\"type\":\"META\"";
+    out << ",\"format\":\"linxtrace.v1\"";
+    out << ",\"contract_id\":\"" << idHex.str() << "\"";
+    out << ",\"pipeline_schema_id\":\"" << schemaId << "\"";
+    out << ",\"stage_order_csv\":\"" << jsonEscape(stageCsv) << "\"";
+    out << ",\"stage_catalog\":[";
     for (std::size_t i = 0; i < stageList.size(); ++i) {
       const std::string &s = stageList[i];
-      meta << "    {\"stage_id\":\"" << jsonEscape(s) << "\",\"label\":\"" << jsonEscape(s)
-           << "\",\"color\":\"" << stageColor(s) << "\",\"group\":\"" << stageGroup(s) << "\"}";
+      out << "{\"stage_id\":\"" << jsonEscape(s) << "\",\"label\":\"" << jsonEscape(s)
+          << "\",\"color\":\"" << stageColor(s) << "\",\"group\":\"" << stageGroup(s) << "\"}";
       if (i + 1 < stageList.size()) {
-        meta << ",";
+        out << ",";
       }
-      meta << "\n";
     }
-    meta << "  ],\n";
-    meta << "  \"lane_catalog\": [\n";
+    out << "]";
+    out << ",\"lane_catalog\":[";
     for (std::size_t i = 0; i < laneList.size(); ++i) {
       const std::string &l = laneList[i];
-      meta << "    {\"lane_id\":\"" << jsonEscape(l) << "\",\"label\":\"" << jsonEscape(l) << "\"}";
+      out << "{\"lane_id\":\"" << jsonEscape(l) << "\",\"label\":\"" << jsonEscape(l) << "\"}";
       if (i + 1 < laneList.size()) {
-        meta << ",";
+        out << ",";
       }
-      meta << "\n";
     }
-    meta << "  ],\n";
-    meta << "  \"row_catalog\": [\n";
+    out << "]";
+    out << ",\"row_catalog\":[";
     std::size_t idx = 0;
     for (const auto &[rowId, row] : rows_) {
-      meta << "    {"
-           << "\"row_id\":" << rowId << ","
-           << "\"row_kind\":\"" << jsonEscape(row.row_kind) << "\","
-           << "\"core_id\":" << row.core_id << ","
-           << "\"block_uid\":\"" << jsonEscape(normalizeHexId(row.block_uid.empty() ? "0x0" : row.block_uid))
-           << "\","
-           << "\"uop_uid\":\"" << jsonEscape(normalizeHexId(row.uop_uid.empty() ? "0x0" : row.uop_uid))
-           << "\","
-           << "\"left_label\":\"" << jsonEscape(row.left_label) << "\","
-           << "\"detail_defaults\":\"" << jsonEscape(row.detail_defaults) << "\""
-           << "}";
+      out << "{"
+          << "\"row_id\":" << rowId << ","
+          << "\"row_kind\":\"" << jsonEscape(row.row_kind) << "\","
+          << "\"core_id\":" << row.core_id << ","
+          << "\"block_uid\":\"" << jsonEscape(normalizeHexId(row.block_uid.empty() ? "0x0" : row.block_uid))
+          << "\","
+          << "\"row_sid\":\"" << jsonEscape(normalizeHexId(row.uop_uid.empty() ? "0x0" : row.uop_uid))
+          << "\","
+          << "\"uop_uid\":\"" << jsonEscape(normalizeHexId(row.uop_uid.empty() ? "0x0" : row.uop_uid))
+          << "\","
+          << "\"left_label\":\"" << jsonEscape(row.left_label) << "\","
+          << "\"detail_defaults\":\"" << jsonEscape(row.detail_defaults) << "\""
+          << "}";
       if (++idx < rows_.size()) {
-        meta << ",";
+        out << ",";
       }
-      meta << "\n";
     }
-    meta << "  ],\n";
-    meta << "  \"render_prefs\": {\n";
-    meta << "    \"theme\": \"high-contrast\",\n";
-    meta << "    \"show_symbols\": true\n";
-    meta << "  }\n";
-    meta << "}\n";
+    out << "]";
+    out << ",\"render_prefs\":{\"theme\":\"high-contrast\",\"show_symbols\":true}";
+    out << "}\n";
   }
 
-  std::ofstream out_{};
-#if defined(PYC_RUNTIME_ENABLE_ZLIB_TRACE)
-  gzFile gz_ = nullptr;
-#endif
-  bool gzip_ = false;
+  std::ofstream event_out_{};
   std::filesystem::path path_{};
-  std::filesystem::path actual_path_{};
+  std::filesystem::path event_tmp_path_{};
   bool opened_ = false;
   std::uint64_t cur_cycle_ = 0;
   std::map<std::uint64_t, RowInfo> rows_{};
