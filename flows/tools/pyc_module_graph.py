@@ -54,21 +54,7 @@ class NodeInfo:
     expanded: bool
 
 
-def _ensure_graphviz() -> None:
-    try:
-        import graphviz  # noqa: F401
-    except Exception:  # noqa: BLE001
-        raise SystemExit(
-            "error: missing python package `graphviz`.\n"
-            "Install:\n"
-            "  python3 -m pip install graphviz\n"
-            "\n"
-            "If `pip` is blocked (PEP 668 / externally-managed Python), use a venv:\n"
-            "  python3 -m venv .venv\n"
-            "  . .venv/bin/activate\n"
-            "  python -m pip install graphviz\n"
-        )
-
+def _ensure_dot() -> None:
     try:
         subprocess.run(["dot", "-V"], check=False, capture_output=True)
     except FileNotFoundError as e:
@@ -221,6 +207,31 @@ def _sanitize_dot_id(name: str) -> str:
     if s[0].isdigit():
         s = "n_" + s
     return s
+
+
+def _dot_escape(s: str) -> str:
+    # Used for label="...". Escape quotes only; keep backslash escapes (e.g. \n) intact.
+    return str(s).replace('"', '\\"')
+
+
+class _DotWriter:
+    def __init__(self) -> None:
+        self._lines: list[str] = []
+        self._indent = 0
+
+    def writeln(self, line: str = "") -> None:
+        self._lines.append(("\t" * self._indent) + line)
+
+    def begin(self, line: str) -> None:
+        self.writeln(f"{line} {{")
+        self._indent += 1
+
+    def end(self) -> None:
+        self._indent -= 1
+        self.writeln("}")
+
+    def text(self) -> str:
+        return "\n".join(self._lines) + "\n"
 
 
 def _tarjan_scc(nodes: Iterable[str], adj: dict[str, set[str]]) -> list[list[str]]:
@@ -442,7 +453,7 @@ def main() -> int:
     ap = argparse.ArgumentParser(description="Generate a module-instance connectivity graph from a textual .pyc (MLIR).")
     ap.add_argument("--pyc", required=True, help="Path to textual .pyc file (MLIR)")
     ap.add_argument("--module", default="", help="Target module symbol (default: module attribute pyc.top)")
-    ap.add_argument("--out", required=True, help="Output SVG path")
+    ap.add_argument("--out", required=True, help="Output path (.dot or a Graphviz render like .svg)")
 
     ap.add_argument("--hierarchical", action="store_true", help="Show selected submodules as nested clusters")
     ap.add_argument(
@@ -548,8 +559,8 @@ def main() -> int:
 
     walk_context(target_sym, tuple(), level=0, mod_stack=tuple())
 
-    if not nodes:
-        raise SystemExit(f"error: no pyc.instance ops found in target module: {target_sym}")
+    # Some leaf modules have no sub-instances. Still emit a valid empty graph + JSON
+    # so callers (e.g. pycircuit.cli emit) can use a single codepath.
 
     if len(nodes) > int(args.max_nodes):
         raise SystemExit(
@@ -604,28 +615,6 @@ def main() -> int:
         return "\\n".join(lines)
 
     # Emit DOT + SVG (Graphviz required).
-    _ensure_graphviz()
-    import graphviz  # noqa: E402
-
-    dot = graphviz.Digraph(name=f"{target_sym}_module_graph", format="svg", engine="dot")
-    dot.attr(
-        rankdir="LR",
-        # Cluster graphs are common here; newrank avoids dot rank init failures.
-        newrank="true",
-        fontname="Helvetica",
-        fontsize="10",
-        nodesep="0.2",
-        ranksep="0.55",
-        splines="polyline",
-        bgcolor="white",
-        label=f"{target_sym} module graph (pyc.instance connectivity)",
-        labelloc="t",
-        labeljust="c",
-        pad="0.25",
-    )
-    dot.attr("node", fontname="Helvetica", fontsize="8", style="filled", fillcolor="#F7F7F7", shape="record")
-    dot.attr("edge", fontsize="7", color="#9E9E9E", arrowsize="0.6")
-
     dot_id: dict[str, str] = {}
     used: set[str] = set()
 
@@ -639,7 +628,19 @@ def main() -> int:
         used.add(nid)
         return nid
 
-    def emit_node(g: graphviz.Digraph, p: tuple[str, ...]) -> None:
+    w = _DotWriter()
+    graph_name = _sanitize_dot_id(f"{target_sym}_module_graph")
+    w.begin(f"digraph {graph_name}")
+    w.writeln(
+        'graph [bgcolor="white" fontname="Helvetica" fontsize="10" '
+        f'label="{_dot_escape(f"{target_sym} module graph (pyc.instance connectivity)")}" '
+        'labelloc="t" labeljust="c" pad="0.25" rankdir="LR" ranksep="0.55" nodesep="0.2" '
+        'splines="polyline" newrank="true"];'
+    )
+    w.writeln('node [fillcolor="#F7F7F7" fontname="Helvetica" fontsize="8" shape="record" style="filled"];')
+    w.writeln('edge [arrowsize="0.6" color="#9E9E9E" fontsize="7"];')
+
+    def emit_node(p: tuple[str, ...]) -> None:
         key = "/".join(p)
         if key not in dot_id:
             dot_id[key] = node_id_for(p)
@@ -654,46 +655,38 @@ def main() -> int:
 
         in_cnt = len(in_ports_used.get(key, set()))
         out_cnt = len(out_ports_used.get(key, set()))
-        label = "{<in> " + f"in({in_cnt})" + "|" + f"{n.name}\\n{n.callee}" + "|<out> " + f"out({out_cnt})" + "}"
-        g.node(nid, label=label, color=border, penwidth=pen)
+        label_mid = _dot_escape(f"{n.name}\\n{n.callee}")
+        label = "{<in> " + f"in({in_cnt})" + "|" + label_mid + "|<out> " + f"out({out_cnt})" + "}"
+        w.writeln(f'{nid} [label="{label}" color="{border}" penwidth="{pen}"];')
 
     def cluster_name_for(path: tuple[str, ...]) -> str:
         return "cluster_" + _sanitize_dot_id(target_sym + "__" + "__".join(path))
 
-    def emit_context(sym: str, prefix: tuple[str, ...], *, level: int, g: graphviz.Digraph) -> None:
+    def begin_cluster(cluster_name: str, label: str, *, font_size: str) -> None:
+        w.begin(f"subgraph {cluster_name}")
+        w.writeln(
+            f'color="#BDBDBD" style="rounded" fontname="Helvetica" fontsize="{font_size}" '
+            f'label="{_dot_escape(label)}" labelloc="t" labeljust="l";'
+        )
+
+    def emit_context(sym: str, prefix: tuple[str, ...], *, level: int) -> None:
         f = funcs[sym]
         for inst in f.instances:
             p = prefix + (inst.name,)
             if p not in nodes:
                 continue
             if p in expanded:
-                with g.subgraph(name=cluster_name_for(p)) as sc:
-                    sc.attr(
-                        label=f"{inst.name}\\n{inst.callee}",
-                        labelloc="t",
-                        labeljust="l",
-                        color="#BDBDBD",
-                        style="rounded",
-                        fontname="Helvetica",
-                        fontsize="10",
-                    )
-                    emit_node(sc, p)
-                    if level < expand_depth and inst.callee in funcs:
-                        emit_context(inst.callee, p, level=level + 1, g=sc)
+                begin_cluster(cluster_name_for(p), f"{inst.name}\\n{inst.callee}", font_size="10")
+                emit_node(p)
+                if level < expand_depth and inst.callee in funcs:
+                    emit_context(inst.callee, p, level=level + 1)
+                w.end()
             else:
-                emit_node(g, p)
+                emit_node(p)
 
-    with dot.subgraph(name="cluster_" + _sanitize_dot_id(target_sym)) as root:
-        root.attr(
-            label=f"{target_sym}",
-            labelloc="t",
-            labeljust="l",
-            color="#BDBDBD",
-            style="rounded",
-            fontname="Helvetica",
-            fontsize="11",
-        )
-        emit_context(target_sym, tuple(), level=0, g=root)
+    begin_cluster("cluster_" + _sanitize_dot_id(target_sym), f"{target_sym}", font_size="11")
+    emit_context(target_sym, tuple(), level=0)
+    w.end()
 
     for (sp, dp), ent in sorted(edges_global.items(), key=lambda x: ("/".join(x[0][0]), "/".join(x[0][1]))):
         src_key = "/".join(sp)
@@ -702,21 +695,24 @@ def main() -> int:
             continue
         lbl = edge_label(ent)
         if lbl:
-            dot.edge(f"{dot_id[src_key]}:out", f"{dot_id[dst_key]}:in", label=lbl)
+            w.writeln(f'{dot_id[src_key]}:out -> {dot_id[dst_key]}:in [label="{_dot_escape(lbl)}"];')
         else:
-            dot.edge(f"{dot_id[src_key]}:out", f"{dot_id[dst_key]}:in")
+            w.writeln(f"{dot_id[src_key]}:out -> {dot_id[dst_key]}:in;")
 
-    dot_path.write_text(dot.source, encoding="utf-8")
+    w.end()
+    dot_path.write_text(w.text(), encoding="utf-8")
 
-    stem = str(out_svg.with_suffix(""))
-    rendered = dot.render(stem, cleanup=True)
-    rendered_path = Path(rendered).resolve()
-    if rendered_path != out_svg:
+    # Render if requested output isn't dot.
+    out_ext = out_svg.suffix.lower().lstrip(".")
+    if out_ext != "dot":
+        _ensure_dot()
         try:
-            out_svg.unlink(missing_ok=True)  # type: ignore[arg-type]
-        except Exception:  # noqa: BLE001
-            pass
-        rendered_path.replace(out_svg)
+            subprocess.run(
+                ["dot", f"-T{out_ext}", str(dot_path), "-o", str(out_svg)],
+                check=True,
+            )
+        except subprocess.CalledProcessError as e:
+            raise SystemExit(f"error: dot render failed (dot -T{out_ext} ...): {e}") from e
 
     nodes_json = []
     for p, n in sorted(nodes.items(), key=lambda x: (x[1].level, "/".join(x[0]))):
