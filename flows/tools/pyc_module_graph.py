@@ -44,6 +44,11 @@ def _ensure_graphviz() -> None:
             "error: missing python package `graphviz`.\n"
             "Install:\n"
             "  python3 -m pip install graphviz\n"
+            "\n"
+            "If `pip` is blocked (PEP 668 / externally-managed Python), use a venv:\n"
+            "  python3 -m venv .venv\n"
+            "  . .venv/bin/activate\n"
+            "  python -m pip install graphviz\n"
         )
 
     try:
@@ -561,4 +566,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
