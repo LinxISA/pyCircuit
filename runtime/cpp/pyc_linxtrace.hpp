@@ -1,6 +1,7 @@
 #pragma once
 
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
@@ -73,6 +74,13 @@ public:
     cur_cycle_ = cycle;
   }
 
+  // Backward-compatible helper.
+  void insn(std::uint64_t rowId, std::uint64_t simId, std::uint64_t threadId) {
+    std::ostringstream uid;
+    uid << "0x" << std::hex << simId << std::dec;
+    insnV5(rowId, uid.str(), threadId, "0x0", "normal");
+  }
+
   void insnV5(std::uint64_t rowId, const std::string &uidHex, std::uint64_t threadId,
               const std::string &parentUidHex, const std::string &kind) {
     if (!isOpen()) {
@@ -127,6 +135,14 @@ public:
     writeLine(ss.str());
   }
 
+  // Kept for source compatibility with existing writers.
+  void stageStart(std::uint64_t id, int laneId, const std::string &stage) {
+    presence(id, laneId, stage, 0, "0");
+  }
+
+  // Kept for source compatibility with existing writers.
+  void stageEnd(std::uint64_t, int, const std::string &) {}
+
   void retire(std::uint64_t rowId, std::uint64_t retireId, int type) {
     if (!isOpen()) {
       return;
@@ -176,7 +192,28 @@ public:
     writeLine(ss.str());
   }
 
+  // Kept for source compatibility; dependency rendering is handled by external tools.
+  void dep(std::uint64_t consumerId, std::uint64_t producerId, int type) {
+    if (!isOpen()) {
+      return;
+    }
+    std::ostringstream ss;
+    ss << "{\"type\":\"DEP\""
+       << ",\"cycle\":" << cur_cycle_
+       << ",\"consumer_row_id\":" << consumerId
+       << ",\"producer_row_id\":" << producerId
+       << ",\"dep_type\":" << type
+       << "}";
+    writeLine(ss.str());
+  }
+
 private:
+  static constexpr std::array<const char *, 16> kCanonicalStageOrder = {
+      "IB", "D1", "D2", "D3", "S1", "S2", "IQ", "P1",
+      "I1", "I2", "E1", "W1", "W2", "CMT", "FLS", "XCHK",
+  };
+  static constexpr const char *kPipelineSchemaId = "LC-TRACE1-FA870FA28B15";
+
   struct RowInfo {
     std::uint64_t row_id = 0;
     std::string row_kind = "uop";
@@ -312,12 +349,15 @@ private:
   }
 
   void writeMetaRecord(std::ostream &out) const {
-    std::vector<std::string> stageList(stages_.begin(), stages_.end());
+    std::vector<std::string> stageList{};
+    stageList.reserve(kCanonicalStageOrder.size());
+    for (const char *stage : kCanonicalStageOrder) {
+      stageList.emplace_back(stage);
+    }
     std::vector<std::string> laneList(lanes_.begin(), lanes_.end());
 
-    const std::string schemaId = "LC-TRACE-RUNTIME";
     std::ostringstream contractSeed;
-    contractSeed << schemaId << "|";
+    contractSeed << kPipelineSchemaId << "|";
     for (std::size_t i = 0; i < stageList.size(); ++i) {
       if (i) contractSeed << ",";
       contractSeed << stageList[i];
@@ -340,7 +380,7 @@ private:
     const std::uint64_t h = fnv1a64(contractSeed.str());
     std::ostringstream idHex;
     // Keep the contract hash fixed-width so consumers can string-compare reliably.
-    idHex << schemaId << "-" << std::uppercase << std::hex << std::setw(16) << std::setfill('0')
+    idHex << kPipelineSchemaId << "-" << std::uppercase << std::hex << std::setw(16) << std::setfill('0')
           << h;
     const std::string stageCsv = [&]() {
       std::ostringstream ss;
@@ -354,7 +394,7 @@ private:
     out << "{\"type\":\"META\"";
     out << ",\"format\":\"linxtrace.v1\"";
     out << ",\"contract_id\":\"" << idHex.str() << "\"";
-    out << ",\"pipeline_schema_id\":\"" << schemaId << "\"";
+    out << ",\"pipeline_schema_id\":\"" << kPipelineSchemaId << "\"";
     out << ",\"stage_order_csv\":\"" << jsonEscape(stageCsv) << "\"";
     out << ",\"stage_catalog\":[";
     for (std::size_t i = 0; i < stageList.size(); ++i) {

@@ -19,6 +19,9 @@ struct CppEmitterOptions {
   // Chunk full-topology eval bodies to avoid mega-functions that are expensive
   // for downstream C++ compilers.
   unsigned evalTopoChunkNodes = 256;
+  // Chunk fused comb helpers to avoid single mega-functions that dominate
+  // downstream C++ TU cost even after file sharding.
+  unsigned combChunkNodes = 256;
 };
 
 ::mlir::LogicalResult emitCpp(::mlir::ModuleOp module, ::llvm::raw_ostream &os,

@@ -190,6 +190,12 @@ private:
 template <unsigned Width>
 using Wire = Bits<Width>;
 
+template <unsigned Width, std::size_t N>
+inline void appendPackedWireWords(std::array<std::uint64_t, N> &dst, std::size_t &offset, Wire<Width> v) {
+  for (unsigned i = 0; i < Wire<Width>::kWords; ++i)
+    dst[offset++] = v.word(i);
+}
+
 template <unsigned Width>
 constexpr std::int64_t asSigned(Wire<Width> v) {
   static_assert(Width > 0 && Width <= 64, "asSigned supports widths 1..64");

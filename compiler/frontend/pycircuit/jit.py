@@ -17,7 +17,7 @@ from .hw import (
     Vec,
     Wire,
 )
-from .jit_cache import assigned_names_for, get_function_meta, get_signature
+from .jit_cache import assigned_names_for, get_function_meta, get_signature, get_structural_metrics
 from .literals import LiteralValue
 
 
@@ -1165,10 +1165,12 @@ class _Compiler:
         has_hw = any(self._is_hw_value(a) for a in args) or any(self._is_hw_value(v) for v in kwargs.values())
         try:
             if has_hw and inspect.isfunction(fn) and kind is None and not self._is_frontend_intrinsic_helper(fn):
-                raise JitError(
-                    f"hardware-carrying call to undecorated function {getattr(fn, '__name__', fn)!r}; "
-                    "use @module for hierarchy boundaries, @function for inline helpers, or @const for compile-time metaprogramming"
-                )
+                struct_metrics = get_structural_metrics(fn)
+                if struct_metrics.module_call_count > 0 or struct_metrics.state_call_count > 0:
+                    raise JitError(
+                        f"hardware-carrying call to undecorated function {getattr(fn, '__name__', fn)!r}; "
+                        "use @module for hierarchy boundaries, @function for inline helpers, or @const for compile-time metaprogramming"
+                    )
 
             if kind == "module":
                 # Module calls with hardware values are hierarchy boundaries and
@@ -1213,6 +1215,31 @@ class _Compiler:
             raise JitError(f"cannot inline {getattr(fn, '__name__', fn)!r}: {e}") from e
 
         fdef = meta.fdef
+        struct_metrics = get_structural_metrics(fn)
+        if struct_metrics.module_call_count > 0:
+            raise JitError(
+                f"@function {getattr(fn, '__name__', fn)!r} must not instantiate modules/collections "
+                f"(module_call_count={struct_metrics.module_call_count}); "
+                "promote the repeated hierarchy to `@module` and instantiate via `array(...)`"
+            )
+        if struct_metrics.state_call_count > 0:
+            raise JitError(
+                f"@function {getattr(fn, '__name__', fn)!r} must not allocate state "
+                f"(state_call_count={struct_metrics.state_call_count}); "
+                "move the stateful logic behind a `@module` boundary"
+            )
+        if struct_metrics.estimated_inline_cost > 1400:
+            raise JitError(
+                f"@function {getattr(fn, '__name__', fn)!r} exceeds inline complexity cap "
+                f"(estimated_inline_cost={struct_metrics.estimated_inline_cost} > 1400); "
+                "split the helper or promote it to `@module`"
+            )
+        if struct_metrics.repeat_pressure() > 96:
+            raise JitError(
+                f"@function {getattr(fn, '__name__', fn)!r} has repeated inline hardware pressure "
+                f"({struct_metrics.repeat_pressure()} > 96); "
+                "use `spec.module_family(...)` + `array(...)` for repeated same-shape structure"
+            )
 
         if require_builder:
             if not fdef.args.args:

@@ -9,6 +9,7 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/StringSet.h"
+#include "llvm/Support/JSON.h"
 
 #include <string>
 
@@ -94,6 +95,26 @@ static bool isValidFieldPath(llvm::StringRef path) {
   return true;
 }
 
+static bool jsonIntFieldNonNegative(Operation *op,
+                                    const llvm::json::Object &obj,
+                                    llvm::StringRef field,
+                                    llvm::StringRef code,
+                                    bool &ok) {
+  auto it = obj.find(field);
+  if (it == obj.end()) {
+    op->emitError() << "[" << code << "] missing JSON field `" << field << "`";
+    ok = false;
+    return false;
+  }
+  auto iv = it->second.getAsInteger();
+  if (!iv || *iv < 0) {
+    op->emitError() << "[" << code << "] JSON field `" << field << "` must be a non-negative integer";
+    ok = false;
+    return false;
+  }
+  return true;
+}
+
 class CheckFrontendContractPass : public PassWrapper<CheckFrontendContractPass, OperationPass<ModuleOp>> {
 public:
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(CheckFrontendContractPass)
@@ -158,6 +179,10 @@ public:
       (void)checkStrAttr("pyc.base", "PYC906", "frontend must stamp canonical base symbol name");
       auto argNames = checkArrAttr("arg_names", "PYC907", "frontend must stamp canonical port names");
       auto resultNames = checkArrAttr("result_names", "PYC908", "frontend must stamp canonical port names");
+      auto structMetrics =
+          checkStrAttr("pyc.struct.metrics", "PYC951", "frontend must stamp structural summary metadata");
+      auto structCollections =
+          checkStrAttr("pyc.struct.collections", "PYC952", "frontend must stamp structural collection metadata");
 
       if (kind) {
         auto k = kind.getValue();
@@ -404,6 +429,98 @@ public:
             f.emitError() << "[PYC918] invalid value-param type `" << typeAttr.getValue()
                           << "` for `" << nameAttr.getValue() << "` (expected iN/!pyc.clock/!pyc.reset)";
             ok = false;
+          }
+        }
+      }
+
+      if (structMetrics) {
+        llvm::Expected<llvm::json::Value> parsed = llvm::json::parse(structMetrics.getValue());
+        if (!parsed) {
+          f.emitError() << "[PYC953] invalid JSON in `pyc.struct.metrics`";
+          ok = false;
+        } else {
+          auto *obj = parsed->getAsObject();
+          if (!obj) {
+            f.emitError() << "[PYC954] `pyc.struct.metrics` must encode a JSON object";
+            ok = false;
+          } else {
+            (void)jsonIntFieldNonNegative(f, *obj, "source_loc", "PYC955", ok);
+            (void)jsonIntFieldNonNegative(f, *obj, "ast_node_count", "PYC956", ok);
+            (void)jsonIntFieldNonNegative(f, *obj, "hardware_call_count", "PYC957", ok);
+            (void)jsonIntFieldNonNegative(f, *obj, "loop_count", "PYC958", ok);
+            (void)jsonIntFieldNonNegative(f, *obj, "module_call_count", "PYC959", ok);
+            (void)jsonIntFieldNonNegative(f, *obj, "state_call_count", "PYC960", ok);
+            (void)jsonIntFieldNonNegative(f, *obj, "estimated_inline_cost", "PYC961", ok);
+            (void)jsonIntFieldNonNegative(f, *obj, "instance_count", "PYC962", ok);
+            (void)jsonIntFieldNonNegative(f, *obj, "state_alloc_count", "PYC963", ok);
+            (void)jsonIntFieldNonNegative(f, *obj, "collection_count", "PYC964", ok);
+            (void)jsonIntFieldNonNegative(f, *obj, "collection_instance_count", "PYC965", ok);
+            (void)jsonIntFieldNonNegative(f, *obj, "module_family_collection_count", "PYC966", ok);
+
+            auto clusterIt = obj->find("repeated_body_clusters");
+            if (clusterIt == obj->end() || !clusterIt->second.getAsArray()) {
+              f.emitError() << "[PYC967] `pyc.struct.metrics` missing `repeated_body_clusters` array";
+              ok = false;
+            } else {
+              auto *arr = clusterIt->second.getAsArray();
+              for (std::size_t idx = 0; idx < arr->size(); ++idx) {
+                auto *entry = (*arr)[idx].getAsObject();
+                if (!entry) {
+                  f.emitError() << "[PYC968] `pyc.struct.metrics.repeated_body_clusters[" << idx
+                                << "]` must be an object";
+                  ok = false;
+                  continue;
+                }
+                auto fp = entry->getString("fingerprint");
+                if (!fp || fp->empty()) {
+                  f.emitError() << "[PYC969] repeated-body cluster #" << idx
+                                << " must provide a non-empty `fingerprint`";
+                  ok = false;
+                }
+                (void)jsonIntFieldNonNegative(f, *entry, "count", "PYC970", ok);
+                (void)jsonIntFieldNonNegative(f, *entry, "node_count", "PYC971", ok);
+                (void)jsonIntFieldNonNegative(f, *entry, "hardware_calls", "PYC972", ok);
+                (void)jsonIntFieldNonNegative(f, *entry, "module_calls", "PYC973", ok);
+                (void)jsonIntFieldNonNegative(f, *entry, "state_calls", "PYC974", ok);
+                (void)jsonIntFieldNonNegative(f, *entry, "loop_extent_hint", "PYC975", ok);
+              }
+            }
+          }
+        }
+      }
+
+      if (structCollections) {
+        llvm::Expected<llvm::json::Value> parsed = llvm::json::parse(structCollections.getValue());
+        if (!parsed) {
+          f.emitError() << "[PYC976] invalid JSON in `pyc.struct.collections`";
+          ok = false;
+        } else {
+          auto *arr = parsed->getAsArray();
+          if (!arr) {
+            f.emitError() << "[PYC977] `pyc.struct.collections` must encode a JSON array";
+            ok = false;
+          } else {
+            for (std::size_t idx = 0; idx < arr->size(); ++idx) {
+              auto *entry = (*arr)[idx].getAsObject();
+              if (!entry) {
+                f.emitError() << "[PYC978] `pyc.struct.collections[" << idx << "]` must be an object";
+                ok = false;
+                continue;
+              }
+              auto kindStr = entry->getString("collection_kind");
+              if (!kindStr || kindStr->empty()) {
+                f.emitError() << "[PYC979] structural collection #" << idx
+                              << " must provide `collection_kind`";
+                ok = false;
+              }
+              (void)jsonIntFieldNonNegative(f, *entry, "key_count", "PYC980", ok);
+              auto familyFlag = entry->getBoolean("from_module_family");
+              if (!familyFlag.has_value()) {
+                f.emitError() << "[PYC981] structural collection #" << idx
+                              << " must provide boolean `from_module_family`";
+                ok = false;
+              }
+            }
           }
         }
       }

@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from dataclasses import dataclass
+import hashlib
 import inspect
+import json
 from typing import Any, Iterable, Iterator, Mapping, Union, overload
 
 from .connectors import (
@@ -583,6 +585,40 @@ class Circuit(Module):
         # Hardened probe metadata (Decision 0132/0140).
         # Keyed by exported port name (e.g. "dbg__...").
         self._hardened_probe_table: dict[str, dict[str, Any]] = {}
+        # Structural metadata for hierarchy-discipline checks.
+        self._struct_instance_count = 0
+        self._struct_state_alloc_count = 0
+        self._struct_collections: list[dict[str, Any]] = []
+
+    @staticmethod
+    def _struct_identity(payload: Any) -> str:
+        text = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+        return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
+
+    def _record_struct_instance(self) -> None:
+        self._struct_instance_count += 1
+
+    def _record_struct_state_alloc(self) -> None:
+        self._struct_state_alloc_count += 1
+
+    def _record_struct_collection(self, meta: Mapping[str, Any]) -> None:
+        self._struct_collections.append(dict(meta))
+
+    def structural_runtime_metadata(self) -> dict[str, Any]:
+        collection_instance_count = 0
+        module_family_collection_count = 0
+        for entry in self._struct_collections:
+            collection_instance_count += int(entry.get("key_count", 0))
+            if bool(entry.get("from_module_family", False)):
+                module_family_collection_count += 1
+        return {
+            "instance_count": int(self._struct_instance_count),
+            "state_alloc_count": int(self._struct_state_alloc_count),
+            "collection_count": int(len(self._struct_collections)),
+            "collection_instance_count": int(collection_instance_count),
+            "module_family_collection_count": int(module_family_collection_count),
+            "collections": list(self._struct_collections),
+        }
 
     def _record_hardened_layout_group(self, group: Mapping[str, Any]) -> None:
         """Record a hardened metadata group to be emitted into MLIR attrs."""
@@ -1073,6 +1109,7 @@ class Circuit(Module):
         else:
             init_w = init if isinstance(init, Wire) else Wire(self, init)
 
+        self._record_struct_state_alloc()
         q_sig = self.reg(clk, rst, en_w.sig, next_w.sig, init_w.sig)
         q_w = Wire(self, q_sig, signed=(next_w.signed or init_w.signed))
         return Reg(q=q_w, clk=clk, rst=rst, en=en_w, next=next_w, init=init_w)
@@ -1408,7 +1445,6 @@ class Circuit(Module):
         fn: Any,
         *,
         name: str,
-        short_name: str | None = None,
         bind: Mapping[str, Connector | ConnectorBundle | ConnectorStruct | Mapping[str, Any] | Any],
         params: dict[str, Any] | None = None,
         module_name: str | None = None,
@@ -1420,7 +1456,6 @@ class Circuit(Module):
         return self.instance_handle(
             fn,
             name=str(name),
-            short_name=None if short_name is None else str(short_name),
             params=params,
             module_name=module_name,
             **bound_ports,
@@ -1431,7 +1466,6 @@ class Circuit(Module):
         fn: Any,
         *,
         name: str,
-        short_name: str | None = None,
         params: dict[str, Any] | None = None,
         module_name: str | None = None,
         **ports: Any,
@@ -1441,7 +1475,6 @@ class Circuit(Module):
         return self.instance(
             fn,
             name=str(name),
-            short_name=None if short_name is None else str(short_name),
             params=params,
             module_name=module_name,
             **wrapped,
@@ -1518,6 +1551,49 @@ class Circuit(Module):
         if not key_list:
             raise ValueError("array requires at least one key")
 
+        collection_kind = "plain"
+        family_payload: dict[str, Any] | None = None
+        template_payload: dict[str, Any] | None = None
+        from_module_family = False
+        if isinstance(fn_or_collection, ModuleFamilySpec):
+            collection_kind = "family"
+            family_payload = fn_or_collection.__pyc_template_value__()
+            template_payload = family_payload
+            from_module_family = True
+        elif isinstance(fn_or_collection, ModuleListSpec):
+            collection_kind = "list"
+            family_payload = fn_or_collection.family.__pyc_template_value__()
+            template_payload = fn_or_collection.__pyc_template_value__()
+            from_module_family = True
+        elif isinstance(fn_or_collection, ModuleVectorSpec):
+            collection_kind = "vector"
+            family_payload = fn_or_collection.family.__pyc_template_value__()
+            template_payload = fn_or_collection.__pyc_template_value__()
+            from_module_family = True
+        elif isinstance(fn_or_collection, ModuleMapSpec):
+            collection_kind = "map"
+            family_payload = fn_or_collection.family.__pyc_template_value__()
+            template_payload = fn_or_collection.__pyc_template_value__()
+            from_module_family = True
+        elif isinstance(fn_or_collection, ModuleDictSpec):
+            collection_kind = "dict"
+            family_payload = fn_or_collection.family.__pyc_template_value__()
+            template_payload = fn_or_collection.__pyc_template_value__()
+            from_module_family = True
+
+        meta: dict[str, Any] = {
+            "name": str(name),
+            "collection_kind": str(collection_kind),
+            "key_count": int(len(key_list)),
+            "from_module_family": bool(from_module_family),
+        }
+        if family_payload is not None:
+            meta["family_identity"] = self._struct_identity(family_payload)
+            meta["family_payload"] = family_payload
+        if template_payload is not None:
+            meta["template_payload"] = template_payload
+        self._record_struct_collection(meta)
+
         keyed_bindings = dict(per or {})
         instances: dict[str, ModuleInstanceHandle] = {}
         outputs: dict[str, Connector | ConnectorBundle | ConnectorStruct] = {}
@@ -1571,7 +1647,6 @@ class Circuit(Module):
         fn: Any,
         *,
         name: str,
-        short_name: str | None = None,
         params: dict[str, Any] | None = None,
         module_name: str | None = None,
         **ports: Any,
@@ -1700,6 +1775,7 @@ class Circuit(Module):
             name=str(name),
             short_name=None if short_name is None else str(short_name),
         )
+        self._record_struct_instance()
         out_fields: dict[str, Connector] = {}
         for oname, sig in zip(cm.result_names, outs):
             out_fields[oname] = WireConnector(owner=self, name=oname, wire=Wire(self, sig))
@@ -1730,7 +1806,6 @@ class Circuit(Module):
         fn: Any,
         *,
         name: str,
-        short_name: str | None = None,
         params: dict[str, Any] | None = None,
         module_name: str | None = None,
         **ports: Any,
@@ -1748,7 +1823,6 @@ class Circuit(Module):
         return self.instance_handle(
             fn,
             name=name,
-            short_name=short_name,
             params=params,
             module_name=module_name,
             **ports,
@@ -1785,6 +1859,7 @@ class Circuit(Module):
             depth=depth,
             name=name,
         )
+        self._record_struct_state_alloc()
         return Wire(self, rdata)
 
     def sync_mem(
@@ -1820,6 +1895,7 @@ class Circuit(Module):
             depth=depth,
             name=name,
         )
+        self._record_struct_state_alloc()
         return Wire(self, rdata)
 
     def sync_mem_dp(
@@ -1859,6 +1935,7 @@ class Circuit(Module):
             depth=depth,
             name=name,
         )
+        self._record_struct_state_alloc()
         return Wire(self, rdata0), Wire(self, rdata1)
 
     def async_fifo(
@@ -1890,11 +1967,13 @@ class Circuit(Module):
             as_sig(out_ready),
             depth=depth,
         )
+        self._record_struct_state_alloc()
         return Wire(self, in_ready), Wire(self, out_valid), Wire(self, out_data)
 
     def cdc_sync(self, clk: Signal, rst: Signal, a: Union[Wire, Reg, Signal], *, stages: int | None = None) -> Wire:
         sig = a.q.sig if isinstance(a, Reg) else (a.sig if isinstance(a, Wire) else a)
         out = super().cdc_sync(clk, rst, sig, stages=stages)
+        self._record_struct_state_alloc()
         return Wire(self, out)
 
     def fifo(
@@ -1924,6 +2003,7 @@ class Circuit(Module):
             as_sig(out_ready),
             depth=depth,
         )
+        self._record_struct_state_alloc()
         return Wire(self, in_ready), Wire(self, out_valid), Wire(self, out_data)
 
     def fifo_domain(

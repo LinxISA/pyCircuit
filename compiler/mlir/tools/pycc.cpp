@@ -908,6 +908,55 @@ struct CppManifestSource {
   std::string sourceHash;
 };
 
+static constexpr double kHardMaxSourcePredictedCompileCost = 15000.0;
+static constexpr double kHardMaxModulePredictedCompileCost = 40000.0;
+static constexpr double kHardMaxTotalPredictedCompileCost = 700000.0;
+
+static LogicalResult enforceCppCompileBudgets(ModuleOp module, llvm::ArrayRef<CppManifestSource> sources) {
+  double totalCost = 0.0;
+  double topSourceCost = 0.0;
+  llvm::StringRef topSourcePath;
+  llvm::StringMap<double> moduleCosts;
+
+  for (const auto &src : sources) {
+    totalCost += src.predictedCompileCost;
+    if (src.predictedCompileCost > topSourceCost) {
+      topSourceCost = src.predictedCompileCost;
+      topSourcePath = src.path;
+    }
+    moduleCosts[src.module] += src.predictedCompileCost;
+  }
+
+  llvm::StringRef topModuleName;
+  double topModuleCost = 0.0;
+  for (const auto &it : moduleCosts) {
+    if (it.getValue() > topModuleCost) {
+      topModuleCost = it.getValue();
+      topModuleName = it.getKey();
+    }
+  }
+
+  bool ok = true;
+  if (topSourceCost > kHardMaxSourcePredictedCompileCost) {
+    module.emitError() << "[PYC991] hottest emitted C++ TU exceeds hard budget: path=`" << topSourcePath
+                       << "` predicted_compile_cost=" << topSourceCost
+                       << " > " << kHardMaxSourcePredictedCompileCost;
+    ok = false;
+  }
+  if (topModuleCost > kHardMaxModulePredictedCompileCost) {
+    module.emitError() << "[PYC992] hottest emitted module exceeds hard budget: module=`" << topModuleName
+                       << "` predicted_compile_cost=" << topModuleCost
+                       << " > " << kHardMaxModulePredictedCompileCost;
+    ok = false;
+  }
+  if (totalCost > kHardMaxTotalPredictedCompileCost) {
+    module.emitError() << "[PYC993] total emitted C++ compile cost exceeds hard budget: predicted_compile_cost="
+                       << totalCost << " > " << kHardMaxTotalPredictedCompileCost;
+    ok = false;
+  }
+  return ok ? success() : failure();
+}
+
 struct SplitMethodDef {
   std::string name;
   std::string declaration;
@@ -1905,6 +1954,7 @@ int main(int argc, char **argv) {
   }
   pm.addPass(pyc::createCheckFrontendContractPass());
   pm.addPass(pyc::createInlineFunctionsPass());
+  pm.addPass(pyc::createCheckHierarchyDisciplinePass());
   pm.addPass(createSymbolDCEPass());
   if (inlineDecision.enableInline)
     pm.addPass(createInlinerPass());
@@ -2154,8 +2204,10 @@ int main(int argc, char **argv) {
       llvm::json::Array cppFiles;
       std::vector<CppManifestSource> cppManifestSources;
       pyc::CppEmitterOptions cppEmitOpts;
-      if (cppShardMaxAstNodes > 0)
+      if (cppShardMaxAstNodes > 0) {
         cppEmitOpts.evalTopoChunkNodes = cppShardMaxAstNodes;
+        cppEmitOpts.combChunkNodes = cppShardMaxAstNodes;
+      }
 
       // Collect direct dependencies per module for header includes.
       llvm::StringMap<llvm::SmallVector<std::string>> deps;
@@ -2316,6 +2368,14 @@ int main(int argc, char **argv) {
               return 1;
             if (!coreMethods.empty())
               wroteAny = true;
+            auto shardPredictedCost = [&](size_t lines, size_t bytes, llvm::StringRef kind) -> double {
+              return computePredictedCompileCost(
+                  computeComplexityScore(static_cast<uint64_t>(lines), static_cast<uint64_t>(bytes), kind), kind);
+            };
+
+            constexpr double kShardSoftMaxSourcePredictedCompileCost =
+                kHardMaxSourcePredictedCompileCost * 0.90;
+
             auto writeMaybeShardedMethods = [&](llvm::StringRef stem,
                                                 llvm::StringRef kind,
                                                 llvm::ArrayRef<const SplitMethodDef *> defs,
@@ -2329,10 +2389,12 @@ int main(int argc, char **argv) {
                 totalBytesLocal += m->bytes;
                 totalLinesLocal += m->lines;
               }
+              double totalPredictedCostLocal = shardPredictedCost(totalLinesLocal, totalBytesLocal, kind);
               bool needsSharding =
                   allowSharding && defs.size() > 1 &&
                   ((totalBytesLocal > static_cast<size_t>(cppShardThresholdBytes)) ||
-                   (totalLinesLocal > static_cast<size_t>(cppShardThresholdLines)));
+                   (totalLinesLocal > static_cast<size_t>(cppShardThresholdLines)) ||
+                   (totalPredictedCostLocal > kShardSoftMaxSourcePredictedCompileCost));
 
               if (!needsSharding) {
                 if (failed(writeSourceFile(moduleName + "__" + stem.str() + ".cpp", kind, stem, defs)))
@@ -2361,10 +2423,13 @@ int main(int argc, char **argv) {
               };
 
               for (const SplitMethodDef *m : defs) {
+                double projectedCost =
+                    shardPredictedCost(shardLines + m->lines, shardBytes + m->bytes, kind);
                 bool limitHit =
                     !shardDefs.empty() &&
                     ((shardBytes + m->bytes > static_cast<size_t>(cppShardThresholdBytes)) ||
-                     (shardLines + m->lines > static_cast<size_t>(cppShardThresholdLines)));
+                     (shardLines + m->lines > static_cast<size_t>(cppShardThresholdLines)) ||
+                     (projectedCost > kShardSoftMaxSourcePredictedCompileCost));
                 if (limitHit) {
                   if (failed(flushShard()))
                     return failure();
@@ -2415,6 +2480,8 @@ int main(int argc, char **argv) {
       }
 
       if (splitModule) {
+        if (failed(enforceCppCompileBudgets(*module, cppManifestSources)))
+          return 1;
         llvm::SmallString<256> manifestPathStorage;
         if (!cppManifestPath.empty()) {
           manifestPathStorage = cppManifestPath;
@@ -2483,8 +2550,10 @@ int main(int argc, char **argv) {
   }
   if (emitKind == "cpp") {
     pyc::CppEmitterOptions cppEmitOpts;
-    if (cppShardMaxAstNodes > 0)
+    if (cppShardMaxAstNodes > 0) {
       cppEmitOpts.evalTopoChunkNodes = cppShardMaxAstNodes;
+      cppEmitOpts.combChunkNodes = cppShardMaxAstNodes;
+    }
     if (failed(pyc::emitCpp(*module, os, cppEmitOpts)))
       return 1;
     if (failed(writeSingleOutputStats()))

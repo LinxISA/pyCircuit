@@ -453,7 +453,11 @@ static LogicalResult emitCombAssign(Operation &op, llvm::raw_ostream &os, NameTa
   return op.emitError("unsupported combinational op for C++ emission");
 }
 
-static LogicalResult emitCombMethod(pyc::CombOp comb, llvm::raw_ostream &os, NameTable &nt, unsigned idx) {
+static LogicalResult emitCombMethod(pyc::CombOp comb,
+                                    llvm::raw_ostream &os,
+                                    NameTable &nt,
+                                    unsigned idx,
+                                    const CppEmitterOptions &opts) {
   if (comb.getBody().empty())
     return comb.emitError("pyc.comb must have a non-empty region");
 
@@ -465,11 +469,49 @@ static LogicalResult emitCombMethod(pyc::CombOp comb, llvm::raw_ostream &os, Nam
   for (auto [i, arg] : llvm::enumerate(b.getArguments()))
     nt.names.try_emplace(arg, nt.get(comb.getInputs()[i]));
 
-  os << "  inline void eval_comb_" << idx << "() {\n";
+  llvm::SmallVector<Operation *> combOps;
+  combOps.reserve(b.getOperations().size());
   for (Operation &op : b) {
     if (isa<pyc::YieldOp>(op))
       break;
-    if (failed(emitCombAssign(op, os, nt)))
+    combOps.push_back(&op);
+  }
+
+  unsigned combChunkNodes = std::max(1u, opts.combChunkNodes);
+  if (combOps.size() > combChunkNodes) {
+    std::vector<std::string> partMethods;
+    partMethods.reserve((combOps.size() + combChunkNodes - 1) / combChunkNodes);
+    for (unsigned begin = 0, partIdx = 0; begin < combOps.size(); begin += combChunkNodes, ++partIdx) {
+      unsigned end = std::min<unsigned>(static_cast<unsigned>(combOps.size()), begin + combChunkNodes);
+      std::string partName = "eval_comb_" + std::to_string(idx) + "_part_" + std::to_string(partIdx);
+      partMethods.push_back(partName);
+      os << "  inline void " << partName << "() {\n";
+      for (unsigned i = begin; i < end; ++i) {
+        if (failed(emitCombAssign(*combOps[i], os, nt)))
+          return failure();
+      }
+      os << "  }\n\n";
+    }
+
+    os << "  inline void eval_comb_" << idx << "() {\n";
+    for (const std::string &partName : partMethods)
+      os << "    " << partName << "();\n";
+
+    auto y = dyn_cast_or_null<pyc::YieldOp>(b.getTerminator());
+    if (!y)
+      return comb.emitError("pyc.comb must terminate with pyc.yield");
+    if (y.getNumOperands() != comb.getNumResults())
+      return comb.emitError("pyc.yield operand count must match pyc.comb results");
+
+    for (auto [i, v] : llvm::enumerate(y.getOperands()))
+      os << "    " << nt.get(comb.getResult(i)) << " = " << nt.get(v) << ";\n";
+    os << "  }\n\n";
+    return success();
+  }
+
+  os << "  inline void eval_comb_" << idx << "() {\n";
+  for (Operation *op : combOps) {
+    if (failed(emitCombAssign(*op, os, nt)))
       return failure();
   }
 
@@ -667,6 +709,27 @@ static LogicalResult emitFunc(func::FuncOp f, llvm::raw_ostream &os, const CppEm
     }
   }
 
+  auto instancePackedCacheWordCount = [&](const InstInfo &ii) -> unsigned {
+    unsigned words = 0;
+    auto inst = ii.op;
+    for (unsigned i = 0; i < inst.getNumOperands(); ++i) {
+      unsigned inW = bitWidth(inst.getOperand(i).getType());
+      words += std::max(1u, (inW + 63u) / 64u);
+    }
+    return words;
+  };
+
+  // Medium fanout glue modules still explode into large TUs if they keep the
+  // per-port versioned cache form. Prefer the exact packed-word cache once an
+  // instance reaches moderate input width/count.
+  constexpr unsigned kPackedInstanceCacheOperandThreshold = 12;
+  constexpr unsigned kPackedInstanceCacheWordThreshold = 16;
+  auto usePackedInstanceEvalCache = [&](const InstInfo &ii) -> bool {
+    auto inst = ii.op;
+    unsigned packedWords = instancePackedCacheWordCount(ii);
+    return (inst.getNumOperands() >= kPackedInstanceCacheOperandThreshold) || (packedWords >= kPackedInstanceCacheWordThreshold);
+  };
+
   llvm::DenseMap<Operation *, std::string> byteMemInstName;
   llvm::DenseMap<Operation *, std::string> syncMemInstName;
   llvm::DenseMap<Operation *, std::string> syncMemDPInstName;
@@ -686,14 +749,19 @@ static LogicalResult emitFunc(func::FuncOp f, llvm::raw_ostream &os, const CppEm
     for (const auto &ii : instInfos) {
       auto inst = ii.op;
       os << "  bool " << ii.member << "_eval_cache_valid = false;\n";
-      for (unsigned i = 0; i < inst.getNumOperands(); ++i) {
-        std::string cacheName = ii.member + "_eval_cache_in_" + std::to_string(i);
-        unsigned inW = bitWidth(inst.getOperand(i).getType());
-        os << "  " << cppType(inst.getOperand(i).getType()) << " " << cacheName << "{};\n";
-        os << "  std::uint64_t " << ii.member << "_eval_cache_in_ver_" << i << " = 1ull;\n";
-        os << "  std::uint64_t " << ii.member << "_eval_cache_in_seen_ver_" << i << " = 0ull;\n";
-        if (inW <= 64)
-          os << "  std::uint64_t " << ii.member << "_eval_cache_in_fp_" << i << " = 0ull;\n";
+      if (usePackedInstanceEvalCache(ii)) {
+        os << "  std::array<std::uint64_t, " << instancePackedCacheWordCount(ii) << "> " << ii.member
+           << "_eval_cache_words{};\n";
+      } else {
+        for (unsigned i = 0; i < inst.getNumOperands(); ++i) {
+          std::string cacheName = ii.member + "_eval_cache_in_" + std::to_string(i);
+          unsigned inW = bitWidth(inst.getOperand(i).getType());
+          os << "  " << cppType(inst.getOperand(i).getType()) << " " << cacheName << "{};\n";
+          os << "  std::uint64_t " << ii.member << "_eval_cache_in_ver_" << i << " = 1ull;\n";
+          os << "  std::uint64_t " << ii.member << "_eval_cache_in_seen_ver_" << i << " = 0ull;\n";
+          if (inW <= 64)
+            os << "  std::uint64_t " << ii.member << "_eval_cache_in_fp_" << i << " = 0ull;\n";
+        }
       }
     }
     os << "\n";
@@ -1176,7 +1244,7 @@ static LogicalResult emitFunc(func::FuncOp f, llvm::raw_ostream &os, const CppEm
 
   // Emit fused comb helpers.
   for (auto [i, comb] : llvm::enumerate(combs)) {
-    if (failed(emitCombMethod(comb, os, nt, static_cast<unsigned>(i))))
+    if (failed(emitCombMethod(comb, os, nt, static_cast<unsigned>(i), opts)))
       return failure();
   }
 
@@ -1399,6 +1467,7 @@ static LogicalResult emitFunc(func::FuncOp f, llvm::raw_ostream &os, const CppEm
 
   auto emitInstanceEvalHelperDefinition = [&](const InstInfo &ii, llvm::StringRef helperName) {
     auto inst = ii.op;
+    bool usePackedCache = usePackedInstanceEvalCache(ii);
     os << "  inline bool " << helperName << "() {\n";
     os << "    bool _pyc_inst_changed = false;\n";
     os << "    #ifdef PYC_DISABLE_INSTANCE_EVAL_CACHE\n";
@@ -1412,73 +1481,98 @@ static LogicalResult emitFunc(func::FuncOp f, llvm::raw_ostream &os, const CppEm
     os << "    #else\n";
     std::string changedFlag = ii.member + "_eval_cache_changed";
     os << "    bool " << changedFlag << " = !" << ii.member << "_eval_cache_valid;\n";
-    os << "    #ifndef PYC_DISABLE_VERSIONED_INPUT_CACHE\n";
-    for (unsigned i = 0; i < inst.getNumOperands(); ++i) {
-      std::string cacheName = ii.member + "_eval_cache_in_" + std::to_string(i);
-      std::string inValue = nt.get(inst.getOperand(i));
-      std::string verName = ii.member + "_eval_cache_in_ver_" + std::to_string(i);
-      std::string seenName = ii.member + "_eval_cache_in_seen_ver_" + std::to_string(i);
-      unsigned inW = bitWidth(inst.getOperand(i).getType());
-      os << "    if (" << ii.member << "_eval_cache_valid) {\n";
-      if (inW <= 64) {
-        std::string fpName = ii.member + "_eval_cache_in_fp_" + std::to_string(i);
-        os << "      std::uint64_t _pyc_fp_" << i << " = static_cast<std::uint64_t>(" << inValue << ".value());\n";
-        os << "      if (" << fpName << " != _pyc_fp_" << i << ") {\n";
-        os << "        " << fpName << " = _pyc_fp_" << i << ";\n";
-        os << "        " << cacheName << " = " << inValue << ";\n";
-        os << "        ++" << verName << ";\n";
-        os << "      }\n";
-      } else {
-        os << "      if (" << cacheName << " != " << inValue << ") {\n";
-        os << "        " << cacheName << " = " << inValue << ";\n";
-        os << "        ++" << verName << ";\n";
-        os << "      }\n";
+    if (usePackedCache) {
+      os << "    std::array<std::uint64_t, " << instancePackedCacheWordCount(ii) << "> _pyc_inputs{};\n";
+      os << "    std::size_t _pyc_inputs_off = 0;\n";
+      for (unsigned i = 0; i < inst.getNumOperands(); ++i) {
+        std::string inValue = nt.get(inst.getOperand(i));
+        os << "    pyc::cpp::appendPackedWireWords(_pyc_inputs, _pyc_inputs_off, " << inValue << ");\n";
       }
+      os << "    if (!" << changedFlag << " && (" << ii.member << "_eval_cache_words != _pyc_inputs)) " << changedFlag
+         << " = true;\n";
+      os << "    if (" << changedFlag << ") {\n";
+      for (unsigned i = 0; i < inst.getNumOperands(); ++i) {
+        std::string inValue = nt.get(inst.getOperand(i));
+        os << "      " << ii.member << "->" << ii.inPorts[i] << " = " << inValue << ";\n";
+      }
+      os << "      " << ii.member << "->eval();\n";
+      os << "      if (_pyc_sim_stats_enable) _pyc_sim_stats.instance_eval_calls++;\n";
+      os << "      " << ii.member << "_eval_cache_words = _pyc_inputs;\n";
       os << "    } else {\n";
-      os << "      " << cacheName << " = " << inValue << ";\n";
-      if (inW <= 64) {
-        std::string fpName = ii.member + "_eval_cache_in_fp_" + std::to_string(i);
-        os << "      " << fpName << " = static_cast<std::uint64_t>(" << inValue << ".value());\n";
-      }
-      os << "      ++" << verName << ";\n";
+      os << "      if (_pyc_sim_stats_enable) _pyc_sim_stats.instance_cache_skips++;\n";
       os << "    }\n";
-      os << "    if (!" << changedFlag << " && (" << seenName << " != " << verName << ")) " << changedFlag
-         << " = true;\n";
-      os << "    " << seenName << " = " << verName << ";\n";
+      os << "    _pyc_inst_changed = " << changedFlag << ";\n";
+      os << "    " << ii.member << "_eval_cache_valid = true;\n";
+      os << "    #endif\n";
+    } else {
+      os << "    #ifndef PYC_DISABLE_VERSIONED_INPUT_CACHE\n";
+      for (unsigned i = 0; i < inst.getNumOperands(); ++i) {
+        std::string cacheName = ii.member + "_eval_cache_in_" + std::to_string(i);
+        std::string inValue = nt.get(inst.getOperand(i));
+        std::string verName = ii.member + "_eval_cache_in_ver_" + std::to_string(i);
+        std::string seenName = ii.member + "_eval_cache_in_seen_ver_" + std::to_string(i);
+        unsigned inW = bitWidth(inst.getOperand(i).getType());
+        os << "    if (" << ii.member << "_eval_cache_valid) {\n";
+        if (inW <= 64) {
+          std::string fpName = ii.member + "_eval_cache_in_fp_" + std::to_string(i);
+          os << "      std::uint64_t _pyc_fp_" << i << " = static_cast<std::uint64_t>(" << inValue << ".value());\n";
+          os << "      if (" << fpName << " != _pyc_fp_" << i << ") {\n";
+          os << "        " << fpName << " = _pyc_fp_" << i << ";\n";
+          os << "        " << cacheName << " = " << inValue << ";\n";
+          os << "        ++" << verName << ";\n";
+          os << "      }\n";
+        } else {
+          os << "      if (" << cacheName << " != " << inValue << ") {\n";
+          os << "        " << cacheName << " = " << inValue << ";\n";
+          os << "        ++" << verName << ";\n";
+          os << "      }\n";
+        }
+        os << "    } else {\n";
+        os << "      " << cacheName << " = " << inValue << ";\n";
+        if (inW <= 64) {
+          std::string fpName = ii.member + "_eval_cache_in_fp_" + std::to_string(i);
+          os << "      " << fpName << " = static_cast<std::uint64_t>(" << inValue << ".value());\n";
+        }
+        os << "      ++" << verName << ";\n";
+        os << "    }\n";
+        os << "    if (!" << changedFlag << " && (" << seenName << " != " << verName << ")) " << changedFlag
+           << " = true;\n";
+        os << "    " << seenName << " = " << verName << ";\n";
+      }
+      os << "    if (" << changedFlag << ") {\n";
+      for (unsigned i = 0; i < inst.getNumOperands(); ++i) {
+        std::string cacheName = ii.member + "_eval_cache_in_" + std::to_string(i);
+        os << "      " << ii.member << "->" << ii.inPorts[i] << " = " << cacheName << ";\n";
+      }
+      os << "      " << ii.member << "->eval();\n";
+      os << "      if (_pyc_sim_stats_enable) _pyc_sim_stats.instance_eval_calls++;\n";
+      os << "    } else {\n";
+      os << "      if (_pyc_sim_stats_enable) _pyc_sim_stats.instance_cache_skips++;\n";
+      os << "    }\n";
+      os << "    #else\n";
+      for (unsigned i = 0; i < inst.getNumOperands(); ++i) {
+        std::string cacheName = ii.member + "_eval_cache_in_" + std::to_string(i);
+        std::string inValue = nt.get(inst.getOperand(i));
+        os << "    if (!" << changedFlag << " && (" << cacheName << " != " << inValue << ")) " << changedFlag
+           << " = true;\n";
+      }
+      os << "    if (" << changedFlag << ") {\n";
+      for (unsigned i = 0; i < inst.getNumOperands(); ++i) {
+        std::string cacheName = ii.member + "_eval_cache_in_" + std::to_string(i);
+        std::string inValue = nt.get(inst.getOperand(i));
+        os << "      " << ii.member << "->" << ii.inPorts[i] << " = " << inValue << ";\n";
+        os << "      " << cacheName << " = " << inValue << ";\n";
+      }
+      os << "      " << ii.member << "->eval();\n";
+      os << "      if (_pyc_sim_stats_enable) _pyc_sim_stats.instance_eval_calls++;\n";
+      os << "    } else {\n";
+      os << "      if (_pyc_sim_stats_enable) _pyc_sim_stats.instance_cache_skips++;\n";
+      os << "    }\n";
+      os << "    #endif\n";
+      os << "    _pyc_inst_changed = " << changedFlag << ";\n";
+      os << "    " << ii.member << "_eval_cache_valid = true;\n";
+      os << "    #endif\n";
     }
-    os << "    if (" << changedFlag << ") {\n";
-    for (unsigned i = 0; i < inst.getNumOperands(); ++i) {
-      std::string cacheName = ii.member + "_eval_cache_in_" + std::to_string(i);
-      os << "      " << ii.member << "->" << ii.inPorts[i] << " = " << cacheName << ";\n";
-    }
-    os << "      " << ii.member << "->eval();\n";
-    os << "      if (_pyc_sim_stats_enable) _pyc_sim_stats.instance_eval_calls++;\n";
-    os << "    } else {\n";
-    os << "      if (_pyc_sim_stats_enable) _pyc_sim_stats.instance_cache_skips++;\n";
-    os << "    }\n";
-    os << "    #else\n";
-    for (unsigned i = 0; i < inst.getNumOperands(); ++i) {
-      std::string cacheName = ii.member + "_eval_cache_in_" + std::to_string(i);
-      std::string inValue = nt.get(inst.getOperand(i));
-      os << "    if (!" << changedFlag << " && (" << cacheName << " != " << inValue << ")) " << changedFlag
-         << " = true;\n";
-    }
-    os << "    if (" << changedFlag << ") {\n";
-    for (unsigned i = 0; i < inst.getNumOperands(); ++i) {
-      std::string cacheName = ii.member + "_eval_cache_in_" + std::to_string(i);
-      std::string inValue = nt.get(inst.getOperand(i));
-      os << "      " << ii.member << "->" << ii.inPorts[i] << " = " << inValue << ";\n";
-      os << "      " << cacheName << " = " << inValue << ";\n";
-    }
-    os << "      " << ii.member << "->eval();\n";
-    os << "      if (_pyc_sim_stats_enable) _pyc_sim_stats.instance_eval_calls++;\n";
-    os << "    } else {\n";
-    os << "      if (_pyc_sim_stats_enable) _pyc_sim_stats.instance_cache_skips++;\n";
-    os << "    }\n";
-    os << "    #endif\n";
-    os << "    _pyc_inst_changed = " << changedFlag << ";\n";
-    os << "    " << ii.member << "_eval_cache_valid = true;\n";
-    os << "    #endif\n";
     for (unsigned i = 0; i < inst.getNumResults(); ++i)
       os << "    " << nt.get(inst.getResult(i)) << " = " << ii.member << "->" << ii.outPorts[i] << ";\n";
     os << "    return _pyc_inst_changed;\n";

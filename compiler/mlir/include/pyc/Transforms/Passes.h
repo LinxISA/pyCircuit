@@ -13,6 +13,7 @@ std::unique_ptr<::mlir::Pass> createEliminateWiresPass();
 std::unique_ptr<::mlir::Pass> createPackI1RegsPass();
 std::unique_ptr<::mlir::Pass> createLowerSCFToPYCStaticPass();
 std::unique_ptr<::mlir::Pass> createCheckFrontendContractPass();
+std::unique_ptr<::mlir::Pass> createCheckHierarchyDisciplinePass();
 std::unique_ptr<::mlir::Pass> createCheckNoDynamicPass();
 std::unique_ptr<::mlir::Pass> createCheckCombCyclesPass();
 std::unique_ptr<::mlir::Pass> createCheckClockDomainsPass();

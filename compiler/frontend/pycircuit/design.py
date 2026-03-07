@@ -9,6 +9,7 @@ from typing import Any, Callable, Iterable, Mapping, TYPE_CHECKING
 
 from .api_contract import FRONTEND_CONTRACT
 from .dsl import Module
+from .jit_cache import get_structural_metrics
 
 if TYPE_CHECKING:
     from .hw import Circuit
@@ -295,6 +296,8 @@ class CompiledModule:
     result_types: tuple[str, ...]
     value_param_names: tuple[str, ...]
     value_param_types: tuple[str, ...]
+    struct_metrics_json: str
+    struct_collections_json: str
 
 
 class Design:
@@ -368,11 +371,14 @@ class Design:
         result_names_esc = json.dumps(list(cm.result_names), ensure_ascii=False)
         value_param_names_esc = json.dumps(list(cm.value_param_names), ensure_ascii=False)
         value_param_types_esc = json.dumps(list(cm.value_param_types), ensure_ascii=False)
+        struct_metrics_esc = json.dumps(cm.struct_metrics_json, ensure_ascii=False)
+        struct_collections_esc = json.dumps(cm.struct_collections_json, ensure_ascii=False)
         attrs = (
             f'attributes {{arg_names = {arg_names_esc}, result_names = {result_names_esc}, '
             f"pyc.value_params = {value_param_names_esc}, pyc.value_param_types = {value_param_types_esc}, "
             f'pyc.kind = "{kind}", pyc.inline = "{inline}", pyc.params = {params_esc}, '
-            f"pyc.base = {base_esc}"
+            f"pyc.base = {base_esc}, pyc.struct.metrics = {struct_metrics_esc}, "
+            f"pyc.struct.collections = {struct_collections_esc}"
         )
         if _emit_structural_of(cm.fn):
             attrs += ', pyc.emit.structural = "true"'
@@ -565,6 +571,25 @@ class DesignContext:
         value_param_pairs = _ordered_value_params(fn)
         value_param_names = tuple(name for name, _ in value_param_pairs)
         value_param_types = tuple(ty for _, ty in value_param_pairs)
+        static_metrics = get_structural_metrics(fn).to_dict()
+        runtime_metrics_fn = getattr(mod, "structural_runtime_metadata", None)
+        runtime_metrics = runtime_metrics_fn() if callable(runtime_metrics_fn) else {}
+        struct_metrics = dict(static_metrics)
+        for key in (
+            "instance_count",
+            "state_alloc_count",
+            "collection_count",
+            "collection_instance_count",
+            "module_family_collection_count",
+        ):
+            struct_metrics[key] = int(runtime_metrics.get(key, 0))
+        struct_metrics_json = json.dumps(struct_metrics, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+        struct_collections_json = json.dumps(
+            runtime_metrics.get("collections", []),
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+        )
         # Attach debug attributes (emitted in func.func header).
         try:
             mod.set_func_attr("pyc.base", base)
@@ -573,6 +598,8 @@ class DesignContext:
             mod.set_func_attr("pyc.inline", "true" if _inline_of(fn) else "false")
             mod.set_func_attr_json("pyc.value_params", list(value_param_names))
             mod.set_func_attr_json("pyc.value_param_types", list(value_param_types))
+            mod.set_func_attr("pyc.struct.metrics", struct_metrics_json)
+            mod.set_func_attr("pyc.struct.collections", struct_collections_json)
             if _emit_structural_of(fn):
                 mod.set_func_attr("pyc.emit.structural", "true")
         except Exception as e:
@@ -594,4 +621,6 @@ class DesignContext:
             result_types=res_types,
             value_param_names=value_param_names,
             value_param_types=value_param_types,
+            struct_metrics_json=struct_metrics_json,
+            struct_collections_json=struct_collections_json,
         )
