@@ -29,6 +29,25 @@ _WB_FIELDS = ["wb_rd", "wb_data"]
 _MEM_FIELDS = ["mem_addr", "mem_wdata", "mem_rdata", "mem_size"]
 _TRAP_FIELDS = ["trap_cause"]
 
+# Public compatibility alias consumed by root contract gates.
+MANDATORY_FIELDS = [
+    "cycle",
+    "pc",
+    "insn",
+    "len",
+    "next_pc",
+    "wb_valid",
+    "wb_rd",
+    "wb_data",
+    "mem_valid",
+    "mem_addr",
+    "mem_wdata",
+    "mem_rdata",
+    "mem_size",
+    "trap_valid",
+    "trap_cause",
+]
+
 
 @dataclass(frozen=True)
 class CommitTrace:

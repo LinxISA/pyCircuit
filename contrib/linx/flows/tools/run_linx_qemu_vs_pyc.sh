@@ -49,7 +49,8 @@ FALLBACK_USED=0
 OBJ="$WORK/test.o"
 QEMU_TRACE="$WORK/qemu.jsonl"
 PYC_TRACE="$WORK/pyc.jsonl"
-COMMIT_SCHEMA_ID="${LINX_COMMIT_SCHEMA_ID:-${LINX_TRACE_SCHEMA_VERSION:-LC-COMMIT-BUNDLE-V1}}"
+TRACE_SCHEMA_VERSION="${LINX_TRACE_SCHEMA_VERSION:-1.0}"
+COMMIT_SCHEMA_ID="${LINX_COMMIT_SCHEMA_ID:-LC-COMMIT-BUNDLE-V1}"
 DFX_DUMP_DIR="${LINX_DIFF_DFX_DUMP_DIR:-$WORK/dfx_dump}"
 DFX_PRE="${LINX_DIFF_DFX_PRE:-8}"
 DFX_POST="${LINX_DIFF_DFX_POST:-16}"
@@ -102,6 +103,18 @@ if [[ ! -s "$PYC_TRACE" ]]; then
   echo "error: pyc trace was not produced: $PYC_TRACE" >&2
   exit 2
 fi
+
+echo "[schema] validate qemu trace"
+python3 "$LINX_ROOT/tools/bringup/validate_trace_schema.py" \
+  --trace "$QEMU_TRACE" \
+  --expected-version "${TRACE_SCHEMA_VERSION}" \
+  --assume-trace-version "${TRACE_SCHEMA_VERSION}" >/dev/null
+
+echo "[schema] validate pyc trace"
+python3 "$LINX_ROOT/tools/bringup/validate_trace_schema.py" \
+  --trace "$PYC_TRACE" \
+  --expected-version "${TRACE_SCHEMA_VERSION}" \
+  --assume-trace-version "${TRACE_SCHEMA_VERSION}" >/dev/null
 
 echo "[diff]"
 DIFF_ARGS=(
