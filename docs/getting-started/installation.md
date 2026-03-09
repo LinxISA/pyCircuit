@@ -84,6 +84,20 @@ cmake --install .pycircuit_out/toolchain/build --prefix "$PWD/.pycircuit_out/too
 bash flows/scripts/pyc build
 ```
 
+## Alternative: Install a Release Wheel
+
+```bash
+python3 -m pip install pycircuit-<version>-<platform>.whl
+
+# The wheel ships the matching toolchain inside site-packages.
+pycc --version
+python3 -m pycircuit.cli --help
+```
+
+The wheel is platform-specific because it embeds `pycc`, the runtime archive,
+and the required LLVM/MLIR shared libraries. Use the wheel that matches your
+OS and architecture.
+
 ## Install Python Package
 
 ```bash

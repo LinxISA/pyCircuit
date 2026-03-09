@@ -141,6 +141,16 @@ pyc_find_pycc() {
 }
 
 pyc_pythonpath() {
+  if [[ "${PYC_USE_INSTALLED_PYTHON_PACKAGE:-0}" == "1" ]]; then
+    echo "${PYC_PYTHONPATH:-}"
+    return 0
+  fi
+
+  if [[ -n "${PYC_PYTHONPATH:-}" ]]; then
+    echo "${PYC_PYTHONPATH}"
+    return 0
+  fi
+
   # Prefer editable install (`pip install -e .`), but fall back to PYTHONPATH for
   # repo-local runs.
   echo "${PYC_ROOT_DIR}/compiler/frontend:${PYC_ROOT_DIR}/designs"

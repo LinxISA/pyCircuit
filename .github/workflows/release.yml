@@ -29,6 +29,7 @@ jobs:
           set -euxo pipefail
           sudo apt-get update
           sudo apt-get install -y wget gnupg software-properties-common cmake ninja-build python3 python3-pip clang tar verilator iverilog
+          python3 -m pip install setuptools wheel
           wget https://apt.llvm.org/llvm.sh
           chmod +x llvm.sh
           sudo ./llvm.sh 19
@@ -41,6 +42,7 @@ jobs:
           set -euxo pipefail
           brew update
           brew install ninja cmake llvm@19 python@3
+          python3 -m pip install setuptools wheel
           echo "$(brew --prefix llvm@19)/bin" >> "$GITHUB_PATH"
 
       - name: Build staged toolchain
@@ -80,11 +82,30 @@ jobs:
           mkdir -p dist
           mv ".pycircuit_out/toolchain/build/${PKG}.tar.gz" "dist/${PKG}.tar.gz"
 
+          WHEEL_ARGS=()
+          if [[ "${RUNNER_OS}" == "macOS" ]]; then
+            WHEEL_ARGS+=(--wheel-plat-name "$(python3 packaging/wheel/get_macos_wheel_plat_name.py "$(uname -m)")")
+          fi
+          python3 packaging/wheel/create_wheel.py \
+            --install-dir "$PWD/.pycircuit_out/toolchain/install" \
+            --out-dir "$PWD/dist" \
+            "${WHEEL_ARGS[@]}"
+
+          python3 -m venv .venv-wheel
+          source .venv-wheel/bin/activate
+          pip install dist/*.whl
+          export PYC_TOOLCHAIN_ROOT="$(python -c 'import pycircuit, pathlib; print((pathlib.Path(pycircuit.__file__).resolve().parent / "_toolchain").as_posix())')"
+          export PYC_USE_INSTALLED_PYTHON_PACKAGE=1
+          unset PYCC
+          bash flows/scripts/run_examples.sh
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: pycircuit-${{ runner.os }}-${{ runner.arch }}
-          path: dist/*.tar.gz
+          path: |
+            dist/*.tar.gz
+            dist/*.whl
 
   github-packages:
     needs: [build-packages]
@@ -136,4 +157,6 @@ jobs:
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/*.tar.gz
+          files: |
+            dist/*.tar.gz
+            dist/*.whl

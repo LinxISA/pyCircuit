@@ -34,6 +34,17 @@ bash flows/scripts/pyc build
 
 The staged toolchain is installed under `.pycircuit_out/toolchain/install/` by default.
 
+Install a release wheel instead of building locally:
+
+```bash
+python3 -m pip install pycircuit-<version>-<platform>.whl
+pycc --version
+```
+
+The platform wheel bundles the matching `pycc` toolchain under the `pycircuit`
+package, so `pycircuit.cli` and the `pycc` wrapper use the same installed source
+tree and do not require a separate repo-local build.
+
 Run the smoke gates:
 
 ```bash

@@ -20,6 +20,7 @@ from .diagnostics import render_diagnostic
 from .dsl import Module
 from .design import FRONTEND_CONTRACT, Design, DesignError, value_params_of
 from .jit import JitError, compile
+from .packaged_toolchain import bundled_toolchain_root, tool_executable
 from .probe import (
     ProbeError,
     TbProbes,
@@ -44,6 +45,17 @@ def _default_top_name(src: Path) -> str:
     if not parts:
         return "Top"
     return "".join(p[:1].upper() + p[1:] for p in parts)
+
+
+def _tool_script(name: str) -> Path:
+    candidates = [
+        Path(__file__).resolve().parent / "_tools" / name,
+        Path(__file__).resolve().parents[3] / "flows" / "tools" / name,
+    ]
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+    raise SystemExit(f"required pyCircuit helper script not found: {name}")
 
 
 def _load_py_file(path: Path) -> object:
@@ -163,10 +175,7 @@ def _cmd_emit(args: argparse.Namespace) -> int:
     if isinstance(design, Design):
         out.write_text(design.emit_mlir(), encoding="utf-8")
         if getattr(args, "module_graph_out", None):
-            root = Path(__file__).resolve().parents[3]
-            tool = root / "flows" / "tools" / "pyc_module_graph.py"
-            if not tool.is_file():
-                raise SystemExit(f"module-graph tool not found (expected in-tree): {tool}")
+            tool = _tool_script("pyc_module_graph.py")
             cmd = [
                 sys.executable,
                 str(tool),
@@ -213,6 +222,7 @@ def _detect_pycc() -> Path:
     root = Path(__file__).resolve().parents[3]
     toolchain_root_env = os.environ.get("PYC_TOOLCHAIN_ROOT")
     candidates = [
+        tool_executable("pycc"),
         Path(toolchain_root_env) / "bin" / "pycc" if toolchain_root_env else None,
         root / ".pycircuit_out" / "toolchain" / "install" / "bin" / "pycc",
         root / "dist" / "pycircuit" / "bin" / "pycc",
@@ -253,6 +263,8 @@ def _toolchain_roots(pycc: Path | None = None) -> list[Path]:
     env = os.environ.get("PYC_TOOLCHAIN_ROOT")
     if env:
         add(Path(env))
+
+    add(bundled_toolchain_root())
 
     if pycc is not None:
         try:
@@ -1737,7 +1749,7 @@ def _cmd_build(args: argparse.Namespace) -> int:
         cpp_manifest = out_dir / "cpp_project_manifest.json"
         _save_json(cpp_manifest, build_manifest)
 
-        gen_script = Path(__file__).resolve().parents[3] / "flows" / "tools" / "gen_cmake_from_manifest.py"
+        gen_script = _tool_script("gen_cmake_from_manifest.py")
         cmake_src = out_dir / "cpp_build" / "src"
         cmake_build = out_dir / "cpp_build" / "build"
         cmake_src.mkdir(parents=True, exist_ok=True)
