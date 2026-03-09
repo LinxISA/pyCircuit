@@ -84,49 +84,6 @@ jobs:
             --install-dir "$PWD/.pycircuit_out/toolchain/install" \
             --out-dir "$PWD/dist"
 
-      - name: Upload toolchain
-        uses: actions/upload-artifact@v4
-        with:
-          name: pyc-toolchain-linux
-          path: .pycircuit_out/toolchain/install/
-          retention-days: 1
-
-      - name: Upload wheel
-        uses: actions/upload-artifact@v4
-        with:
-          name: pyc-wheel-linux
-          path: dist/*.whl
-          retention-days: 1
-
-  examples-linux:
-    name: Examples + Sims (Linux)
-    runs-on: ubuntu-latest
-    needs: build-linux
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
-      - name: Install simulation deps
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y verilator iverilog
-
-      - name: Download toolchain
-        uses: actions/download-artifact@v4
-        with:
-          name: pyc-toolchain-linux
-          path: .pycircuit_out/toolchain/install
-
-      - name: Restore toolchain executable bits
-        run: |
-          chmod -R u+rwX,go+rX .pycircuit_out/toolchain/install
-          find .pycircuit_out/toolchain/install/bin -type f -exec chmod +x {} +
-
       - name: Run examples
         run: |
           export PYC_TOOLCHAIN_ROOT="$PWD/.pycircuit_out/toolchain/install"
@@ -141,6 +98,20 @@ jobs:
           export PATH="$PYC_TOOLCHAIN_ROOT/bin:$PATH"
           unset PYCC
           bash flows/scripts/run_sims.sh
+
+      - name: Upload toolchain
+        uses: actions/upload-artifact@v4
+        with:
+          name: pyc-toolchain-linux
+          path: .pycircuit_out/toolchain/install/
+          retention-days: 1
+
+      - name: Upload wheel
+        uses: actions/upload-artifact@v4
+        with:
+          name: pyc-wheel-linux
+          path: dist/*.whl
+          retention-days: 1
 
   wheel-linux:
     name: Wheel Smoke (Linux)
