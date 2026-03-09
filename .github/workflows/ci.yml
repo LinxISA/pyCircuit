@@ -1,6 +1,7 @@
 name: CI
 
 on:
+  workflow_dispatch:
   push:
     branches: [main, develop]
   pull_request:
@@ -193,11 +194,9 @@ jobs:
 
       - name: Build platform wheel
         run: |
-          python packaging/wheel/get_macos_wheel_plat_name.py "$(uname -m)" > .pycircuit_out/macos_plat_name.txt
           python packaging/wheel/create_wheel.py \
             --install-dir "$PWD/.pycircuit_out/toolchain/install" \
-            --out-dir "$PWD/dist" \
-            --wheel-plat-name "$(cat .pycircuit_out/macos_plat_name.txt)"
+            --out-dir "$PWD/dist"
 
       - name: Run example compile gate
         run: |

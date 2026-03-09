@@ -82,14 +82,9 @@ jobs:
           mkdir -p dist
           mv ".pycircuit_out/toolchain/build/${PKG}.tar.gz" "dist/${PKG}.tar.gz"
 
-          WHEEL_ARGS=()
-          if [[ "${RUNNER_OS}" == "macOS" ]]; then
-            WHEEL_ARGS+=(--wheel-plat-name "$(python3 packaging/wheel/get_macos_wheel_plat_name.py "$(uname -m)")")
-          fi
           python3 packaging/wheel/create_wheel.py \
             --install-dir "$PWD/.pycircuit_out/toolchain/install" \
-            --out-dir "$PWD/dist" \
-            "${WHEEL_ARGS[@]}"
+            --out-dir "$PWD/dist"
 
           python3 -m venv .venv-wheel
           source .venv-wheel/bin/activate

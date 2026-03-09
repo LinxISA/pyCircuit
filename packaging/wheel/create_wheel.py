@@ -7,8 +7,17 @@ import shutil
 import subprocess
 import sys
 import tempfile
-import tomllib
 from pathlib import Path
+
+from platform_tags import wheel_plat_name
+
+try:
+    import tomllib
+except ModuleNotFoundError:  # pragma: no cover - Python 3.11+ in CI, but keep 3.9/3.10 usable.
+    try:
+        import tomli as tomllib  # type: ignore[no-redef]
+    except ModuleNotFoundError as exc:  # pragma: no cover - depends on local Python version.
+        raise SystemExit("wheel packaging requires Python 3.11+ or `tomli` on Python 3.9/3.10") from exc
 
 
 def _repo_root() -> Path:
@@ -73,14 +82,13 @@ def main(argv: list[str] | None = None) -> int:
         _copy_file(repo_root / "packaging" / "wheel" / "setup.py", stage / "setup.py")
         _copy_file(repo_root / "packaging" / "wheel" / "pyproject.toml", stage / "pyproject.toml")
 
+        plat_name = args.wheel_plat_name or wheel_plat_name()
+
         env = os.environ.copy()
         env["PYC_WHEEL_VERSION"] = version
-        if args.wheel_plat_name:
-            env["PYC_WHEEL_PLAT_NAME"] = args.wheel_plat_name
 
         cmd = [sys.executable, "setup.py", "bdist_wheel", "--dist-dir", str(out_dir)]
-        if args.wheel_plat_name:
-            cmd.extend(["--plat-name", args.wheel_plat_name])
+        cmd.extend(["--plat-name", plat_name])
 
         subprocess.run(cmd, check=True, cwd=stage, env=env)
     return 0
