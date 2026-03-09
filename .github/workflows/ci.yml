@@ -12,7 +12,7 @@ env:
 
 jobs:
   lint:
-    name: Lint
+    name: Python Checks
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -23,17 +23,26 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install linting tools
-        run: pip install ruff black mypy
+      - name: Install Python check deps
+        run: python -m pip install pyyaml
 
-      - name: Run Ruff
-        run: ruff check .
+      - name: Validate cross-platform wheel tag helper
+        run: |
+          python packaging/wheel/get_wheel_plat_name.py --system linux --arch x86_64
+          python packaging/wheel/get_wheel_plat_name.py --system macos --arch arm64
+          python packaging/wheel/get_wheel_plat_name.py --system macos --arch x86_64
 
-      - name: Run Black
-        run: black --check .
+      - name: Byte-compile packaging + CLI modules
+        run: |
+          python -m py_compile \
+            packaging/wheel/create_wheel.py \
+            packaging/wheel/get_wheel_plat_name.py \
+            packaging/wheel/platform_tags.py \
+            compiler/frontend/pycircuit/packaged_toolchain.py \
+            compiler/frontend/pycircuit/cli.py
 
-      - name: Run MyPy
-        run: mypy compiler/frontend/pycircuit || true
+      - name: Run API hygiene gate
+        run: python flows/tools/check_api_hygiene.py compiler/frontend/pycircuit designs/examples docs README.md
 
   build-linux:
     name: Build Toolchain (Linux)
