@@ -6,7 +6,7 @@ This guide covers setting up the pyCircuit development environment.
 
 | Component | Minimum Version | Recommended Version |
 |-----------|---------------|---------------------|
-| Python | 3.9 | 3.10+ |
+| Python | 3.10 | 3.14 |
 | LLVM | 19 | 19 |
 | CMake | 3.20 | 3.28+ |
 | Ninja | 1.10 | Latest |
@@ -87,7 +87,7 @@ bash flows/scripts/pyc build
 ## Alternative: Install a Release Wheel
 
 ```bash
-python3 -m pip install pycircuit-<version>-<platform>.whl
+python3 -m pip install /path/to/pycircuit_hisi-<version>-py3-none-<platform>.whl
 
 # The wheel ships the matching toolchain inside site-packages.
 pycc --version
@@ -96,17 +96,32 @@ python3 -m pycircuit.cli --help
 
 The wheel is platform-specific because it embeds `pycc`, the runtime archive,
 and the required LLVM/MLIR shared libraries. Use the wheel that matches your
-OS and architecture.
+OS and architecture. A single wheel now covers Python 3.10+ on that platform.
+
+Published package install command:
+
+```bash
+python3 -m pip install pycircuit-hisi
+```
+
+The distribution name is `pycircuit-hisi` to avoid the existing unrelated
+`pycircuit` package on PyPI. The import path remains `pycircuit`, and the CLI
+entrypoints remain `pycircuit`, `pycc`, and `pyc-opt`.
 
 ## Install Python Package
 
 ```bash
-# Install pycircuit in development mode
-pip install -e .
+# Install the frontend package in development mode
+python3 -m pip install -e .
 
 # Verify installation
-python -c "import pycircuit; print(pycircuit.__version__)"
+python3 -c "import pycircuit; print(pycircuit.__version__)"
 ```
+
+Editable install is frontend-only. It does not provide `pycc` on `PATH`; build
+the toolchain with `bash flows/scripts/pyc build` and export
+`PYC_TOOLCHAIN_ROOT="$PWD/.pycircuit_out/toolchain/install"`, or install a
+release wheel instead.
 
 ## Verify Your Setup
 
@@ -134,7 +149,7 @@ cmake -G Ninja -S . -B .pycircuit_out/toolchain/build ...
 
 ### Python Version Issues
 
-pyCircuit requires Python 3.9+. Check your version:
+pyCircuit requires Python 3.10+. Check your version:
 
 ```bash
 python3 --version

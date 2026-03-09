@@ -2,9 +2,12 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License">
-  <img src="https://img.shields.io/badge/Python-3.9+--green.svg" alt="Python">
+  <img src="https://img.shields.io/badge/Python-3.10%2B-green.svg" alt="Python">
   <img src="https://img.shields.io/badge/MLIR-19-orange.svg" alt="MLIR">
   <a href="https://github.com/LinxISA/pyCircuit/actions"><img src="https://github.com/LinxISA/pyCircuit/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/LinxISA/pyCircuit/actions/workflows/release.yml"><img src="https://github.com/LinxISA/pyCircuit/actions/workflows/release.yml/badge.svg" alt="Release"></a>
+  <a href="https://github.com/LinxISA/pyCircuit/releases"><img src="https://img.shields.io/github/v/release/LinxISA/pyCircuit?display_name=tag" alt="Latest Release"></a>
+  <img src="https://img.shields.io/badge/PyPI-pycircuit--hisi-blue.svg" alt="PyPI Package">
 </p>
 
 pyCircuit is a Python-based hardware construction DSL that compiles Python
@@ -37,13 +40,35 @@ The staged toolchain is installed under `.pycircuit_out/toolchain/install/` by d
 Install a release wheel instead of building locally:
 
 ```bash
-python3 -m pip install pycircuit-<version>-<platform>.whl
+python3 -m pip install /path/to/pycircuit_hisi-<version>-py3-none-<platform>.whl
 pycc --version
 ```
 
 The platform wheel bundles the matching `pycc` toolchain under the `pycircuit`
 package, so `pycircuit.cli` and the `pycc` wrapper use the same installed source
-tree and do not require a separate repo-local build.
+tree and do not require a separate repo-local build. The wheel must match both
+your OS/architecture and Python 3.10+.
+
+Published package install command:
+
+```bash
+python3 -m pip install pycircuit-hisi
+```
+
+The distribution name is `pycircuit-hisi` to avoid the existing unrelated
+`pycircuit` package on PyPI. The Python import path remains `pycircuit`, and
+the installed compiler command remains `pycc`.
+
+Install the frontend from source for development:
+
+```bash
+python3 -m pip install -e .
+python3 -m pycircuit.cli --help
+```
+
+Editable source install is frontend-only. It does not install `pycc`; build the
+toolchain with `bash flows/scripts/pyc build` and point `PYC_TOOLCHAIN_ROOT` at
+`.pycircuit_out/toolchain/install`, or use a release wheel.
 
 Run the smoke gates:
 
