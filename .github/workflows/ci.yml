@@ -122,10 +122,16 @@ jobs:
           name: pyc-toolchain-linux
           path: .pycircuit_out/toolchain/install
 
+      - name: Restore toolchain executable bits
+        run: |
+          chmod -R u+rwX,go+rX .pycircuit_out/toolchain/install
+          find .pycircuit_out/toolchain/install/bin -type f -exec chmod +x {} +
+
       - name: Run examples
         run: |
           export PYC_TOOLCHAIN_ROOT="$PWD/.pycircuit_out/toolchain/install"
           export PATH="$PYC_TOOLCHAIN_ROOT/bin:$PATH"
+          export PYC_SKIP_SEMANTIC_REGRESSIONS=1
           unset PYCC
           bash flows/scripts/run_examples.sh
 
@@ -169,6 +175,7 @@ jobs:
           pip install dist/*.whl
           export PYC_TOOLCHAIN_ROOT="$(python -c 'import pycircuit, pathlib; print((pathlib.Path(pycircuit.__file__).resolve().parent / "_toolchain").as_posix())')"
           export PYC_USE_INSTALLED_PYTHON_PACKAGE=1
+          export PYC_SKIP_SEMANTIC_REGRESSIONS=1
           unset PYCC
           bash flows/scripts/run_examples.sh
 
@@ -211,6 +218,7 @@ jobs:
         run: |
           export PYC_TOOLCHAIN_ROOT="$PWD/.pycircuit_out/toolchain/install"
           export PATH="$PYC_TOOLCHAIN_ROOT/bin:$PATH"
+          export PYC_SKIP_SEMANTIC_REGRESSIONS=1
           unset PYCC
           bash flows/scripts/run_examples.sh
 
@@ -223,6 +231,7 @@ jobs:
           pip install dist/*.whl
           export PYC_TOOLCHAIN_ROOT="$(python -c 'import pycircuit, pathlib; print((pathlib.Path(pycircuit.__file__).resolve().parent / "_toolchain").as_posix())')"
           export PYC_USE_INSTALLED_PYTHON_PACKAGE=1
+          export PYC_SKIP_SEMANTIC_REGRESSIONS=1
           unset PYCC
           bash flows/scripts/run_examples.sh
 

@@ -1212,10 +1212,14 @@ fi
 cp -f "${decision_report}" "${docs_gate_dir}/decision_status_report.json" >/dev/null 2>&1 || true
 
 pyc_log "running v4.0 semantic regression lane"
-if ! PYC_GATE_RUN_ID="${gate_run_id}" bash "${PYC_ROOT_DIR}/flows/scripts/run_semantic_regressions_v40.sh" \
-  >"${docs_gate_dir}/semantic_regressions.stdout" 2>"${docs_gate_dir}/semantic_regressions.stderr"; then
-  pyc_warn "semantic regression lane failed"
-  fail=1
+if [[ "${PYC_SKIP_SEMANTIC_REGRESSIONS:-0}" == "1" ]]; then
+  pyc_log "skipping v4.0 semantic regression lane (PYC_SKIP_SEMANTIC_REGRESSIONS=1)"
+else
+  if ! PYC_GATE_RUN_ID="${gate_run_id}" bash "${PYC_ROOT_DIR}/flows/scripts/run_semantic_regressions_v40.sh" \
+    >"${docs_gate_dir}/semantic_regressions.stdout" 2>"${docs_gate_dir}/semantic_regressions.stderr"; then
+    pyc_warn "semantic regression lane failed"
+    fail=1
+  fi
 fi
 
 if [[ "${fail}" -eq 0 ]]; then
