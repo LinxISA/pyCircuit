@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 
 from setuptools import Distribution, find_namespace_packages, setup
+from wheel.bdist_wheel import bdist_wheel as _bdist_wheel
 
 
 def package_files(root: Path, package_root: Path) -> list[str]:
@@ -21,17 +22,35 @@ class BinaryDistribution(Distribution):
         return True
 
 
+class PlatformBinaryWheel(_bdist_wheel):
+    def finalize_options(self) -> None:
+        super().finalize_options()
+        self.root_is_pure = False
+
+    def get_tag(self) -> tuple[str, str, str]:
+        _python, _abi, plat = super().get_tag()
+        return ("py3", "none", plat)
+
+
 ROOT = Path(__file__).resolve().parent
 PACKAGE_ROOT = ROOT / "pycircuit"
 
 setup(
-    name="pycircuit",
+    name="pycircuit-hisi",
     version=os.environ["PYC_WHEEL_VERSION"],
     description="A Python-based hardware description framework that compiles Python to RTL through MLIR",
     long_description=(ROOT / "README.md").read_text(encoding="utf-8"),
     long_description_content_type="text/markdown",
     license="MIT",
-    python_requires=">=3.9",
+    author="LinxISA Contributors",
+    author_email="contact@linxisa.org",
+    url="https://github.com/LinxISA/pyCircuit",
+    project_urls={
+        "Repository": "https://github.com/LinxISA/pyCircuit",
+        "Issues": "https://github.com/LinxISA/pyCircuit/issues",
+        "Releases": "https://github.com/LinxISA/pyCircuit/releases",
+    },
+    python_requires=">=3.10",
     install_requires=[
         "click>=8.0.0",
         "pyyaml>=6.0",
@@ -50,5 +69,6 @@ setup(
             "pyc-opt=pycircuit.packaged_toolchain:pyc_opt_main",
         ]
     },
+    cmdclass={"bdist_wheel": PlatformBinaryWheel},
     distclass=BinaryDistribution,
 )

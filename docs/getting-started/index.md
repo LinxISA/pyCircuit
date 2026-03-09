@@ -4,7 +4,7 @@ Welcome to the pyCircuit getting started guide! This section will help you set u
 
 ## Prerequisites
 
-- Python 3.9 or later
+- Python 3.10 or later
 - LLVM/MLIR 19 (for compiler backend)
 - CMake 3.20+
 - Ninja build system
@@ -39,11 +39,20 @@ bash flows/scripts/pyc build
 
 ```bash
 # Install Python package
-pip install -e .
+python3 -m pip install -e .
 
 # Use the frontend to emit MLIR
 PYTHONPATH=compiler/frontend python -m pycircuit.cli emit your_design.py
 ```
+
+### Option 3: Published PyPI Wheel
+
+```bash
+python3 -m pip install pycircuit-hisi
+```
+
+The distribution name is `pycircuit-hisi` to avoid the unrelated `pycircuit`
+project that already exists on PyPI. The import path remains `pycircuit`.
 
 ## Next Steps
 
