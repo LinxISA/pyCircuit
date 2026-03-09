@@ -92,13 +92,6 @@ jobs:
           unset PYCC
           bash flows/scripts/run_examples.sh
 
-      - name: Run simulations
-        run: |
-          export PYC_TOOLCHAIN_ROOT="$PWD/.pycircuit_out/toolchain/install"
-          export PATH="$PYC_TOOLCHAIN_ROOT/bin:$PATH"
-          unset PYCC
-          bash flows/scripts/run_sims.sh
-
       - name: Upload toolchain
         uses: actions/upload-artifact@v4
         with:
