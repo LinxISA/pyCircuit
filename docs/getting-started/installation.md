@@ -7,7 +7,7 @@ This guide covers setting up the pyCircuit development environment.
 | Component | Minimum Version | Recommended Version |
 |-----------|---------------|---------------------|
 | Python | 3.9 | 3.10+ |
-| LLVM | 17 | 19 |
+| LLVM | 19 | 19 |
 | CMake | 3.20 | 3.28+ |
 | Ninja | 1.10 | Latest |
 
@@ -20,13 +20,16 @@ This guide covers setting up the pyCircuit development environment.
 sudo apt-get update
 
 # Install build tools
-sudo apt-get install -y cmake ninja-build python3 python3-pip clang
+sudo apt-get install -y cmake ninja-build python3 python3-pip clang wget
 
-# Install LLVM/MLIR (Ubuntu 22.04+)
-sudo apt-get install -y llvm-dev mlir-tools libmlir-dev
+# Install LLVM/MLIR 19 (Ubuntu 22.04+)
+wget https://apt.llvm.org/llvm.sh
+chmod +x llvm.sh
+sudo ./llvm.sh 19
+sudo apt-get install -y llvm-19-dev mlir-19-tools libmlir-19-dev
 
 # Verify installation
-llvm-config --version
+llvm-config-19 --version
 mlir-opt --version
 ```
 
@@ -39,10 +42,10 @@ mlir-opt --version
 # Install build tools
 brew install cmake ninja python@3
 
-# Install LLVM with MLIR
-brew install llvm
+# Install LLVM 19 with MLIR
+brew install llvm@19
 # Add LLVM to PATH
-echo 'export PATH="$(brew --prefix llvm)/bin:$PATH"' >> ~/.zshrc
+echo 'export PATH="$(brew --prefix llvm@19)/bin:$PATH"' >> ~/.zshrc
 source ~/.zshrc
 
 # Verify installation
@@ -57,19 +60,21 @@ git clone https://github.com/LinxISA/pyCircuit.git
 cd pyCircuit
 
 # Configure with CMake
-LLVM_DIR="$(llvm-config --cmakedir)"
+LLVM_DIR="$(llvm-config-19 --cmakedir)"
 MLIR_DIR="$(dirname "$LLVM_DIR")/mlir"
 
-cmake -G Ninja -S . -B build \
+cmake -G Ninja -S . -B .pycircuit_out/toolchain/build \
   -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_INSTALL_PREFIX="$PWD/.pycircuit_out/toolchain/install" \
   -DLLVM_DIR="$LLVM_DIR" \
   -DMLIR_DIR="$MLIR_DIR"
 
-# Build the compiler
-ninja -C build pycc pyc-opt
+# Build and stage the compiler toolchain
+ninja -C .pycircuit_out/toolchain/build pycc pyc-opt pyc4_runtime
+cmake --install .pycircuit_out/toolchain/build --prefix "$PWD/.pycircuit_out/toolchain/install"
 
 # Verify the build
-./build/bin/pycc --version
+./.pycircuit_out/toolchain/install/bin/pycc --version
 ```
 
 ## Alternative: Use Build Script
@@ -110,7 +115,7 @@ If CMake can't find LLVM, set the paths explicitly:
 ```bash
 export LLVM_DIR=/path/to/llvm/lib/cmake/llvm
 export MLIR_DIR=/path/to/mlir/lib/cmake/mlir
-cmake -G Ninja -S . -B build ...
+cmake -G Ninja -S . -B .pycircuit_out/toolchain/build ...
 ```
 
 ### Python Version Issues
@@ -136,8 +141,8 @@ brew install python@3.11
 Clean and rebuild:
 
 ```bash
-rm -rf build
-cmake -G Ninja -S . -B build ...
-ninja -C build clean
-ninja -C build pycc
+rm -rf .pycircuit_out/toolchain
+cmake -G Ninja -S . -B .pycircuit_out/toolchain/build ...
+ninja -C .pycircuit_out/toolchain/build clean
+ninja -C .pycircuit_out/toolchain/build pycc
 ```

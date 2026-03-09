@@ -3,7 +3,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License">
   <img src="https://img.shields.io/badge/Python-3.9+--green.svg" alt="Python">
-  <img src="https://img.shields.io/badge/MLIR-17+-orange.svg" alt="MLIR">
+  <img src="https://img.shields.io/badge/MLIR-19-orange.svg" alt="MLIR">
   <a href="https://github.com/LinxISA/pyCircuit/actions"><img src="https://github.com/LinxISA/pyCircuit/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
 </p>
 
@@ -32,6 +32,8 @@ Build the backend tool (`pycc`):
 bash flows/scripts/pyc build
 ```
 
+The staged toolchain is installed under `.pycircuit_out/toolchain/install/` by default.
+
 Run the smoke gates:
 
 ```bash
@@ -59,6 +61,7 @@ Build a multi-module project (device + TB):
 
 ```bash
 PYTHONPATH=compiler/frontend \
+PYC_TOOLCHAIN_ROOT=.pycircuit_out/toolchain/install \
 python3 -m pycircuit.cli build \
   designs/examples/counter/tb_counter.py \
   --out-dir /tmp/pyc_counter \
@@ -105,4 +108,3 @@ pyCircuit
 ## License
 
 pyCircuit is licensed under the MIT License. See `LICENSE`.
-

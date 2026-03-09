@@ -802,11 +802,11 @@ class Circuit(Module):
         tags: Mapping[str, Any] | None = None,
     ) -> Wire:
         _ = (name, value, at, tags)
-        raise DesignError("Circuit.debug() was removed; use standalone `@probe(target=...)` definitions instead")
+        raise DesignError("Legacy debug helper was removed; use standalone `@probe(target=...)` definitions instead")
 
     def debug_bundle(self, prefix: str, fields: Mapping[str, Union[Wire, Reg, Signal, Connector]]) -> dict[str, Wire]:
         _ = (prefix, fields)
-        raise DesignError("Circuit.debug_bundle() was removed; use standalone `@probe(target=...)` definitions instead")
+        raise DesignError("Legacy debug-bundle helper was removed; use standalone `@probe(target=...)` definitions instead")
 
     def debug_probe(
         self,
@@ -819,11 +819,11 @@ class Circuit(Module):
         tags: Mapping[str, Any] | None = None,
     ) -> dict[str, Wire]:
         _ = (stage, lane, fields, family, at, tags)
-        raise DesignError("Circuit.debug_probe() was removed; use standalone `@probe(target=...)` definitions instead")
+        raise DesignError("Legacy debug-probe helper was removed; use standalone `@probe(target=...)` definitions instead")
 
     def debug_occ(self, stage: str, lane: int, fields: Mapping[str, Union[Wire, Reg, Signal, Connector]]) -> dict[str, Wire]:
         _ = (stage, lane, fields)
-        raise DesignError("Circuit.debug_occ() was removed; use standalone `@probe(target=...)` definitions instead")
+        raise DesignError("Legacy occupancy-debug helper was removed; use standalone `@probe(target=...)` definitions instead")
 
     def probe(
         self,
@@ -837,7 +837,7 @@ class Circuit(Module):
         tags: Mapping[str, Any] | None = None,
     ) -> dict[str, Wire]:
         _ = (value, stage, lane, family, prefix, at, tags)
-        raise DesignError("Circuit.probe() was removed; use standalone `@probe(target=...)` definitions instead")
+        raise DesignError("Legacy probe helper was removed; use standalone `@probe(target=...)` definitions instead")
 
     def assign(
         self,

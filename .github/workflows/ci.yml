@@ -6,7 +6,7 @@ on:
   pull_request:
 
 env:
-  LLVM_VERSION: "18"
+  LLVM_VERSION: "19"
   CMAKE_BUILD_TYPE: Release
 
 jobs:
@@ -20,11 +20,10 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: "3.11"
 
       - name: Install linting tools
-        run: |
-          pip install ruff black mypy
+        run: pip install ruff black mypy
 
       - name: Run Ruff
         run: ruff check .
@@ -35,8 +34,8 @@ jobs:
       - name: Run MyPy
         run: mypy compiler/frontend/pycircuit || true
 
-  build:
-    name: Build (ubuntu-latest)
+  build-linux:
+    name: Build Toolchain (Linux)
     runs-on: ubuntu-latest
     needs: lint
     steps:
@@ -46,125 +45,100 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: "3.11"
 
-      - name: Install system dependencies
+      - name: Install LLVM 19 + build deps
         run: |
+          set -euxo pipefail
           sudo apt-get update
-          sudo apt-get install -y cmake ninja-build clang
-          sudo apt-get install -y llvm-${LLVM_VERSION}-dev mlir-${LLVM_VERSION}-tools libmlir-${LLVM_VERSION}-dev || \
-          sudo apt-get install -y llvm-dev mlir-tools libmlir-dev
+          sudo apt-get install -y wget gnupg software-properties-common cmake ninja-build clang verilator iverilog
+          wget https://apt.llvm.org/llvm.sh
+          chmod +x llvm.sh
+          sudo ./llvm.sh ${LLVM_VERSION}
+          sudo apt-get install -y llvm-${LLVM_VERSION}-dev mlir-${LLVM_VERSION}-tools libmlir-${LLVM_VERSION}-dev
+          echo "/usr/lib/llvm-${LLVM_VERSION}/bin" >> "$GITHUB_PATH"
 
-      - name: Configure CMake
+      - name: Build staged toolchain
         run: |
-          LLVM_CONFIG="$(command -v llvm-config || command -v llvm-config-${LLVM_VERSION} || echo llvm-config)"
-          if [ -z "$(command -v $LLVM_CONFIG 2>/dev/null)" ]; then
-            LLVM_CONFIG=$(find /usr -name 'llvm-config*' 2>/dev/null | head -1)
-          fi
-          LLVM_DIR="$(${LLVM_CONFIG} --cmakedir)"
-          MLIR_DIR="$(dirname "$LLVM_DIR")/mlir"
+          bash flows/scripts/pyc build \
+            --llvm-config /usr/lib/llvm-${LLVM_VERSION}/bin/llvm-config \
+            --build-dir "$PWD/.pycircuit_out/toolchain/build" \
+            --install-prefix "$PWD/.pycircuit_out/toolchain/install"
 
-          cmake -G Ninja -S . -B build \
-            -DCMAKE_BUILD_TYPE=$CMAKE_BUILD_TYPE \
-            -DLLVM_DIR="$LLVM_DIR" \
-            -DMLIR_DIR="$MLIR_DIR" \
-            -DPYC_BUILD_CPP_EXAMPLES=OFF
-
-      - name: Build
-        run: ninja -C build pycc pyc-opt
-
-      - name: Upload build artifacts
+      - name: Upload toolchain
         uses: actions/upload-artifact@v4
         with:
-          name: pycc-build
-          path: build/bin/
+          name: pyc-toolchain-linux
+          path: .pycircuit_out/toolchain/install/
           retention-days: 1
 
-  test-examples:
-    name: Test Examples
+  examples-linux:
+    name: Examples + Sims (Linux)
     runs-on: ubuntu-latest
-    needs: build
+    needs: build-linux
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Download build artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: pycc-build
-          path: build/bin/
-
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: "3.11"
+
+      - name: Install simulation deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y verilator iverilog
+
+      - name: Download toolchain
+        uses: actions/download-artifact@v4
+        with:
+          name: pyc-toolchain-linux
+          path: .pycircuit_out/toolchain/install
 
       - name: Run examples
         run: |
-          chmod +x build/bin/pycc
+          export PYC_TOOLCHAIN_ROOT="$PWD/.pycircuit_out/toolchain/install"
+          export PATH="$PYC_TOOLCHAIN_ROOT/bin:$PATH"
+          unset PYCC
           bash flows/scripts/run_examples.sh
 
       - name: Run simulations
         run: |
-          sudo apt-get install -y verilator iverilog
-          bash flows/scripts/run_sims.sh || true
+          export PYC_TOOLCHAIN_ROOT="$PWD/.pycircuit_out/toolchain/install"
+          export PATH="$PYC_TOOLCHAIN_ROOT/bin:$PATH"
+          unset PYCC
+          bash flows/scripts/run_sims.sh
 
-  test-cpu:
-    name: Test Linx CPU
-    runs-on: ubuntu-latest
-    needs: build
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Download build artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: pycc-build
-          path: build/bin/
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
-      - name: Install system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y verilator
-
-      - name: Run Linx CPU tests
-        run: |
-          chmod +x build/bin/pycc
-          bash flows/tools/run_fastfwd_pyc_cpp.sh || true
-
-  macos-build:
-    name: Build (macOS)
+  build-macos:
+    name: Build Toolchain (macOS)
     runs-on: macos-latest
     needs: lint
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
       - name: Install Homebrew packages
         run: |
-          brew install ninja cmake llvm python@3
+          brew update
+          brew install ninja cmake llvm@19 python@3
+          echo "$(brew --prefix llvm@19)/bin" >> "$GITHUB_PATH"
 
-      - name: Set up environment
+      - name: Build staged toolchain
         run: |
-          echo "$(brew --prefix llvm)/bin" >> $GITHUB_PATH
+          bash flows/scripts/pyc build \
+            --llvm-config "$(brew --prefix llvm@19)/bin/llvm-config" \
+            --build-dir "$PWD/.pycircuit_out/toolchain/build" \
+            --install-prefix "$PWD/.pycircuit_out/toolchain/install"
 
-      - name: Configure CMake
+      - name: Run example compile gate
         run: |
-          LLVM_CONFIG="$(command -v llvm-config)"
-          LLVM_DIR="$(${LLVM_CONFIG} --cmakedir)"
-          MLIR_DIR="$(dirname "$LLVM_DIR")/mlir"
-
-          cmake -G Ninja -S . -B build \
-            -DCMAKE_BUILD_TYPE=$CMAKE_BUILD_TYPE \
-            -DLLVM_DIR="$LLVM_DIR" \
-            -DMLIR_DIR="$MLIR_DIR" \
-            -DPYC_BUILD_CPP_EXAMPLES=OFF
-
-      - name: Build
-        run: ninja -C build pycc pyc-opt
+          export PYC_TOOLCHAIN_ROOT="$PWD/.pycircuit_out/toolchain/install"
+          export PATH="$PYC_TOOLCHAIN_ROOT/bin:$PATH"
+          unset PYCC
+          bash flows/scripts/run_examples.sh

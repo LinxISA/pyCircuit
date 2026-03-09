@@ -11,14 +11,14 @@ Recommended: build from the repo root via top-level `CMakeLists.txt` (see `READM
 
 You can also build this subproject standalone if you already have an LLVM+MLIR build/install.
 
-This example assumes an existing `~/llvm-project/build-mlir` containing MLIR.
+This example assumes an existing LLVM/MLIR 19 install or build tree.
 
 ```bash
-cmake -G Ninja -S compiler/mlir -B compiler/mlir/build \
-  -DMLIR_DIR=$HOME/llvm-project/build-mlir/lib/cmake/mlir \
-  -DLLVM_DIR=$HOME/llvm-project/build-mlir/lib/cmake/llvm
+cmake -G Ninja -S compiler/mlir -B /tmp/pyc-mlir-build \
+  -DMLIR_DIR=/path/to/llvm-19/lib/cmake/mlir \
+  -DLLVM_DIR=/path/to/llvm-19/lib/cmake/llvm
 
-ninja -C compiler/mlir/build pyc-opt pycc
+ninja -C /tmp/pyc-mlir-build pyc-opt pycc
 ```
 
 ## Passes (prototype)

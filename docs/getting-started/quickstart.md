@@ -9,6 +9,8 @@ the pyCircuit v4.0 (`pyc0.40`) module/testbench flow.
 bash flows/scripts/pyc build
 ```
 
+This stages the toolchain under `.pycircuit_out/toolchain/install/` by default.
+
 ## 2) Run the example smoke gate
 
 Compiler smoke (`emit + pycc`):
@@ -52,6 +54,7 @@ Build a multi-module project (device + TB) into an output directory:
 
 ```bash
 PYTHONPATH=compiler/frontend \
+PYC_TOOLCHAIN_ROOT=.pycircuit_out/toolchain/install \
 python3 -m pycircuit.cli build \
   designs/examples/counter/tb_counter.py \
   --out-dir /tmp/pyc_counter \
@@ -61,4 +64,3 @@ python3 -m pycircuit.cli build \
 
 For more end-to-end commands (including direct `emit` and `pycc --emit=cpp`),
 see `docs/QUICKSTART.md`.
-

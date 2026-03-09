@@ -577,7 +577,7 @@ fi
 neg_mlir="${neg_dir}/neg_contract_missing_value_param_types.pyc"
 cat > "${neg_mlir}" <<'MLIR'
 module attributes {pyc.top = @neg_contract, pyc.frontend.contract = "pycircuit"} {
-  func.func @neg_contract(%x: i1) -> (i1) attributes {arg_names = ["x"], result_names = ["y"], pyc.kind = "module", pyc.inline = "false", pyc.params = "{}", pyc.base = "neg_contract", pyc.value_params = ["vp"]} {
+  func.func @neg_contract(%x: i1) -> (i1) attributes {arg_names = ["x"], result_names = ["y"], pyc.kind = "module", pyc.inline = "false", pyc.params = "{}", pyc.base = "neg_contract", pyc.value_params = ["vp"], pyc.struct.metrics = "{\"source_loc\":0,\"ast_node_count\":0,\"hardware_call_count\":0,\"loop_count\":0,\"module_call_count\":0,\"state_call_count\":0,\"estimated_inline_cost\":0,\"instance_count\":0,\"state_alloc_count\":0,\"collection_count\":0,\"collection_instance_count\":0,\"module_family_collection_count\":0,\"repeated_body_clusters\":[]}", pyc.struct.collections = "[]"} {
     return %x : i1
   }
 }
@@ -602,11 +602,11 @@ mkdir -p "${m0_ptr_dir}"
 pos_mlir="${m0_ptr_dir}/pos_unique_ptr_children.pyc"
 cat > "${pos_mlir}" <<'MLIR'
 module attributes {pyc.top = @top, pyc.frontend.contract = "pycircuit"} {
-  func.func @leaf(%x: i1) -> (i1) attributes {arg_names = ["x"], result_names = ["y"], pyc.kind = "module", pyc.inline = "false", pyc.params = "{}", pyc.base = "leaf"} {
+  func.func @leaf(%x: i1) -> (i1) attributes {arg_names = ["x"], result_names = ["y"], pyc.kind = "module", pyc.inline = "false", pyc.params = "{}", pyc.base = "leaf", pyc.struct.metrics = "{\"source_loc\":0,\"ast_node_count\":0,\"hardware_call_count\":0,\"loop_count\":0,\"module_call_count\":0,\"state_call_count\":0,\"estimated_inline_cost\":0,\"instance_count\":0,\"state_alloc_count\":0,\"collection_count\":0,\"collection_instance_count\":0,\"module_family_collection_count\":0,\"repeated_body_clusters\":[]}", pyc.struct.collections = "[]"} {
     return %x : i1
   }
 
-  func.func @top(%x: i1) -> (i1) attributes {arg_names = ["x"], result_names = ["y"], pyc.kind = "module", pyc.inline = "false", pyc.params = "{}", pyc.base = "top"} {
+  func.func @top(%x: i1) -> (i1) attributes {arg_names = ["x"], result_names = ["y"], pyc.kind = "module", pyc.inline = "false", pyc.params = "{}", pyc.base = "top", pyc.struct.metrics = "{\"source_loc\":0,\"ast_node_count\":0,\"hardware_call_count\":0,\"loop_count\":0,\"module_call_count\":1,\"state_call_count\":0,\"estimated_inline_cost\":0,\"instance_count\":1,\"state_alloc_count\":0,\"collection_count\":0,\"collection_instance_count\":0,\"module_family_collection_count\":0,\"repeated_body_clusters\":[]}", pyc.struct.collections = "[]"} {
     %y = pyc.instance %x {callee = @leaf, name = "u0"} : (i1) -> i1
     return %y : i1
   }
@@ -642,7 +642,7 @@ mkdir -p "${m0_phase_dir}"
 pos_mlir="${m0_phase_dir}/pos_phase_api.pyc"
 cat > "${pos_mlir}" <<'MLIR'
 module attributes {pyc.top = @top, pyc.frontend.contract = "pycircuit"} {
-  func.func @top(%x: i1) -> (i1) attributes {arg_names = ["x"], result_names = ["y"], pyc.kind = "module", pyc.inline = "false", pyc.params = "{}", pyc.base = "top"} {
+  func.func @top(%x: i1) -> (i1) attributes {arg_names = ["x"], result_names = ["y"], pyc.kind = "module", pyc.inline = "false", pyc.params = "{}", pyc.base = "top", pyc.struct.metrics = "{\"source_loc\":0,\"ast_node_count\":0,\"hardware_call_count\":0,\"loop_count\":0,\"module_call_count\":0,\"state_call_count\":0,\"estimated_inline_cost\":0,\"instance_count\":0,\"state_alloc_count\":0,\"collection_count\":0,\"collection_instance_count\":0,\"module_family_collection_count\":0,\"repeated_body_clusters\":[]}", pyc.struct.collections = "[]"} {
     return %x : i1
   }
 }
@@ -713,11 +713,11 @@ mkdir -p "${m0_probe_dir}"
 mlir="${m0_probe_dir}/pos_probe_registry.pyc"
 cat > "${mlir}" <<'MLIR'
 module attributes {pyc.top = @top, pyc.frontend.contract = "pycircuit"} {
-  func.func @leaf(%x: i8) -> (i8) attributes {arg_names = ["x"], result_names = ["y"], pyc.kind = "module", pyc.inline = "false", pyc.params = "{}", pyc.base = "leaf"} {
+  func.func @leaf(%x: i8) -> (i8) attributes {arg_names = ["x"], result_names = ["y"], pyc.kind = "module", pyc.inline = "false", pyc.params = "{}", pyc.base = "leaf", pyc.struct.metrics = "{\"source_loc\":0,\"ast_node_count\":0,\"hardware_call_count\":0,\"loop_count\":0,\"module_call_count\":0,\"state_call_count\":0,\"estimated_inline_cost\":0,\"instance_count\":0,\"state_alloc_count\":0,\"collection_count\":0,\"collection_instance_count\":0,\"module_family_collection_count\":0,\"repeated_body_clusters\":[]}", pyc.struct.collections = "[]"} {
     return %x : i8
   }
 
-  func.func @top(%x: i8) -> (i8) attributes {arg_names = ["x"], result_names = ["y"], pyc.kind = "module", pyc.inline = "false", pyc.params = "{}", pyc.base = "top"} {
+  func.func @top(%x: i8) -> (i8) attributes {arg_names = ["x"], result_names = ["y"], pyc.kind = "module", pyc.inline = "false", pyc.params = "{}", pyc.base = "top", pyc.struct.metrics = "{\"source_loc\":0,\"ast_node_count\":0,\"hardware_call_count\":0,\"loop_count\":0,\"module_call_count\":1,\"state_call_count\":0,\"estimated_inline_cost\":0,\"instance_count\":1,\"state_alloc_count\":0,\"collection_count\":0,\"collection_instance_count\":0,\"module_family_collection_count\":0,\"repeated_body_clusters\":[]}", pyc.struct.collections = "[]"} {
     %y = pyc.instance %x {callee = @leaf, name = "u0"} : (i8) -> i8
     return %y : i8
   }
@@ -815,7 +815,7 @@ mkdir -p "${m2_neg_dir}"
 neg_mlir="${m2_neg_dir}/neg_comb_cycle_local.pyc"
 cat > "${neg_mlir}" <<'MLIR'
 module attributes {pyc.top = @neg_comb_cycle_local, pyc.frontend.contract = "pycircuit"} {
-  func.func @neg_comb_cycle_local(%x: i1) -> (i1) attributes {arg_names = ["x"], result_names = ["y"], pyc.kind = "module", pyc.inline = "false", pyc.params = "{}", pyc.base = "neg_comb_cycle_local"} {
+  func.func @neg_comb_cycle_local(%x: i1) -> (i1) attributes {arg_names = ["x"], result_names = ["y"], pyc.kind = "module", pyc.inline = "false", pyc.params = "{}", pyc.base = "neg_comb_cycle_local", pyc.struct.metrics = "{\"source_loc\":0,\"ast_node_count\":0,\"hardware_call_count\":0,\"loop_count\":0,\"module_call_count\":0,\"state_call_count\":0,\"estimated_inline_cost\":0,\"instance_count\":0,\"state_alloc_count\":0,\"collection_count\":0,\"collection_instance_count\":0,\"module_family_collection_count\":0,\"repeated_body_clusters\":[]}", pyc.struct.collections = "[]"} {
     %w0 = pyc.wire {pyc.name = "w0"} : i1
     %w1 = pyc.wire {pyc.name = "w1"} : i1
     pyc.assign %w0, %w1 : i1
@@ -841,11 +841,11 @@ fi
 neg_mlir="${m2_neg_dir}/neg_comb_cycle_instance.pyc"
 cat > "${neg_mlir}" <<'MLIR'
 module attributes {pyc.top = @top, pyc.frontend.contract = "pycircuit"} {
-  func.func @id(%x: i1) -> (i1) attributes {arg_names = ["x"], result_names = ["y"], pyc.kind = "module", pyc.inline = "false", pyc.params = "{}", pyc.base = "id"} {
+  func.func @id(%x: i1) -> (i1) attributes {arg_names = ["x"], result_names = ["y"], pyc.kind = "module", pyc.inline = "false", pyc.params = "{}", pyc.base = "id", pyc.struct.metrics = "{\"source_loc\":0,\"ast_node_count\":0,\"hardware_call_count\":0,\"loop_count\":0,\"module_call_count\":0,\"state_call_count\":0,\"estimated_inline_cost\":0,\"instance_count\":0,\"state_alloc_count\":0,\"collection_count\":0,\"collection_instance_count\":0,\"module_family_collection_count\":0,\"repeated_body_clusters\":[]}", pyc.struct.collections = "[]"} {
     return %x : i1
   }
 
-  func.func @top(%x: i1) -> (i1) attributes {arg_names = ["x"], result_names = ["y"], pyc.kind = "module", pyc.inline = "false", pyc.params = "{}", pyc.base = "top"} {
+  func.func @top(%x: i1) -> (i1) attributes {arg_names = ["x"], result_names = ["y"], pyc.kind = "module", pyc.inline = "false", pyc.params = "{}", pyc.base = "top", pyc.struct.metrics = "{\"source_loc\":0,\"ast_node_count\":0,\"hardware_call_count\":0,\"loop_count\":0,\"module_call_count\":1,\"state_call_count\":0,\"estimated_inline_cost\":0,\"instance_count\":1,\"state_alloc_count\":0,\"collection_count\":0,\"collection_instance_count\":0,\"module_family_collection_count\":0,\"repeated_body_clusters\":[]}", pyc.struct.collections = "[]"} {
     %w = pyc.wire {pyc.name = "w"} : i1
     %y = pyc.instance %w {callee = @id, name = "u0"} : (i1) -> i1
     pyc.assign %w, %y : i1
@@ -870,7 +870,7 @@ fi
 neg_mlir="${m2_neg_dir}/neg_logic_depth_instance.pyc"
 cat > "${neg_mlir}" <<'MLIR'
 module attributes {pyc.top = @top, pyc.frontend.contract = "pycircuit"} {
-  func.func @chain4(%x: i8) -> (i8) attributes {arg_names = ["x"], result_names = ["y"], pyc.kind = "module", pyc.inline = "false", pyc.params = "{}", pyc.base = "chain4"} {
+  func.func @chain4(%x: i8) -> (i8) attributes {arg_names = ["x"], result_names = ["y"], pyc.kind = "module", pyc.inline = "false", pyc.params = "{}", pyc.base = "chain4", pyc.struct.metrics = "{\"source_loc\":0,\"ast_node_count\":0,\"hardware_call_count\":4,\"loop_count\":0,\"module_call_count\":0,\"state_call_count\":0,\"estimated_inline_cost\":0,\"instance_count\":0,\"state_alloc_count\":0,\"collection_count\":0,\"collection_instance_count\":0,\"module_family_collection_count\":0,\"repeated_body_clusters\":[]}", pyc.struct.collections = "[]"} {
     %c1 = pyc.constant 13 : i8
     %c2 = pyc.constant 37 : i8
     %c3 = pyc.constant 240 : i8
@@ -882,7 +882,7 @@ module attributes {pyc.top = @top, pyc.frontend.contract = "pycircuit"} {
     return %t3 : i8
   }
 
-  func.func @top(%x: i8) -> (i8) attributes {arg_names = ["x"], result_names = ["y"], pyc.kind = "module", pyc.inline = "false", pyc.params = "{}", pyc.base = "top"} {
+  func.func @top(%x: i8) -> (i8) attributes {arg_names = ["x"], result_names = ["y"], pyc.kind = "module", pyc.inline = "false", pyc.params = "{}", pyc.base = "top", pyc.struct.metrics = "{\"source_loc\":0,\"ast_node_count\":0,\"hardware_call_count\":0,\"loop_count\":0,\"module_call_count\":2,\"state_call_count\":0,\"estimated_inline_cost\":0,\"instance_count\":2,\"state_alloc_count\":0,\"collection_count\":0,\"collection_instance_count\":0,\"module_family_collection_count\":0,\"repeated_body_clusters\":[]}", pyc.struct.collections = "[]"} {
     %y1 = pyc.instance %x {callee = @chain4, name = "u0"} : (i8) -> i8
     %y2 = pyc.instance %y1 {callee = @chain4, name = "u1"} : (i8) -> i8
     return %y2 : i8
@@ -912,7 +912,7 @@ neg_mlir="${cdc_neg_dir}/neg_cross_clock_path.pyc"
 cat > "${neg_mlir}" <<'MLIR'
 module attributes {pyc.top = @neg_cross_clock_path, pyc.frontend.contract = "pycircuit"} {
   func.func @neg_cross_clock_path(%clk_a: !pyc.clock, %rst_a: !pyc.reset, %clk_b: !pyc.clock, %rst_b: !pyc.reset) -> (i8)
-      attributes {arg_names = ["clk_a", "rst_a", "clk_b", "rst_b"], result_names = ["y"], pyc.kind = "module", pyc.inline = "false", pyc.params = "{}", pyc.base = "neg_cross_clock_path"} {
+      attributes {arg_names = ["clk_a", "rst_a", "clk_b", "rst_b"], result_names = ["y"], pyc.kind = "module", pyc.inline = "false", pyc.params = "{}", pyc.base = "neg_cross_clock_path", pyc.struct.metrics = "{\"source_loc\":0,\"ast_node_count\":0,\"hardware_call_count\":0,\"loop_count\":0,\"module_call_count\":0,\"state_call_count\":2,\"estimated_inline_cost\":0,\"instance_count\":0,\"state_alloc_count\":2,\"collection_count\":0,\"collection_instance_count\":0,\"module_family_collection_count\":0,\"repeated_body_clusters\":[]}", pyc.struct.collections = "[]"} {
     %en = pyc.constant 1 : i1
     %init = pyc.constant 0 : i8
     %c0 = pyc.constant 0 : i8

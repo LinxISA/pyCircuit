@@ -210,15 +210,20 @@ def _detect_pycc() -> Path:
             return p
         raise SystemExit(f"PYCC is set but not executable: {p}")
 
-    # Prefer in-tree builds when running from the repo.
     root = Path(__file__).resolve().parents[3]
+    toolchain_root_env = os.environ.get("PYC_TOOLCHAIN_ROOT")
     candidates = [
+        Path(toolchain_root_env) / "bin" / "pycc" if toolchain_root_env else None,
+        root / ".pycircuit_out" / "toolchain" / "install" / "bin" / "pycc",
+        root / "dist" / "pycircuit" / "bin" / "pycc",
         root / "build-top" / "bin" / "pycc",
         root / "build" / "bin" / "pycc",
         root / "compiler" / "mlir" / "build2" / "bin" / "pycc",
         root / "compiler" / "mlir" / "build" / "bin" / "pycc",
     ]
     for c in candidates:
+        if c is None:
+            continue
         if c.is_file() and os.access(c, os.X_OK):
             return c
 
@@ -227,6 +232,82 @@ def _detect_pycc() -> Path:
         return Path(found)
 
     raise SystemExit("missing pycc (set PYCC=... or build it with: flows/scripts/pyc build)")
+
+
+def _toolchain_roots(pycc: Path | None = None) -> list[Path]:
+    roots: list[Path] = []
+    seen: set[Path] = set()
+
+    def add(path: Path | None) -> None:
+        if path is None:
+            return
+        try:
+            rp = path.resolve()
+        except OSError:
+            return
+        if rp in seen:
+            return
+        seen.add(rp)
+        roots.append(rp)
+
+    env = os.environ.get("PYC_TOOLCHAIN_ROOT")
+    if env:
+        add(Path(env))
+
+    if pycc is not None:
+        try:
+            resolved_pycc = pycc.resolve()
+        except OSError:
+            resolved_pycc = pycc
+        if resolved_pycc.parent.name == "bin":
+            add(resolved_pycc.parent.parent)
+
+    repo_root = Path(__file__).resolve().parents[3]
+    add(repo_root / ".pycircuit_out" / "toolchain" / "install")
+    add(repo_root / "dist" / "pycircuit")
+    return roots
+
+
+def _runtime_lib_filename() -> str:
+    return "pyc4_runtime.lib" if os.name == "nt" else "libpyc4_runtime.a"
+
+
+def _detect_toolchain_root(pycc: Path | None = None) -> Path | None:
+    for root in _toolchain_roots(pycc):
+        cmake_cfg = root / "share" / "pycircuit" / "cmake" / "pycircuitConfig.cmake"
+        runtime_lib = root / "lib" / _runtime_lib_filename()
+        if cmake_cfg.is_file() or runtime_lib.is_file():
+            return root
+    return None
+
+
+def _runtime_manifest_for_toolchain(toolchain_root: Path | None) -> dict[str, object]:
+    if toolchain_root is None:
+        raise SystemExit(
+            "missing pyc toolchain root (set PYC_TOOLCHAIN_ROOT or use flows/scripts/pyc build to stage an install tree)"
+        )
+
+    include_dir = (toolchain_root / "include").resolve()
+    lib_dir = (toolchain_root / "lib").resolve()
+    cmake_config_dir = (toolchain_root / "share" / "pycircuit" / "cmake").resolve()
+    runtime_lib = (lib_dir / _runtime_lib_filename()).resolve()
+
+    if not include_dir.is_dir():
+        raise SystemExit(f"invalid toolchain root: missing include dir: {include_dir}")
+    if not runtime_lib.is_file():
+        raise SystemExit(f"invalid toolchain root: missing runtime library: {runtime_lib}")
+
+    return {
+        "mode": "prebuilt",
+        "cmake_package": "pycircuit",
+        "cmake_target": "pycircuit::pyc4_runtime",
+        "toolchain_root_hint": str(toolchain_root.resolve()),
+        "cmake_config_dir": str(cmake_config_dir),
+        "include_dirs": [str(include_dir)],
+        "lib_dirs": [str(lib_dir)],
+        "libs": ["pyc4_runtime"],
+        "library_files": [str(runtime_lib)],
+    }
 
 
 def _as_int_width(ty: str) -> int:
@@ -1635,27 +1716,21 @@ def _cmd_build(args: argparse.Namespace) -> int:
         cpp_headers = _gather_cpp_headers(device_cpp_root)
         include_dirs: list[str] = []
         include_dirs.append(str(device_cpp_root))
-        runtime_root = Path(__file__).resolve().parents[3] / "runtime"
-        include_dirs.append(str(runtime_root))
         for p in [*cpp_sources, *cpp_headers]:
             parent = str(p.parent)
             if parent not in include_dirs:
                 include_dirs.append(parent)
 
-        runtime_sources: list[str] = []
-        runtime_cpp_source = runtime_root / "cpp" / "pyc_runtime.cpp"
-        if runtime_cpp_source.is_file():
-            runtime_sources.append(str(runtime_cpp_source))
+        runtime = _runtime_manifest_for_toolchain(_detect_toolchain_root(pycc))
 
         build_manifest = {
-            "version": 1,
+            "version": 3,
             "target_name": iface.sym,
             "tb_cpp": str(tb_cpp_out),
             "sources": [str(p) for p in cpp_sources],
             "headers": [str(p) for p in cpp_headers],
             "include_dirs": include_dirs,
-            "runtime_sources": runtime_sources,
-            "runtime_include_dirs": [str(runtime_root)],
+            "runtime": runtime,
             "cxx_standard": "c++17",
             "profile": str(args.profile),
         }

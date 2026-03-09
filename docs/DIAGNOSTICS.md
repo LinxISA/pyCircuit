@@ -44,5 +44,5 @@ Emit + compile one module:
 PYTHONPATH=/Users/zhoubot/pyCircuit/compiler/frontend \
 python3 -m pycircuit.cli emit /Users/zhoubot/pyCircuit/designs/examples/counter/counter.py -o /tmp/counter.pyc
 
-/Users/zhoubot/pyCircuit/compiler/mlir/build2/bin/pycc /tmp/counter.pyc --emit=cpp --out-dir /tmp/counter_cpp
+/Users/zhoubot/pyCircuit/.pycircuit_out/toolchain/install/bin/pycc /tmp/counter.pyc --emit=cpp --out-dir /tmp/counter_cpp
 ```

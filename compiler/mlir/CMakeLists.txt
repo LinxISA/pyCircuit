@@ -9,6 +9,7 @@ include(GNUInstallDirs)
 
 find_package(LLVM REQUIRED CONFIG)
 find_package(MLIR REQUIRED CONFIG)
+set(PYC_LLVM_VERSION "${LLVM_PACKAGE_VERSION}" PARENT_SCOPE)
 
 message(STATUS "Using LLVMConfig.cmake in: ${LLVM_DIR}")
 message(STATUS "Using MLIRConfig.cmake in: ${MLIR_DIR}")
@@ -106,7 +107,11 @@ target_link_libraries(pyc_transforms PUBLIC
 # "ninja" (all), pyc-opt may fail to link on some systems.
 if(TARGET MLIRRegisterAllPasses)
   add_executable(pyc-opt EXCLUDE_FROM_ALL tools/pyc-opt.cpp)
-  set_target_properties(pyc-opt PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
+  set_target_properties(pyc-opt PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
+    INSTALL_RPATH "${PYC_INSTALL_RPATH}"
+    BUILD_WITH_INSTALL_RPATH OFF
+  )
   llvm_update_compile_flags(pyc-opt)
   target_include_directories(pyc-opt PRIVATE
     "${PYC_SOURCE_DIR}/include"
@@ -129,7 +134,11 @@ endif()
 
 add_executable(pycc tools/pycc.cpp lib/Emit/VerilogEmitter.cpp lib/Emit/CppEmitter.cpp)
 llvm_update_compile_flags(pycc)
-set_target_properties(pycc PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
+set_target_properties(pycc PROPERTIES
+  RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
+  INSTALL_RPATH "${PYC_INSTALL_RPATH}"
+  BUILD_WITH_INSTALL_RPATH OFF
+)
 target_include_directories(pycc PRIVATE
   "${PYC_SOURCE_DIR}/include"
   "${PYC_BINARY_DIR}/include"

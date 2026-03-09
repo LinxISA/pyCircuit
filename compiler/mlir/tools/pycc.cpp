@@ -23,6 +23,7 @@
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/StringSet.h"
 #include "llvm/ADT/Twine.h"
+#include "llvm/Config/llvm-config.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/MD5.h"
 #include "llvm/Support/JSON.h"
@@ -30,6 +31,7 @@
 #include "llvm/Support/InitLLVM.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/Path.h"
+#include "llvm/Support/Program.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/raw_ostream.h"
 
@@ -60,6 +62,18 @@
 #endif
 
 using namespace mlir;
+
+static void addRemoveDeadValuesPassIfSupported(PassManager &pm) {
+#if LLVM_VERSION_MAJOR >= 19
+  // LLVM 19's RemoveDeadValues currently crashes on some generated pyc module
+  // shapes while erasing function arguments. The rest of the pipeline already
+  // runs SymbolDCE/CSE/SCCP/canonicalization and our legality passes, so keep
+  // the flow stable by skipping this cleanup pass on LLVM 19+.
+  (void)pm;
+#else
+  pm.addPass(createRemoveDeadValuesPass());
+#endif
+}
 
 static llvm::cl::opt<std::string> inputFilename(llvm::cl::Positional, llvm::cl::desc("<input .pyc>"),
                                                 llvm::cl::init("-"));
@@ -942,6 +956,60 @@ static std::optional<std::string> findPrimitivesDir(const char *argv0) {
   return std::nullopt;
 }
 
+static const char *runtimeLibBasename() {
+#if defined(_WIN32)
+  return "pyc4_runtime.lib";
+#else
+  return "libpyc4_runtime.a";
+#endif
+}
+
+static std::optional<std::string> findToolchainRoot(const char *argv0) {
+  auto tryRoot = [&](llvm::SmallString<256> root) -> std::optional<std::string> {
+    llvm::SmallString<256> runtimeLib(root);
+    llvm::sys::path::append(runtimeLib, "lib", runtimeLibBasename());
+    llvm::SmallString<256> cmakeCfg(root);
+    llvm::sys::path::append(cmakeCfg, "share", "pycircuit", "cmake", "pycircuitConfig.cmake");
+    if (llvm::sys::fs::exists(runtimeLib) || llvm::sys::fs::exists(cmakeCfg))
+      return root.str().str();
+    return std::nullopt;
+  };
+
+  if (const char *env = std::getenv("PYC_TOOLCHAIN_ROOT")) {
+    llvm::SmallString<256> root(env);
+    if (auto found = tryRoot(root))
+      return found;
+  }
+
+  llvm::ErrorOr<std::string> resolved = llvm::sys::findProgramByName(argv0 ? argv0 : "");
+  llvm::SmallString<256> exePath;
+  if (resolved) {
+    exePath = *resolved;
+  } else if (argv0 && *argv0) {
+    exePath = argv0;
+  }
+  if (exePath.empty())
+    return std::nullopt;
+
+  llvm::SmallString<256> realExe;
+  if (llvm::sys::fs::real_path(exePath, realExe))
+    realExe = exePath;
+  llvm::SmallString<256> parent = llvm::sys::path::parent_path(realExe);
+  if (llvm::sys::path::filename(parent) == "bin") {
+    llvm::SmallString<256> root = llvm::sys::path::parent_path(parent);
+    if (auto found = tryRoot(root))
+      return found;
+  }
+
+  llvm::SmallString<256> cur = parent;
+  for (unsigned i = 0; i < 6 && !cur.empty(); ++i) {
+    if (auto found = tryRoot(cur))
+      return found;
+    cur = llvm::sys::path::parent_path(cur);
+  }
+  return std::nullopt;
+}
+
 static LogicalResult emitPrimitivesFile(llvm::StringRef outPath, llvm::StringRef primDir, bool targetFpga) {
   static const char *kFiles[] = {
       "pyc_reg.v",
@@ -1705,10 +1773,11 @@ static LogicalResult writeCppCompileManifest(llvm::StringRef path,
                                              llvm::ArrayRef<CppManifestSource> sources,
                                              llvm::ArrayRef<std::string> includeDirs,
                                              llvm::ArrayRef<std::string> compileDefines,
+                                             std::optional<std::string> toolchainRoot,
                                              llvm::StringRef topHeader,
                                              const llvm::json::Object &profileSummary) {
   llvm::json::Object manifest;
-  manifest["version"] = 2;
+  manifest["version"] = 3;
   manifest["target_name"] = targetName.str();
   manifest["cxx_standard"] = "c++17";
 
@@ -1746,6 +1815,41 @@ static LogicalResult writeCppCompileManifest(llvm::StringRef path,
         "|" + std::to_string(s.complexityScore) + "|" + s.sourceHash);
   }
   manifest["sources"] = std::move(srcJson);
+  if (toolchainRoot) {
+    llvm::json::Object runtime;
+    runtime["mode"] = "prebuilt";
+    runtime["cmake_package"] = "pycircuit";
+    runtime["cmake_target"] = "pycircuit::pyc4_runtime";
+    runtime["toolchain_root_hint"] = *toolchainRoot;
+
+    llvm::SmallString<256> cmakeCfgDir(*toolchainRoot);
+    llvm::sys::path::append(cmakeCfgDir, "share", "pycircuit", "cmake");
+    runtime["cmake_config_dir"] = cmakeCfgDir.str().str();
+
+    llvm::json::Array runtimeIncludeDirs;
+    llvm::SmallString<256> includeDir(*toolchainRoot);
+    llvm::sys::path::append(includeDir, "include");
+    runtimeIncludeDirs.push_back(includeDir.str().str());
+    runtime["include_dirs"] = std::move(runtimeIncludeDirs);
+
+    llvm::json::Array runtimeLibDirs;
+    llvm::SmallString<256> libDir(*toolchainRoot);
+    llvm::sys::path::append(libDir, "lib");
+    runtimeLibDirs.push_back(libDir.str().str());
+    runtime["lib_dirs"] = std::move(runtimeLibDirs);
+
+    llvm::json::Array runtimeLibs;
+    runtimeLibs.push_back("pyc4_runtime");
+    runtime["libs"] = std::move(runtimeLibs);
+
+    llvm::json::Array runtimeLibraryFiles;
+    llvm::SmallString<256> runtimeLib(*toolchainRoot);
+    llvm::sys::path::append(runtimeLib, "lib", runtimeLibBasename());
+    runtimeLibraryFiles.push_back(runtimeLib.str().str());
+    runtime["library_files"] = std::move(runtimeLibraryFiles);
+
+    manifest["runtime"] = std::move(runtime);
+  }
   manifest["top_header"] = topHeader.str();
   manifest["profile_summary"] = llvm::json::Object(profileSummary);
 
@@ -1888,11 +1992,11 @@ int main(int argc, char **argv) {
   }
   if (hasDirectCpp) {
     emitKind = "cpp";
-    outputFilename = directCppOut;
+    outputFilename = std::string(directCppOut);
   }
   if (hasDirectVerilog) {
     emitKind = "verilog";
-    outputFilename = directVerilogOut;
+    outputFilename = std::string(directVerilogOut);
   }
   if ((hasDirectCpp || hasDirectVerilog) && !outDir.empty()) {
     llvm::errs() << "error: direct output mode (-cpp/-verilog) cannot be combined with --out-dir\n";
@@ -2064,8 +2168,8 @@ int main(int argc, char **argv) {
 
   GreedyRewriteConfig canonicalizeCfg;
   if (effectiveCanonicalizeBudget > 0) {
-    canonicalizeCfg.setMaxIterations(static_cast<int64_t>(effectiveCanonicalizeBudget));
-    canonicalizeCfg.setMaxNumRewrites(static_cast<int64_t>(effectiveCanonicalizeBudget) * 4096);
+    canonicalizeCfg.maxIterations = static_cast<int64_t>(effectiveCanonicalizeBudget);
+    canonicalizeCfg.maxNumRewrites = static_cast<int64_t>(effectiveCanonicalizeBudget) * 4096;
   }
 
   // Cleanup + optimization pipeline tuned for netlist-style emission.
@@ -2086,7 +2190,7 @@ int main(int argc, char **argv) {
   pm.addPass(createCanonicalizerPass(canonicalizeCfg));
   pm.addPass(createCSEPass());
   pm.addPass(createSCCPPass());
-  pm.addPass(createRemoveDeadValuesPass());
+  addRemoveDeadValuesPassIfSupported(pm);
   pm.addNestedPass<func::FuncOp>(pyc::createEliminateDeadInstancesPass());
   pm.addPass(createSymbolDCEPass());
 
@@ -2103,7 +2207,7 @@ int main(int argc, char **argv) {
     pm.addNestedPass<func::FuncOp>(pyc::createFuseCombPass());
   pm.addPass(createCanonicalizerPass(canonicalizeCfg));
   pm.addPass(createCSEPass());
-  pm.addPass(createRemoveDeadValuesPass());
+  addRemoveDeadValuesPassIfSupported(pm);
   pm.addNestedPass<func::FuncOp>(pyc::createEliminateDeadInstancesPass());
   pm.addPass(createSymbolDCEPass());
   pm.addNestedPass<func::FuncOp>(pyc::createCheckFlatTypesPass());
@@ -2625,8 +2729,9 @@ int main(int argc, char **argv) {
         llvm::json::Object manifestProfile = buildProfileSummary();
         manifestProfile["pycc_peak_rss_bytes"] = static_cast<int64_t>(getPeakRssBytes());
         manifestProfile["pass_time_ms"] = static_cast<int64_t>(passMs);
+        auto toolchainRoot = findToolchainRoot(argv[0]);
         if (failed(writeCppCompileManifest(manifestPathStorage, top, cppManifestSources,
-                                           includeDirs, compileDefines, topHeaderName,
+                                           includeDirs, compileDefines, toolchainRoot, topHeaderName,
                                            manifestProfile)))
           return 1;
       }

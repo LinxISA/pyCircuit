@@ -10,9 +10,10 @@
       "name": "release",
       "displayName": "Release (Ninja)",
       "generator": "Ninja",
-      "binaryDir": "${sourceDir}/build",
+      "binaryDir": "${sourceDir}/.pycircuit_out/toolchain/build",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_INSTALL_PREFIX": "${sourceDir}/.pycircuit_out/toolchain/install",
         "PYC_BUILD_MLIR_TOOLS": "ON",
         "LLVM_DIR": "$env{LLVM_DIR}",
         "MLIR_DIR": "$env{MLIR_DIR}"

@@ -94,6 +94,13 @@ def main() -> int:
         if not isinstance(p, str):
             continue
         include_dirs.append(_resolve_dir(manifest_dir, p))
+    runtime = manifest.get("runtime", {})
+    if not isinstance(runtime, dict):
+        runtime = {}
+    for p in runtime.get("include_dirs", []):
+        if not isinstance(p, str):
+            continue
+        include_dirs.append(_resolve_dir(manifest_dir, p))
     for p in manifest.get("runtime_include_dirs", []):
         if not isinstance(p, str):
             continue
@@ -178,7 +185,29 @@ def main() -> int:
     inputs_for_link = list(objects)
     if _need_rebuild(out_exe, inputs_for_link):
         out_exe.parent.mkdir(parents=True, exist_ok=True)
-        link_cmd = [args.cxx, *map(str, objects), "-o", str(out_exe)]
+        link_cmd = [args.cxx, *map(str, objects)]
+        runtime_library_files: list[str] = []
+        for p in runtime.get("library_files", []):
+            if isinstance(p, str) and p:
+                runtime_library_files.append(str(_resolve_dir(manifest_dir, p)))
+        runtime_lib_dirs: list[str] = []
+        for p in runtime.get("lib_dirs", []):
+            if isinstance(p, str) and p:
+                runtime_lib_dirs.append(str(_resolve_dir(manifest_dir, p)))
+        runtime_libs: list[str] = []
+        for lib in runtime.get("libs", []):
+            if isinstance(lib, str) and lib:
+                runtime_libs.append(lib)
+
+        if runtime_library_files:
+            link_cmd.extend(runtime_library_files)
+        else:
+            for lib_dir in runtime_lib_dirs:
+                link_cmd.extend(["-L", lib_dir])
+            for lib in runtime_libs:
+                link_cmd.append(lib if lib.startswith("-l") else f"-l{lib}")
+
+        link_cmd.extend(["-o", str(out_exe)])
         _run(link_cmd)
 
     print(str(out_exe))
