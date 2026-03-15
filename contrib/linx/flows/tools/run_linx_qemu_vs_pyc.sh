@@ -2,8 +2,54 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-LINX_ROOT="$(cd "${ROOT}/../.." && pwd)"
-LINXCORE_ROOT="${LINXCORE_ROOT:-/Users/zhoubot/LinxCore}"
+PYC_ROOT="$(cd "${ROOT}/../.." && pwd)"
+
+find_linx_root() {
+  local cand
+  if [[ -n "${LINX_ROOT:-}" && -d "${LINX_ROOT}/tools/bringup" ]]; then
+    echo "${LINX_ROOT}"
+    return 0
+  fi
+  for cand in \
+    "$(cd "${ROOT}/../../../.." && pwd)" \
+    "$(cd "${PYC_ROOT}/.." && pwd)" \
+    "/Users/zhoubot/linx-isa"
+  do
+    if [[ -d "${cand}/tools/bringup" ]]; then
+      echo "${cand}"
+      return 0
+    fi
+  done
+  return 1
+}
+
+LINX_ROOT="$(find_linx_root)" || {
+  echo "error: unable to resolve linx-isa superproject root" >&2
+  exit 2
+}
+
+find_linxcore_root() {
+  local cand
+  if [[ -n "${LINXCORE_ROOT:-}" && -d "${LINXCORE_ROOT}/generated/cpp/linxcore_top" ]]; then
+    echo "${LINXCORE_ROOT}"
+    return 0
+  fi
+  for cand in \
+    "${LINX_ROOT}/rtl/LinxCore" \
+    "/Users/zhoubot/LinxCore"
+  do
+    if [[ -d "${cand}/generated/cpp/linxcore_top" ]]; then
+      echo "${cand}"
+      return 0
+    fi
+  done
+  return 1
+}
+
+LINXCORE_ROOT="$(find_linxcore_root)" || {
+  echo "error: unable to resolve LinxCore root" >&2
+  exit 2
+}
 
 DEFAULT_SRC=""
 for cand in \
@@ -18,7 +64,7 @@ do
 done
 SRC="${1:-$DEFAULT_SRC}"
 
-LLVM_BUILD="${LLVM_BUILD:-$HOME/llvm-project/build-linxisa-clang}"
+LLVM_BUILD="${LLVM_BUILD:-${LINX_ROOT}/compiler/llvm/build-linxisa-clang}"
 LLVM_MC="${LLVM_MC:-$LLVM_BUILD/bin/llvm-mc}"
 
 QEMU_BIN="${QEMU_BIN:-}"
@@ -50,7 +96,7 @@ OBJ="$WORK/test.o"
 QEMU_TRACE="$WORK/qemu.jsonl"
 PYC_TRACE="$WORK/pyc.jsonl"
 TRACE_SCHEMA_VERSION="${LINX_TRACE_SCHEMA_VERSION:-1.0}"
-COMMIT_SCHEMA_ID="${LINX_COMMIT_SCHEMA_ID:-LC-COMMIT-BUNDLE-V1}"
+COMMIT_SCHEMA_ID="${LINX_COMMIT_SCHEMA_ID:-LC-COMMIT-BUNDLE-V2}"
 DFX_DUMP_DIR="${LINX_DIFF_DFX_DUMP_DIR:-$WORK/dfx_dump}"
 DFX_PRE="${LINX_DIFF_DFX_PRE:-8}"
 DFX_POST="${LINX_DIFF_DFX_POST:-16}"

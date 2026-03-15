@@ -208,11 +208,13 @@ public:
   }
 
 private:
-  static constexpr std::array<const char *, 16> kCanonicalStageOrder = {
-      "IB", "D1", "D2", "D3", "S1", "S2", "IQ", "P1",
-      "I1", "I2", "E1", "W1", "W2", "CMT", "FLS", "XCHK",
+  static constexpr std::array<const char *, 39> kCanonicalStageOrder = {
+      "F0", "F1", "F2", "F3", "F4", "D1", "D2", "D3", "IQ", "S1",
+      "S2", "P1", "I1", "I2", "E1", "E2", "E3", "E4", "W1", "W2",
+      "LIQ", "LHQ", "STQ", "SCB", "MDB", "L1D", "BISQ", "BCTRL", "TMU", "TMA",
+      "CUBE", "VEC", "TAU", "BROB", "ROB", "CMT", "FLS", "XCHK", "IB",
   };
-  static constexpr const char *kPipelineSchemaId = "LC-TRACE1-FA870FA28B15";
+  static constexpr const char *kPipelineSchemaId = "LC-TRACE1-1ABD8F1C22C0";
 
   struct RowInfo {
     std::uint64_t row_id = 0;

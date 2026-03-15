@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 
-DEFAULT_COMMIT_SCHEMA_ID = "LC-COMMIT-BUNDLE-V1"
+DEFAULT_COMMIT_SCHEMA_ID = "LC-COMMIT-BUNDLE-V2"
 
 # Decision 0142 minimum commit/retire bundle fields (as used by LinxCore M1):
 #   pc/insn/len/next_pc + wb/mem/trap groups.
@@ -36,16 +36,27 @@ MANDATORY_FIELDS = [
     "insn",
     "len",
     "next_pc",
+    "src0_valid",
+    "src0_reg",
+    "src0_data",
+    "src1_valid",
+    "src1_reg",
+    "src1_data",
+    "dst_valid",
+    "dst_reg",
+    "dst_data",
     "wb_valid",
     "wb_rd",
     "wb_data",
     "mem_valid",
+    "mem_is_store",
     "mem_addr",
     "mem_wdata",
     "mem_rdata",
     "mem_size",
     "trap_valid",
     "trap_cause",
+    "traparg0",
 ]
 
 
