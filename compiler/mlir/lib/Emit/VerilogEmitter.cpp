@@ -908,7 +908,14 @@ static LogicalResult emitFunc(func::FuncOp f, raw_ostream &os, const VerilogEmit
         auto qTy = dyn_cast<IntegerType>(r.getQ().getType());
         if (!qTy)
           return r.emitError("verilog emitter only supports integer reg data type");
-        os << "pyc_reg #(.WIDTH(" << qTy.getWidth() << ")) " << nt.get(r.getQ()) << "_inst (\n";
+        // Detect active-low reset by checking if the reset signal name ends with "_n"
+        std::string rstName = nt.get(r.getRst());
+        bool rstActiveLow = (rstName.size() >= 2 && rstName.substr(rstName.size() - 2) == "_n") ||
+                             (rstName.find("rst_n") != std::string::npos);
+        if (rstActiveLow)
+          os << "pyc_reg #(.WIDTH(" << qTy.getWidth() << "), .RST_ACTIVE_LOW(1)) " << nt.get(r.getQ()) << "_inst (\n";
+        else
+          os << "pyc_reg #(.WIDTH(" << qTy.getWidth() << ")) " << nt.get(r.getQ()) << "_inst (\n";
         os << "  .clk(" << nt.get(r.getClk()) << "),\n";
         os << "  .rst(" << nt.get(r.getRst()) << "),\n";
         os << "  .en(" << nt.get(r.getEn()) << "),\n";
@@ -923,7 +930,13 @@ static LogicalResult emitFunc(func::FuncOp f, raw_ostream &os, const VerilogEmit
         if (!inDataTy)
           return fifo.emitError("verilog emitter only supports integer fifo data type");
         auto depth = fifo->getAttrOfType<IntegerAttr>("depth").getValue().getZExtValue();
-        os << "pyc_fifo #(.WIDTH(" << inDataTy.getWidth() << "), .DEPTH(" << depth << ")) "
+        // Detect active-low reset for FIFO
+        std::string fifoRstName = nt.get(fifo.getRst());
+        bool fifoRstActiveLow = (fifoRstName.size() >= 2 && fifoRstName.substr(fifoRstName.size() - 2) == "_n") ||
+                                 (fifoRstName.find("rst_n") != std::string::npos);
+        os << "pyc_fifo #(.WIDTH(" << inDataTy.getWidth() << "), .DEPTH(" << depth << ")";
+        if (fifoRstActiveLow) os << ", .RST_ACTIVE_LOW(1)";
+        os << ") "
            << nt.get(fifo.getInReady()) << "_inst (\n";
         os << "  .clk(" << nt.get(fifo.getClk()) << "),\n";
         os << "  .rst(" << nt.get(fifo.getRst()) << "),\n";
