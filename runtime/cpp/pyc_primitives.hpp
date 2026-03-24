@@ -65,7 +65,7 @@ struct pyc_not {
   void eval() { y = ~a; }
 };
 
-template <unsigned Width>
+template <unsigned Width, bool RstActiveLow = false>
 class pyc_reg {
 public:
   pyc_reg(Wire<1> &clk, Wire<1> &rst, Wire<1> &en, Wire<Width> &d, Wire<Width> &init, Wire<Width> &q)
@@ -79,7 +79,8 @@ public:
     if (!posedge)
       return;
 
-    if (rst.toBool()) {
+    bool rstActive = RstActiveLow ? !rst.toBool() : rst.toBool();
+    if (rstActive) {
       pending = true;
       qNext = init;
       return;
@@ -110,7 +111,7 @@ public:
   Wire<Width> qNext{};
 };
 
-template <unsigned Width, unsigned Depth>
+template <unsigned Width, unsigned Depth, bool RstActiveLow = false>
 class pyc_fifo {
 public:
   pyc_fifo(Wire<1> &clk,
@@ -164,7 +165,8 @@ public:
       return;
 
     pending = true;
-    if (rst.toBool()) {
+    bool rstActive = RstActiveLow ? !rst.toBool() : rst.toBool();
+    if (rstActive) {
       rdNext_ = 0;
       wrNext_ = 0;
       countNext_ = 0;

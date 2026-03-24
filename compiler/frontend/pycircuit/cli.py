@@ -666,7 +666,8 @@ def _render_tb_cpp(iface: _TopIface, t: Tb, *, trace_plan: TracePlan | None = No
             "\"global\", pyc::cpp::PycTraceBinWriter::ResetKind::Warm);\n"
         )
         lines.append("  }\n")
-        lines.append(f"  tb.reset(dut.{rst_sn}, /*cyclesAsserted=*/{int(ca)}, /*cyclesDeasserted=*/{int(cd)});\n\n")
+        al = "true" if t.reset_spec.active_low else "false"
+        lines.append(f"  tb.reset(dut.{rst_sn}, /*cyclesAsserted=*/{int(ca)}, /*cyclesDeasserted=*/{int(cd)}, /*activeLow=*/{al});\n\n")
 
     if trace_plan and trace_plan.enabled_signals and trace_plan.window:
         begin = trace_plan.window.begin_cycle
@@ -1002,11 +1003,13 @@ def _render_tb_sv(iface: _TopIface, t: Tb, *, trace_plan: TracePlan | None = Non
             lines.append(f"    rng_{sn} = 64'h{seed64:016x};\n")
     lines.append("\n")
     if has_reset:
-        lines.append(f"    {rst_sn} = 1'b1;\n")
+        assert_val = "1'b0" if t.reset_spec.active_low else "1'b1"
+        deassert_val = "1'b1" if t.reset_spec.active_low else "1'b0"
+        lines.append(f"    {rst_sn} = {assert_val};\n")
         lines.append(f"    repeat ({int(ca)}) @(posedge {clk_sn});\n")
         # Deassert reset away from a posedge to avoid races with posedge-triggered state.
         lines.append(f"    @(negedge {clk_sn});\n")
-        lines.append(f"    {rst_sn} = 1'b0;\n")
+        lines.append(f"    {rst_sn} = {deassert_val};\n")
         lines.append(f"    repeat ({int(cd)}) @(posedge {clk_sn});\n")
         # Ensure cycle 0 starts on a negedge after any post-reset settle cycles.
         lines.append(f"    if ({int(cd)} != 0) @(negedge {clk_sn});\n\n")

@@ -279,10 +279,10 @@ public:
     }
   }
 
-  void reset(Wire<1> &rst, std::uint64_t cyclesAsserted = 2, std::uint64_t cyclesDeasserted = 1) {
-    rst = Wire<1>(1);
+  void reset(Wire<1> &rst, std::uint64_t cyclesAsserted = 2, std::uint64_t cyclesDeasserted = 1, bool activeLow = false) {
+    rst = Wire<1>(activeLow ? 0u : 1u);
     runCycles(cyclesAsserted);
-    rst = Wire<1>(0);
+    rst = Wire<1>(activeLow ? 1u : 0u);
     runCycles(cyclesDeasserted);
   }
 
