@@ -225,6 +225,13 @@ def _canon_param(v: Any, *, path: str) -> Any:
         return None
     if isinstance(v, (bool, int, str)):
         return v
+    # LiteralValue is a compile-time hardware constant with explicit width/signedness.
+    # When passed as a @module argument, it participates in specialization hashing
+    # so that different constant values produce distinct module definitions.
+    from .literals import LiteralValue
+    if isinstance(v, LiteralValue):
+        return {"kind": "literal", "value": int(v.value),
+                "width": v.width, "signed": v.signed}
     if isinstance(v, (tuple, list)):
         return [_canon_param(x, path=_canon_path_index(path, i)) for i, x in enumerate(v)]
     if isinstance(v, dict):

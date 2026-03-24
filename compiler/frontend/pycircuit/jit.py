@@ -588,6 +588,8 @@ class _Compiler:
                     f"@module call positional arg {pname!r} cannot be a ConnectorBundle; "
                     "bind each formal port explicitly"
                 )
+            elif isinstance(v, LiteralValue):
+                spec_params[pname] = v
             elif self._is_hw_value(v):
                 ports[pname] = v
             else:
@@ -610,6 +612,8 @@ class _Compiler:
                     f"@module call kwarg {k!r} cannot be a ConnectorBundle; "
                     "bind each formal port explicitly"
                 )
+            elif isinstance(v, LiteralValue):
+                spec_params[str(k)] = v
             elif self._is_hw_value(v):
                 ports[str(k)] = v
             else:
