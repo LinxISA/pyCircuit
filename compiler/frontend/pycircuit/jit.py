@@ -927,10 +927,11 @@ class _Compiler:
             if isinstance(rhs, Connector):
                 rhs = rhs.read()
 
-            def _as_py_int(v: Any) -> int:
-                if isinstance(v, LiteralValue):
-                    return int(v.value)
-                return int(v)
+            def _eval_val(v: Any) -> Any:
+                if hasattr(v, "__int__") and not isinstance(v, LiteralValue) and not isinstance(v, bool):
+                    try: return int(v)
+                    except: pass
+                return v
 
             if isinstance(node.op, ast.Add):
                 if isinstance(lhs, (Wire, Reg)):
@@ -943,53 +944,53 @@ class _Compiler:
                     return lhs + rhs
                 if isinstance(lhs, Vec) and isinstance(rhs, Vec):
                     return Vec((*lhs.elems, *rhs.elems))
-                return _as_py_int(lhs) + _as_py_int(rhs)
+                return _eval_val(lhs) + _eval_val(rhs)
             if isinstance(node.op, ast.Sub):
                 if isinstance(lhs, (Wire, Reg)):
                     return _expect_wire(lhs, ctx="-") - rhs
                 if isinstance(rhs, (Wire, Reg)):
-                    return _as_py_int(lhs) - _expect_wire(rhs, ctx="-")
-                return _as_py_int(lhs) - _as_py_int(rhs)
+                    return _eval_val(lhs) - _expect_wire(rhs, ctx="-")
+                return _eval_val(lhs) - _eval_val(rhs)
             if isinstance(node.op, ast.Mult):
                 if isinstance(lhs, (Wire, Reg)):
                     return _expect_wire(lhs, ctx="*") * rhs
                 if isinstance(rhs, (Wire, Reg)):
                     return _expect_wire(rhs, ctx="*") * lhs
-                return _as_py_int(lhs) * _as_py_int(rhs)
+                return _eval_val(lhs) * _eval_val(rhs)
             if isinstance(node.op, ast.FloorDiv) or isinstance(node.op, ast.Div):
                 if isinstance(lhs, (Wire, Reg)):
                     return _expect_wire(lhs, ctx="/") // rhs
                 if isinstance(rhs, (Wire, Reg)):
                     w = _expect_wire(rhs, ctx="/")
-                    lhs_w = w._as_wire(_as_py_int(lhs), width=w.width)
+                    lhs_w = w._as_wire(_eval_val(lhs), width=w.width)
                     return lhs_w // w
-                return _as_py_int(lhs) // _as_py_int(rhs)
+                return _eval_val(lhs) // _eval_val(rhs)
             if isinstance(node.op, ast.Mod):
                 if isinstance(lhs, (Wire, Reg)):
                     return _expect_wire(lhs, ctx="%") % rhs
                 if isinstance(rhs, (Wire, Reg)):
                     w = _expect_wire(rhs, ctx="%")
-                    lhs_w = w._as_wire(_as_py_int(lhs), width=w.width)
+                    lhs_w = w._as_wire(_eval_val(lhs), width=w.width)
                     return lhs_w % w
-                return _as_py_int(lhs) % _as_py_int(rhs)
+                return _eval_val(lhs) % _eval_val(rhs)
             if isinstance(node.op, ast.BitAnd):
                 if isinstance(lhs, (Wire, Reg)):
                     return lhs & rhs
                 if isinstance(rhs, (Wire, Reg)):
                     return rhs & lhs
-                return _as_py_int(lhs) & _as_py_int(rhs)
+                return _eval_val(lhs) & _eval_val(rhs)
             if isinstance(node.op, ast.BitOr):
                 if isinstance(lhs, (Wire, Reg)):
                     return lhs | rhs
                 if isinstance(rhs, (Wire, Reg)):
                     return rhs | lhs
-                return _as_py_int(lhs) | _as_py_int(rhs)
+                return _eval_val(lhs) | _eval_val(rhs)
             if isinstance(node.op, ast.BitXor):
                 if isinstance(lhs, (Wire, Reg)):
                     return lhs ^ rhs
                 if isinstance(rhs, (Wire, Reg)):
                     return rhs ^ lhs
-                return _as_py_int(lhs) ^ _as_py_int(rhs)
+                return _eval_val(lhs) ^ _eval_val(rhs)
             if isinstance(node.op, ast.LShift):
                 if isinstance(lhs, (Wire, Reg)):
                     w = _expect_wire(lhs, ctx="<<")
@@ -999,22 +1000,24 @@ class _Compiler:
                     return w.shl(amount=int(amt))
                 if isinstance(rhs, (Wire, Reg)):
                     raise JitError("<< requires a wire on the left side when using hardware values")
-                return _as_py_int(lhs) << _as_py_int(rhs)
+                return _eval_val(lhs) << _eval_val(rhs)
             if isinstance(node.op, ast.RShift):
                 if isinstance(lhs, (Wire, Reg)):
                     w = _expect_wire(lhs, ctx=">>")
                     amt = rhs.value if isinstance(rhs, LiteralValue) else rhs
                     if not isinstance(amt, int):
                         raise JitError(">> only supports constant shift amounts")
-                    return w >> int(amt)
+                    return w.shr(amount=int(amt))
                 if isinstance(rhs, (Wire, Reg)):
                     raise JitError(">> requires a wire on the left side when using hardware values")
-                return _as_py_int(lhs) >> _as_py_int(rhs)
+                return _eval_val(lhs) >> _eval_val(rhs)
         if isinstance(node, ast.UnaryOp):
             v = self.eval_expr(node.operand)
             if isinstance(v, Connector):
                 v = v.read()
             if isinstance(node.op, ast.Invert):
+                if isinstance(v, (LiteralValue, int)):
+                    return ~v
                 w = _expect_wire(v, ctx="~")
                 return ~w
             if isinstance(node.op, ast.Not):
