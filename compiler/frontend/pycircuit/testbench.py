@@ -100,6 +100,7 @@ def testbench_payload_from_tb(
                 "port": str(tb.reset_spec.port),
                 "cycles_asserted": int(tb.reset_spec.cycles_asserted),
                 "cycles_deasserted": int(tb.reset_spec.cycles_deasserted),
+                "active_low": bool(tb.reset_spec.active_low),
             }
         ),
         drives=tuple({"port": str(d.port), "value": int(d.value), "at": int(d.at)} for d in tb.drives),

@@ -132,6 +132,7 @@ class ResetSpec:
     port: str
     cycles_asserted: int = 2
     cycles_deasserted: int = 1
+    active_low: bool = False
 
 
 @dataclass(frozen=True)
@@ -204,7 +205,7 @@ class Tb:
             raise TbError("half_period_steps must be > 0")
         self.clocks.append(ClockSpec(port=p, half_period_steps=hp, phase_steps=int(phase_steps), start_high=bool(start_high)))
 
-    def reset(self, port: str, *, cycles_asserted: int = 2, cycles_deasserted: int = 1) -> None:
+    def reset(self, port: str, *, cycles_asserted: int = 2, cycles_deasserted: int = 1, active_low: bool = False) -> None:
         p = str(port).strip()
         if not p:
             raise TbError("reset port must be non-empty")
@@ -212,7 +213,7 @@ class Tb:
         cd = int(cycles_deasserted)
         if ca < 0 or cd < 0:
             raise TbError("reset cycles must be >= 0")
-        self.reset_spec = ResetSpec(port=p, cycles_asserted=ca, cycles_deasserted=cd)
+        self.reset_spec = ResetSpec(port=p, cycles_asserted=ca, cycles_deasserted=cd, active_low=bool(active_low))
 
     def drive(self, port: str, value: int | bool, *, at: int) -> None:
         p = str(port).strip()

@@ -1,7 +1,8 @@
 // Ready/valid FIFO with synchronous reset (prototype).
 module pyc_fifo #(
   parameter WIDTH = 1,
-  parameter DEPTH = 2
+  parameter DEPTH = 2,
+  parameter RST_ACTIVE_LOW = 0
 ) (
   input             clk,
   input             rst,
@@ -37,6 +38,8 @@ module pyc_fifo #(
 
   localparam PTR_W = (DEPTH <= 1) ? 1 : pyc_clog2(DEPTH);
 
+  wire rst_active = RST_ACTIVE_LOW ? ~rst : rst;
+
   reg [WIDTH-1:0] storage [0:DEPTH-1];
   reg [PTR_W-1:0] rd_ptr;
   reg [PTR_W-1:0] wr_ptr;
@@ -65,7 +68,7 @@ module pyc_fifo #(
   endfunction
 
   always @(posedge clk) begin
-    if (rst) begin
+    if (rst_active) begin
       rd_ptr <= {PTR_W{1'b0}};
       wr_ptr <= {PTR_W{1'b0}};
       count <= {(PTR_W + 1){1'b0}};
