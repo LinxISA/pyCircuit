@@ -1098,7 +1098,7 @@ static bool isProbeOnlyFunc(func::FuncOp f) {
   return false;
 }
 
-static constexpr double kHardMaxSourcePredictedCompileCost = 15000.0;
+static constexpr double kHardMaxSourcePredictedCompileCost = 50000.0;
 static constexpr double kHardMaxModulePredictedCompileCost = 40000.0;
 static constexpr double kHardMaxTotalPredictedCompileCost = 700000.0;
 
