@@ -13,14 +13,16 @@ from .connectors import (
     RegConnector,
     WireConnector,
 )
-from .design import const, function, module, testbench as _testbench_decorator
+from .design import const, function, module, probe as _probe_decorator, testbench as _testbench_decorator
 from .hw import Bundle, Circuit, ClockDomain, Pop, Reg, Vec, Wire, cat, unsigned
 from .jit import JitError, compile
 from .literals import LiteralValue, S, U, s, u
+from .probe import ProbeBuilder, ProbeError, ProbeRef, ProbeView, TbProbeHandle, TbProbes
 from .tb import Tb, sva
 from .testbench import TestbenchProgram
 
 testbench = _testbench_decorator
+probe = _probe_decorator
 
 __all__ = [
     "Connector",
@@ -36,10 +38,16 @@ __all__ = [
     "ModuleInstanceHandle",
     "ModuleCollectionHandle",
     "Pop",
+    "ProbeError",
+    "ProbeBuilder",
+    "ProbeRef",
+    "ProbeView",
     "Reg",
     "RegConnector",
     "S",
     "Tb",
+    "TbProbeHandle",
+    "TbProbes",
     "TestbenchProgram",
     "U",
     "Vec",
@@ -52,6 +60,7 @@ __all__ = [
     "lib",
     "logic",
     "module",
+    "probe",
     "spec",
     "testbench",
     "wiring",

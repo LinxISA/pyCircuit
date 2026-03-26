@@ -50,6 +50,11 @@ _REMOVED_CALL_HINTS: dict[str, str] = {
     "connect_struct": "use `connect(...)`",
     "jit_inline": "use `function` for inline hardware helpers",
     "as_connector": "remove explicit connector wrapping and pass values directly",
+    "debug": "define a standalone `@probe(target=...)` and consume it from the testbench",
+    "debug_bundle": "define a standalone `@probe(target=...)` and use `ProbeBuilder.emit(...)`",
+    "debug_probe": "define a standalone `@probe(target=...)` and use `ProbeBuilder.emit(...)`",
+    "debug_occ": "define a standalone `@probe(target=...)` and use `ProbeBuilder.emit(...)`",
+    "probe": "define a standalone `@probe(target=...)` and use `ProbeBuilder.emit(...)`",
 }
 
 
@@ -177,6 +182,12 @@ TEXT_RULES: tuple[TextRule, ...] = (
         pattern=_rx(r"\.as_connector\s*\("),
         message="removed explicit connector wrapper `.as_connector(...)`",
         hint="pass Wire/Reg/Signal/int/literal values directly; coercion is implicit at call boundaries",
+    ),
+    TextRule(
+        code="PYC424",
+        pattern=_rx(r"\.(?:debug|debug_bundle|debug_probe|debug_occ|probe)\s*\("),
+        message="removed Circuit probe/debug API",
+        hint="use standalone `@probe(target=...)` definitions",
     ),
 )
 

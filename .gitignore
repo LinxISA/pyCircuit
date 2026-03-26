@@ -175,6 +175,7 @@ venv.bak/
 
 # mkdocs documentation
 /site
+/_build/
 
 # mypy
 .mypy_cache/
@@ -230,7 +231,7 @@ __marimo__/
 
 # pyCircuit generated outputs (local artifacts only; never checked in)
 .pycircuit_out/
-examples/
+/examples/
 janus/
 **/generated/
 designs/**/generated/

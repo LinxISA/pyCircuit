@@ -526,6 +526,23 @@ LogicalResult AshriOp::verify() {
   return success();
 }
 
+static LogicalResult verifyDynShift(Operation *op, Type inTyRaw, Type amtTyRaw, Type outTyRaw) {
+  auto inTy = dyn_cast<IntegerType>(inTyRaw);
+  auto amtTy = dyn_cast<IntegerType>(amtTyRaw);
+  auto outTy = dyn_cast<IntegerType>(outTyRaw);
+  if (!inTy || !amtTy || !outTy)
+    return op->emitOpError("only supports integer types");
+  if (outTy != inTy)
+    return op->emitOpError("result type must match input type");
+  return success();
+}
+
+LogicalResult ShlOp::verify() { return verifyDynShift(*this, getIn().getType(), getAmount().getType(), getResult().getType()); }
+
+LogicalResult LshrOp::verify() { return verifyDynShift(*this, getIn().getType(), getAmount().getType(), getResult().getType()); }
+
+LogicalResult AshrOp::verify() { return verifyDynShift(*this, getIn().getType(), getAmount().getType(), getResult().getType()); }
+
 LogicalResult ConcatOp::verify() {
   if (getInputs().empty())
     return emitOpError("requires at least one input");

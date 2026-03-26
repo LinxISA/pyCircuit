@@ -1,32 +1,22 @@
 # Development Guide
 
-Welcome to the pyCircuit development guide! This section covers everything you need to know about contributing to pyCircuit and setting up a development environment.
+This page lists the active pyc4.0 development entrypoints and gate commands.
 
-## Contributing
+## Core references
 
-We welcome contributions! Please see our [Contributing Guide](contributing.md) for detailed information on:
-- Setting up your development environment
-- Code style and conventions
-- Submitting pull requests
-- Running tests
+- `docs/rfcs/pyc4.0-decisions.md`
+- `docs/updatePLAN.md`
+- `docs/gates/README.md`
+- `docs/gates/decision_status_v40.md`
 
-## Building from Source
+## Build and gate commands
 
-See the [Build Guide](build.md) for detailed instructions on:
-- Installing LLVM/MLIR dependencies
-- Configuring CMake
-- Building the compiler
-- Troubleshooting build issues
+- `bash flows/scripts/pyc build`
+- `bash flows/scripts/run_examples.sh`
+- `bash flows/scripts/run_sims.sh`
+- `bash flows/scripts/run_sims_nightly.sh`
 
-## Testing
-
-The [Testing Guide](testing.md) covers:
-- Running unit tests
-- Running integration tests
-- Writing new tests
-- Debugging test failures
-
-## Architecture
+## Repository layout
 
 pyCircuit is organized as follows:
 
@@ -48,9 +38,11 @@ pyCircuit
 
 ## Quick Links
 
-- [Contributing](contributing.md) - How to contribute
-- [Build Guide](build.md) - Build from source
-- [Testing](testing.md) - Run tests
+- `docs/FRONTEND_API.md`
+- `docs/TESTBENCH.md`
+- `docs/IR_SPEC.md`
+- `docs/DIAGNOSTICS.md`
+- `designs/examples/README.md`
 
 ## Getting Help
 

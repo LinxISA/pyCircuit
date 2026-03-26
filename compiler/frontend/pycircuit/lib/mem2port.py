@@ -58,6 +58,7 @@ def Mem2Port(
         wdata=wdata_w,
         wstrb=wstrb_w,
         depth=int(depth),
+        name="mem",
     )
 
     return m.bundle_connector(

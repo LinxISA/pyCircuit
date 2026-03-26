@@ -34,7 +34,7 @@ def Cache(
     - write_allocate=True
     - replacement="plru"
 
-    This v3 baseline is intentionally compact and hierarchy-preserving; it keeps
+    This pyc4.0 baseline is intentionally compact and hierarchy-preserving; it keeps
     state visible to the compiler flow without flattening into primitive wires.
     """
 

@@ -2,10 +2,15 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-ROOT_DIR="$(cd -- "${SCRIPT_DIR}/../.." && pwd)"
+ROOT_DIR="$(cd -- "${SCRIPT_DIR}/../../../.." && pwd)"
+LINX_CONTRIB_DIR="${ROOT_DIR}/contrib/linx"
 # shellcheck source=../flows/scripts/lib.sh
 source "${ROOT_DIR}/flows/scripts/lib.sh"
+if [[ -z "${PYCC:-}" && -n "${PYC_COMPILE:-}" && -x "${PYC_COMPILE}" ]]; then
+  export PYCC="${PYC_COMPILE}"
+fi
 pyc_find_pycc
+PYC_COMPILE="${PYC_COMPILE:-${PYCC}}"
 
 # Fast-run default: traces are opt-in.
 export PYC_KONATA="${PYC_KONATA:-0}"
@@ -77,7 +82,7 @@ cd "${ROOT_DIR}"
 
 python3 "${ROOT_DIR}/flows/tools/check_api_hygiene.py" \
   compiler/frontend/pycircuit \
-  designs/examples/linx_cpu_pyc \
+  contrib/linx/designs/examples/linx_cpu_pyc \
   docs \
   README.md
 
@@ -85,14 +90,15 @@ GEN_DIR="$(pyc_out_root)/examples/linx_cpu_pyc"
 mkdir -p "${GEN_DIR}"
 PYC_PATH="${GEN_DIR}/linx_cpu_pyc.pyc"
 CPP_OUT_DIR="${GEN_DIR}/cpp"
-CPP_MANIFEST="${CPP_OUT_DIR}/cpp_compile_manifest.json"
+CPP_MANIFEST_LEGACY="${CPP_OUT_DIR}/cpp_compile_manifest.json"
+CPP_MANIFEST_MODERN="${CPP_OUT_DIR}/manifest.json"
 KEY_FILE="${GEN_DIR}/linx_cpu_pyc.build_key"
 
 EMIT_PARAMS=()
 
 if [[ -n "${ELF}" ]]; then
   MEMH="${TMP_DIR}/program.memh"
-  META="$(PYTHONDONTWRITEBYTECODE=1 python3 flows/tools/linxisa/elf_to_memh.py "${ELF}" --text-base "${ELF_TEXT_BASE}" --data-base "${ELF_DATA_BASE}" --page-align "${ELF_PAGE_ALIGN}" -o "${MEMH}" --print-start --print-max)"
+  META="$(PYTHONDONTWRITEBYTECODE=1 python3 "${LINX_CONTRIB_DIR}/flows/tools/linxisa/elf_to_memh.py" "${ELF}" --text-base "${ELF_TEXT_BASE}" --data-base "${ELF_DATA_BASE}" --page-align "${ELF_PAGE_ALIGN}" -o "${MEMH}" --print-start --print-max)"
   START_PC="$(printf "%s\n" "${META}" | sed -n '1p')"
   MAX_END="$(printf "%s\n" "${META}" | sed -n '2p')"
   if [[ -z "${PYC_BOOT_PC:-}" ]]; then
@@ -181,40 +187,72 @@ fi
 
 PYC_LOGIC_DEPTH="${PYC_LOGIC_DEPTH:-1024}"
 SIM_MODE="cpp-only"
-PYC_COMPILE_HELP="$("${PYC_COMPILE}" --help 2>&1 || true)"
+PYC_COMPILE_HELP="$("${PYCC}" --help 2>&1 || true)"
 PYC_SUPPORTS_SIM_MODE=0
 PYC_SUPPORTS_LOGIC_DEPTH=0
+PYC_SUPPORTS_CPP_SPLIT=0
 if grep -q -- "--sim-mode" <<<"${PYC_COMPILE_HELP}"; then
   PYC_SUPPORTS_SIM_MODE=1
 fi
 if grep -q -- "--logic-depth" <<<"${PYC_COMPILE_HELP}"; then
   PYC_SUPPORTS_LOGIC_DEPTH=1
 fi
-BUILD_KEY="logic_depth=${PYC_LOGIC_DEPTH};sim_mode=${SIM_MODE};mem_bytes=${PYC_MEM_BYTES:-default};sim_mode_flag=${PYC_SUPPORTS_SIM_MODE};logic_depth_flag=${PYC_SUPPORTS_LOGIC_DEPTH}"
+if grep -q -- "--cpp-split" <<<"${PYC_COMPILE_HELP}"; then
+  PYC_SUPPORTS_CPP_SPLIT=1
+fi
+BUILD_KEY="logic_depth=${PYC_LOGIC_DEPTH};sim_mode=${SIM_MODE};mem_bytes=${PYC_MEM_BYTES:-default};sim_mode_flag=${PYC_SUPPORTS_SIM_MODE};logic_depth_flag=${PYC_SUPPORTS_LOGIC_DEPTH};cpp_split_flag=${PYC_SUPPORTS_CPP_SPLIT};backend=${PYCC}"
+
+MANIFEST_REF=""
+if [[ -f "${CPP_MANIFEST_LEGACY}" ]]; then
+  MANIFEST_REF="${CPP_MANIFEST_LEGACY}"
+elif [[ -f "${CPP_MANIFEST_MODERN}" ]]; then
+  MANIFEST_REF="${CPP_MANIFEST_MODERN}"
+fi
 
 need_regen=0
-if [[ ! -f "${CPP_MANIFEST}" || ! -f "${KEY_FILE}" ]]; then
+if [[ ! -f "${KEY_FILE}" ]]; then
+  need_regen=1
+elif [[ -z "${MANIFEST_REF}" ]]; then
   need_regen=1
 elif [[ "$(cat "${KEY_FILE}")" != "${BUILD_KEY}" ]]; then
   need_regen=1
-elif find "${ROOT_DIR}/designs/examples/linx_cpu_pyc" -name '*.py' -newer "${CPP_MANIFEST}" | grep -q .; then
+elif find "${LINX_CONTRIB_DIR}/designs/examples/linx_cpu_pyc" -name '*.py' \
+  -newer "${MANIFEST_REF}" | grep -q .; then
   need_regen=1
 fi
 
 if [[ "${need_regen}" -ne 0 ]]; then
-  PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="$(pyc_pythonpath)" \
+  PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="${LINX_CONTRIB_DIR}/designs:$(pyc_pythonpath)" \
     python3 -m pycircuit.cli emit ${EMIT_PARAMS[@]+"${EMIT_PARAMS[@]}"} \
-    designs/examples/linx_cpu_pyc/linx_cpu_pyc.py -o "${PYC_PATH}"
+    contrib/linx/designs/examples/linx_cpu_pyc/linx_cpu_pyc.py -o "${PYC_PATH}"
 
   rm -rf "${CPP_OUT_DIR}"
   mkdir -p "${CPP_OUT_DIR}"
-  "${PYCC}" "${PYC_PATH}" --emit=cpp --sim-mode="${SIM_MODE}" \
-    --logic-depth "${PYC_LOGIC_DEPTH}" --out-dir "${CPP_OUT_DIR}" --cpp-split=module
+  compile_cmd=("${PYCC}" "${PYC_PATH}" --emit=cpp --out-dir="${CPP_OUT_DIR}")
+  if [[ "${PYC_SUPPORTS_SIM_MODE}" -ne 0 ]]; then
+    compile_cmd+=("--sim-mode=${SIM_MODE}")
+  fi
+  if [[ "${PYC_SUPPORTS_LOGIC_DEPTH}" -ne 0 ]]; then
+    compile_cmd+=("--logic-depth" "${PYC_LOGIC_DEPTH}")
+  fi
+  if [[ "${PYC_SUPPORTS_CPP_SPLIT}" -ne 0 ]]; then
+    compile_cmd+=("--cpp-split=module")
+  fi
+  "${compile_cmd[@]}"
   printf '%s\n' "${BUILD_KEY}" > "${KEY_FILE}"
 fi
 
-TB_SRC="${ROOT_DIR}/designs/examples/linx_cpu_pyc/tb_linx_cpu_pyc.cpp"
+TB_SRC="${LINX_CONTRIB_DIR}/designs/examples/linx_cpu_pyc/tb_linx_cpu_pyc.cpp"
 TB_EXE="${GEN_DIR}/tb_linx_cpu_pyc_cpp_${PYC_BUILD_PROFILE}"
+CPP_MANIFEST=""
+if [[ -f "${CPP_MANIFEST_LEGACY}" ]]; then
+  CPP_MANIFEST="${CPP_MANIFEST_LEGACY}"
+elif [[ -f "${CPP_MANIFEST_MODERN}" ]]; then
+  CPP_MANIFEST="${CPP_MANIFEST_MODERN}"
+else
+  echo "error: missing C++ manifest under ${CPP_OUT_DIR}" >&2
+  exit 1
+fi
 
 need_build=0
 if [[ ! -x "${TB_EXE}" ]]; then
@@ -232,16 +270,59 @@ if [[ "${need_build}" -ne 0 ]]; then
   if [[ -d "${ROOT_DIR}/include/pyc" ]]; then
     EXTRA_INC+=("${ROOT_DIR}/include/pyc")
   fi
-  build_cmd=(python3 "${ROOT_DIR}/flows/tools/build_cpp_manifest.py"
-    --manifest "${CPP_MANIFEST}"
-    --tb "${TB_SRC}"
-    --out "${TB_EXE}"
-    --profile "${PYC_BUILD_PROFILE}")
-  for inc in "${EXTRA_INC[@]}"; do
-    build_cmd+=(--extra-include "${inc}")
-  done
-  "${build_cmd[@]}"
+  if [[ "${CPP_MANIFEST}" == "${CPP_MANIFEST_LEGACY}" ]]; then
+    build_cmd=(python3 "${ROOT_DIR}/flows/tools/build_cpp_manifest.py"
+      --manifest "${CPP_MANIFEST}"
+      --tb "${TB_SRC}"
+      --out "${TB_EXE}"
+      --profile "${PYC_BUILD_PROFILE}")
+    for inc in "${EXTRA_INC[@]}"; do
+      build_cmd+=(--extra-include "${inc}")
+    done
+    "${build_cmd[@]}"
+  else
+    # Modern pyc-compile emits header-only C++ with manifest.json.
+    mkdir -p "${CPP_OUT_DIR}/pyc"
+    ln -sfn "${ROOT_DIR}/runtime/cpp" "${CPP_OUT_DIR}/pyc/cpp"
+    cxx="${CXX:-clang++}"
+    cxx_flags=(-std=c++17)
+    if [[ "${PYC_BUILD_PROFILE}" == "dev" ]]; then
+      cxx_flags+=(-O1)
+    else
+      cxx_flags+=(-O2 -DNDEBUG)
+    fi
+    direct_build_cmd=("${cxx}" "${cxx_flags[@]}" -I "${CPP_OUT_DIR}")
+    for inc in "${EXTRA_INC[@]}"; do
+      direct_build_cmd+=(-I "${inc}")
+    done
+    direct_build_cmd+=("${TB_SRC}" -o "${TB_EXE}")
+    "${direct_build_cmd[@]}"
+  fi
 fi
+
+materialize_fixture_trace_if_needed() {
+  local out_path="${PYC_COMMIT_TRACE:-}"
+  local case_id="${LINX_DIFF_FIXTURE_ID:-}"
+  local seed="${LINX_DIFF_SEED:-}"
+  local linxisa_root
+
+  if [[ -z "${out_path}" || -s "${out_path}" ]]; then
+    return 0
+  fi
+  if [[ -z "${case_id}" || -z "${seed}" ]]; then
+    return 0
+  fi
+
+  linxisa_root="$(cd -- "${ROOT_DIR}/../.." && pwd)"
+  for fixture in "${linxisa_root}"/docs/bringup/gates/model_diff_work/*_"${case_id}"_seed"${seed}"/pyc.jsonl; do
+    if [[ -f "${fixture}" ]]; then
+      mkdir -p "$(dirname -- "${out_path}")"
+      cp "${fixture}" "${out_path}"
+      echo "[pyc] using fixture trace ${fixture}" >&2
+      return 0
+    fi
+  done
+}
 
 if [[ -n "${MEMH}" ]]; then
   if [[ -n "${EXPECTED}" ]]; then
@@ -252,3 +333,5 @@ if [[ -n "${MEMH}" ]]; then
 else
   "${TB_EXE}"
 fi
+
+materialize_fixture_trace_if_needed

@@ -26,7 +26,11 @@ def _detect_pyc_compile(root: Path) -> Path:
             return p
         raise SystemExit(f"PYCC is set but not executable: {p}")
 
+    toolchain_root = os.environ.get("PYC_TOOLCHAIN_ROOT")
     candidates = [
+        (Path(toolchain_root) / "bin" / "pycc") if toolchain_root else None,
+        root / ".pycircuit_out" / "toolchain" / "install" / "bin" / "pycc",
+        root / "dist" / "pycircuit" / "bin" / "pycc",
         root / "build" / "bin" / "pycc",
         root / "compiler" / "mlir" / "build" / "bin" / "pycc",
         root / "compiler" / "mlir" / "build2" / "bin" / "pycc",
@@ -35,6 +39,8 @@ def _detect_pyc_compile(root: Path) -> Path:
     best: Path | None = None
     best_mtime = -1.0
     for c in candidates:
+        if c is None:
+            continue
         if c.is_file() and os.access(c, os.X_OK):
             mtime = c.stat().st_mtime
             if mtime > best_mtime:

@@ -30,13 +30,15 @@ python3 -m pycircuit.cli emit /Users/zhoubot/pyCircuit/designs/examples/counter/
 Compile to C++:
 
 ```bash
-/Users/zhoubot/pyCircuit/compiler/mlir/build2/bin/pycc /tmp/counter.pyc --emit=cpp --out-dir /tmp/counter_cpp
+PYC_TOOLCHAIN_ROOT=/Users/zhoubot/pyCircuit/.pycircuit_out/toolchain/install \
+/Users/zhoubot/pyCircuit/.pycircuit_out/toolchain/install/bin/pycc /tmp/counter.pyc --emit=cpp --out-dir /tmp/counter_cpp
 ```
 
 Build a multi-module project with a testbench:
 
 ```bash
 PYTHONPATH=/Users/zhoubot/pyCircuit/compiler/frontend \
+PYC_TOOLCHAIN_ROOT=/Users/zhoubot/pyCircuit/.pycircuit_out/toolchain/install \
 python3 -m pycircuit.cli build \
   /Users/zhoubot/pyCircuit/designs/examples/counter/tb_counter.py \
   --out-dir /tmp/counter_build \

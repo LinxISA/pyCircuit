@@ -98,12 +98,6 @@ public:
     pending = false;
   }
 
-  // Back-compat single-phase tick (compute + commit).
-  void tick() {
-    tick_compute();
-    tick_commit();
-  }
-
   Wire<1> &clk;
   Wire<1> &rst;
   Wire<1> &en;
@@ -142,7 +136,9 @@ public:
   // Combinational ready/valid generation.
   void eval() {
     const bool outReadyNow = out_ready.toBool();
-    if (evalValid_ && lastEvalCount_ == count_ && lastEvalRd_ == rd_ && lastEvalOutReady_ == outReadyNow)
+    Wire<Width> out_data_int = (count_ != 0) ? storage_[rd_] : Wire<Width>(0);
+    if (evalValid_ && lastEvalCount_ == count_ && lastEvalRd_ == rd_ && lastEvalOutReady_ == outReadyNow &&
+        lastEvalOutData_ == out_data_int)
       return;
 
     bool out_valid_int = (count_ != 0);
@@ -150,12 +146,13 @@ public:
 
     in_ready = Wire<1>(in_ready_int ? 1u : 0u);
     out_valid = Wire<1>(out_valid_int ? 1u : 0u);
-    out_data = storage_[rd_];
+    out_data = out_data_int;
 
     evalValid_ = true;
     lastEvalCount_ = count_;
     lastEvalRd_ = rd_;
     lastEvalOutReady_ = outReadyNow;
+    lastEvalOutData_ = out_data_int;
   }
 
   void tick_compute() {
@@ -210,13 +207,6 @@ public:
     pending = false;
   }
 
-  // Back-compat single-phase tick (compute + commit + refresh outputs).
-  void tick() {
-    tick_compute();
-    tick_commit();
-    eval();
-  }
-
 private:
   static constexpr unsigned bump(unsigned p) { return (p + 1 >= Depth) ? 0 : (p + 1); }
 
@@ -246,6 +236,7 @@ public:
   bool lastEvalOutReady_ = false;
   unsigned lastEvalCount_ = 0;
   unsigned lastEvalRd_ = 0;
+  Wire<Width> lastEvalOutData_{};
 
 private:
   Wire<Width> storage_[Depth]{};

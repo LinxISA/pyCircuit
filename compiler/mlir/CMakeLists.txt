@@ -9,6 +9,7 @@ include(GNUInstallDirs)
 
 find_package(LLVM REQUIRED CONFIG)
 find_package(MLIR REQUIRED CONFIG)
+set(PYC_LLVM_VERSION "${LLVM_PACKAGE_VERSION}" PARENT_SCOPE)
 
 message(STATUS "Using LLVMConfig.cmake in: ${LLVM_DIR}")
 message(STATUS "Using MLIRConfig.cmake in: ${MLIR_DIR}")
@@ -27,6 +28,7 @@ add_definitions(${LLVM_DEFINITIONS})
 
 set(PYC_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
 set(PYC_BINARY_DIR "${CMAKE_CURRENT_BINARY_DIR}")
+get_filename_component(PYC_REPO_ROOT "${PYC_SOURCE_DIR}/../.." ABSOLUTE)
 
 # TableGen files include via `include "pyc/..."`, so ensure the project `include/`
 # directory is on the TableGen include path.
@@ -67,13 +69,17 @@ target_link_libraries(pyc_dialect PUBLIC
 )
 
 add_library(pyc_transforms
+  lib/Transforms/CombDepGraph.cpp
   lib/Transforms/CheckFrontendContractPass.cpp
+  lib/Transforms/CheckHierarchyDisciplinePass.cpp
   lib/Transforms/CheckFlatTypesPass.cpp
   lib/Transforms/CheckLogicDepthPass.cpp
   lib/Transforms/CheckNoDynamicPass.cpp
   lib/Transforms/CheckCombCyclesPass.cpp
+  lib/Transforms/CheckClockDomainsPass.cpp
   lib/Transforms/CombCanonicalizePass.cpp
   lib/Transforms/CollectCompileStatsPass.cpp
+  lib/Transforms/EliminateDeadInstancesPass.cpp
   lib/Transforms/EliminateDeadStatePass.cpp
   lib/Transforms/EliminateWiresPass.cpp
   lib/Transforms/InlineFunctionsPass.cpp
@@ -101,7 +107,11 @@ target_link_libraries(pyc_transforms PUBLIC
 # "ninja" (all), pyc-opt may fail to link on some systems.
 if(TARGET MLIRRegisterAllPasses)
   add_executable(pyc-opt EXCLUDE_FROM_ALL tools/pyc-opt.cpp)
-  set_target_properties(pyc-opt PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
+  set_target_properties(pyc-opt PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
+    INSTALL_RPATH "${PYC_INSTALL_RPATH}"
+    BUILD_WITH_INSTALL_RPATH OFF
+  )
   llvm_update_compile_flags(pyc-opt)
   target_include_directories(pyc-opt PRIVATE
     "${PYC_SOURCE_DIR}/include"
@@ -124,10 +134,15 @@ endif()
 
 add_executable(pycc tools/pycc.cpp lib/Emit/VerilogEmitter.cpp lib/Emit/CppEmitter.cpp)
 llvm_update_compile_flags(pycc)
-set_target_properties(pycc PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
+set_target_properties(pycc PROPERTIES
+  RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
+  INSTALL_RPATH "${PYC_INSTALL_RPATH}"
+  BUILD_WITH_INSTALL_RPATH OFF
+)
 target_include_directories(pycc PRIVATE
   "${PYC_SOURCE_DIR}/include"
   "${PYC_BINARY_DIR}/include"
+  "${PYC_REPO_ROOT}/runtime"
 )
 target_link_libraries(pycc PRIVATE
   pyc_dialect

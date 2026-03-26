@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from dataclasses import dataclass
+import hashlib
 import inspect
+import json
 from typing import Any, Iterable, Iterator, Mapping, Union, overload
 
 from .connectors import (
@@ -18,6 +20,7 @@ from .connectors import (
     is_connector_bundle,
     is_connector_struct,
 )
+from .design import DesignError
 from .dsl import Module, Signal
 from .literals import LiteralValue, infer_literal_width
 
@@ -206,19 +209,25 @@ class Wire:
             raise TypeError("<< only supports constant integer shift amounts")
         return self.shl(amount=int(other))
 
-    def lshr(self, *, amount: int) -> "Wire":
-        """Logical shift right by a constant amount (zero-fill)."""
-        amt = int(amount)
-        if amt < 0:
-            raise ValueError("lshr amount must be >= 0")
-        return Wire(self.m, self.m.lshri(self.sig, amount=amt), signed=False)
+    def lshr(self, *, amount: Union[int, "Wire", "Reg", Signal, LiteralValue]) -> "Wire":
+        """Logical shift right by an immediate or dynamic amount (zero-fill)."""
+        if isinstance(amount, int):
+            amt = int(amount)
+            if amt < 0:
+                raise ValueError("lshr amount must be >= 0")
+            return Wire(self.m, self.m.lshri(self.sig, amount=amt), signed=False)
+        amt = self._as_wire(amount, width=None)
+        return Wire(self.m, self.m.lshr(self.sig, amt.sig), signed=False)
 
-    def ashr(self, *, amount: int) -> "Wire":
-        """Arithmetic shift right by a constant amount (sign-fill)."""
-        amt = int(amount)
-        if amt < 0:
-            raise ValueError("ashr amount must be >= 0")
-        return Wire(self.m, self.m.ashri(self.sig, amount=amt), signed=True)
+    def ashr(self, *, amount: Union[int, "Wire", "Reg", Signal, LiteralValue]) -> "Wire":
+        """Arithmetic shift right by an immediate or dynamic amount (sign-fill)."""
+        if isinstance(amount, int):
+            amt = int(amount)
+            if amt < 0:
+                raise ValueError("ashr amount must be >= 0")
+            return Wire(self.m, self.m.ashri(self.sig, amount=amt), signed=True)
+        amt = self._as_wire(amount, width=None)
+        return Wire(self.m, self.m.ashr(self.sig, amt.sig), signed=True)
 
     def __rshift__(self, other: int) -> "Wire":
         if not isinstance(other, int):
@@ -341,8 +350,12 @@ class Wire:
     def slice(self, *, lsb: int, width: int) -> "Wire":
         return Wire(self.m, self.m.extract(self.sig, lsb=lsb, width=width), signed=False)
 
-    def shl(self, *, amount: int) -> "Wire":
-        return Wire(self.m, self.m.shli(self.sig, amount=amount), signed=self.signed)
+    def shl(self, *, amount: Union[int, "Wire", "Reg", Signal, LiteralValue]) -> "Wire":
+        """Shift left by an immediate or dynamic amount."""
+        if isinstance(amount, int):
+            return Wire(self.m, self.m.shli(self.sig, amount=int(amount)), signed=self.signed)
+        amt = self._as_wire(amount, width=None)
+        return Wire(self.m, self.m.shl(self.sig, amt.sig), signed=self.signed)
 
     def __getitem__(self, idx: int | slice) -> "Wire":
         if isinstance(idx, slice):
@@ -568,6 +581,154 @@ class Circuit(Module):
         self._design_ctx = design_ctx
         # Stable debug exports materialized as module outputs.
         self._debug_exports: dict[str, Signal] = {}
+        # Hardened layout metadata (Decision 0125/0143).
+        self._hardened_layout_groups: list[dict[str, Any]] = []
+        # Hardened probe metadata (Decision 0132/0140).
+        # Keyed by exported port name (e.g. "dbg__...").
+        self._hardened_probe_table: dict[str, dict[str, Any]] = {}
+        # Structural metadata for hierarchy-discipline checks.
+        self._struct_instance_count = 0
+        self._struct_state_alloc_count = 0
+        self._struct_collections: list[dict[str, Any]] = []
+
+    @staticmethod
+    def _struct_identity(payload: Any) -> str:
+        text = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+        return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
+
+    def _record_struct_instance(self) -> None:
+        self._struct_instance_count += 1
+
+    def _record_struct_state_alloc(self) -> None:
+        self._struct_state_alloc_count += 1
+
+    def _record_struct_collection(self, meta: Mapping[str, Any]) -> None:
+        self._struct_collections.append(dict(meta))
+
+    def structural_runtime_metadata(self) -> dict[str, Any]:
+        collection_instance_count = 0
+        module_family_collection_count = 0
+        for entry in self._struct_collections:
+            collection_instance_count += int(entry.get("key_count", 0))
+            if bool(entry.get("from_module_family", False)):
+                module_family_collection_count += 1
+        return {
+            "instance_count": int(self._struct_instance_count),
+            "state_alloc_count": int(self._struct_state_alloc_count),
+            "collection_count": int(len(self._struct_collections)),
+            "collection_instance_count": int(collection_instance_count),
+            "module_family_collection_count": int(module_family_collection_count),
+            "collections": list(self._struct_collections),
+        }
+
+    def _record_hardened_layout_group(self, group: Mapping[str, Any]) -> None:
+        """Record a hardened metadata group to be emitted into MLIR attrs."""
+        self._hardened_layout_groups.append(dict(group))
+        self._materialize_hardened_metadata_attr()
+
+    def _record_hardened_probe(self, *, port: str, meta: Mapping[str, Any]) -> None:
+        """Record a hardened probe entry to be emitted into MLIR attrs."""
+        p = str(port).strip()
+        if not p:
+            raise ValueError("probe port must be non-empty")
+        self._hardened_probe_table[p] = dict(meta)
+        self._materialize_hardened_metadata_attr()
+
+    @staticmethod
+    def _normalize_probe_at(at: str | None) -> str:
+        raw = "xfer" if at is None else str(at).strip().lower()
+        if raw in {"pre"}:
+            return "tick"
+        if raw in {"post"}:
+            return "xfer"
+        if raw not in {"tick", "xfer"}:
+            raise ValueError("probe `at` must be 'tick' or 'xfer'")
+        return raw
+
+    @staticmethod
+    def _normalize_probe_tags(tags: Mapping[str, Any] | None) -> dict[str, Any]:
+        if not tags:
+            return {}
+        out: dict[str, Any] = {}
+        for k in sorted(tags.keys(), key=lambda x: str(x)):
+            kk = str(k).strip()
+            if not kk:
+                raise ValueError("probe tag keys must be non-empty")
+            v = tags[k]
+            if v is None:
+                continue
+            if isinstance(v, (bool, int, str)):
+                out[kk] = v
+                continue
+            out[kk] = str(v)
+        return out
+
+    def _materialize_hardened_metadata_attr(self) -> None:
+        if not self._hardened_layout_groups and not self._hardened_probe_table:
+            return
+
+        layout_table: dict[str, Any] = {}
+        layout_names: dict[str, set[str]] = {}
+        groups: list[dict[str, Any]] = []
+        for g in self._hardened_layout_groups:
+            spec = g.get("spec", {})
+            if not isinstance(spec, Mapping):
+                continue
+            layout_id = str(spec.get("layout_id", "")).strip()
+            if not layout_id:
+                continue
+
+            kind = str(spec.get("kind", "")).strip()
+            name = str(spec.get("name", "")).strip()
+            layout_names.setdefault(layout_id, set()).add(name or "<unnamed>")
+
+            if layout_id not in layout_table:
+                layout_table[layout_id] = {
+                    "kind": kind,
+                    "total_width": int(spec.get("total_width", 0)),
+                    "field_map": spec.get("field_map", {}),
+                    "fields": spec.get("fields", []),
+                }
+
+            groups.append(
+                {
+                    "usage": str(g.get("usage", "")),
+                    "prefix": str(g.get("prefix", "")),
+                    "spec": {"kind": kind, "name": name, "layout_id": layout_id},
+                    "ports": dict(g.get("ports", {})),
+                }
+            )
+
+        # Deterministic ordering independent of frontend call order (Decision 0147).
+        for lid, names in layout_names.items():
+            entry = layout_table.get(lid)
+            if isinstance(entry, dict):
+                entry["schema_names"] = sorted(n for n in names if n)
+
+        def group_sort_key(g: Mapping[str, Any]) -> tuple[str, str, str, str, str]:
+            usage = str(g.get("usage", ""))
+            prefix = str(g.get("prefix", ""))
+            spec = g.get("spec", {})
+            if isinstance(spec, Mapping):
+                skind = str(spec.get("kind", ""))
+                sname = str(spec.get("name", ""))
+                lid = str(spec.get("layout_id", ""))
+            else:
+                skind, sname, lid = "", "", ""
+            return (usage, prefix, skind, sname, lid)
+
+        payload = {
+            "version": 1,
+            "layout_table": layout_table,
+            "layout_groups": sorted(groups, key=group_sort_key),
+            "probe_table": dict(self._hardened_probe_table),
+        }
+        # Attach as a JSON string attribute for tool-visible, backend-consumable
+        # hardened metadata (Decision 0125/0132).
+        import json  # local import to keep hw.py import surface small
+
+        hardened_json = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+        self.set_func_attr("pyc.hardened", hardened_json)
 
     def scoped_name(self, name: str) -> str:
         if not self._scope_stack:
@@ -632,77 +793,51 @@ class Circuit(Module):
             return Wire(self, self.alias(v.sig, name=self.scoped_name(name)), signed=v.signed)
         return Wire(self, self.alias(v, name=self.scoped_name(name)))
 
-    def debug(self, name: str, value: Union[Wire, Reg, Signal]) -> Wire:
-        """Export a named debug probe as a stable module output.
+    def debug(
+        self,
+        name: str,
+        value: Union[Wire, Reg, Signal, Connector],
+        *,
+        at: str | None = None,
+        tags: Mapping[str, Any] | None = None,
+    ) -> Wire:
+        _ = (name, value, at, tags)
+        raise DesignError("Legacy debug helper was removed; use standalone `@probe(target=...)` definitions instead")
 
-        Probes are emitted as `dbg__*` outputs and consumed directly by generated
-        C++/SV testbench flows.
-        """
-        raw = str(name).strip()
-        if not raw:
-            raise ValueError("debug name must be non-empty")
-        scoped = self.scoped_name(f"dbg__{raw}")
-
-        if isinstance(value, Reg):
-            w = value.q
-            sig = w.sig
-        elif isinstance(value, Wire):
-            w = value
-            sig = value.sig
-        else:
-            sig = value
-            w = Wire(self, sig)
-
-        prev = self._debug_exports.get(scoped)
-        if prev is not None and prev is not sig:
-            raise ValueError(f"debug probe {scoped!r} already exists with a different signal")
-        if prev is None:
-            self.output(scoped, sig)
-            self._debug_exports[scoped] = sig
-        return w
-
-    def debug_bundle(self, prefix: str, fields: Mapping[str, Union[Wire, Reg, Signal]]) -> dict[str, Wire]:
-        """Export a group of debug probes using `prefix_<field>` names."""
-        raw_prefix = str(prefix).strip()
-        if not raw_prefix:
-            raise ValueError("debug bundle prefix must be non-empty")
-        out: dict[str, Wire] = {}
-        for key, value in fields.items():
-            raw_key = str(key).strip()
-            if not raw_key:
-                raise ValueError("debug bundle field name must be non-empty")
-            out[raw_key] = self.debug(f"{raw_prefix}_{raw_key}", value)
-        return out
+    def debug_bundle(self, prefix: str, fields: Mapping[str, Union[Wire, Reg, Signal, Connector]]) -> dict[str, Wire]:
+        _ = (prefix, fields)
+        raise DesignError("Legacy debug-bundle helper was removed; use standalone `@probe(target=...)` definitions instead")
 
     def debug_probe(
         self,
         stage: str,
         lane: int,
-        fields: Mapping[str, Union[Wire, Reg, Signal]],
+        fields: Mapping[str, Union[Wire, Reg, Signal, Connector]],
         *,
         family: str = "pv",
+        at: str | None = None,
+        tags: Mapping[str, Any] | None = None,
     ) -> dict[str, Wire]:
-        """Emit canonical DFX probes as `dbg__<family>_<stage>_<field>_lane<k>_<stage>`."""
-        raw_stage = str(stage).strip().lower()
-        if not raw_stage:
-            raise ValueError("debug probe stage must be non-empty")
-        if lane < 0:
-            raise ValueError("debug probe lane must be >= 0")
-        raw_family = str(family).strip().lower()
-        if not raw_family:
-            raise ValueError("debug probe family must be non-empty")
-        out: dict[str, Wire] = {}
-        for key, value in fields.items():
-            raw_key = str(key).strip()
-            if not raw_key:
-                raise ValueError("debug probe field name must be non-empty")
-            name = f"{raw_family}_{raw_stage}_{raw_key}_lane{int(lane)}_{raw_stage}"
-            out[raw_key] = self.debug(name, value)
-        return out
+        _ = (stage, lane, fields, family, at, tags)
+        raise DesignError("Legacy debug-probe helper was removed; use standalone `@probe(target=...)` definitions instead")
 
-    def debug_occ(self, stage: str, lane: int, fields: Mapping[str, Union[Wire, Reg, Signal]]) -> dict[str, Wire]:
-        """Emit occupancy probes as `dbg__occ_<stage>_<field>_lane<k>_<stage>`."""
-        return self.debug_probe(stage, lane, fields, family="occ")
+    def debug_occ(self, stage: str, lane: int, fields: Mapping[str, Union[Wire, Reg, Signal, Connector]]) -> dict[str, Wire]:
+        _ = (stage, lane, fields)
+        raise DesignError("Legacy occupancy-debug helper was removed; use standalone `@probe(target=...)` definitions instead")
+
+    def probe(
+        self,
+        value: Any,
+        *,
+        stage: str,
+        lane: int,
+        family: str = "pv",
+        prefix: str | None = None,
+        at: str | None = None,
+        tags: Mapping[str, Any] | None = None,
+    ) -> dict[str, Wire]:
+        _ = (value, stage, lane, family, prefix, at, tags)
+        raise DesignError("Legacy probe helper was removed; use standalone `@probe(target=...)` definitions instead")
 
     def assign(
         self,
@@ -843,6 +978,7 @@ class Circuit(Module):
         else:
             init_w = init if isinstance(init, Wire) else Wire(self, init)
 
+        self._record_struct_state_alloc()
         q_sig = self.reg(clk, rst, en_w.sig, next_w.sig, init_w.sig)
         q_w = Wire(self, q_sig, signed=(next_w.signed or init_w.signed))
         return Reg(q=q_w, clk=clk, rst=rst, en=en_w, next=next_w, init=init_w)
@@ -1181,6 +1317,7 @@ class Circuit(Module):
         bind: Mapping[str, Connector | ConnectorBundle | ConnectorStruct | Mapping[str, Any] | Any],
         params: dict[str, Any] | None = None,
         module_name: str | None = None,
+        short_name: str | None = None,
     ) -> ModuleInstanceHandle:
         """Instantiate a module from connector/spec bindings."""
         from .wiring.connect import ports
@@ -1191,6 +1328,7 @@ class Circuit(Module):
             name=str(name),
             params=params,
             module_name=module_name,
+            short_name=short_name,
             **bound_ports,
         )
 
@@ -1201,6 +1339,8 @@ class Circuit(Module):
         name: str,
         params: dict[str, Any] | None = None,
         module_name: str | None = None,
+        short_name: str | None = None,
+        keep: bool = False,
         **ports: Any,
     ) -> Connector | ConnectorBundle:
         """Instantiate a module while auto-wrapping port values as connectors."""
@@ -1210,6 +1350,8 @@ class Circuit(Module):
             name=str(name),
             params=params,
             module_name=module_name,
+            short_name=short_name,
+            keep=keep,
             **wrapped,
         )
 
@@ -1284,6 +1426,49 @@ class Circuit(Module):
         if not key_list:
             raise ValueError("array requires at least one key")
 
+        collection_kind = "plain"
+        family_payload: dict[str, Any] | None = None
+        template_payload: dict[str, Any] | None = None
+        from_module_family = False
+        if isinstance(fn_or_collection, ModuleFamilySpec):
+            collection_kind = "family"
+            family_payload = fn_or_collection.__pyc_template_value__()
+            template_payload = family_payload
+            from_module_family = True
+        elif isinstance(fn_or_collection, ModuleListSpec):
+            collection_kind = "list"
+            family_payload = fn_or_collection.family.__pyc_template_value__()
+            template_payload = fn_or_collection.__pyc_template_value__()
+            from_module_family = True
+        elif isinstance(fn_or_collection, ModuleVectorSpec):
+            collection_kind = "vector"
+            family_payload = fn_or_collection.family.__pyc_template_value__()
+            template_payload = fn_or_collection.__pyc_template_value__()
+            from_module_family = True
+        elif isinstance(fn_or_collection, ModuleMapSpec):
+            collection_kind = "map"
+            family_payload = fn_or_collection.family.__pyc_template_value__()
+            template_payload = fn_or_collection.__pyc_template_value__()
+            from_module_family = True
+        elif isinstance(fn_or_collection, ModuleDictSpec):
+            collection_kind = "dict"
+            family_payload = fn_or_collection.family.__pyc_template_value__()
+            template_payload = fn_or_collection.__pyc_template_value__()
+            from_module_family = True
+
+        meta: dict[str, Any] = {
+            "name": str(name),
+            "collection_kind": str(collection_kind),
+            "key_count": int(len(key_list)),
+            "from_module_family": bool(from_module_family),
+        }
+        if family_payload is not None:
+            meta["family_identity"] = self._struct_identity(family_payload)
+            meta["family_payload"] = family_payload
+        if template_payload is not None:
+            meta["template_payload"] = template_payload
+        self._record_struct_collection(meta)
+
         keyed_bindings = dict(per or {})
         instances: dict[str, ModuleInstanceHandle] = {}
         outputs: dict[str, Connector | ConnectorBundle | ConnectorStruct] = {}
@@ -1339,6 +1524,8 @@ class Circuit(Module):
         name: str,
         params: dict[str, Any] | None = None,
         module_name: str | None = None,
+        short_name: str | None = None,
+        keep: bool = False,
         **ports: Any,
     ) -> ModuleInstanceHandle:
         """Instantiate a specialized sub-module and return a rich instance handle."""
@@ -1346,7 +1533,7 @@ class Circuit(Module):
         if self._design_ctx is None:
             raise TypeError("Circuit.instance requires a design context (compile via pycircuit.jit.compile)")
 
-        from .design import DesignContext, DesignError
+        from .design import DesignContext, DesignError, value_params_of
 
         if not isinstance(self._design_ctx, DesignContext):
             raise TypeError("internal error: Circuit design context has an unexpected type")
@@ -1355,6 +1542,13 @@ class Circuit(Module):
         overlap = sorted(set(params_dict.keys()) & set(ports.keys()))
         if overlap:
             raise DesignError(f"instance params/ports overlap: {', '.join(overlap)}")
+        callee_value_params = value_params_of(fn)
+        value_param_overlap = sorted(set(params_dict.keys()) & set(callee_value_params.keys()))
+        if value_param_overlap:
+            raise DesignError(
+                "value-param(s) must be connected as instance ports, not specialization params: "
+                + ", ".join(value_param_overlap)
+            )
 
         normalized_ports: dict[str, Connector] = {}
         for pname, v in ports.items():
@@ -1375,6 +1569,11 @@ class Circuit(Module):
             sig_param_names = set()
 
         for pname in sorted(sig_param_names & set(normalized_ports.keys())):
+            if pname in callee_value_params:
+                # Value-param port types are declared at the @module boundary;
+                # they are not part of specialization key inference.
+                continue
+
             c = normalized_ports[pname]
             rv = c.read()
             if isinstance(rv, Wire):
@@ -1446,7 +1645,15 @@ class Circuit(Module):
         for pname, pty in zip(cm.arg_names, cm.arg_types):
             operands.append(coerce_to_sig(normalized_ports[pname], expected_ty=pty, port=pname))
 
-        outs = self.instance_op(cm.sym_name, *operands, result_types=list(cm.result_types), name=str(name))
+        outs = self.instance_op(
+            cm.sym_name,
+            *operands,
+            result_types=list(cm.result_types),
+            name=str(name),
+            short_name=None if short_name is None else str(short_name),
+            keep=bool(keep),
+        )
+        self._record_struct_instance()
         out_fields: dict[str, Connector] = {}
         for oname, sig in zip(cm.result_names, outs):
             out_fields[oname] = WireConnector(owner=self, name=oname, wire=Wire(self, sig))
@@ -1479,6 +1686,8 @@ class Circuit(Module):
         name: str,
         params: dict[str, Any] | None = None,
         module_name: str | None = None,
+        short_name: str | None = None,
+        keep: bool = False,
         **ports: Any,
     ) -> Connector | ConnectorBundle:
         """Instantiate a specialized sub-module.
@@ -1496,6 +1705,8 @@ class Circuit(Module):
             name=name,
             params=params,
             module_name=module_name,
+            short_name=short_name,
+            keep=keep,
             **ports,
         ).outputs
 
@@ -1510,7 +1721,7 @@ class Circuit(Module):
         wdata: Union[Wire, Reg, Signal],
         wstrb: Union[Wire, Reg, Signal],
         depth: int,
-        name: str | None = None,
+        name: str,
     ) -> Wire:
         def as_sig(v: Union[Wire, Reg, Signal]) -> Signal:
             if isinstance(v, Reg):
@@ -1530,6 +1741,7 @@ class Circuit(Module):
             depth=depth,
             name=name,
         )
+        self._record_struct_state_alloc()
         return Wire(self, rdata)
 
     def sync_mem(
@@ -1544,7 +1756,7 @@ class Circuit(Module):
         wdata: Union[Wire, Reg, Signal],
         wstrb: Union[Wire, Reg, Signal],
         depth: int,
-        name: str | None = None,
+        name: str,
     ) -> Wire:
         def as_sig(v: Union[Wire, Reg, Signal]) -> Signal:
             if isinstance(v, Reg):
@@ -1565,6 +1777,7 @@ class Circuit(Module):
             depth=depth,
             name=name,
         )
+        self._record_struct_state_alloc()
         return Wire(self, rdata)
 
     def sync_mem_dp(
@@ -1581,7 +1794,7 @@ class Circuit(Module):
         wdata: Union[Wire, Reg, Signal],
         wstrb: Union[Wire, Reg, Signal],
         depth: int,
-        name: str | None = None,
+        name: str,
     ) -> tuple[Wire, Wire]:
         def as_sig(v: Union[Wire, Reg, Signal]) -> Signal:
             if isinstance(v, Reg):
@@ -1604,6 +1817,7 @@ class Circuit(Module):
             depth=depth,
             name=name,
         )
+        self._record_struct_state_alloc()
         return Wire(self, rdata0), Wire(self, rdata1)
 
     def async_fifo(
@@ -1635,11 +1849,13 @@ class Circuit(Module):
             as_sig(out_ready),
             depth=depth,
         )
+        self._record_struct_state_alloc()
         return Wire(self, in_ready), Wire(self, out_valid), Wire(self, out_data)
 
     def cdc_sync(self, clk: Signal, rst: Signal, a: Union[Wire, Reg, Signal], *, stages: int | None = None) -> Wire:
         sig = a.q.sig if isinstance(a, Reg) else (a.sig if isinstance(a, Wire) else a)
         out = super().cdc_sync(clk, rst, sig, stages=stages)
+        self._record_struct_state_alloc()
         return Wire(self, out)
 
     def fifo(
@@ -1669,6 +1885,7 @@ class Circuit(Module):
             as_sig(out_ready),
             depth=depth,
         )
+        self._record_struct_state_alloc()
         return Wire(self, in_ready), Wire(self, out_valid), Wire(self, out_data)
 
     def fifo_domain(

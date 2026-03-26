@@ -262,8 +262,7 @@ struct CombCanonicalizePass : public PassWrapper<CombCanonicalizePass, Operation
     patterns.add<MuxSameSelSimplify, MuxI1ToLogic, AndBasicSimplify, OrBasicSimplify, OrAndXorFactor>(f.getContext());
 
     GreedyRewriteConfig cfg;
-    cfg.enableFolding();
-    if (failed(applyPatternsGreedily(f, std::move(patterns), cfg)))
+    if (failed(applyPatternsAndFoldGreedily(f, std::move(patterns), cfg)))
       signalPassFailure();
   }
 };

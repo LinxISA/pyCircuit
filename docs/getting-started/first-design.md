@@ -1,150 +1,78 @@
-# Your First Design: Calculator
+# Your First Design: A Simple ALU (pyc4.0)
 
-In this tutorial, we'll build a simple calculator with arithmetic operations to demonstrate more advanced pyCircuit features.
+This tutorial builds a tiny ALU-style block to demonstrate pyCircuit v4.0
+authoring with Python control flow that lowers to **static hardware**.
 
-## Design Specification
+## Design specification
 
-Our calculator will:
-- Take two 8-bit inputs (a and b)
-- Select an operation via a 2-bit operation select
-- Output the result (16-bit to handle multiplication)
+Inputs:
+- `a`: 8-bit
+- `b`: 8-bit
+- `op`: 2-bit selector
 
-## Operations
+Output:
+- `result`: 8-bit
 
-| Op[1:0] | Operation |
-|---------|-----------|
-| 00 | a + b (add) |
-| 01 | a - b (subtract) |
-| 10 | a & b (and) |
-| 11 | a * b (multiply) |
+Operations:
+
+| `op` | Operation |
+|---:|---|
+| 0 | `a + b` |
+| 1 | `a - b` |
+| 2 | `a ^ b` |
+| 3 | `a & b` |
 
 ## Implementation
 
-```python
-from pycircuit import (
-    CycleAwareCircuit,
-    CycleAwareDomain,
-    compile_cycle_aware,
-    mux,
-    ca_cat,
-)
-
-def calculator(m: CycleAwareCircuit, domain: CycleAwareDomain) -> None:
-    """Simple calculator with add, subtract, and, multiply operations    # Input ports."""
-    
-
-    a = domain.input("a", width=8)
-    b = domain.input("b", width=8)
-    op = domain.input("op", width=2)
-    
-    # Constants
-    zero = domain.const(0, width=8)
-    one = domain.const(1, width=8)
-    
-    # Operation selection signals
-    is_add = op.eq(zero)
-    is_sub = op.eq(one)
-    is_and = op.eq(domain.const(2, width=2))
-    is_mul = op.eq(domain.const(3, width=2))
-    
-    # Compute operations
-    result_add = a + b
-    result_sub = a - b
-    result_and = a & b
-    result_mul = a * b
-    
-    # Select result using mux tree
-    result = result_mul
-    result = mux(is_and, result_and, result)
-    result = mux(is_sub, result_sub, result)
-    result = mux(is_add, result_add, result)
-    
-    # Output
-    m.output("result", result)
-
-# Compile and emit
-circuit = compile_cycle_aware(calculator, name="calculator")
-print(circuit.emit_mlir())
-```
-
-## Key Concepts Demonstrated
-
-### 1. Constants
+This design exists in the repo at `designs/examples/jit_control_flow/jit_control_flow.py`:
 
 ```python
-zero = domain.const(0, width=8)
-one = domain.const(1, width=8)
+from pycircuit import Circuit, module, u
+
+@module
+def build(m: Circuit, rounds: int = 4) -> None:
+    a = m.input("a", width=8)
+    b = m.input("b", width=8)
+    op = m.input("op", width=2)
+
+    acc = a + u(8, 0)
+    if op == u(2, 0):
+        acc = a + b
+    elif op == u(2, 1):
+        acc = a - b
+    elif op == u(2, 2):
+        acc = a ^ b
+    else:
+        acc = a & b
+
+    for _ in range(rounds):
+        acc = acc + 1
+
+    m.output("result", acc)
 ```
 
-Constants are created with `domain.const(value, width)`. They automatically get assigned the current cycle.
+Notes:
+- The `if/elif/else` and `for` loop are **authoring sugar**. The compiler must
+  lower the design to static hardware (no residual dynamic control flow).
+- `rounds` is a compile-time parameter.
 
-### 2. Comparisons
+## Build + run
 
-```python
-is_add = op.eq(zero)  # Equality comparison
-```
-
-Comparison operations return 1-bit signals that can be used in mux selection.
-
-### 3. Mux Trees
-
-```python
-result = mux(is_add, result_add, result)
-result = mux(is_sub, result_sub, result)
-```
-
-The `mux(sel, true_val, false_val)` function creates a multiplexer. We chain them to implement priority selection.
-
-### 4. Bitwidth Extension
-
-Notice that `a * b` produces a 16-bit result (8 + 8), while other operations produce 8-bit results. pyCircuit handles this automatically through its type system.
-
-## Running the Design
+Run the standard gates:
 
 ```bash
-# Emit MLIR
-PYTHONPATH=compiler/frontend python -m pycircuit.cli emit \
-    designs/examples/calculator/calculator.py -o calculator.pyc
-
-# Compile to C++
-./build/bin/pycc calculator.pyc --emit=cpp -o calculator_build/
-
-# Run simulation
-cd calculator_build
-make
-./tb_calculator
+bash flows/scripts/run_examples.sh
+bash flows/scripts/run_sims.sh
 ```
 
-## Adding a Register
+Or build just this example via the CLI:
 
-Let's modify the design to add an output register:
-
-```python
-def calculator_reg(m: CycleAwareCircuit, domain: CycleAwareDomain) -> None:
-    """Calculator with registered output."""
-    
-    # Input ports
-    a = domain.input("a", width=8)
-    b = domain.input("b", width=8)
-    op = domain.input("op", width=2)
-    
-    # ... compute result (same as before) ...
-    
-    # Register the result
-    result_reg = domain.signal("result_reg", width=16, reset=0)
-    
-    domain.next()  # Advance to next cycle
-    result_reg.set(result)  # Register assignment
-    
-    m.output("result", result_reg)
+```bash
+PYTHONPATH=compiler/frontend \
+python3 -m pycircuit.cli build \
+  designs/examples/jit_control_flow/tb_jit_control_flow.py \
+  --out-dir /tmp/pyc_jit_control_flow \
+  --target both \
+  --jobs 8
 ```
 
-The key changes:
-1. Create a register signal with `reset=0`
-2. Call `domain.next()` to advance one cycle
-3. Call `.set()` to assign the D input
-
-## What's Next?
-
-- [Tutorial](../tutorial/index.md) - Learn more about the unified signal model
-- [Examples](../examples/index.md) - Explore more complex designs like FIFO and CPU

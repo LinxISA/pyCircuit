@@ -1,16 +1,16 @@
 #pragma once
 
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
 #include <map>
-
-#include <zlib.h>
 #include <set>
 #include <sstream>
 #include <string>
+#include <system_error>
 #include <vector>
 
 namespace pyc::cpp {
@@ -20,21 +20,21 @@ public:
   bool open(const std::filesystem::path &path, std::uint64_t startCycle) {
     close();
     path_ = path;
-    gzip_ = (path_.extension() == ".gz");
-
-    if (gzip_) {
-      // zlib expects a narrow C string path.
-      gz_ = gzopen(path_.string().c_str(), "wb");
-      if (!gz_) {
-        opened_ = false;
-        return false;
-      }
-    } else {
-      out_.open(path_, std::ios::out | std::ios::trunc);
-      if (!out_.is_open()) {
-        opened_ = false;
-        return false;
-      }
+    if (path_.extension() != ".linxtrace") {
+      opened_ = false;
+      return false;
+    }
+    if (path_.has_parent_path()) {
+      std::filesystem::create_directories(path_.parent_path());
+    }
+    rows_.clear();
+    stages_.clear();
+    lanes_.clear();
+    event_tmp_path_ = std::filesystem::path(path_.string() + ".events.tmp");
+    event_out_.open(event_tmp_path_, std::ios::out | std::ios::trunc);
+    if (!event_out_.is_open()) {
+      opened_ = false;
+      return false;
     }
 
     cur_cycle_ = startCycle;
@@ -46,29 +46,22 @@ public:
     if (!opened_) {
       return;
     }
-    if (gzip_) {
-      if (gz_) {
-        gzflush(gz_, Z_FINISH);
-        gzclose(gz_);
-        gz_ = nullptr;
-      }
-    } else {
-      if (out_.is_open()) {
-        out_.flush();
-        out_.close();
-      }
+    if (event_out_.is_open()) {
+      event_out_.flush();
+      event_out_.close();
     }
-    writeMetaSidecar();
+    finalizeTraceFile();
+    std::error_code ec{};
+    std::filesystem::remove(event_tmp_path_, ec);
+    event_tmp_path_.clear();
+    path_.clear();
     opened_ = false;
-    gzip_ = false;
   }
 
   ~LinxTraceWriter() { close(); }
 
   bool isOpen() const {
-    if (!opened_)
-      return false;
-    return gzip_ ? (gz_ != nullptr) : out_.is_open();
+    return opened_ && event_out_.is_open();
   }
 
   void atCycle(std::uint64_t cycle) {
@@ -112,6 +105,7 @@ public:
        << ",\"row_kind\":\"" << jsonEscape(row.row_kind) << "\""
        << ",\"core_id\":" << threadId
        << ",\"kind\":\"" << jsonEscape(row.kind) << "\""
+       << ",\"row_sid\":\"" << jsonEscape(row.uop_uid.empty() ? "0x0" : row.uop_uid) << "\""
        << ",\"uop_uid\":\"" << jsonEscape(row.uop_uid.empty() ? "0x0" : row.uop_uid) << "\""
        << ",\"parent_uid\":\"" << jsonEscape(row.parent_uid.empty() ? "0x0" : row.parent_uid) << "\""
        << ",\"block_uid\":\"" << jsonEscape(row.block_uid.empty() ? "0x0" : row.block_uid) << "\""
@@ -214,6 +208,14 @@ public:
   }
 
 private:
+  static constexpr std::array<const char *, 39> kCanonicalStageOrder = {
+      "F0", "F1", "F2", "F3", "F4", "D1", "D2", "D3", "IQ", "S1",
+      "S2", "P1", "I1", "I2", "E1", "E2", "E3", "E4", "W1", "W2",
+      "LIQ", "LHQ", "STQ", "SCB", "MDB", "L1D", "BISQ", "BCTRL", "TMU", "TMA",
+      "CUBE", "VEC", "TAU", "BROB", "ROB", "CMT", "FLS", "XCHK", "IB",
+  };
+  static constexpr const char *kPipelineSchemaId = "LC-TRACE1-1ABD8F1C22C0";
+
   struct RowInfo {
     std::uint64_t row_id = 0;
     std::string row_kind = "uop";
@@ -325,45 +327,39 @@ private:
     return h;
   }
 
-  static std::filesystem::path deriveMetaPath(const std::filesystem::path &eventPath) {
-    std::string s = eventPath.string();
-    if (s.size() >= 3 && s.compare(s.size() - 3, 3, ".gz") == 0) {
-      s = s.substr(0, s.size() - 3);
-    }
-    const std::string suffix = ".linxtrace.jsonl";
-    if (s.size() >= suffix.size() && s.compare(s.size() - suffix.size(), suffix.size(), suffix) == 0) {
-      return std::filesystem::path(s.substr(0, s.size() - suffix.size()) + ".linxtrace.meta.json");
-    }
-    return std::filesystem::path(s + ".meta.json");
-  }
-
   void writeLine(const std::string &line) {
     if (!isOpen()) {
       return;
     }
-    if (gzip_) {
-      const std::string payload = line + "\n";
-      // gzwrite returns number of uncompressed bytes written.
-      (void)gzwrite(gz_, payload.data(), static_cast<unsigned>(payload.size()));
-      return;
-    }
-    out_ << line << "\n";
+    event_out_ << line << "\n";
   }
 
-  void writeMetaSidecar() {
-    if (path_.empty()) {
+  void finalizeTraceFile() {
+    if (path_.empty() || event_tmp_path_.empty()) {
       return;
     }
-    std::filesystem::path metaPath = deriveMetaPath(path_);
-    if (metaPath.has_parent_path()) {
-      std::filesystem::create_directories(metaPath.parent_path());
+    std::ofstream out(path_, std::ios::out | std::ios::trunc);
+    if (!out.is_open()) {
+      return;
     }
-    std::vector<std::string> stageList(stages_.begin(), stages_.end());
+    writeMetaRecord(out);
+    std::ifstream events(event_tmp_path_, std::ios::in);
+    if (!events.is_open()) {
+      return;
+    }
+    out << events.rdbuf();
+  }
+
+  void writeMetaRecord(std::ostream &out) const {
+    std::vector<std::string> stageList{};
+    stageList.reserve(kCanonicalStageOrder.size());
+    for (const char *stage : kCanonicalStageOrder) {
+      stageList.emplace_back(stage);
+    }
     std::vector<std::string> laneList(lanes_.begin(), lanes_.end());
 
-    const std::string schemaId = "LC-TRACE-RUNTIME";
     std::ostringstream contractSeed;
-    contractSeed << schemaId << "|";
+    contractSeed << kPipelineSchemaId << "|";
     for (std::size_t i = 0; i < stageList.size(); ++i) {
       if (i) contractSeed << ",";
       contractSeed << stageList[i];
@@ -385,7 +381,9 @@ private:
     contractSeed << "|linxtrace.v1";
     const std::uint64_t h = fnv1a64(contractSeed.str());
     std::ostringstream idHex;
-    idHex << schemaId << "-" << std::uppercase << std::hex << h;
+    // Keep the contract hash fixed-width so consumers can string-compare reliably.
+    idHex << kPipelineSchemaId << "-" << std::uppercase << std::hex << std::setw(16) << std::setfill('0')
+          << h;
     const std::string stageCsv = [&]() {
       std::ostringstream ss;
       for (std::size_t i = 0; i < stageList.size(); ++i) {
@@ -395,68 +393,58 @@ private:
       return ss.str();
     }();
 
-    std::ofstream meta(metaPath, std::ios::out | std::ios::trunc);
-    if (!meta.is_open()) {
-      return;
-    }
-
-    meta << "{\n";
-    meta << "  \"format\": \"linxtrace.v1\",\n";
-    meta << "  \"contract_id\": \"" << idHex.str() << "\",\n";
-    meta << "  \"pipeline_schema_id\": \"" << schemaId << "\",\n";
-    meta << "  \"stage_order_csv\": \"" << jsonEscape(stageCsv) << "\",\n";
-    meta << "  \"stage_catalog\": [\n";
+    out << "{\"type\":\"META\"";
+    out << ",\"format\":\"linxtrace.v1\"";
+    out << ",\"contract_id\":\"" << idHex.str() << "\"";
+    out << ",\"pipeline_schema_id\":\"" << kPipelineSchemaId << "\"";
+    out << ",\"stage_order_csv\":\"" << jsonEscape(stageCsv) << "\"";
+    out << ",\"stage_catalog\":[";
     for (std::size_t i = 0; i < stageList.size(); ++i) {
       const std::string &s = stageList[i];
-      meta << "    {\"stage_id\":\"" << jsonEscape(s) << "\",\"label\":\"" << jsonEscape(s)
-           << "\",\"color\":\"" << stageColor(s) << "\",\"group\":\"" << stageGroup(s) << "\"}";
+      out << "{\"stage_id\":\"" << jsonEscape(s) << "\",\"label\":\"" << jsonEscape(s)
+          << "\",\"color\":\"" << stageColor(s) << "\",\"group\":\"" << stageGroup(s) << "\"}";
       if (i + 1 < stageList.size()) {
-        meta << ",";
+        out << ",";
       }
-      meta << "\n";
     }
-    meta << "  ],\n";
-    meta << "  \"lane_catalog\": [\n";
+    out << "]";
+    out << ",\"lane_catalog\":[";
     for (std::size_t i = 0; i < laneList.size(); ++i) {
       const std::string &l = laneList[i];
-      meta << "    {\"lane_id\":\"" << jsonEscape(l) << "\",\"label\":\"" << jsonEscape(l) << "\"}";
+      out << "{\"lane_id\":\"" << jsonEscape(l) << "\",\"label\":\"" << jsonEscape(l) << "\"}";
       if (i + 1 < laneList.size()) {
-        meta << ",";
+        out << ",";
       }
-      meta << "\n";
     }
-    meta << "  ],\n";
-    meta << "  \"row_catalog\": [\n";
+    out << "]";
+    out << ",\"row_catalog\":[";
     std::size_t idx = 0;
     for (const auto &[rowId, row] : rows_) {
-      meta << "    {"
-           << "\"row_id\":" << rowId << ","
-           << "\"row_kind\":\"" << jsonEscape(row.row_kind) << "\","
-           << "\"core_id\":" << row.core_id << ","
-           << "\"block_uid\":\"" << jsonEscape(normalizeHexId(row.block_uid.empty() ? "0x0" : row.block_uid))
-           << "\","
-           << "\"uop_uid\":\"" << jsonEscape(normalizeHexId(row.uop_uid.empty() ? "0x0" : row.uop_uid))
-           << "\","
-           << "\"left_label\":\"" << jsonEscape(row.left_label) << "\","
-           << "\"detail_defaults\":\"" << jsonEscape(row.detail_defaults) << "\""
-           << "}";
+      out << "{"
+          << "\"row_id\":" << rowId << ","
+          << "\"row_kind\":\"" << jsonEscape(row.row_kind) << "\","
+          << "\"core_id\":" << row.core_id << ","
+          << "\"block_uid\":\"" << jsonEscape(normalizeHexId(row.block_uid.empty() ? "0x0" : row.block_uid))
+          << "\","
+          << "\"row_sid\":\"" << jsonEscape(normalizeHexId(row.uop_uid.empty() ? "0x0" : row.uop_uid))
+          << "\","
+          << "\"uop_uid\":\"" << jsonEscape(normalizeHexId(row.uop_uid.empty() ? "0x0" : row.uop_uid))
+          << "\","
+          << "\"left_label\":\"" << jsonEscape(row.left_label) << "\","
+          << "\"detail_defaults\":\"" << jsonEscape(row.detail_defaults) << "\""
+          << "}";
       if (++idx < rows_.size()) {
-        meta << ",";
+        out << ",";
       }
-      meta << "\n";
     }
-    meta << "  ],\n";
-    meta << "  \"render_prefs\": {\n";
-    meta << "    \"theme\": \"high-contrast\",\n";
-    meta << "    \"show_symbols\": true\n";
-    meta << "  }\n";
-    meta << "}\n";
+    out << "]";
+    out << ",\"render_prefs\":{\"theme\":\"high-contrast\",\"show_symbols\":true}";
+    out << "}\n";
   }
 
-  std::ofstream out_{};
-  gzFile gz_ = nullptr;
-  bool gzip_ = false;
+  std::ofstream event_out_{};
   std::filesystem::path path_{};
+  std::filesystem::path event_tmp_path_{};
   bool opened_ = false;
   std::uint64_t cur_cycle_ = 0;
   std::map<std::uint64_t, RowInfo> rows_{};

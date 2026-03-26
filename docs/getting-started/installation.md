@@ -6,8 +6,8 @@ This guide covers setting up the pyCircuit development environment.
 
 | Component | Minimum Version | Recommended Version |
 |-----------|---------------|---------------------|
-| Python | 3.9 | 3.10+ |
-| LLVM | 17 | 19 |
+| Python | 3.10 | 3.14 |
+| LLVM | 19 | 19 |
 | CMake | 3.20 | 3.28+ |
 | Ninja | 1.10 | Latest |
 
@@ -20,13 +20,16 @@ This guide covers setting up the pyCircuit development environment.
 sudo apt-get update
 
 # Install build tools
-sudo apt-get install -y cmake ninja-build python3 python3-pip clang
+sudo apt-get install -y cmake ninja-build python3 python3-pip clang wget
 
-# Install LLVM/MLIR (Ubuntu 22.04+)
-sudo apt-get install -y llvm-dev mlir-tools libmlir-dev
+# Install LLVM/MLIR 19 (Ubuntu 22.04+)
+wget https://apt.llvm.org/llvm.sh
+chmod +x llvm.sh
+sudo ./llvm.sh 19
+sudo apt-get install -y llvm-19-dev mlir-19-tools libmlir-19-dev
 
 # Verify installation
-llvm-config --version
+llvm-config-19 --version
 mlir-opt --version
 ```
 
@@ -39,10 +42,10 @@ mlir-opt --version
 # Install build tools
 brew install cmake ninja python@3
 
-# Install LLVM with MLIR
-brew install llvm
+# Install LLVM 19 with MLIR
+brew install llvm@19
 # Add LLVM to PATH
-echo 'export PATH="$(brew --prefix llvm)/bin:$PATH"' >> ~/.zshrc
+echo 'export PATH="$(brew --prefix llvm@19)/bin:$PATH"' >> ~/.zshrc
 source ~/.zshrc
 
 # Verify installation
@@ -57,19 +60,21 @@ git clone https://github.com/LinxISA/pyCircuit.git
 cd pyCircuit
 
 # Configure with CMake
-LLVM_DIR="$(llvm-config --cmakedir)"
+LLVM_DIR="$(llvm-config-19 --cmakedir)"
 MLIR_DIR="$(dirname "$LLVM_DIR")/mlir"
 
-cmake -G Ninja -S . -B build \
+cmake -G Ninja -S . -B .pycircuit_out/toolchain/build \
   -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_INSTALL_PREFIX="$PWD/.pycircuit_out/toolchain/install" \
   -DLLVM_DIR="$LLVM_DIR" \
   -DMLIR_DIR="$MLIR_DIR"
 
-# Build the compiler
-ninja -C build pycc pyc-opt
+# Build and stage the compiler toolchain
+ninja -C .pycircuit_out/toolchain/build pycc pyc-opt pyc4_runtime
+cmake --install .pycircuit_out/toolchain/build --prefix "$PWD/.pycircuit_out/toolchain/install"
 
 # Verify the build
-./build/bin/pycc --version
+./.pycircuit_out/toolchain/install/bin/pycc --version
 ```
 
 ## Alternative: Use Build Script
@@ -79,15 +84,44 @@ ninja -C build pycc pyc-opt
 bash flows/scripts/pyc build
 ```
 
+## Alternative: Install a Release Wheel
+
+```bash
+python3 -m pip install /path/to/pycircuit_hisi-<version>-py3-none-<platform>.whl
+
+# The wheel ships the matching toolchain inside site-packages.
+pycc --version
+python3 -m pycircuit.cli --help
+```
+
+The wheel is platform-specific because it embeds `pycc`, the runtime archive,
+and the required LLVM/MLIR shared libraries. Use the wheel that matches your
+OS and architecture. A single wheel now covers Python 3.10+ on that platform.
+
+Published package install command:
+
+```bash
+python3 -m pip install pycircuit-hisi
+```
+
+The distribution name is `pycircuit-hisi` to avoid the existing unrelated
+`pycircuit` package on PyPI. The import path remains `pycircuit`, and the CLI
+entrypoints remain `pycircuit`, `pycc`, and `pyc-opt`.
+
 ## Install Python Package
 
 ```bash
-# Install pycircuit in development mode
-pip install -e .
+# Install the frontend package in development mode
+python3 -m pip install -e .
 
 # Verify installation
-python -c "import pycircuit; print(pycircuit.__version__)"
+python3 -c "import pycircuit; print(pycircuit.__version__)"
 ```
+
+Editable install is frontend-only. It does not provide `pycc` on `PATH`; build
+the toolchain with `bash flows/scripts/pyc build` and export
+`PYC_TOOLCHAIN_ROOT="$PWD/.pycircuit_out/toolchain/install"`, or install a
+release wheel instead.
 
 ## Verify Your Setup
 
@@ -110,12 +144,12 @@ If CMake can't find LLVM, set the paths explicitly:
 ```bash
 export LLVM_DIR=/path/to/llvm/lib/cmake/llvm
 export MLIR_DIR=/path/to/mlir/lib/cmake/mlir
-cmake -G Ninja -S . -B build ...
+cmake -G Ninja -S . -B .pycircuit_out/toolchain/build ...
 ```
 
 ### Python Version Issues
 
-pyCircuit requires Python 3.9+. Check your version:
+pyCircuit requires Python 3.10+. Check your version:
 
 ```bash
 python3 --version
@@ -136,8 +170,8 @@ brew install python@3.11
 Clean and rebuild:
 
 ```bash
-rm -rf build
-cmake -G Ninja -S . -B build ...
-ninja -C build clean
-ninja -C build pycc
+rm -rf .pycircuit_out/toolchain
+cmake -G Ninja -S . -B .pycircuit_out/toolchain/build ...
+ninja -C .pycircuit_out/toolchain/build clean
+ninja -C .pycircuit_out/toolchain/build pycc
 ```

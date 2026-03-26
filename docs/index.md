@@ -1,63 +1,46 @@
-# Welcome to pyCircuit
+# Welcome to pyCircuit (pyc4.0 / pyc0.40)
 
-pyCircuit is a Python-based hardware description framework that brings modern software engineering practices to hardware design. Inspired by Chisel and pyMTL, it provides a unique **Cycle-Aware Signal System** that simplifies complex pipeline design.
+pyCircuit is a Python-based hardware construction DSL that compiles to MLIR and
+emits:
 
-## Why pyCircuit?
+- **C++ functional simulation** (module instances become SimObjects with `tick()` / `transfer()`)
+- **Verilog** (for RTL integration and Verilator)
 
-- **Pythonic**: Write hardware in Python with full IDE support
-- **Automatic Pipeline Balancing**: Signals automatically align across clock cycles
-- **MLIR-Powered**: Robust compilation infrastructure with optimization passes
-- **Dual Output**: Generate C++ for fast simulation or Verilog for synthesis
+pyc4.0 is a hard-break release focused on **ultra-large designs**, scalable DFX,
+and strict IR legality gates.
 
-## Key Concepts
+## Core ideas (pyc4.0)
 
-### Unified Signal Model
+- `@module` is the hierarchy boundary and maps 1:1 to a simulation object.
+- Two-phase simulation: **tick** (compute / resolve) then **transfer** (commit state).
+- Observation points:
+  - **TICK-OBS**: post-tick, pre-transfer
+  - **XFER-OBS**: post-transfer
+- Python control flow is allowed as authoring sugar, but must lower to **static hardware**
+  (no residual dynamic control flow in backend IR).
 
-Define both combinational logic and registers with the same syntax:
-
-```python
-# Wire (no reset) - combinational logic
-result = domain.signal("result", width=32)
-result.set(a + b)
-
-# Register (with reset) - sequential logic
-counter = domain.signal("counter", width=8, reset=0)
-domain.next()
-counter.set(counter + 1)
-```
-
-### Cycle-Aware Computing
-
-Each signal tracks its logical clock cycle, enabling automatic DFF insertion:
+## Minimal example
 
 ```python
-# Signals from different cycles are automatically balanced
-stage0_data = domain.input("data_in", width=16)  # cycle 0
-domain.next()
-stage1_data = domain.signal("stage1", width=16, reset=0)  # cycle 1
-domain.next()
-# result combines cycle 0 and cycle 2 data
-result = stage0_data + stage1_data  # DFFs inserted automatically
+from pycircuit import Circuit, module, u
+
+@module
+def build(m: Circuit) -> None:
+    clk = m.clock("clk")
+    rst = m.reset("rst")
+    en = m.input("enable", width=1)
+
+    count = m.out("count_q", clk=clk, rst=rst, width=8, init=u(8, 0))
+    count.set(count.out() + 1, when=en)
+    m.output("count", count)
 ```
 
-## Quick Links
+## Quick links
 
-- [Installation Guide](getting-started/installation.md) - Set up your development environment
-- [Quickstart](getting-started/quickstart.md) - Build and run your first design
-- [Tutorial](tutorial/index.md) - Deep dive into pyCircuit programming
-- [Examples](examples/index.md) - Complete design examples
-- [API Reference](api/frontend-api.md) - Detailed API documentation
+- `docs/QUICKSTART.md`
+- `docs/FRONTEND_API.md`
+- `docs/TESTBENCH.md`
+- `docs/IR_SPEC.md`
+- `designs/examples/README.md`
+- `docs/rfcs/pyc4.0-decisions.md` and `docs/updatePLAN.md` (contracts + execution plan)
 
-## Performance
-
-pyCircuit is designed for high-performance hardware simulation:
-
-- **Fast C++ Simulation**: Generated C++ code runs at millions of cycles per second
-- **Verilator Integration**: Optional Verilog simulation for timing-accurate validation
-- **VCD Waveform Debugging**: Built-in waveform generation for signal tracing
-
-## Community
-
-- GitHub: https://github.com/LinxISA/pyCircuit
-- Issues: https://github.com/LinxISA/pyCircuit/issues
-- Discussions: https://github.com/LinxISA/pyCircuit/discussions

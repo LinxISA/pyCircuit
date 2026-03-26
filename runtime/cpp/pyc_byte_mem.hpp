@@ -2,6 +2,9 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <iomanip>
+#include <ostream>
+#include <utility>
 #include <vector>
 
 #include "pyc_bits.hpp"
@@ -34,6 +37,69 @@ public:
     eval();
   }
 
+  struct MemWatchEvent {
+    enum class Kind : std::uint8_t { Read = 0, Write = 1 };
+    Kind kind = Kind::Read;
+    std::uint8_t port = 0;
+    std::size_t addr = 0; // byte address
+    Wire<DataWidth> data{};
+    Wire<StrbWidth> strb{};
+  };
+
+  // Decision 0006: memory observability supports hash/watch/dump.
+  //
+  // Notes:
+  // - For byte memories, `addr`/watch ranges are in bytes.
+  // - Read events are recorded when `eval()` recomputes `rdata` (i.e. on an
+  //   raddr change or after a write dirties data).
+  // - Write events are recorded on the active clock edge when `wvalid` is
+  //   asserted (data is the committed word at `waddr` after applying `wstrb`).
+  void mem_watch(std::size_t lo, std::size_t hi) {
+    if (lo > hi)
+      std::swap(lo, hi);
+    watch_enabled_ = true;
+    watch_lo_ = lo;
+    watch_hi_ = hi;
+    watch_events_.clear();
+  }
+  void mem_watch_disable() {
+    watch_enabled_ = false;
+    watch_events_.clear();
+  }
+  bool mem_watch_enabled() const { return watch_enabled_; }
+  void mem_watch_clear() { watch_events_.clear(); }
+  const std::vector<MemWatchEvent> &mem_watch_events() const { return watch_events_; }
+
+  std::uint64_t mem_hash(std::size_t lo = 0, std::size_t hi = (DepthBytes > 0 ? DepthBytes - 1 : 0)) const {
+    if (DepthBytes == 0)
+      return 0;
+    if (lo > hi)
+      std::swap(lo, hi);
+    if (hi >= DepthBytes)
+      hi = DepthBytes - 1;
+
+    std::uint64_t h = 1469598103934665603ull;
+    for (std::size_t i = lo; i <= hi; ++i) {
+      h ^= static_cast<std::uint64_t>(mem_[i]);
+      h *= 1099511628211ull;
+    }
+    return h;
+  }
+
+  void mem_dump(std::ostream &os, std::size_t lo = 0, std::size_t hi = (DepthBytes > 0 ? DepthBytes - 1 : 0)) const {
+    if (DepthBytes == 0)
+      return;
+    if (lo > hi)
+      std::swap(lo, hi);
+    if (hi >= DepthBytes)
+      hi = DepthBytes - 1;
+
+    for (std::size_t i = lo; i <= hi; ++i) {
+      os << "{\"addr\":" << i << ",\"byte\":\"0x" << std::hex << std::setw(2) << std::setfill('0')
+         << static_cast<unsigned>(mem_[i]) << std::dec << "\"}\n";
+    }
+  }
+
   void eval() {
     std::size_t base = toIndex(raddr);
     if (evalValid && !dataDirty && base == lastEvalRaddr)
@@ -50,6 +116,21 @@ public:
     lastEvalRaddr = base;
     evalValid = true;
     dataDirty = false;
+
+    if (watch_enabled_) {
+      const std::size_t lo = base;
+      const std::size_t hi = base + static_cast<std::size_t>(StrbWidth ? (StrbWidth - 1) : 0);
+      const bool hit = !(hi < watch_lo_ || lo > watch_hi_);
+      if (hit) {
+        MemWatchEvent ev;
+        ev.kind = MemWatchEvent::Kind::Read;
+        ev.port = 0;
+        ev.addr = base;
+        ev.data = v;
+        ev.strb = Wire<StrbWidth>(0);
+        watch_events_.push_back(ev);
+      }
+    }
   }
 
   void tick_compute() {
@@ -84,6 +165,29 @@ public:
         mem_[ai] = static_cast<std::uint8_t>(byte.value() & 0xFFu);
       }
       dataDirty = true;
+
+      if (watch_enabled_) {
+        const std::size_t lo = base;
+        const std::size_t hi = base + static_cast<std::size_t>(StrbWidth ? (StrbWidth - 1) : 0);
+        const bool hit = !(hi < watch_lo_ || lo > watch_hi_);
+        if (hit) {
+          // Reconstruct committed word.
+          Wire<DataWidth> v = Wire<DataWidth>(0);
+          for (unsigned i = 0; i < StrbWidth; i++) {
+            std::size_t ai = base + static_cast<std::size_t>(i);
+            std::uint8_t b = (ai < DepthBytes) ? mem_[ai] : 0u;
+            Wire<DataWidth> byteW = zext<DataWidth, 8>(Wire<8>(b));
+            v = v | shl<DataWidth>(byteW, 8u * i);
+          }
+          MemWatchEvent ev;
+          ev.kind = MemWatchEvent::Kind::Write;
+          ev.port = 0;
+          ev.addr = base;
+          ev.data = v;
+          ev.strb = latchedStrb;
+          watch_events_.push_back(ev);
+        }
+      }
     }
     pendingWrite = false;
     eval();
@@ -144,6 +248,11 @@ private:
     }
     return out;
   }
+
+  bool watch_enabled_ = false;
+  std::size_t watch_lo_ = 0;
+  std::size_t watch_hi_ = 0;
+  std::vector<MemWatchEvent> watch_events_{};
 };
 
 } // namespace pyc::cpp

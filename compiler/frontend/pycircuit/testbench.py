@@ -4,6 +4,7 @@ import json
 from dataclasses import dataclass
 from typing import Any, Mapping
 
+from .probe import TbProbes
 from .tb import Tb
 
 
@@ -26,6 +27,7 @@ class TestbenchProgram:
     timeout_cycles: int
     finish_cycle: int | None
     sva_asserts: tuple[dict[str, Any], ...]
+    probes: tuple[dict[str, Any], ...] = ()
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -45,6 +47,7 @@ class TestbenchProgram:
             "timeout_cycles": int(self.timeout_cycles),
             "finish_cycle": (None if self.finish_cycle is None else int(self.finish_cycle)),
             "sva_asserts": list(self.sva_asserts),
+            "probes": list(self.probes),
         }
 
     def as_json(self) -> str:
@@ -59,7 +62,21 @@ def testbench_payload_from_tb(
     out_raw: list[str],
     out_tys: list[str],
     tb: Tb,
+    probes: TbProbes | None = None,
 ) -> TestbenchProgram:
+    probe_rows: tuple[dict[str, Any], ...] = ()
+    if probes is not None:
+        probe_rows = tuple(
+            {
+                "canonical_path": handle.path,
+                "source_path": handle.source_path,
+                "at": handle.at,
+                "tags": dict(handle.tags),
+                "width_bits": int(handle.width_bits),
+                "ty": handle.ty,
+            }
+            for handle in probes.glob("**")
+        )
     return TestbenchProgram(
         top_symbol=str(top_symbol),
         top_header=f"{top_symbol}.hpp",
@@ -122,6 +139,7 @@ def testbench_payload_from_tb(
             }
             for a in tb.sva_asserts
         ),
+        probes=probe_rows,
     )
 
 

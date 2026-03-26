@@ -29,7 +29,13 @@ module pyc_byte_mem #(
 
   // Optional initialization.
   integer init_fd;
+  integer init_i;
   initial begin
+    `ifndef SYNTHESIS
+    // Deterministic simulation init: keep C++/Verilog equivalence stable.
+    for (init_i = 0; init_i < DEPTH; init_i = init_i + 1)
+      mem[init_i] = 8'h00;
+    `endif
     if (INIT_MEMH != "") begin
       init_fd = $fopen(INIT_MEMH, "r");
       if (init_fd != 0) begin
@@ -56,7 +62,7 @@ module pyc_byte_mem #(
   integer wa;
   always @(posedge clk) begin
     if (rst) begin
-      // No implicit clear; memory contents are left as-is (TB may $readmemh()).
+      // Reset does not clear memory (init happens via INIT_MEMH or sim-default 0s).
     end else if (wvalid) begin
       wa = waddr[31:0];
       for (j = 0; j < STRB_WIDTH; j = j + 1) begin

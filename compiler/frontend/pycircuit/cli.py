@@ -13,15 +13,31 @@ import subprocess
 import sys
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 from .api_contract import collect_local_python_graph, nearest_project_root, scan_file
 from .diagnostics import render_diagnostic
 from .dsl import Module
-from .design import FRONTEND_CONTRACT, Design, DesignError
+from .design import FRONTEND_CONTRACT, Design, DesignError, value_params_of
 from .jit import JitError, compile
+from .packaged_toolchain import bundled_toolchain_root, tool_executable
+from .probe import (
+    ProbeError,
+    TbProbes,
+    build_resolved_probe_manifest,
+    collect_probe_functions,
+    load_probe_catalog,
+    resolve_probe_function,
+)
 from .tb import Tb, TbError, _sanitize_id
 from .testbench import emit_testbench_pyc, testbench_payload_from_tb
+from .trace_dsl import (
+    TraceConfigError,
+    TracePlan,
+    compute_trace_plan,
+    compute_trace_plan_from_artifacts,
+    load_trace_config,
+)
 
 
 def _default_top_name(src: Path) -> str:
@@ -29,6 +45,17 @@ def _default_top_name(src: Path) -> str:
     if not parts:
         return "Top"
     return "".join(p[:1].upper() + p[1:] for p in parts)
+
+
+def _tool_script(name: str) -> Path:
+    candidates = [
+        Path(__file__).resolve().parent / "_tools" / name,
+        Path(__file__).resolve().parents[3] / "flows" / "tools" / name,
+    ]
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+    raise SystemExit(f"required pyCircuit helper script not found: {name}")
 
 
 def _load_py_file(path: Path) -> object:
@@ -69,28 +96,28 @@ def _scan_api_contract(entry: Path, *, project_root_override: str | None = None)
     raise SystemExit(f"api contract check failed: {len(diags)} violation(s)")
 
 
-def _cmd_emit(args: argparse.Namespace) -> int:
-    src_arg = args.python_file
-    out = Path(args.output)
-    src, mod = _resolve_emit_source(src_arg)
-    if src is not None:
-        _scan_api_contract(src, project_root_override=args.project_root)
-    if not hasattr(mod, "build"):
-        raise SystemExit(f"{src_arg} must define a v3 entrypoint: `@module def build(m: Circuit, ...)`")
-    build = getattr(mod, "build")
+def _project_root(entry: Path, *, project_root_override: str | None = None) -> Path:
+    if project_root_override:
+        return Path(project_root_override).resolve()
+    return nearest_project_root(entry)
 
+
+def _collect_jit_params(build: Any, *, overrides: list[str]) -> dict[str, object]:
     if not callable(build):
         raise SystemExit("build must be a callable @module entrypoint: `def build(m: Circuit, ...)`")
 
     sig = inspect.signature(build)
     params = list(sig.parameters.values())
     if not params:
-        raise SystemExit("build must use v3 JIT entry semantics: `@module def build(m: Circuit, ...)`")
+        raise SystemExit("build must use JIT entry semantics: `@module def build(m: Circuit, ...)`")
+    value_param_names = set(value_params_of(build).keys())
 
     # Collect JIT-time parameters from defaults.
     jit_params: dict[str, object] = {}
     missing: list[str] = []
     for p in params[1:]:
+        if p.name in value_param_names:
+            continue
         if p.default is inspect._empty:
             missing.append(p.name)
         else:
@@ -101,7 +128,7 @@ def _cmd_emit(args: argparse.Namespace) -> int:
         )
 
     # Apply CLI overrides.
-    for spec in args.param:
+    for spec in overrides:
         if "=" not in spec:
             raise SystemExit(f"--param expects name=value, got: {spec!r}")
         name, raw = spec.split("=", 1)
@@ -117,10 +144,29 @@ def _cmd_emit(args: argparse.Namespace) -> int:
             val = raw
         jit_params[name] = val
 
-    top_name = _default_top_name(src if src is not None else Path(src_arg.replace(".", "/") + ".py"))
+    return jit_params
+
+
+def _top_name_for_build(src: Path, build: Any) -> str:
+    top_name = _default_top_name(src)
     override = getattr(build, "__pycircuit_name__", None)
     if isinstance(override, str) and override.strip():
         top_name = override.strip()
+    return top_name
+
+
+def _cmd_emit(args: argparse.Namespace) -> int:
+    src_arg = args.python_file
+    out = Path(args.output)
+    src, mod = _resolve_emit_source(src_arg)
+    if src is not None:
+        _scan_api_contract(src, project_root_override=args.project_root)
+    if not hasattr(mod, "build"):
+        raise SystemExit(f"{src_arg} must define a pyCircuit entrypoint: `@module def build(m: Circuit, ...)`")
+    build = getattr(mod, "build")
+
+    jit_params = _collect_jit_params(build, overrides=list(args.param or []))
+    top_name = _top_name_for_build(src if src is not None else Path(src_arg.replace(".", "/") + ".py"), build)
     try:
         design = compile(build, name=top_name, **jit_params)
     except (DesignError, JitError) as e:
@@ -128,6 +174,37 @@ def _cmd_emit(args: argparse.Namespace) -> int:
 
     if isinstance(design, Design):
         out.write_text(design.emit_mlir(), encoding="utf-8")
+        if getattr(args, "module_graph_out", None):
+            tool = _tool_script("pyc_module_graph.py")
+            cmd = [
+                sys.executable,
+                str(tool),
+                "--pyc",
+                str(out),
+                "--out",
+                str(args.module_graph_out),
+                "--edge-label-mode",
+                str(getattr(args, "module_graph_edge_label_mode", "ports")),
+                "--edge-label-limit",
+                str(int(getattr(args, "module_graph_edge_label_limit", 4))),
+                "--max-nodes",
+                str(int(getattr(args, "module_graph_max_nodes", 500))),
+                "--max-edges",
+                str(int(getattr(args, "module_graph_max_edges", 2000))),
+            ]
+            if getattr(args, "module_graph_module", ""):
+                cmd += ["--module", str(args.module_graph_module)]
+            if bool(getattr(args, "module_graph_recursive", False)):
+                # "Recursive nest" = expand the full instance hierarchy (bounded by tool guardrails).
+                cmd += ["--hierarchical", "--expand-all", "--expand-depth", "64"]
+            r = subprocess.run(cmd, capture_output=True, text=True)
+            if r.returncode != 0:
+                raise SystemExit(
+                    "module-graph generation failed.\n"
+                    f"cmd: {' '.join(cmd)}\n"
+                    f"stdout:\n{r.stdout}\n"
+                    f"stderr:\n{r.stderr}\n"
+                )
         return 0
 
     raise SystemExit("internal error: compile did not return a Design")
@@ -142,15 +219,21 @@ def _detect_pycc() -> Path:
             return p
         raise SystemExit(f"PYCC is set but not executable: {p}")
 
-    # Prefer in-tree builds when running from the repo.
     root = Path(__file__).resolve().parents[3]
+    toolchain_root_env = os.environ.get("PYC_TOOLCHAIN_ROOT")
     candidates = [
+        tool_executable("pycc"),
+        Path(toolchain_root_env) / "bin" / "pycc" if toolchain_root_env else None,
+        root / ".pycircuit_out" / "toolchain" / "install" / "bin" / "pycc",
+        root / "dist" / "pycircuit" / "bin" / "pycc",
         root / "build-top" / "bin" / "pycc",
         root / "build" / "bin" / "pycc",
         root / "compiler" / "mlir" / "build2" / "bin" / "pycc",
         root / "compiler" / "mlir" / "build" / "bin" / "pycc",
     ]
     for c in candidates:
+        if c is None:
+            continue
         if c.is_file() and os.access(c, os.X_OK):
             return c
 
@@ -159,6 +242,84 @@ def _detect_pycc() -> Path:
         return Path(found)
 
     raise SystemExit("missing pycc (set PYCC=... or build it with: flows/scripts/pyc build)")
+
+
+def _toolchain_roots(pycc: Path | None = None) -> list[Path]:
+    roots: list[Path] = []
+    seen: set[Path] = set()
+
+    def add(path: Path | None) -> None:
+        if path is None:
+            return
+        try:
+            rp = path.resolve()
+        except OSError:
+            return
+        if rp in seen:
+            return
+        seen.add(rp)
+        roots.append(rp)
+
+    env = os.environ.get("PYC_TOOLCHAIN_ROOT")
+    if env:
+        add(Path(env))
+
+    add(bundled_toolchain_root())
+
+    if pycc is not None:
+        try:
+            resolved_pycc = pycc.resolve()
+        except OSError:
+            resolved_pycc = pycc
+        if resolved_pycc.parent.name == "bin":
+            add(resolved_pycc.parent.parent)
+
+    repo_root = Path(__file__).resolve().parents[3]
+    add(repo_root / ".pycircuit_out" / "toolchain" / "install")
+    add(repo_root / "dist" / "pycircuit")
+    return roots
+
+
+def _runtime_lib_filename() -> str:
+    return "pyc4_runtime.lib" if os.name == "nt" else "libpyc4_runtime.a"
+
+
+def _detect_toolchain_root(pycc: Path | None = None) -> Path | None:
+    for root in _toolchain_roots(pycc):
+        cmake_cfg = root / "share" / "pycircuit" / "cmake" / "pycircuitConfig.cmake"
+        runtime_lib = root / "lib" / _runtime_lib_filename()
+        if cmake_cfg.is_file() or runtime_lib.is_file():
+            return root
+    return None
+
+
+def _runtime_manifest_for_toolchain(toolchain_root: Path | None) -> dict[str, object]:
+    if toolchain_root is None:
+        raise SystemExit(
+            "missing pyc toolchain root (set PYC_TOOLCHAIN_ROOT or use flows/scripts/pyc build to stage an install tree)"
+        )
+
+    include_dir = (toolchain_root / "include").resolve()
+    lib_dir = (toolchain_root / "lib").resolve()
+    cmake_config_dir = (toolchain_root / "share" / "pycircuit" / "cmake").resolve()
+    runtime_lib = (lib_dir / _runtime_lib_filename()).resolve()
+
+    if not include_dir.is_dir():
+        raise SystemExit(f"invalid toolchain root: missing include dir: {include_dir}")
+    if not runtime_lib.is_file():
+        raise SystemExit(f"invalid toolchain root: missing runtime library: {runtime_lib}")
+
+    return {
+        "mode": "prebuilt",
+        "cmake_package": "pycircuit",
+        "cmake_target": "pycircuit::pyc4_runtime",
+        "toolchain_root_hint": str(toolchain_root.resolve()),
+        "cmake_config_dir": str(cmake_config_dir),
+        "include_dirs": [str(include_dir)],
+        "lib_dirs": [str(lib_dir)],
+        "libs": ["pyc4_runtime"],
+        "library_files": [str(runtime_lib)],
+    }
 
 
 def _as_int_width(ty: str) -> int:
@@ -171,51 +332,11 @@ def _as_int_width(ty: str) -> int:
 
 def _collect_build(mod: object, src: Path, args: argparse.Namespace) -> Module | Design:
     if not hasattr(mod, "build"):
-        raise SystemExit(f"{src} must define a v3 entrypoint: `@module def build(m: Circuit, ...)`")
+        raise SystemExit(f"{src} must define a pyCircuit entrypoint: `@module def build(m: Circuit, ...)`")
     build = getattr(mod, "build")
 
-    if not callable(build):
-        raise SystemExit("build must be a callable @module entrypoint: `def build(m: Circuit, ...)`")
-
-    sig = inspect.signature(build)
-    params = list(sig.parameters.values())
-    if not params:
-        raise SystemExit("build must use v3 JIT entry semantics: `@module def build(m: Circuit, ...)`")
-
-    # Collect JIT-time parameters from defaults.
-    jit_params: dict[str, object] = {}
-    missing: list[str] = []
-    for p in params[1:]:
-        if p.default is inspect._empty:
-            missing.append(p.name)
-        else:
-            jit_params[p.name] = p.default
-    if missing:
-        raise SystemExit(
-            f"build() is treated as a JIT design function but missing default values for: {', '.join(missing)}"
-        )
-
-    # Apply CLI overrides.
-    for spec in args.param:
-        if "=" not in spec:
-            raise SystemExit(f"--param expects name=value, got: {spec!r}")
-        name, raw = spec.split("=", 1)
-        name = name.strip()
-        raw = raw.strip()
-        if not name:
-            raise SystemExit(f"--param expects name=value, got: {spec!r}")
-        if name not in jit_params:
-            raise SystemExit(f"unknown JIT parameter: {name!r} (available: {', '.join(jit_params.keys())})")
-        try:
-            val = ast.literal_eval(raw)
-        except Exception:
-            val = raw
-        jit_params[name] = val
-
-    top_name = _default_top_name(src)
-    override = getattr(build, "__pycircuit_name__", None)
-    if isinstance(override, str) and override.strip():
-        top_name = override.strip()
+    jit_params = _collect_jit_params(build, overrides=list(getattr(args, "param", []) or []))
+    top_name = _top_name_for_build(src, build)
     try:
         return compile(build, name=top_name, **jit_params)
     except (DesignError, JitError) as e:
@@ -277,7 +398,43 @@ def _top_iface(design: Module | Design) -> _TopIface:
     return _TopIface(sym=str(getattr(design, "name", "Top")), in_raw=in_raw, in_tys=in_tys, out_raw=out_raw, out_tys=out_tys)
 
 
-def _render_tb_cpp(iface: _TopIface, t: Tb) -> str:
+def _top_iface_from_manifest(manifest: Mapping[str, Any]) -> _TopIface:
+    top = str(manifest.get("top", "")).strip()
+    modules = manifest.get("modules", None)
+    if not top or not isinstance(modules, list):
+        raise SystemExit("invalid project_manifest.json: missing `top` or `modules`")
+    for m in modules:
+        if not isinstance(m, Mapping):
+            continue
+        if str(m.get("name", "")).strip() != top:
+            continue
+        in_raw = [str(x) for x in (m.get("arg_names") or [])]
+        in_tys = [str(x) for x in (m.get("arg_types") or [])]
+        out_raw = [str(x) for x in (m.get("result_names") or [])]
+        out_tys = [str(x) for x in (m.get("result_types") or [])]
+        return _TopIface(sym=top, in_raw=in_raw, in_tys=in_tys, out_raw=out_raw, out_tys=out_tys)
+    raise SystemExit(f"invalid project_manifest.json: top module {top!r} not found in modules list")
+
+
+def _module_paths_from_manifest(manifest: Mapping[str, Any], *, out_dir: Path) -> dict[str, Path]:
+    modules = manifest.get("modules", None)
+    if not isinstance(modules, list) or not modules:
+        raise SystemExit("invalid project_manifest.json: missing `modules` list")
+    out: dict[str, Path] = {}
+    for m in modules:
+        if not isinstance(m, Mapping):
+            continue
+        name = str(m.get("name", "")).strip()
+        pyc_rel = str(m.get("pyc", "")).strip()
+        if not name or not pyc_rel:
+            continue
+        out[name] = (out_dir / pyc_rel).resolve()
+    if not out:
+        raise SystemExit("invalid project_manifest.json: module list is empty")
+    return out
+
+
+def _render_tb_cpp(iface: _TopIface, t: Tb, *, trace_plan: TracePlan | None = None) -> str:
     has_clocks = bool(t.clocks)
     has_reset = t.reset_spec is not None
     if has_reset and not has_clocks:
@@ -370,33 +527,117 @@ def _render_tb_cpp(iface: _TopIface, t: Tb) -> str:
 
     lines: list[str] = []
     lines.append("// Generated by pycircuit (prototype)\n")
+    lines.append("#include <algorithm>\n")
+    lines.append("#include <array>\n")
     lines.append("#include <cstdint>\n")
     lines.append("#include <cstdlib>\n")
     lines.append("#include <filesystem>\n")
     lines.append("#include <iostream>\n\n")
+    lines.append("#include <iterator>\n")
+    lines.append("#include <string>\n")
+    lines.append("#include <string_view>\n\n")
     lines.append("#include <cpp/pyc_tb.hpp>\n\n")
+    lines.append("#include <cpp/pyc_trace_bin.hpp>\n\n")
     lines.append(f"#include \"{hdr}\"\n\n")
     lines.append("using pyc::cpp::Testbench;\n\n")
     lines.append("int main() {\n")
     lines.append(f"  pyc::gen::{top} dut;\n")
     lines.append(f"  Testbench<pyc::gen::{top}> tb(dut);\n\n")
+    lines.append("  std::optional<pyc::cpp::PycTraceBinWriter> bin_trace;\n\n")
     if rand_specs:
         lines.append("  // Random streams (deterministic).\n")
         for sn, _w, seed, _st, _ev in rand_specs:
             seed64 = int(seed) & ((1 << 64) - 1)
             lines.append(f"  std::uint64_t rng_{sn} = 0x{seed64:x}ull;\n")
         lines.append("\n")
-    lines.append("  // Optional traces.\n")
+    lines.append("  // Optional traces (Decision 0145).\n")
     lines.append("  const char *trace_dir_env = std::getenv(\"PYC_TRACE_DIR\");\n")
     lines.append(
-        "  std::filesystem::path out_dir = trace_dir_env ? std::filesystem::path(trace_dir_env) : std::filesystem::path(\".\");\n"
+        "  const bool trace_env_enabled = (trace_dir_env != nullptr) && (std::string(trace_dir_env).size() != 0);\n"
     )
-    lines.append(f"  out_dir /= \"tb_{iface.sym}\";\n")
-    lines.append("  std::filesystem::create_directories(out_dir);\n")
-    lines.append(f"  tb.enableVcd((out_dir / \"tb_{iface.sym}.vcd\").string(), /*top=*/\"tb_{iface.sym}\");\n")
-    for sn in [*iface.in_names, *iface.out_names]:
-        lines.append(f"  tb.vcdTrace(dut.{sn}, \"{sn}\");\n")
-    lines.append("\n")
+    lines.append(f"  const bool trace_cfg_enabled = {str(bool(trace_plan and trace_plan.enabled_signals)).lower()};\n")
+    lines.append("  if (trace_env_enabled || trace_cfg_enabled) {\n")
+    lines.append(
+        "    std::filesystem::path out_dir = trace_env_enabled ? std::filesystem::path(trace_dir_env) : std::filesystem::path(\".\");\n"
+    )
+    lines.append(f"    out_dir /= \"tb_{iface.sym}\";\n")
+    lines.append("    std::filesystem::create_directories(out_dir);\n")
+    lines.append(f"    tb.enableVcd((out_dir / \"tb_{iface.sym}.vcd\").string(), /*top=*/\"tb_{iface.sym}\");\n")
+    if trace_plan and trace_plan.enabled_signals:
+        sigs = list(trace_plan.enabled_signals)
+        insts = list(trace_plan.enabled_instances)
+        sig_obs = dict(getattr(trace_plan, "signal_obs", {}) or {})
+        # Ensure stable ordering for reproducible generated TB text.
+        sigs = sorted(set(str(s) for s in sigs))
+        insts = sorted(set(str(s) for s in insts))
+        sig_obs = {str(k): str(v).strip().lower() for k, v in sig_obs.items() if str(k) in set(sigs)}
+        tick_sigs = sorted([k for k, v in sig_obs.items() if v == "tick"])
+        xfer_sigs = sorted([k for k, v in sig_obs.items() if v == "xfer"])
+        lines.append("    // Trace config selected signals (generated from trace DSL).\n")
+        lines.append("    static constexpr std::string_view kEnabledInstances[] = {\n")
+        for s in insts:
+            lines.append(f"      {json.dumps(s)},\n")
+        lines.append("    };\n")
+        lines.append("    static constexpr std::string_view kEnabledSignals[] = {\n")
+        for s in sigs:
+            lines.append(f"      {json.dumps(s)},\n")
+        lines.append("    };\n")
+        lines.append("    // Per-signal observation points (Decision 0113 / 0140).\n")
+        lines.append(
+            f"    static constexpr std::array<std::string_view, {len(tick_sigs)}> kTickObsSignals = {{\n"
+        )
+        for s in tick_sigs:
+            lines.append(f"      {json.dumps(s)},\n")
+        lines.append("    };\n")
+        lines.append(
+            f"    static constexpr std::array<std::string_view, {len(xfer_sigs)}> kXferObsSignals = {{\n"
+        )
+        for s in xfer_sigs:
+            lines.append(f"      {json.dumps(s)},\n")
+        lines.append("    };\n")
+        lines.append(
+            "    auto enabledInstance = [&](std::string_view p) -> bool {\n"
+            "      return std::binary_search(std::begin(kEnabledInstances), std::end(kEnabledInstances), p);\n"
+            "    };\n"
+        )
+        lines.append(
+            "    auto enabledSignal = [&](std::string_view p) -> bool {\n"
+            "      return std::binary_search(std::begin(kEnabledSignals), std::end(kEnabledSignals), p);\n"
+            "    };\n"
+        )
+        lines.append(
+            "    auto sampleAtForSignal = [&](std::string_view p) -> pyc::cpp::PycTraceBinWriter::SampleAt {\n"
+            "      if (std::binary_search(kTickObsSignals.begin(), kTickObsSignals.end(), p))\n"
+            "        return pyc::cpp::PycTraceBinWriter::SampleAt::Tick;\n"
+            "      if (std::binary_search(kXferObsSignals.begin(), kXferObsSignals.end(), p))\n"
+            "        return pyc::cpp::PycTraceBinWriter::SampleAt::Commit;\n"
+            "      return pyc::cpp::PycTraceBinWriter::SampleAt::Auto;\n"
+            "    };\n"
+        )
+        lines.append("    dut.pyc_trace_vcd(tb, /*prefix=*/\"dut\", enabledInstance, enabledSignal);\n")
+        lines.append("    // Binary trace event stream (Decision 0016).\n")
+        lines.append("    pyc::cpp::ProbeRegistry reg;\n")
+        lines.append("    dut.pyc_register_probes(reg, /*prefix=*/\"dut\");\n")
+        lines.append("    std::vector<const pyc::cpp::ProbeRegistry::Entry *> trace_probes;\n")
+        lines.append("    std::vector<pyc::cpp::PycTraceBinWriter::SampleAt> trace_sample_at;\n")
+        lines.append("    trace_probes.reserve(std::size(kEnabledSignals));\n")
+        lines.append("    trace_sample_at.reserve(std::size(kEnabledSignals));\n")
+        lines.append("    for (auto p : kEnabledSignals) {\n")
+        lines.append(
+            "      if (const auto *e = reg.findByPath(p)) { trace_probes.push_back(e); trace_sample_at.push_back(sampleAtForSignal(p)); }\n"
+        )
+        lines.append("    }\n")
+        lines.append("    bin_trace.emplace();\n")
+        lines.append(
+            f"    if (!bin_trace->open(out_dir / \"tb_{iface.sym}.pyctrace\", std::move(trace_probes), /*external_manifest=*/true, std::move(trace_sample_at))) {{\n"
+        )
+        lines.append("      std::cerr << \"WARN: failed to open pyc binary trace output\\n\";\n")
+        lines.append("      bin_trace.reset();\n")
+        lines.append("    }\n")
+    else:
+        for sn in [*iface.in_names, *iface.out_names]:
+            lines.append(f"    tb.vcdTrace(dut.{sn}, \"{sn}\");\n")
+    lines.append("  }\n\n")
 
     if has_clocks:
         for c in t.clocks:
@@ -407,7 +648,41 @@ def _render_tb_cpp(iface: _TopIface, t: Tb) -> str:
                 f"  tb.addClock(dut.{sn}, /*halfPeriodSteps=*/{int(c.half_period_steps)}, /*phaseSteps=*/{int(c.phase_steps)}, /*startHigh=*/{str(bool(c.start_high)).lower()});\n"
             )
     if has_reset:
+        lines.append("  if (bin_trace) {\n")
+        lines.append("    const std::uint64_t __pyc_reset_assert_cycle = 0ull;\n")
+        lines.append(
+            f"    const std::uint64_t __pyc_reset_deassert_cycle = ({int(ca)}ull == 0ull) ? 0ull : ({int(ca)}ull - 1ull);\n"
+        )
+        lines.append(
+            "    bin_trace->writeInvalidate(__pyc_reset_assert_cycle, pyc::cpp::PycTraceBinWriter::Phase::Tick, "
+            "\"global\", pyc::cpp::PycTraceBinWriter::InvalidateReason::WarmReset, \"global\", \"tb.reset\");\n"
+        )
+        lines.append(
+            "    bin_trace->writeResetAssert(__pyc_reset_assert_cycle, pyc::cpp::PycTraceBinWriter::Phase::Tick, "
+            "\"global\", pyc::cpp::PycTraceBinWriter::ResetKind::Warm);\n"
+        )
+        lines.append(
+            "    bin_trace->writeResetDeassert(__pyc_reset_deassert_cycle, pyc::cpp::PycTraceBinWriter::Phase::Tick, "
+            "\"global\", pyc::cpp::PycTraceBinWriter::ResetKind::Warm);\n"
+        )
+        lines.append("  }\n")
         lines.append(f"  tb.reset(dut.{rst_sn}, /*cyclesAsserted=*/{int(ca)}, /*cyclesDeasserted=*/{int(cd)});\n\n")
+
+    if trace_plan and trace_plan.enabled_signals and trace_plan.window:
+        begin = trace_plan.window.begin_cycle
+        end = trace_plan.window.end_cycle
+        if begin is not None and end is not None:
+            hp = int(t.clocks[0].half_period_steps) if has_clocks else 0
+            steps_per_cycle = 1 if not has_clocks else max(1, 2 * hp)
+            lines.append("  // Bounded trace window (cycles are relative to post-reset cycle 0).\n")
+            lines.append("  if (trace_cfg_enabled) {\n")
+            lines.append("    const std::uint64_t trace_base_steps = tb.timeSteps();\n")
+            lines.append(f"    const std::uint64_t steps_per_cycle = {int(steps_per_cycle)}ull;\n")
+            lines.append(
+                f"    tb.setVcdWindow(trace_base_steps + ({int(begin)}ull * steps_per_cycle), "
+                f"trace_base_steps + (({int(end)}ull + 1ull) * steps_per_cycle) - 1ull);\n"
+            )
+            lines.append("  }\n\n")
 
     lines.append(f"  const std::uint64_t timeout_cycles = {int(t.timeout_cycles)}ull;\n")
     lines.append("  bool ok = false;\n")
@@ -437,6 +712,10 @@ def _render_tb_cpp(iface: _TopIface, t: Tb) -> str:
         lines.append("    }\n")
 
     if expects_pre_by:
+        # In the generated C++ TB, combinational logic only updates when we call
+        # `dut.comb()`. For pre-step (TICK-OBS) sampling, ensure values reflect
+        # the drives applied for this cycle before checking expectations.
+        lines.append("    dut.comb();\n")
         lines.append("    // Pre-step expects for this cycle.\n")
         lines.append("    switch (cyc) {\n")
         for cyc in sorted(expects_pre_by.keys()):
@@ -461,9 +740,21 @@ def _render_tb_cpp(iface: _TopIface, t: Tb) -> str:
         lines.append("    }\n")
 
     if has_clocks:
-        lines.append("    tb.runCyclesAuto(1);\n")
+        if trace_plan and trace_plan.enabled_signals and trace_plan.window:
+            begin = trace_plan.window.begin_cycle
+            end = trace_plan.window.end_cycle
+            if begin is not None and end is not None:
+                lines.append(
+                    f"    tb.runCycleAutoTrace(cyc, (bin_trace && cyc >= {int(begin)}ull && cyc <= {int(end)}ull) ? &*bin_trace : nullptr);\n"
+                )
+            else:
+                lines.append("    tb.runCycleAutoTrace(cyc, bin_trace ? &*bin_trace : nullptr);\n")
+        else:
+            lines.append("    tb.runCycleAutoTrace(cyc, bin_trace ? &*bin_trace : nullptr);\n")
     else:
         lines.append("    tb.runSteps(1);\n")
+
+    # Binary trace sampling is performed inside Testbench stepping (Decision 0113).
 
     if expects_post_by:
         lines.append("    // Post-step expects for this cycle.\n")
@@ -535,7 +826,7 @@ def _render_tb_cpp(iface: _TopIface, t: Tb) -> str:
     return "".join(lines)
 
 
-def _render_tb_sv(iface: _TopIface, t: Tb) -> str:
+def _render_tb_sv(iface: _TopIface, t: Tb, *, trace_plan: TracePlan | None = None) -> str:
     has_clocks = bool(t.clocks)
     has_reset = t.reset_spec is not None
     if has_reset and not has_clocks:
@@ -650,6 +941,39 @@ def _render_tb_sv(iface: _TopIface, t: Tb) -> str:
     lines.append(",\n".join(conns))
     lines.append("\n  );\n\n")
 
+    # Optional VCD tracing via `$dumpvars` (Decision 0145).
+    if trace_plan and trace_plan.enabled_signals:
+        # Decision 0023: enabled_signals are canonical `<instance_path>:<field_path>` strings.
+        # SystemVerilog `$dumpvars` expects hierarchical references, so map ":" -> ".".
+        sigs = sorted(set(str(s) for s in trace_plan.enabled_signals))
+
+        def canonical_to_sv_ref(p: str) -> str:
+            inst, sep, field = str(p).partition(":")
+            if not sep:
+                return str(p)
+            if not inst:
+                return _sanitize_id(field)
+            if not field:
+                return inst
+            # Verilog/SV identifiers cannot contain `.` or `[]` separators used
+            # by canonical field paths (Decisions 0009/0024). The Verilog
+            # backend applies `_sanitize_id` on port names, so do the same here.
+            return f"{inst}.{_sanitize_id(field)}"
+
+        sv_sigs = sorted(set(canonical_to_sv_ref(s) for s in sigs))
+        lines.append("  // Optional traces (generated from trace DSL).\n")
+        lines.append("  initial begin : __pyc_tb_trace\n")
+        lines.append(f"    $dumpfile(\"tb_{top}.vcd\");\n")
+        # Chunk long `$dumpvars` arg lists to keep tool limits reasonable.
+        chunk = 64
+        for i in range(0, len(sv_sigs), chunk):
+            args = ", ".join(sv_sigs[i : i + chunk])
+            lines.append(f"    $dumpvars(0, {args});\n")
+        if trace_plan.window and trace_plan.window.begin_cycle is not None and trace_plan.window.end_cycle is not None:
+            if int(trace_plan.window.begin_cycle) > 0:
+                lines.append("    $dumpoff;\n")
+        lines.append("  end\n\n")
+
     # Clock generation: currently only supports the first clock.
     if has_clocks:
         hp = int(t.clocks[0].half_period_steps)
@@ -680,15 +1004,27 @@ def _render_tb_sv(iface: _TopIface, t: Tb) -> str:
     if has_reset:
         lines.append(f"    {rst_sn} = 1'b1;\n")
         lines.append(f"    repeat ({int(ca)}) @(posedge {clk_sn});\n")
+        # Deassert reset away from a posedge to avoid races with posedge-triggered state.
+        lines.append(f"    @(negedge {clk_sn});\n")
         lines.append(f"    {rst_sn} = 1'b0;\n")
-        lines.append(f"    repeat ({int(cd)}) @(posedge {clk_sn});\n\n")
-    if has_clocks:
+        lines.append(f"    repeat ({int(cd)}) @(posedge {clk_sn});\n")
+        # Ensure cycle 0 starts on a negedge after any post-reset settle cycles.
+        lines.append(f"    if ({int(cd)} != 0) @(negedge {clk_sn});\n\n")
+    elif has_clocks:
         # Align stimulus so cycle 0 drives are applied on a negedge, avoiding races
         # with posedge-triggered sequential logic in the DUT.
         lines.append(f"    @(negedge {clk_sn});\n\n")
 
     lines.append(f"    timeout_cycles = {int(t.timeout_cycles)};\n")
     lines.append("    for (cyc = 0; cyc < timeout_cycles; cyc = cyc + 1) begin\n")
+
+    if trace_plan and trace_plan.enabled_signals and trace_plan.window:
+        b = trace_plan.window.begin_cycle
+        e = trace_plan.window.end_cycle
+        if b is not None and e is not None:
+            lines.append("      // Trace window toggles.\n")
+            lines.append(f"      if (cyc == {int(b)}) $dumpon;\n")
+            lines.append(f"      if (cyc == {int(e) + 1}) $dumpoff;\n\n")
 
     if rand_specs:
         lines.append("      // Random drives for this cycle (applied before explicit drives).\n")
@@ -714,6 +1050,10 @@ def _render_tb_sv(iface: _TopIface, t: Tb) -> str:
         lines.append("      endcase\n")
 
     if expects_pre_by:
+        # Allow a delta-cycle for combinational logic to settle after procedural
+        # drives in this TB process. This keeps pre-step sampling stable and
+        # avoids racey reads of DUT outputs.
+        lines.append("      #0;\n")
         lines.append("      // Pre-step expects for this cycle (checked before posedge).\n")
         lines.append("      unique case (cyc)\n")
         for cyc in sorted(expects_pre_by.keys()):
@@ -834,8 +1174,16 @@ def _render_tb_sv(iface: _TopIface, t: Tb) -> str:
 
 def _write_text_atomic(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
+    data = text.encode("utf-8")
+    if path.is_file():
+        try:
+            if path.read_bytes() == data:
+                return
+        except OSError:
+            # Fall back to overwrite if we can't read for comparison.
+            pass
     tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(text, encoding="utf-8")
+    tmp.write_bytes(data)
     os.replace(tmp, path)
 
 
@@ -849,7 +1197,7 @@ def _run_backend_job(job: tuple[str, list[str]]) -> tuple[str, str]:
     return (name, proc.stdout.strip())
 
 
-def _emit_multi_pyc_artifacts(design: Design, *, out_dir: Path) -> tuple[Path, dict[str, Any], dict[str, Path]]:
+def _emit_multi_pyc_artifacts(design: Design, *, out_dir: Path) -> tuple[Path, dict[str, Any], dict[str, Path], Path]:
     module_map = design.emit_module_mlir_map()
     module_dir = out_dir / "device" / "modules"
     module_dir.mkdir(parents=True, exist_ok=True)
@@ -860,13 +1208,23 @@ def _emit_multi_pyc_artifacts(design: Design, *, out_dir: Path) -> tuple[Path, d
         _write_text_atomic(p, module_map[sym])
         module_paths[sym] = p
 
+    design_pyc_path = out_dir / "device" / "design.pyc"
+    _write_text_atomic(design_pyc_path, design.emit_mlir())
+
     manifest = design.emit_project_manifest(module_dir_rel="device/modules")
+    manifest["design_pyc"] = str(design_pyc_path.relative_to(out_dir))
     manifest_path = out_dir / "project_manifest.json"
     _write_text_atomic(manifest_path, json.dumps(manifest, sort_keys=True, indent=2) + "\n")
-    return (manifest_path, manifest, module_paths)
+    return (manifest_path, manifest, module_paths, design_pyc_path)
 
 
-def _collect_testbench_payload(mod: object, iface: _TopIface) -> tuple[str, str]:
+def _collect_testbench_payload(
+    mod: object,
+    iface: _TopIface,
+    *,
+    trace_plan: TracePlan | None = None,
+    tb_probes: TbProbes | None = None,
+) -> tuple[str, str]:
     if not hasattr(mod, "tb") or not callable(getattr(mod, "tb")):
         raise SystemExit("build requires `@testbench def tb(t: Tb): ...`")
     tb_fn = getattr(mod, "tb")
@@ -874,9 +1232,15 @@ def _collect_testbench_payload(mod: object, iface: _TopIface) -> tuple[str, str]
         raise SystemExit("build requires tb(...) to be decorated with `@testbench`")
     t = Tb()
     try:
-        tb_fn(t)
+        tb_sig = inspect.signature(tb_fn)
+        if len(tb_sig.parameters) >= 2:
+            tb_fn(t, TbProbes([]) if tb_probes is None else tb_probes)
+        else:
+            tb_fn(t)
     except TbError as e:
         raise SystemExit(f"tb() failed: {e}") from e
+    except ProbeError as e:
+        raise SystemExit(f"tb() probe access failed: {e}") from e
     payload_obj = testbench_payload_from_tb(
         top_symbol=iface.sym,
         in_raw=list(iface.in_raw),
@@ -884,6 +1248,7 @@ def _collect_testbench_payload(mod: object, iface: _TopIface) -> tuple[str, str]
         out_raw=list(iface.out_raw),
         out_tys=list(iface.out_tys),
         tb=t,
+        probes=tb_probes,
     )
     tb_name = getattr(tb_fn, "__pycircuit_module_name__", None)
     if not isinstance(tb_name, str) or not tb_name.strip():
@@ -891,8 +1256,10 @@ def _collect_testbench_payload(mod: object, iface: _TopIface) -> tuple[str, str]
     tb_name = _sanitize_id(str(tb_name))
     payload = payload_obj.as_dict()
     payload["tb_name"] = str(tb_name)
-    payload["cpp_text"] = _render_tb_cpp(iface, t)
-    payload["sv_text"] = _render_tb_sv(iface, t)
+    if trace_plan is not None:
+        payload["trace_plan"] = trace_plan.as_dict()
+    payload["cpp_text"] = _render_tb_cpp(iface, t, trace_plan=trace_plan)
+    payload["sv_text"] = _render_tb_sv(iface, t, trace_plan=trace_plan)
     return (str(tb_name), json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False))
 
 
@@ -933,6 +1300,22 @@ def _module_hash(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def _deps_hash(entry: Path, *, project_root: Path) -> str:
+    root = project_root.resolve()
+    files = collect_local_python_graph(entry.resolve(), project_root=root)
+    h = hashlib.sha256()
+    for p in files:
+        try:
+            rel = str(p.relative_to(root))
+        except ValueError:
+            rel = str(p)
+        h.update(rel.encode("utf-8"))
+        h.update(b"\0")
+        h.update(hashlib.sha256(p.read_bytes()).digest())
+        h.update(b"\0")
+    return h.hexdigest()
+
+
 def _canonical_hash(payload: dict[str, Any]) -> str:
     blob = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
     return hashlib.sha256(blob).hexdigest()
@@ -946,17 +1329,211 @@ def _save_json(path: Path, data: dict[str, Any]) -> None:
     _write_text_atomic(path, json.dumps(data, sort_keys=True, indent=2) + "\n")
 
 
+def _base_name_of(fn: Any) -> str:
+    override = getattr(fn, "__pycircuit_module_name__", None)
+    if isinstance(override, str) and override.strip():
+        return override.strip()
+    return getattr(fn, "__name__", "Module")
+
+
+def _module_params_from_manifest(manifest: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
+    out: dict[str, dict[str, Any]] = {}
+    modules = manifest.get("modules", [])
+    if not isinstance(modules, list):
+        return out
+    for raw in modules:
+        if not isinstance(raw, Mapping):
+            continue
+        sym = str(raw.get("name", "")).strip()
+        params_json = str(raw.get("params_json", "{}"))
+        if not sym:
+            continue
+        try:
+            params = json.loads(params_json)
+        except Exception:
+            params = {}
+        if isinstance(params, Mapping):
+            out[sym] = dict(params)
+        else:
+            out[sym] = {}
+    return out
+
+
+def _module_bases_from_manifest(manifest: Mapping[str, Any]) -> dict[str, list[str]]:
+    out: dict[str, list[str]] = {}
+    modules = manifest.get("modules", [])
+    if not isinstance(modules, list):
+        return out
+    for raw in modules:
+        if not isinstance(raw, Mapping):
+            continue
+        sym = str(raw.get("name", "")).strip()
+        base = str(raw.get("base", "")).strip()
+        if not sym or not base:
+            continue
+        out.setdefault(base, []).append(sym)
+    for key in list(out.keys()):
+        out[key] = sorted(set(out[key]))
+    return out
+
+
+def _resolve_probe_outputs(
+    *,
+    mod: object,
+    manifest: Mapping[str, Any],
+    probe_catalog_path: Path,
+    out_dir: Path,
+) -> tuple[dict[str, Any], dict[str, Any], Path]:
+    catalog = load_probe_catalog(probe_catalog_path)
+    params_by_symbol = _module_params_from_manifest(manifest)
+    bases = _module_bases_from_manifest(manifest)
+    explicit_plans = []
+    probe_entries: list[dict[str, Any]] = []
+    probe_dir = out_dir / "device" / "probes"
+    probe_dir.mkdir(parents=True, exist_ok=True)
+
+    probe_modules: list[object] = []
+    seen_module_ids: set[int] = set()
+
+    def add_probe_module(candidate: object | None) -> None:
+        if candidate is None:
+            return
+        mod_id = id(candidate)
+        if mod_id in seen_module_ids:
+            return
+        seen_module_ids.add(mod_id)
+        probe_modules.append(candidate)
+
+    add_probe_module(mod)
+    for value in vars(mod).values():
+        owner = inspect.getmodule(value) if callable(value) else None
+        if owner is not None:
+            add_probe_module(owner)
+
+    seen_probe_fns: set[int] = set()
+    probe_fns: list[Any] = []
+    for probe_mod in probe_modules:
+        for probe_fn in collect_probe_functions(probe_mod):
+            probe_id = id(probe_fn)
+            if probe_id in seen_probe_fns:
+                continue
+            seen_probe_fns.add(probe_id)
+            probe_fns.append(probe_fn)
+
+    for probe_fn in probe_fns:
+        target_fn = getattr(probe_fn, "__pycircuit_probe_target__", None)
+        if target_fn is None:
+            raise SystemExit(f"invalid @probe without target: {getattr(probe_fn, '__name__', probe_fn)!r}")
+        target_base = _base_name_of(target_fn)
+        target_symbols = bases.get(target_base, [])
+        plan = resolve_probe_function(
+            probe_fn,
+            catalog=catalog,
+            target_base=target_base,
+            target_symbols=target_symbols,
+            params_by_symbol=params_by_symbol,
+        )
+        explicit_plans.append(plan)
+        rel = Path("device") / "probes" / f"{plan.name}.json"
+        _save_json(out_dir / rel, plan.as_dict())
+        probe_entries.append(
+            {
+                "name": plan.name,
+                "target_base": target_base,
+                "target_symbols": list(plan.target_symbols),
+                "json": str(rel),
+                "leaf_count": len(plan.leaves),
+            }
+        )
+
+    probe_manifest = build_resolved_probe_manifest(
+        top=str(manifest.get("top", "")),
+        root_instance="dut",
+        explicit_plans=explicit_plans,
+        catalog=catalog,
+    )
+    probe_plan = {
+        "version": 1,
+        "top_symbol": str(manifest.get("top", "")),
+        "aliases": [
+            {"canonical_path": leaf.canonical_path, "source_path": leaf.source_path}
+            for plan in explicit_plans
+            for leaf in plan.leaves
+        ],
+    }
+    probe_plan_path = out_dir / "probe_plan.json"
+    _save_json(probe_plan_path, probe_plan)
+    return (probe_manifest, {"version": 1, "probes": probe_entries}, probe_plan_path)
+
+
 def _cmd_build(args: argparse.Namespace) -> int:
     src = Path(args.python_file).resolve()
     out_dir = Path(args.out_dir).resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    _scan_api_contract(src, project_root_override=args.project_root)
+    cache_path = out_dir / ".build_cache.json"
+    cache = _load_json(cache_path) if cache_path.is_file() else {"module_hashes": {}}
+
+    project_root = _project_root(src, project_root_override=args.project_root)
+    _scan_api_contract(src, project_root_override=str(project_root))
     mod = _load_py_file(src)
-    design = _collect_build(mod, src, args)
-    if not isinstance(design, Design):
-        raise SystemExit("internal error: expected Design from compile(...)")
-    iface = _top_iface(design)
+    if not hasattr(mod, "build") or not callable(getattr(mod, "build")):
+        raise SystemExit(f"{src} must define a pyCircuit entrypoint: `@module def build(m: Circuit, ...)`")
+    build = getattr(mod, "build")
+    jit_params = _collect_jit_params(build, overrides=list(getattr(args, "param", []) or []))
+    top_name = _top_name_for_build(src, build)
+
+    from .design import canonical_params_json
+
+    try:
+        jit_params_json = canonical_params_json(jit_params, path="jit_params")
+    except DesignError as e:
+        raise SystemExit(f"JIT param canonicalization failed: {e}") from e
+    jit_inputs = {
+        "version": 1,
+        "entry_hash": _module_hash(src),
+        "deps_hash": _deps_hash(src, project_root=project_root),
+        "jit_params_json": jit_params_json,
+        "top_name": top_name,
+        "frontend_contract": FRONTEND_CONTRACT,
+    }
+    jit_key = _canonical_hash(jit_inputs)
+
+    manifest_path = out_dir / "project_manifest.json"
+    design: Design | None = None
+    manifest: dict[str, Any]
+    module_paths: dict[str, Path]
+    design_pyc_path: Path
+    iface: _TopIface
+
+    cached_key = str(cache.get("jit_cache_key", "")).strip()
+    cache_hit = cached_key == jit_key and manifest_path.is_file()
+    if cache_hit:
+        try:
+            manifest = _load_json(manifest_path)
+            module_paths = _module_paths_from_manifest(manifest, out_dir=out_dir)
+            if not all(p.is_file() for p in module_paths.values()):
+                raise FileNotFoundError("missing cached .pyc modules")
+            design_pyc_rel = str(manifest.get("design_pyc", "")).strip()
+            design_pyc_path = (out_dir / design_pyc_rel) if design_pyc_rel else (out_dir / "device" / "design.pyc")
+            if not design_pyc_path.is_file():
+                raise FileNotFoundError("missing cached design.pyc")
+            iface = _top_iface_from_manifest(manifest)
+            print("jit-cache: hit")
+        except Exception:
+            cache_hit = False
+
+    if not cache_hit:
+        try:
+            design_obj = compile(build, name=top_name, **jit_params)
+        except (DesignError, JitError) as e:
+            raise SystemExit(f"design compile failed: {e}") from e
+        if not isinstance(design_obj, Design):
+            raise SystemExit("internal error: expected Design from compile(...)")
+        design = design_obj
+        iface = _top_iface(design)
+        manifest_path, manifest, module_paths, design_pyc_path = _emit_multi_pyc_artifacts(design, out_dir=out_dir)
+        print("jit-cache: miss")
 
     pycc = _detect_pycc()
     jobs = max(1, int(args.jobs))
@@ -964,39 +1541,106 @@ def _cmd_build(args: argparse.Namespace) -> int:
         raise SystemExit("--logic-depth must be > 0")
     logic_depth = int(args.logic_depth)
 
-    manifest_path, manifest, module_paths = _emit_multi_pyc_artifacts(design, out_dir=out_dir)
-
-    tb_name, tb_payload_json = _collect_testbench_payload(mod, iface)
-    tb_pyc_path = _emit_testbench_pyc_file(out_dir=out_dir, tb_name=tb_name, payload_json=tb_payload_json)
-    manifest["testbench"] = {"name": tb_name, "pyc": str(tb_pyc_path.relative_to(out_dir))}
-
-    cache_path = out_dir / ".build_cache.json"
-    cache = _load_json(cache_path) if cache_path.is_file() else {"module_hashes": {}, "pycc": str(pycc)}
-    old_hashes = dict(cache.get("module_hashes", {}))
-    module_hashes: dict[str, str] = {}
-
     device_cpp_root = out_dir / "device" / "cpp"
     device_v_root = out_dir / "device" / "verilog"
-    tb_cpp_out = out_dir / "tb" / f"{tb_name}.cpp"
-    tb_sv_out = out_dir / "tb" / f"{tb_name}.sv"
     device_cpp_root.mkdir(parents=True, exist_ok=True)
     device_v_root.mkdir(parents=True, exist_ok=True)
 
     target = str(args.target)
     do_cpp = target in {"cpp", "both"}
     do_v = target in {"verilator", "both"}
+    pycc_build_profile = "dev-fast" if str(args.profile) == "dev" else "release"
+    pycc_hard_hierarchy_flags = [
+        f"--build-profile={pycc_build_profile}",
+        "--inline-policy=off",
+        "--hierarchy-policy=strict",
+    ]
 
     build_flags = {
         "pycc": str(pycc.resolve()),
         "logic_depth": logic_depth,
         "profile": str(args.profile),
+        "pycc_build_profile": pycc_build_profile,
+        "inline_policy": "off",
+        "hierarchy_policy": "strict",
         "target": target,
         "frontend_contract": FRONTEND_CONTRACT,
     }
     build_flags_hash = _canonical_hash(build_flags)
     same_flags = str(cache.get("build_flags_hash", "")) == build_flags_hash
 
+    design_key = "__design_pyc"
+    old_hashes = dict(cache.get("module_hashes", {}))
+    module_hashes: dict[str, str] = {}
+    design_hash = _module_hash(design_pyc_path)
+    module_hashes[design_key] = design_hash
+    probe_catalog_path = out_dir / "device" / "probe_catalog.json"
+    probe_catalog_ready = probe_catalog_path.is_file()
+    probe_unchanged = same_flags and old_hashes.get(design_key) == design_hash
     pycc_jobs: list[tuple[str, list[str]]] = []
+    if not (probe_unchanged and probe_catalog_ready):
+        pycc_jobs.append(
+            (
+                "probe-catalog",
+                [
+                    str(pycc),
+                    str(design_pyc_path),
+                    "--emit=none",
+                    *pycc_hard_hierarchy_flags,
+                    "--probe-manifest",
+                    str(probe_catalog_path),
+                    f"--logic-depth={logic_depth}",
+                ],
+            )
+        )
+    if pycc_jobs:
+        with ProcessPoolExecutor(max_workers=jobs) as pool:
+            futs = {pool.submit(_run_backend_job, j): j[0] for j in pycc_jobs}
+            for fut in as_completed(futs):
+                _ = fut.result()
+        pycc_jobs = []
+
+    try:
+        probe_manifest_obj, probe_section, probe_plan_path = _resolve_probe_outputs(
+            mod=mod,
+            manifest=manifest,
+            probe_catalog_path=probe_catalog_path,
+            out_dir=out_dir,
+        )
+    except ProbeError as e:
+        raise SystemExit(f"probe resolution failed: {e}") from e
+    probe_manifest_path = out_dir / "probe_manifest.json"
+    _save_json(probe_manifest_path, probe_manifest_obj)
+    manifest["probe_manifest"] = str(probe_manifest_path.relative_to(out_dir))
+    manifest["probes"] = list(probe_section.get("probes", []))
+
+    trace_plan: TracePlan | None = None
+    trace_cfg_path = getattr(args, "trace_config", None)
+    if trace_cfg_path is not None:
+        raw = str(trace_cfg_path).strip()
+        if raw:
+            try:
+                cfg = load_trace_config(Path(raw))
+                trace_plan = compute_trace_plan_from_artifacts(
+                    manifest=manifest,
+                    module_paths=module_paths,
+                    config=cfg,
+                    probe_manifest=probe_manifest_obj,
+                )
+            except TraceConfigError as e:
+                raise SystemExit(f"trace config error: {e}") from e
+
+    tb_probes = TbProbes.from_probe_manifest(probe_manifest_obj)
+    tb_name, tb_payload_json = _collect_testbench_payload(mod, iface, trace_plan=trace_plan, tb_probes=tb_probes)
+    tb_pyc_path = _emit_testbench_pyc_file(out_dir=out_dir, tb_name=tb_name, payload_json=tb_payload_json)
+    manifest["testbench"] = {"name": tb_name, "pyc": str(tb_pyc_path.relative_to(out_dir))}
+    if trace_plan is not None:
+        trace_path = out_dir / "trace_plan.json"
+        _save_json(trace_path, trace_plan.as_dict())
+        manifest["trace_plan"] = str(trace_path.relative_to(out_dir))
+
+    tb_cpp_out = out_dir / "tb" / f"{tb_name}.cpp"
+    tb_sv_out = out_dir / "tb" / f"{tb_name}.sv"
     for sym in sorted(module_paths.keys()):
         mp = module_paths[sym]
         h = _module_hash(mp)
@@ -1014,9 +1658,12 @@ def _cmd_build(args: argparse.Namespace) -> int:
                         str(pycc),
                         str(mp),
                         "--emit=cpp",
+                        *pycc_hard_hierarchy_flags,
                         "--out-dir",
                         str(cpp_out_dir),
                         "--cpp-split=module",
+                        "--probe-plan",
+                        str(probe_plan_path),
                         f"--logic-depth={logic_depth}",
                     ],
                 )
@@ -1033,6 +1680,7 @@ def _cmd_build(args: argparse.Namespace) -> int:
                         str(pycc),
                         str(mp),
                         "--emit=verilog",
+                        *pycc_hard_hierarchy_flags,
                         "--out-dir",
                         str(verilog_out_dir),
                         f"--logic-depth={logic_depth}",
@@ -1041,9 +1689,29 @@ def _cmd_build(args: argparse.Namespace) -> int:
             )
 
     if do_cpp:
-        pycc_jobs.append((f"tb-cpp:{tb_name}", [str(pycc), str(tb_pyc_path), "-cpp", str(tb_cpp_out)]))
+        tb_key = f"tb:{tb_name}"
+        tb_hash = _module_hash(tb_pyc_path)
+        module_hashes[tb_key] = tb_hash
+        tb_unchanged = same_flags and old_hashes.get(tb_key) == tb_hash
+        if not (tb_unchanged and tb_cpp_out.is_file()):
+            pycc_jobs.append(
+                (
+                    f"tb-cpp:{tb_name}",
+                    [str(pycc), str(tb_pyc_path), *pycc_hard_hierarchy_flags, "-cpp", str(tb_cpp_out)],
+                )
+            )
     if do_v:
-        pycc_jobs.append((f"tb-sv:{tb_name}", [str(pycc), str(tb_pyc_path), "-verilog", str(tb_sv_out)]))
+        tb_key = f"tb:{tb_name}"
+        tb_hash = module_hashes.get(tb_key) or _module_hash(tb_pyc_path)
+        module_hashes[tb_key] = tb_hash
+        tb_unchanged = same_flags and old_hashes.get(tb_key) == tb_hash
+        if not (tb_unchanged and tb_sv_out.is_file()):
+            pycc_jobs.append(
+                (
+                    f"tb-sv:{tb_name}",
+                    [str(pycc), str(tb_pyc_path), *pycc_hard_hierarchy_flags, "-verilog", str(tb_sv_out)],
+                )
+            )
 
     if pycc_jobs:
         with ProcessPoolExecutor(max_workers=jobs) as pool:
@@ -1060,26 +1728,28 @@ def _cmd_build(args: argparse.Namespace) -> int:
         cpp_headers = _gather_cpp_headers(device_cpp_root)
         include_dirs: list[str] = []
         include_dirs.append(str(device_cpp_root))
-        include_dirs.append(str(Path(__file__).resolve().parents[3] / "runtime"))
         for p in [*cpp_sources, *cpp_headers]:
             parent = str(p.parent)
             if parent not in include_dirs:
                 include_dirs.append(parent)
 
+        runtime = _runtime_manifest_for_toolchain(_detect_toolchain_root(pycc))
+
         build_manifest = {
-            "version": 1,
+            "version": 3,
             "target_name": iface.sym,
             "tb_cpp": str(tb_cpp_out),
             "sources": [str(p) for p in cpp_sources],
             "headers": [str(p) for p in cpp_headers],
             "include_dirs": include_dirs,
+            "runtime": runtime,
             "cxx_standard": "c++17",
             "profile": str(args.profile),
         }
         cpp_manifest = out_dir / "cpp_project_manifest.json"
         _save_json(cpp_manifest, build_manifest)
 
-        gen_script = Path(__file__).resolve().parents[3] / "flows" / "tools" / "gen_cmake_from_manifest.py"
+        gen_script = _tool_script("gen_cmake_from_manifest.py")
         cmake_src = out_dir / "cpp_build" / "src"
         cmake_build = out_dir / "cpp_build" / "build"
         cmake_src.mkdir(parents=True, exist_ok=True)
@@ -1201,13 +1871,19 @@ def _cmd_build(args: argparse.Namespace) -> int:
             run_args = list(getattr(args, "run_arg", []) or [])
             subprocess.run([str(vbin), *run_args], cwd=str(out_dir), check=True)
 
-    cache = {
-        "module_hashes": module_hashes,
-        "pycc": str(pycc),
-        "build_flags": build_flags,
-        "build_flags_hash": build_flags_hash,
-    }
-    _save_json(cache_path, cache)
+    cache_out = dict(cache)
+    cache_out.update(
+        {
+            "module_hashes": module_hashes,
+            "pycc": str(pycc),
+            "build_flags": build_flags,
+            "build_flags_hash": build_flags_hash,
+            "jit_cache_key": jit_key,
+            "jit_cache_inputs": jit_inputs,
+            "last_pycc_jobs": int(len(pycc_jobs)),
+        }
+    )
+    _save_json(cache_path, cache_out)
     _save_json(manifest_path, manifest)
     print(str(manifest_path))
     return 0
@@ -1230,6 +1906,52 @@ def main(argv: list[str] | None = None) -> int:
         "--project-root",
         default=None,
         help="Optional project root for strict API contract scan (defaults to nearest .git/pyproject.toml).",
+    )
+    emit.add_argument(
+        "--module-graph-out",
+        dest="module_graph_out",
+        default=None,
+        help="Optional: emit a module-instance connectivity graph from the emitted .pyc (DOT/SVG via Graphviz).",
+    )
+    emit.add_argument(
+        "--module-graph-module",
+        dest="module_graph_module",
+        default="",
+        help="Target module symbol for the graph (default: module attribute pyc.top).",
+    )
+    emit.add_argument(
+        "--module-graph-recursive",
+        dest="module_graph_recursive",
+        action="store_true",
+        help="Recursively expand module instances (module nest) in the graph.",
+    )
+    emit.add_argument(
+        "--module-graph-edge-label-mode",
+        dest="module_graph_edge_label_mode",
+        choices=["ports", "count", "none"],
+        default="ports",
+        help="Edge label mode for module graph.",
+    )
+    emit.add_argument(
+        "--module-graph-edge-label-limit",
+        dest="module_graph_edge_label_limit",
+        type=int,
+        default=4,
+        help="Max port mappings per edge label (module graph).",
+    )
+    emit.add_argument(
+        "--module-graph-max-nodes",
+        dest="module_graph_max_nodes",
+        type=int,
+        default=500,
+        help="Max instance nodes before aborting (module graph).",
+    )
+    emit.add_argument(
+        "--module-graph-max-edges",
+        dest="module_graph_max_edges",
+        type=int,
+        default=2000,
+        help="Max instance edges before aborting (module graph).",
     )
     emit.set_defaults(fn=_cmd_emit)
 
@@ -1256,6 +1978,11 @@ def main(argv: list[str] | None = None) -> int:
         help="Backend targets to generate/build",
     )
     build.add_argument("--logic-depth", type=int, default=32, help="Max combinational logic depth for pycc")
+    build.add_argument(
+        "--trace-config",
+        default=None,
+        help="Optional trace configuration JSON (instance globs + probe tags + windows) for VCD generation.",
+    )
     build.add_argument(
         "--run-verilator",
         action="store_true",

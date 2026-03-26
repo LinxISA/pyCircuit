@@ -89,6 +89,22 @@ Verifier contract:
 Backends emit named port connections using the callee’s `arg_names` /
 `result_names` attributes.
 
+Boundary-dynamic value params:
+
+- Frontend may stamp:
+  - `pyc.value_params = ["name0", ...]`
+  - `pyc.value_param_types = ["iN"|!pyc.clock|!pyc.reset, ...]`
+- These names are a subset of `arg_names`.
+- Value params are runtime boundary ports only; they must not participate in
+  compile-time specialization identity.
+
+Hierarchy preservation policy:
+
+- `pycc` strict mode (`--hierarchy-policy=strict`, default) enforces that
+  frontend module symbol boundaries are preserved through lowering.
+- Default C++ out-dir flows use `--inline-policy=off` so `@module` callsites
+  remain explicit instance boundaries.
+
 ### 2.2.3 `pyc.assert` (simulation-only assertion)
 
 `pyc.assert` is a simulation-only check that aborts when `cond` is false.

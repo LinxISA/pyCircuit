@@ -2,7 +2,8 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-ROOT_DIR="$(cd -- "${SCRIPT_DIR}/../.." && pwd)"
+ROOT_DIR="$(cd -- "${SCRIPT_DIR}/../../../.." && pwd)"
+LINX_CONTRIB_DIR="${ROOT_DIR}/contrib/linx"
 # shellcheck source=../flows/scripts/lib.sh
 source "${ROOT_DIR}/flows/scripts/lib.sh"
 pyc_find_pycc
@@ -20,7 +21,7 @@ if [[ ! -f "${VLOG}" ]]; then
   exit 1
 fi
 
-TB_SV="${ROOT_DIR}/designs/examples/linx_cpu/tb_linx_cpu_pyc.sv"
+TB_SV="${LINX_CONTRIB_DIR}/designs/examples/linx_cpu/tb_linx_cpu_pyc.sv"
 OBJ_DIR="${GEN_DIR}/verilator_obj"
 EXE="${OBJ_DIR}/Vtb_linx_cpu_pyc"
 
@@ -58,31 +59,31 @@ if [[ $# -gt 0 ]]; then
 fi
 
 run_case "test_or" \
-  +memh="${ROOT_DIR}/designs/examples/linx_cpu/programs/test_or.memh" \
+  +memh="${LINX_CONTRIB_DIR}/designs/examples/linx_cpu/programs/test_or.memh" \
   +expected=0000ff00 \
   +expected_exit=00000000
 
 run_case "test_csel_fixed" \
-  +memh="${ROOT_DIR}/designs/examples/linx_cpu/programs/test_csel_fixed.memh" \
+  +memh="${LINX_CONTRIB_DIR}/designs/examples/linx_cpu/programs/test_csel_fixed.memh" \
   +expected=00000064 \
   +expected_exit=00000000
 
 run_case "test_branch2" \
   +no_memcheck \
-  +memh="${ROOT_DIR}/designs/examples/linx_cpu/programs/test_branch2.memh" \
+  +memh="${LINX_CONTRIB_DIR}/designs/examples/linx_cpu/programs/test_branch2.memh" \
   +expected_exit=00000000
 
 run_case "test_call_simple" \
   +no_memcheck \
-  +memh="${ROOT_DIR}/designs/examples/linx_cpu/programs/test_call_simple.memh" \
+  +memh="${LINX_CONTRIB_DIR}/designs/examples/linx_cpu/programs/test_call_simple.memh" \
   +expected_exit=00000000
 
 run_case "test_jump" \
   +no_memcheck \
-  +memh="${ROOT_DIR}/designs/examples/linx_cpu/programs/test_jump.memh" \
+  +memh="${LINX_CONTRIB_DIR}/designs/examples/linx_cpu/programs/test_jump.memh" \
   +expected_exit=00000000
 
 run_case "test_pcrel" \
   +no_memcheck \
-  +memh="${ROOT_DIR}/designs/examples/linx_cpu/programs/test_pcrel.memh" \
+  +memh="${LINX_CONTRIB_DIR}/designs/examples/linx_cpu/programs/test_pcrel.memh" \
   +expected_exit=00000000

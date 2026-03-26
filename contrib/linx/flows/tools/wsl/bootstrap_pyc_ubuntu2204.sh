@@ -47,5 +47,5 @@ log "emit+compile designs/examples/counter/counter.py (verilog)"
 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="${ROOT_DIR}/compiler/frontend" \
   python3 -m pycircuit.cli emit "${ROOT_DIR}/designs/examples/counter/counter.py" -o /tmp/counter.pyc
 
-"${ROOT_DIR}/build/bin/pycc" /tmp/counter.pyc --emit=verilog -o /tmp/counter.v
+"${ROOT_DIR}/.pycircuit_out/toolchain/install/bin/pycc" /tmp/counter.pyc --emit=verilog -o /tmp/counter.v
 log "wrote /tmp/counter.v"

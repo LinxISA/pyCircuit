@@ -12,7 +12,10 @@
 #include "llvm/ADT/SmallSet.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringMap.h"
+#include "llvm/ADT/StringSet.h"
 #include "llvm/ADT/StringExtras.h"
+#include "llvm/Support/JSON.h"
+#include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/raw_ostream.h"
 
 #include <algorithm>
@@ -138,6 +141,103 @@ static std::string getPortName(func::FuncOp f, unsigned idx, bool isResult) {
         return sanitizeId(s.getValue());
   }
   return "out" + std::to_string(idx);
+}
+
+static std::string getPortCanonicalFieldPath(func::FuncOp f, unsigned idx, bool isResult) {
+  if (!isResult) {
+    if (auto names = f->getAttrOfType<ArrayAttr>("arg_names")) {
+      if (idx < names.size())
+        if (auto s = dyn_cast<StringAttr>(names[idx]))
+          return s.getValue().str();
+    }
+    return "arg" + std::to_string(idx);
+  }
+  if (auto names = f->getAttrOfType<ArrayAttr>("result_names")) {
+    if (idx < names.size())
+      if (auto s = dyn_cast<StringAttr>(names[idx]))
+        return s.getValue().str();
+  }
+  return "out" + std::to_string(idx);
+}
+
+struct ProbeAliasEntry {
+  std::string canonicalPath;
+  std::string sourcePath;
+};
+
+static std::vector<ProbeAliasEntry> loadProbeAliasesForTop(llvm::StringRef planPath, llvm::StringRef symName) {
+  std::vector<ProbeAliasEntry> out;
+  if (planPath.empty())
+    return out;
+  auto fileOrErr = llvm::MemoryBuffer::getFile(planPath);
+  if (!fileOrErr)
+    return out;
+  auto parsed = llvm::json::parse(fileOrErr.get()->getBuffer());
+  if (!parsed)
+    return out;
+  auto *obj = parsed->getAsObject();
+  if (!obj)
+    return out;
+  auto topSymbol = obj->getString("top_symbol");
+  if (!topSymbol || *topSymbol != symName)
+    return out;
+  auto *aliases = obj->getArray("aliases");
+  if (!aliases)
+    return out;
+  out.reserve(aliases->size());
+  for (const llvm::json::Value &value : *aliases) {
+    auto *entry = value.getAsObject();
+    if (!entry)
+      continue;
+    auto canonical = entry->getString("canonical_path");
+    auto source = entry->getString("source_path");
+    if (!canonical || !source)
+      continue;
+    out.push_back(ProbeAliasEntry{canonical->str(), source->str()});
+  }
+  std::sort(out.begin(), out.end(), [](const ProbeAliasEntry &a, const ProbeAliasEntry &b) {
+    return a.canonicalPath < b.canonicalPath;
+  });
+  return out;
+}
+
+static Value findRegQFromValue(Value v) {
+  llvm::SmallVector<Value, 8> seen;
+  while (true) {
+    for (Value prev : seen) {
+      if (prev == v)
+        return Value();
+    }
+    seen.push_back(v);
+    while (auto a = v.getDefiningOp<pyc::AliasOp>())
+      v = a.getIn();
+    if (auto rop = v.getDefiningOp<pyc::RegOp>())
+      return rop.getQ();
+    auto comb = v.getDefiningOp<pyc::CombOp>();
+    if (!comb)
+      return Value();
+
+    auto res = dyn_cast<OpResult>(v);
+    if (!res)
+      return Value();
+    auto yield = dyn_cast_or_null<pyc::YieldOp>(comb.getBody().front().getTerminator());
+    if (!yield)
+      return Value();
+    if (res.getResultNumber() >= yield.getNumOperands())
+      return Value();
+
+    Value y = yield.getOperand(res.getResultNumber());
+    while (auto a = y.getDefiningOp<pyc::AliasOp>())
+      y = a.getIn();
+    auto barg = dyn_cast<BlockArgument>(y);
+    if (!barg)
+      return Value();
+    if (barg.getOwner() != &comb.getBody().front())
+      return Value();
+    if (barg.getArgNumber() >= comb.getNumOperands())
+      return Value();
+    v = comb.getOperand(barg.getArgNumber());
+  }
 }
 
 static void computeUniquePortNames(func::FuncOp f, std::vector<std::string> &inNames, std::vector<std::string> &outNames) {
@@ -396,6 +496,30 @@ static LogicalResult emitCombAssign(Operation &op, llvm::raw_ostream &os, NameTa
        << sh.getAmountAttr().getInt() << "u);\n";
     return success();
   }
+  if (auto sh = dyn_cast<pyc::ShlOp>(op)) {
+    unsigned w = bitWidth(sh.getResult().getType());
+    if (w == 0)
+      return sh.emitError("invalid shl width");
+    os << "    " << nt.get(sh.getResult()) << " = pyc::cpp::shl<" << w << ">(" << nt.get(sh.getIn())
+       << ", static_cast<unsigned>(" << nt.get(sh.getAmount()) << ".value()));\n";
+    return success();
+  }
+  if (auto sh = dyn_cast<pyc::LshrOp>(op)) {
+    unsigned w = bitWidth(sh.getResult().getType());
+    if (w == 0)
+      return sh.emitError("invalid lshr width");
+    os << "    " << nt.get(sh.getResult()) << " = pyc::cpp::lshr<" << w << ">(" << nt.get(sh.getIn())
+       << ", static_cast<unsigned>(" << nt.get(sh.getAmount()) << ".value()));\n";
+    return success();
+  }
+  if (auto sh = dyn_cast<pyc::AshrOp>(op)) {
+    unsigned w = bitWidth(sh.getResult().getType());
+    if (w == 0)
+      return sh.emitError("invalid ashr width");
+    os << "    " << nt.get(sh.getResult()) << " = pyc::cpp::ashr<" << w << ">(" << nt.get(sh.getIn())
+       << ", static_cast<unsigned>(" << nt.get(sh.getAmount()) << ".value()));\n";
+    return success();
+  }
   if (auto c = dyn_cast<pyc::ConcatOp>(op)) {
     unsigned w = bitWidth(c.getResult().getType());
     if (w == 0)
@@ -412,7 +536,11 @@ static LogicalResult emitCombAssign(Operation &op, llvm::raw_ostream &os, NameTa
   return op.emitError("unsupported combinational op for C++ emission");
 }
 
-static LogicalResult emitCombMethod(pyc::CombOp comb, llvm::raw_ostream &os, NameTable &nt, unsigned idx) {
+static LogicalResult emitCombMethod(pyc::CombOp comb,
+                                    llvm::raw_ostream &os,
+                                    NameTable &nt,
+                                    unsigned idx,
+                                    const CppEmitterOptions &opts) {
   if (comb.getBody().empty())
     return comb.emitError("pyc.comb must have a non-empty region");
 
@@ -424,11 +552,49 @@ static LogicalResult emitCombMethod(pyc::CombOp comb, llvm::raw_ostream &os, Nam
   for (auto [i, arg] : llvm::enumerate(b.getArguments()))
     nt.names.try_emplace(arg, nt.get(comb.getInputs()[i]));
 
-  os << "  inline void eval_comb_" << idx << "() {\n";
+  llvm::SmallVector<Operation *> combOps;
+  combOps.reserve(b.getOperations().size());
   for (Operation &op : b) {
     if (isa<pyc::YieldOp>(op))
       break;
-    if (failed(emitCombAssign(op, os, nt)))
+    combOps.push_back(&op);
+  }
+
+  unsigned combChunkNodes = std::max(1u, opts.combChunkNodes);
+  if (combOps.size() > combChunkNodes) {
+    std::vector<std::string> partMethods;
+    partMethods.reserve((combOps.size() + combChunkNodes - 1) / combChunkNodes);
+    for (unsigned begin = 0, partIdx = 0; begin < combOps.size(); begin += combChunkNodes, ++partIdx) {
+      unsigned end = std::min<unsigned>(static_cast<unsigned>(combOps.size()), begin + combChunkNodes);
+      std::string partName = "eval_comb_" + std::to_string(idx) + "_part_" + std::to_string(partIdx);
+      partMethods.push_back(partName);
+      os << "  inline void " << partName << "() {\n";
+      for (unsigned i = begin; i < end; ++i) {
+        if (failed(emitCombAssign(*combOps[i], os, nt)))
+          return failure();
+      }
+      os << "  }\n\n";
+    }
+
+    os << "  inline void eval_comb_" << idx << "() {\n";
+    for (const std::string &partName : partMethods)
+      os << "    " << partName << "();\n";
+
+    auto y = dyn_cast_or_null<pyc::YieldOp>(b.getTerminator());
+    if (!y)
+      return comb.emitError("pyc.comb must terminate with pyc.yield");
+    if (y.getNumOperands() != comb.getNumResults())
+      return comb.emitError("pyc.yield operand count must match pyc.comb results");
+
+    for (auto [i, v] : llvm::enumerate(y.getOperands()))
+      os << "    " << nt.get(comb.getResult(i)) << " = " << nt.get(v) << ";\n";
+    os << "  }\n\n";
+    return success();
+  }
+
+  os << "  inline void eval_comb_" << idx << "() {\n";
+  for (Operation *op : combOps) {
+    if (failed(emitCombAssign(*op, os, nt)))
       return failure();
   }
 
@@ -444,7 +610,7 @@ static LogicalResult emitCombMethod(pyc::CombOp comb, llvm::raw_ostream &os, Nam
   return success();
 }
 
-static LogicalResult emitFunc(func::FuncOp f, llvm::raw_ostream &os) {
+static LogicalResult emitFunc(func::FuncOp f, llvm::raw_ostream &os, const CppEmitterOptions &opts) {
   NameTable nt;
 
   if (!llvm::hasSingleElement(f.getBody()))
@@ -456,14 +622,23 @@ static LogicalResult emitFunc(func::FuncOp f, llvm::raw_ostream &os) {
   os << "struct " << structName << " {\n";
 
   // Ports.
+  std::vector<std::string> inNames;
+  inNames.reserve(f.getNumArguments());
+  std::vector<std::string> inCanon;
+  inCanon.reserve(f.getNumArguments());
   std::vector<std::string> outNames;
   outNames.reserve(f.getNumResults());
+  std::vector<std::string> outCanon;
+  outCanon.reserve(f.getNumResults());
   for (auto [i, arg] : llvm::enumerate(f.getArguments())) {
+    inCanon.push_back(getPortCanonicalFieldPath(f, i, /*isResult=*/false));
     std::string name = nt.unique(getPortName(f, i, /*isResult=*/false));
+    inNames.push_back(name);
     nt.names.try_emplace(arg, name);
     os << "  " << cppType(arg.getType()) << " " << name << "{};\n";
   }
   for (unsigned i = 0; i < f.getNumResults(); ++i) {
+    outCanon.push_back(getPortCanonicalFieldPath(f, i, /*isResult=*/true));
     std::string name = nt.unique(getPortName(f, i, /*isResult=*/true));
     outNames.push_back(name);
     os << "  " << cppType(f.getResultTypes()[i]) << " " << name << "{};\n";
@@ -562,6 +737,7 @@ static LogicalResult emitFunc(func::FuncOp f, llvm::raw_ostream &os) {
     pyc::InstanceOp op;
     func::FuncOp callee;
     std::string member;
+    std::string seg;
     std::vector<std::string> inPorts;
     std::vector<std::string> outPorts;
   };
@@ -599,11 +775,14 @@ static LogicalResult emitFunc(func::FuncOp f, llvm::raw_ostream &os) {
         base = sanitizeId(nameAttr.getValue());
       else
         base = sanitizeId(callee.getSymName()) + std::string("_inst");
+      std::string seg = base;
+      if (auto shortAttr = inst->getAttrOfType<StringAttr>("short_name"))
+        seg = sanitizeId(shortAttr.getValue());
       std::string member = nt.unique(base);
 
       unsigned idx = static_cast<unsigned>(instInfos.size());
       instIndex.try_emplace(inst.getOperation(), idx);
-      instInfos.push_back(InstInfo{inst, callee, std::move(member), std::move(inPorts), std::move(outPorts)});
+      instInfos.push_back(InstInfo{inst, callee, std::move(member), std::move(seg), std::move(inPorts), std::move(outPorts)});
     }
 
     llvm::DenseMap<Operation *, SeqStateKind> seqMemo{};
@@ -613,41 +792,226 @@ static LogicalResult emitFunc(func::FuncOp f, llvm::raw_ostream &os) {
     }
   }
 
+  auto instancePackedCacheWordCount = [&](const InstInfo &ii) -> unsigned {
+    unsigned words = 0;
+    auto inst = ii.op;
+    for (unsigned i = 0; i < inst.getNumOperands(); ++i) {
+      unsigned inW = bitWidth(inst.getOperand(i).getType());
+      words += std::max(1u, (inW + 63u) / 64u);
+    }
+    return words;
+  };
+
+  // Medium fanout glue modules still explode into large TUs if they keep the
+  // per-port versioned cache form. Prefer the exact packed-word cache once an
+  // instance reaches moderate input width/count.
+  constexpr unsigned kPackedInstanceCacheOperandThreshold = 12;
+  constexpr unsigned kPackedInstanceCacheWordThreshold = 16;
+  auto usePackedInstanceEvalCache = [&](const InstInfo &ii) -> bool {
+    auto inst = ii.op;
+    unsigned packedWords = instancePackedCacheWordCount(ii);
+    return (inst.getNumOperands() >= kPackedInstanceCacheOperandThreshold) || (packedWords >= kPackedInstanceCacheWordThreshold);
+  };
+
   llvm::DenseMap<Operation *, std::string> byteMemInstName;
   llvm::DenseMap<Operation *, std::string> syncMemInstName;
   llvm::DenseMap<Operation *, std::string> syncMemDPInstName;
 
-  if (!instInfos.empty()) {
-    os << "  // Sub-modules.\n";
-    for (const auto &ii : instInfos) {
-      auto callee = ii.callee;
-      os << "  std::shared_ptr<" << sanitizeId(callee.getSymName()) << "> " << ii.member
-         << " = std::make_shared<" << sanitizeId(callee.getSymName()) << ">();\n";
-    }
-    os << "\n";
+	  if (!instInfos.empty()) {
+	    os << "  // Sub-modules.\n";
+	    for (const auto &ii : instInfos) {
+	      auto callee = ii.callee;
+	      // Decision 0012: Parent SimObjects own children via unique_ptr.
+	      os << "  std::unique_ptr<" << sanitizeId(callee.getSymName()) << "> " << ii.member
+	         << " = std::make_unique<" << sanitizeId(callee.getSymName()) << ">();\n";
+	    }
+	    os << "\n";
 
     os << "  // Sub-module eval cache (default-on in C++; can be disabled with\n";
     os << "  // -DPYC_DISABLE_INSTANCE_EVAL_CACHE).\n";
     for (const auto &ii : instInfos) {
       auto inst = ii.op;
       os << "  bool " << ii.member << "_eval_cache_valid = false;\n";
-      for (unsigned i = 0; i < inst.getNumOperands(); ++i) {
-        std::string cacheName = ii.member + "_eval_cache_in_" + std::to_string(i);
-        unsigned inW = bitWidth(inst.getOperand(i).getType());
-        os << "  " << cppType(inst.getOperand(i).getType()) << " " << cacheName << "{};\n";
-        os << "  std::uint64_t " << ii.member << "_eval_cache_in_ver_" << i << " = 1ull;\n";
-        os << "  std::uint64_t " << ii.member << "_eval_cache_in_seen_ver_" << i << " = 0ull;\n";
-        if (inW <= 64)
-          os << "  std::uint64_t " << ii.member << "_eval_cache_in_fp_" << i << " = 0ull;\n";
+      if (usePackedInstanceEvalCache(ii)) {
+        os << "  std::array<std::uint64_t, " << instancePackedCacheWordCount(ii) << "> " << ii.member
+           << "_eval_cache_words{};\n";
+      } else {
+        for (unsigned i = 0; i < inst.getNumOperands(); ++i) {
+          std::string cacheName = ii.member + "_eval_cache_in_" + std::to_string(i);
+          unsigned inW = bitWidth(inst.getOperand(i).getType());
+          os << "  " << cppType(inst.getOperand(i).getType()) << " " << cacheName << "{};\n";
+          os << "  std::uint64_t " << ii.member << "_eval_cache_in_ver_" << i << " = 1ull;\n";
+          os << "  std::uint64_t " << ii.member << "_eval_cache_in_seen_ver_" << i << " = 0ull;\n";
+          if (inW <= 64)
+            os << "  std::uint64_t " << ii.member << "_eval_cache_in_fp_" << i << " = 0ull;\n";
+        }
       }
     }
     os << "\n";
   }
 
-  for (auto r : regs) {
-    unsigned w = bitWidth(r.getQ().getType());
-    if (w == 0)
-      return r.emitError("invalid reg width");
+	  // DFX trace registration (Decision 0145).
+	  os << "  template <typename TbT, typename EnabledInstT, typename EnabledSigT>\n";
+	  os << "  void pyc_trace_vcd(TbT &tb, const std::string &prefix, EnabledInstT &&enabledInst, EnabledSigT &&enabledSig) {\n";
+	  os << "    std::string inst = pyc::cpp::shortenInstancePath(prefix);\n";
+	  os << "    auto trace_port = [&](auto &sig, const char *leaf) {\n";
+  os << "      std::string p = inst;\n";
+  // Decision 0023: canonical_path uses <instance_path>:<field_path>.
+  os << "      p += \":\";\n";
+  os << "      p += leaf;\n";
+		  os << "      if (enabledSig(p)) tb.vcdTrace(sig, p);\n";
+	  os << "    };\n";
+	  for (unsigned i = 0; i < inNames.size(); ++i)
+	    os << "    trace_port(" << inNames[i] << ", " << cppStringLiteral(inCanon[i]) << ");\n";
+	  for (unsigned i = 0; i < outNames.size(); ++i)
+	    os << "    trace_port(" << outNames[i] << ", " << cppStringLiteral(outCanon[i]) << ");\n";
+	  if (!instInfos.empty()) {
+	    os << "    auto trace_child = [&](auto &child, const char *seg) {\n";
+	    os << "      std::string full = prefix;\n";
+	    os << "      full += \".\";\n";
+    os << "      full += seg;\n";
+    os << "      std::string inst_path = pyc::cpp::shortenInstancePath(full);\n";
+    os << "      if (enabledInst(inst_path) && child) child->pyc_trace_vcd(tb, full, enabledInst, enabledSig);\n";
+    os << "    };\n";
+    for (const auto &ii : instInfos)
+      os << "    trace_child(" << ii.member << ", \"" << ii.seg << "\");\n";
+  }
+	  os << "  }\n\n";
+
+	  // ProbeRegistry registration (Decisions 0004, 0018-0021).
+	  os << "  void pyc_register_probes(pyc::cpp::ProbeRegistry &reg, const std::string &prefix) {\n";
+	  os << "    std::string inst = pyc::cpp::shortenInstancePath(prefix);\n";
+	  os << "    auto reg_path = [&](const char *leaf) {\n";
+	  os << "      std::string p = inst;\n";
+	  // Decision 0023: canonical_path uses <instance_path>:<field_path>.
+	  os << "      p += \":\";\n";
+	  os << "      p += leaf;\n";
+	  os << "      return p;\n";
+	  os << "    };\n";
+
+    struct NamedProbeInfo {
+      std::string fieldPath;
+      std::string cppValue;
+      std::string cppRegInst;
+      unsigned width = 0;
+      bool isReg = false;
+    };
+
+    // Decision 0003 / 0051-0052: infer probe kind for ports and named internal
+    // objects. A value is considered stateful iff it directly returns the q
+    // output of a local pyc.reg (through optional pyc.alias wrappers).
+    std::vector<bool> outIsReg(f.getNumResults(), false);
+    std::vector<Value> outRegQ(f.getNumResults(), Value());
+    std::vector<NamedProbeInfo> namedProbes;
+    if (!f.isDeclaration()) {
+      auto ret = dyn_cast_or_null<func::ReturnOp>(f.getBody().front().getTerminator());
+      if (!ret)
+        return f.emitError("missing return");
+      for (unsigned i = 0; i < f.getNumResults() && i < ret.getNumOperands(); ++i)
+        outRegQ[i] = findRegQFromValue(ret.getOperand(i));
+      for (unsigned i = 0; i < f.getNumResults(); ++i)
+        outIsReg[i] = static_cast<bool>(outRegQ[i]);
+
+      llvm::StringSet<> seenNamedFields;
+      f.walk([&](Operation *op) {
+        auto nameAttr = op->getAttrOfType<StringAttr>("pyc.name");
+        if (!nameAttr || op->getNumResults() != 1)
+          return;
+        Value value = op->getResult(0);
+        unsigned width = bitWidth(value.getType());
+        if (width == 0)
+          return;
+        std::string fieldPath = nameAttr.getValue().str();
+        if (!seenNamedFields.insert(fieldPath).second)
+          return;
+        Value regQ = findRegQFromValue(value);
+        namedProbes.push_back(NamedProbeInfo{
+            fieldPath,
+            nt.get(value),
+            static_cast<bool>(regQ) ? (nt.get(regQ) + "_inst") : std::string(),
+            width,
+            static_cast<bool>(regQ),
+        });
+      });
+      std::sort(namedProbes.begin(), namedProbes.end(), [](const NamedProbeInfo &a, const NamedProbeInfo &b) {
+        return a.fieldPath < b.fieldPath;
+      });
+    }
+
+		  for (auto [i, arg] : llvm::enumerate(f.getArguments())) {
+		    unsigned w = bitWidth(arg.getType());
+		    if (w == 0)
+		      return f.emitError("invalid input port width for ProbeRegistry: ") << getPortCanonicalFieldPath(f, i, /*isResult=*/false);
+		    os << "    reg.addWire<" << w << ">(reg_path(" << cppStringLiteral(inCanon[static_cast<unsigned>(i)]) << "), &"
+		       << inNames[static_cast<unsigned>(i)] << ");\n";
+		  }
+		  for (unsigned i = 0; i < f.getNumResults(); ++i) {
+		    unsigned w = bitWidth(f.getResultTypes()[i]);
+		    if (w == 0)
+		      return f.emitError("invalid output port width for ProbeRegistry: ") << getPortCanonicalFieldPath(f, i, /*isResult=*/true);
+		    if (outIsReg[i]) {
+		      os << "    reg.addReg<" << w << ">(reg_path(" << cppStringLiteral(outCanon[i]) << "), &" << outNames[i]
+		         << ", &" << nt.get(outRegQ[i]) << "_inst->pending, &" << nt.get(outRegQ[i]) << "_inst->qNext);\n";
+		    } else {
+		      os << "    reg.addWire<" << w << ">(reg_path(" << cppStringLiteral(outCanon[i]) << "), &" << outNames[i] << ");\n";
+		    }
+		  }
+      for (const auto &named : namedProbes) {
+        if (named.isReg) {
+          os << "    reg.addReg<" << named.width << ">(reg_path(" << cppStringLiteral(named.fieldPath) << "), &"
+             << named.cppValue << ", &" << named.cppRegInst << "->pending, &" << named.cppRegInst << "->qNext);\n";
+        } else {
+          os << "    reg.addWire<" << named.width << ">(reg_path(" << cppStringLiteral(named.fieldPath) << "), &"
+             << named.cppValue << ");\n";
+        }
+      }
+		  for (auto mem : byteMems) {
+		    std::string instName = nt.get(mem.getRdata()) + "_inst";
+		    if (auto nameAttr = mem->getAttrOfType<StringAttr>("name"))
+	      instName = sanitizeId(nameAttr.getValue());
+	    os << "    reg.addMem(reg_path(\"" << instName << "\"), &" << instName << ", &" << instName
+	       << ".pendingWrite, &" << instName << ".latchedAddr, &" << instName << ".latchedData, &" << instName
+	       << ".latchedStrb);\n";
+	  }
+	  for (auto mem : syncMems) {
+	    std::string instName = nt.get(mem.getRdata()) + "_inst";
+	    if (auto nameAttr = mem->getAttrOfType<StringAttr>("name"))
+	      instName = sanitizeId(nameAttr.getValue());
+	    os << "    if (" << instName << ") reg.addMem(reg_path(\"" << instName << "\"), " << instName << ", &" << instName
+	       << "->pendingWrite, &" << instName << "->latchedWaddr, &" << instName << "->latchedWdata, &" << instName
+	       << "->latchedWstrb);\n";
+	  }
+	  for (auto mem : syncMemDPs) {
+	    std::string instName = nt.get(mem.getRdata0()) + "_inst";
+	    if (auto nameAttr = mem->getAttrOfType<StringAttr>("name"))
+	      instName = sanitizeId(nameAttr.getValue());
+	    os << "    if (" << instName << ") reg.addMem(reg_path(\"" << instName << "\"), " << instName << ", &" << instName
+	       << "->pendingWrite, &" << instName << "->latchedWaddr, &" << instName << "->latchedWdata, &" << instName
+	       << "->latchedWstrb);\n";
+	  }
+	  if (!instInfos.empty()) {
+	    os << "    auto reg_child = [&](auto &child, const char *seg) {\n";
+	    os << "      std::string p = prefix;\n";
+	    os << "      p += \".\";\n";
+	    os << "      p += seg;\n";
+	    os << "      if (child) child->pyc_register_probes(reg, p);\n";
+	    os << "    };\n";
+	    for (const auto &ii : instInfos)
+	      os << "    reg_child(" << ii.member << ", \"" << ii.seg << "\");\n";
+	  }
+      auto probeAliases = loadProbeAliasesForTop(opts.probePlanPath, f.getSymName());
+      if (!probeAliases.empty()) {
+        for (const auto &alias : probeAliases) {
+          os << "    if (const auto *src = reg.findByPath(" << cppStringLiteral(alias.sourcePath) << "))\n";
+          os << "      reg.addAlias(" << cppStringLiteral(alias.canonicalPath) << ", *src);\n";
+        }
+      }
+	  os << "  }\n\n";
+
+	  for (auto r : regs) {
+	    unsigned w = bitWidth(r.getQ().getType());
+	    if (w == 0)
+	      return r.emitError("invalid reg width");
     os << "  pyc::cpp::pyc_reg<" << w << "> *" << nt.get(r.getQ()) << "_inst = nullptr;\n";
   }
   for (auto fifo : fifos) {
@@ -975,7 +1339,7 @@ static LogicalResult emitFunc(func::FuncOp f, llvm::raw_ostream &os) {
 
   // Emit fused comb helpers.
   for (auto [i, comb] : llvm::enumerate(combs)) {
-    if (failed(emitCombMethod(comb, os, nt, static_cast<unsigned>(i))))
+    if (failed(emitCombMethod(comb, os, nt, static_cast<unsigned>(i), opts)))
       return failure();
   }
 
@@ -1035,7 +1399,7 @@ static LogicalResult emitFunc(func::FuncOp f, llvm::raw_ostream &os) {
     }
 
     // Multiple drivers to the same wire are not supported by the topo scheduler
-    // (imperative evaluation becomes ambiguous); fall back to the legacy fixpoint.
+    // (imperative evaluation becomes ambiguous); fall back to bounded fixpoint.
     for (auto &it : wireAssignCount) {
       if (it.second > 1)
         return false;
@@ -1161,6 +1525,9 @@ static LogicalResult emitFunc(func::FuncOp f, llvm::raw_ostream &os) {
             pyc::ShliOp,
             pyc::LshriOp,
             pyc::AshriOp,
+            pyc::ShlOp,
+            pyc::LshrOp,
+            pyc::AshrOp,
             arith::SelectOp>(*op)) {
       if (failed(emitCombAssign(*op, os, nt)))
         return failure();
@@ -1195,6 +1562,7 @@ static LogicalResult emitFunc(func::FuncOp f, llvm::raw_ostream &os) {
 
   auto emitInstanceEvalHelperDefinition = [&](const InstInfo &ii, llvm::StringRef helperName) {
     auto inst = ii.op;
+    bool usePackedCache = usePackedInstanceEvalCache(ii);
     os << "  inline bool " << helperName << "() {\n";
     os << "    bool _pyc_inst_changed = false;\n";
     os << "    #ifdef PYC_DISABLE_INSTANCE_EVAL_CACHE\n";
@@ -1208,73 +1576,98 @@ static LogicalResult emitFunc(func::FuncOp f, llvm::raw_ostream &os) {
     os << "    #else\n";
     std::string changedFlag = ii.member + "_eval_cache_changed";
     os << "    bool " << changedFlag << " = !" << ii.member << "_eval_cache_valid;\n";
-    os << "    #ifndef PYC_DISABLE_VERSIONED_INPUT_CACHE\n";
-    for (unsigned i = 0; i < inst.getNumOperands(); ++i) {
-      std::string cacheName = ii.member + "_eval_cache_in_" + std::to_string(i);
-      std::string inValue = nt.get(inst.getOperand(i));
-      std::string verName = ii.member + "_eval_cache_in_ver_" + std::to_string(i);
-      std::string seenName = ii.member + "_eval_cache_in_seen_ver_" + std::to_string(i);
-      unsigned inW = bitWidth(inst.getOperand(i).getType());
-      os << "    if (" << ii.member << "_eval_cache_valid) {\n";
-      if (inW <= 64) {
-        std::string fpName = ii.member + "_eval_cache_in_fp_" + std::to_string(i);
-        os << "      std::uint64_t _pyc_fp_" << i << " = static_cast<std::uint64_t>(" << inValue << ".value());\n";
-        os << "      if (" << fpName << " != _pyc_fp_" << i << ") {\n";
-        os << "        " << fpName << " = _pyc_fp_" << i << ";\n";
-        os << "        " << cacheName << " = " << inValue << ";\n";
-        os << "        ++" << verName << ";\n";
-        os << "      }\n";
-      } else {
-        os << "      if (" << cacheName << " != " << inValue << ") {\n";
-        os << "        " << cacheName << " = " << inValue << ";\n";
-        os << "        ++" << verName << ";\n";
-        os << "      }\n";
+    if (usePackedCache) {
+      os << "    std::array<std::uint64_t, " << instancePackedCacheWordCount(ii) << "> _pyc_inputs{};\n";
+      os << "    std::size_t _pyc_inputs_off = 0;\n";
+      for (unsigned i = 0; i < inst.getNumOperands(); ++i) {
+        std::string inValue = nt.get(inst.getOperand(i));
+        os << "    pyc::cpp::appendPackedWireWords(_pyc_inputs, _pyc_inputs_off, " << inValue << ");\n";
       }
+      os << "    if (!" << changedFlag << " && (" << ii.member << "_eval_cache_words != _pyc_inputs)) " << changedFlag
+         << " = true;\n";
+      os << "    if (" << changedFlag << ") {\n";
+      for (unsigned i = 0; i < inst.getNumOperands(); ++i) {
+        std::string inValue = nt.get(inst.getOperand(i));
+        os << "      " << ii.member << "->" << ii.inPorts[i] << " = " << inValue << ";\n";
+      }
+      os << "      " << ii.member << "->eval();\n";
+      os << "      if (_pyc_sim_stats_enable) _pyc_sim_stats.instance_eval_calls++;\n";
+      os << "      " << ii.member << "_eval_cache_words = _pyc_inputs;\n";
       os << "    } else {\n";
-      os << "      " << cacheName << " = " << inValue << ";\n";
-      if (inW <= 64) {
-        std::string fpName = ii.member + "_eval_cache_in_fp_" + std::to_string(i);
-        os << "      " << fpName << " = static_cast<std::uint64_t>(" << inValue << ".value());\n";
-      }
-      os << "      ++" << verName << ";\n";
+      os << "      if (_pyc_sim_stats_enable) _pyc_sim_stats.instance_cache_skips++;\n";
       os << "    }\n";
-      os << "    if (!" << changedFlag << " && (" << seenName << " != " << verName << ")) " << changedFlag
-         << " = true;\n";
-      os << "    " << seenName << " = " << verName << ";\n";
+      os << "    _pyc_inst_changed = " << changedFlag << ";\n";
+      os << "    " << ii.member << "_eval_cache_valid = true;\n";
+      os << "    #endif\n";
+    } else {
+      os << "    #ifndef PYC_DISABLE_VERSIONED_INPUT_CACHE\n";
+      for (unsigned i = 0; i < inst.getNumOperands(); ++i) {
+        std::string cacheName = ii.member + "_eval_cache_in_" + std::to_string(i);
+        std::string inValue = nt.get(inst.getOperand(i));
+        std::string verName = ii.member + "_eval_cache_in_ver_" + std::to_string(i);
+        std::string seenName = ii.member + "_eval_cache_in_seen_ver_" + std::to_string(i);
+        unsigned inW = bitWidth(inst.getOperand(i).getType());
+        os << "    if (" << ii.member << "_eval_cache_valid) {\n";
+        if (inW <= 64) {
+          std::string fpName = ii.member + "_eval_cache_in_fp_" + std::to_string(i);
+          os << "      std::uint64_t _pyc_fp_" << i << " = static_cast<std::uint64_t>(" << inValue << ".value());\n";
+          os << "      if (" << fpName << " != _pyc_fp_" << i << ") {\n";
+          os << "        " << fpName << " = _pyc_fp_" << i << ";\n";
+          os << "        " << cacheName << " = " << inValue << ";\n";
+          os << "        ++" << verName << ";\n";
+          os << "      }\n";
+        } else {
+          os << "      if (" << cacheName << " != " << inValue << ") {\n";
+          os << "        " << cacheName << " = " << inValue << ";\n";
+          os << "        ++" << verName << ";\n";
+          os << "      }\n";
+        }
+        os << "    } else {\n";
+        os << "      " << cacheName << " = " << inValue << ";\n";
+        if (inW <= 64) {
+          std::string fpName = ii.member + "_eval_cache_in_fp_" + std::to_string(i);
+          os << "      " << fpName << " = static_cast<std::uint64_t>(" << inValue << ".value());\n";
+        }
+        os << "      ++" << verName << ";\n";
+        os << "    }\n";
+        os << "    if (!" << changedFlag << " && (" << seenName << " != " << verName << ")) " << changedFlag
+           << " = true;\n";
+        os << "    " << seenName << " = " << verName << ";\n";
+      }
+      os << "    if (" << changedFlag << ") {\n";
+      for (unsigned i = 0; i < inst.getNumOperands(); ++i) {
+        std::string cacheName = ii.member + "_eval_cache_in_" + std::to_string(i);
+        os << "      " << ii.member << "->" << ii.inPorts[i] << " = " << cacheName << ";\n";
+      }
+      os << "      " << ii.member << "->eval();\n";
+      os << "      if (_pyc_sim_stats_enable) _pyc_sim_stats.instance_eval_calls++;\n";
+      os << "    } else {\n";
+      os << "      if (_pyc_sim_stats_enable) _pyc_sim_stats.instance_cache_skips++;\n";
+      os << "    }\n";
+      os << "    #else\n";
+      for (unsigned i = 0; i < inst.getNumOperands(); ++i) {
+        std::string cacheName = ii.member + "_eval_cache_in_" + std::to_string(i);
+        std::string inValue = nt.get(inst.getOperand(i));
+        os << "    if (!" << changedFlag << " && (" << cacheName << " != " << inValue << ")) " << changedFlag
+           << " = true;\n";
+      }
+      os << "    if (" << changedFlag << ") {\n";
+      for (unsigned i = 0; i < inst.getNumOperands(); ++i) {
+        std::string cacheName = ii.member + "_eval_cache_in_" + std::to_string(i);
+        std::string inValue = nt.get(inst.getOperand(i));
+        os << "      " << ii.member << "->" << ii.inPorts[i] << " = " << inValue << ";\n";
+        os << "      " << cacheName << " = " << inValue << ";\n";
+      }
+      os << "      " << ii.member << "->eval();\n";
+      os << "      if (_pyc_sim_stats_enable) _pyc_sim_stats.instance_eval_calls++;\n";
+      os << "    } else {\n";
+      os << "      if (_pyc_sim_stats_enable) _pyc_sim_stats.instance_cache_skips++;\n";
+      os << "    }\n";
+      os << "    #endif\n";
+      os << "    _pyc_inst_changed = " << changedFlag << ";\n";
+      os << "    " << ii.member << "_eval_cache_valid = true;\n";
+      os << "    #endif\n";
     }
-    os << "    if (" << changedFlag << ") {\n";
-    for (unsigned i = 0; i < inst.getNumOperands(); ++i) {
-      std::string cacheName = ii.member + "_eval_cache_in_" + std::to_string(i);
-      os << "      " << ii.member << "->" << ii.inPorts[i] << " = " << cacheName << ";\n";
-    }
-    os << "      " << ii.member << "->eval();\n";
-    os << "      if (_pyc_sim_stats_enable) _pyc_sim_stats.instance_eval_calls++;\n";
-    os << "    } else {\n";
-    os << "      if (_pyc_sim_stats_enable) _pyc_sim_stats.instance_cache_skips++;\n";
-    os << "    }\n";
-    os << "    #else\n";
-    for (unsigned i = 0; i < inst.getNumOperands(); ++i) {
-      std::string cacheName = ii.member + "_eval_cache_in_" + std::to_string(i);
-      std::string inValue = nt.get(inst.getOperand(i));
-      os << "    if (!" << changedFlag << " && (" << cacheName << " != " << inValue << ")) " << changedFlag
-         << " = true;\n";
-    }
-    os << "    if (" << changedFlag << ") {\n";
-    for (unsigned i = 0; i < inst.getNumOperands(); ++i) {
-      std::string cacheName = ii.member + "_eval_cache_in_" + std::to_string(i);
-      std::string inValue = nt.get(inst.getOperand(i));
-      os << "      " << ii.member << "->" << ii.inPorts[i] << " = " << inValue << ";\n";
-      os << "      " << cacheName << " = " << inValue << ";\n";
-    }
-    os << "      " << ii.member << "->eval();\n";
-    os << "      if (_pyc_sim_stats_enable) _pyc_sim_stats.instance_eval_calls++;\n";
-    os << "    } else {\n";
-    os << "      if (_pyc_sim_stats_enable) _pyc_sim_stats.instance_cache_skips++;\n";
-    os << "    }\n";
-    os << "    #endif\n";
-    os << "    _pyc_inst_changed = " << changedFlag << ";\n";
-    os << "    " << ii.member << "_eval_cache_valid = true;\n";
-    os << "    #endif\n";
     for (unsigned i = 0; i < inst.getNumResults(); ++i)
       os << "    " << nt.get(inst.getResult(i)) << " = " << ii.member << "->" << ii.outPorts[i] << ";\n";
     os << "    return _pyc_inst_changed;\n";
@@ -1546,6 +1939,9 @@ static LogicalResult emitFunc(func::FuncOp f, llvm::raw_ostream &os) {
             pyc::ShliOp,
             pyc::LshriOp,
             pyc::AshriOp,
+            pyc::ShlOp,
+            pyc::LshrOp,
+            pyc::AshrOp,
             arith::SelectOp>(*op)) {
       if (failed(emitCombAssign(*op, os, nt)))
         return failure();
@@ -1751,7 +2147,7 @@ static LogicalResult emitFunc(func::FuncOp f, llvm::raw_ostream &os) {
   }
 
   // eval(): attempt a single-pass topological netlist schedule; if the graph has
-  // cycles, fall back to a small fixed-point iteration (legacy behavior).
+  // cycles, fall back to a bounded fixed-point iteration.
   if (!hasFullTopo) {
     unsigned numPrims = static_cast<unsigned>(instInfos.size() + fifos.size() + asyncFifos.size() + byteMems.size());
 
@@ -1800,7 +2196,7 @@ static LogicalResult emitFunc(func::FuncOp f, llvm::raw_ostream &os) {
         closeGroup();
     }
 
-    os << "  inline void eval_legacy_fallback_path() {\n";
+    os << "  inline void eval_fixpoint_fallback_path() {\n";
     if (numPrims > 0) {
       os << "    for (unsigned _i = 0; _i < " << numPrims << "u; ++_i) {\n";
       os << "      if (_pyc_sim_stats_enable) _pyc_sim_stats.fallback_iterations++;\n";
@@ -1872,11 +2268,34 @@ static LogicalResult emitFunc(func::FuncOp f, llvm::raw_ostream &os) {
     }
   }
 
+  std::vector<std::string> topoEvalMethods;
+  if (hasFullTopo && !fullOrdered.empty()) {
+    unsigned evalTopoChunkNodes = std::max(1u, opts.evalTopoChunkNodes);
+    if (fullOrdered.size() > evalTopoChunkNodes) {
+      topoEvalMethods.reserve((fullOrdered.size() + evalTopoChunkNodes - 1) / evalTopoChunkNodes);
+      for (unsigned begin = 0, chunkIdx = 0; begin < fullOrdered.size(); begin += evalTopoChunkNodes, ++chunkIdx) {
+        unsigned end = std::min<unsigned>(static_cast<unsigned>(fullOrdered.size()), begin + evalTopoChunkNodes);
+        std::string methodName = "eval_topo_part_" + std::to_string(chunkIdx);
+        topoEvalMethods.push_back(methodName);
+        os << "  inline void " << methodName << "() {\n";
+        for (unsigned i = begin; i < end; ++i)
+          if (failed(emitEvalNode(fullOrdered[i], "    ")))
+            return failure();
+        os << "  }\n\n";
+      }
+    }
+  }
+
   os << "  void eval() {\n";
   if (hasFullTopo) {
-    for (Operation *op : fullOrdered)
-      if (failed(emitEvalNode(op, "    ")))
-        return failure();
+    if (!topoEvalMethods.empty()) {
+      for (const std::string &methodName : topoEvalMethods)
+        os << "    " << methodName << "();\n";
+    } else {
+      for (Operation *op : fullOrdered)
+        if (failed(emitEvalNode(op, "    ")))
+          return failure();
+    }
   } else {
     os << "    eval_comb_pass();\n";
     unsigned numPrims = static_cast<unsigned>(instInfos.size() + fifos.size() + asyncFifos.size() + byteMems.size());
@@ -1885,13 +2304,13 @@ static LogicalResult emitFunc(func::FuncOp f, llvm::raw_ostream &os) {
       os << "      #ifndef PYC_DISABLE_SCC_WORKLIST_EVAL\n";
       os << "      eval_fast_scc_path();\n";
       os << "      #else\n";
-      os << "      eval_legacy_fallback_path();\n";
+      os << "      eval_fixpoint_fallback_path();\n";
       os << "      #endif\n";
       os << "    } else {\n";
-      os << "      eval_legacy_fallback_path();\n";
+      os << "      eval_fixpoint_fallback_path();\n";
       os << "    }\n";
     } else {
-      os << "    eval_legacy_fallback_path();\n";
+      os << "    eval_fixpoint_fallback_path();\n";
     }
   }
 
@@ -1999,23 +2418,30 @@ static LogicalResult emitFunc(func::FuncOp f, llvm::raw_ostream &os) {
     os << "    " << nt.get(fifo.getInReady()) << "_inst_eval_cache_valid = false;\n";
   for (auto mem : byteMems)
     os << "    " << byteMemInstName.lookup(mem.getOperation()) << "_eval_cache_valid = false;\n";
-  for (auto fifo : asyncFifos)
-    os << "    " << nt.get(fifo.getInReady()) << "_inst_eval_cache_valid = false;\n";
-  os << "  }\n\n";
+	  for (auto fifo : asyncFifos)
+	    os << "    " << nt.get(fifo.getInReady()) << "_inst_eval_cache_valid = false;\n";
+	  os << "  }\n\n";
 
-  // tick(): back-compat wrapper.
-  os << "  void tick() {\n";
-  os << "    tick_compute();\n";
-  os << "    tick_commit();\n";
-  os << "  }\n";
+	  // Decision 0027: provide explicit comb/tick/commit APIs + high-level step().
+	  // Decision 0001: expose transfer() as an alias of commit().
+	  os << "  void comb() { eval(); }\n";
+	  os << "  void tick() { tick_compute(); }\n";
+	  os << "  void commit() { tick_commit(); }\n";
+	  os << "  void transfer() { tick_commit(); }\n";
+	  os << "  void step() {\n";
+	  os << "    comb();\n";
+	  os << "    tick();\n";
+	  os << "    commit();\n";
+	  os << "    comb();\n";
+	  os << "  }\n";
 
-  os << "};\n\n";
-  return success();
-}
+	  os << "};\n\n";
+	  return success();
+	}
 
 } // namespace
 
-LogicalResult emitCpp(ModuleOp module, llvm::raw_ostream &os, const CppEmitterOptions &) {
+LogicalResult emitCpp(ModuleOp module, llvm::raw_ostream &os, const CppEmitterOptions &opts) {
   os << "// pyCircuit C++ emission (prototype)\n";
   os << "#include <cstdlib>\n";
   os << "#include <cstdint>\n";
@@ -2082,7 +2508,7 @@ LogicalResult emitCpp(ModuleOp module, llvm::raw_ostream &os, const CppEmitterOp
     return module.emitError("C++ emitter: module instance graph has a cycle");
 
   for (unsigned idx : order) {
-    if (failed(emitFunc(funcs[idx], os)))
+    if (failed(emitFunc(funcs[idx], os, opts)))
       return failure();
   }
 
@@ -2090,9 +2516,9 @@ LogicalResult emitCpp(ModuleOp module, llvm::raw_ostream &os, const CppEmitterOp
   return success();
 }
 
-LogicalResult emitCppFunc(ModuleOp module, func::FuncOp f, llvm::raw_ostream &os, const CppEmitterOptions &) {
+LogicalResult emitCppFunc(ModuleOp module, func::FuncOp f, llvm::raw_ostream &os, const CppEmitterOptions &opts) {
   (void)module;
-  return emitFunc(f, os);
+  return emitFunc(f, os, opts);
 }
 
 } // namespace pyc

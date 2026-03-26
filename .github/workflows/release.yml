@@ -8,6 +8,8 @@ on:
 
 permissions:
   contents: write
+  packages: write
+  id-token: write
 
 jobs:
   build-packages:
@@ -27,67 +29,121 @@ jobs:
         run: |
           set -euxo pipefail
           sudo apt-get update
-          sudo apt-get install -y cmake ninja-build python3 python3-pip clang tar
-
-          for v in 19 18 17 16 15 ""; do
-            if [[ -n "$v" ]]; then
-              pkgs="llvm-${v}-dev mlir-${v}-tools libmlir-${v}-dev"
-            else
-              pkgs="llvm-dev mlir-tools libmlir-dev"
-            fi
-            if sudo apt-get install -y ${pkgs}; then
-              break
-            fi
-          done
-
-          (command -v llvm-config && llvm-config --version) || \
-            (command -v llvm-config-19 && llvm-config-19 --version) || \
-            (command -v llvm-config-18 && llvm-config-18 --version) || \
-            (command -v llvm-config-17 && llvm-config-17 --version) || \
-            (command -v llvm-config-16 && llvm-config-16 --version) || \
-            (command -v llvm-config-15 && llvm-config-15 --version)
+          sudo apt-get install -y wget gnupg software-properties-common cmake ninja-build python3 python3-pip clang tar verilator iverilog
+          python3 -m pip install setuptools wheel
+          wget https://apt.llvm.org/llvm.sh
+          chmod +x llvm.sh
+          sudo ./llvm.sh 19
+          sudo apt-get install -y llvm-19-dev mlir-19-tools libmlir-19-dev
+          echo "/usr/lib/llvm-19/bin" >> "$GITHUB_PATH"
 
       - name: Install deps (macOS)
         if: runner.os == 'macOS'
         run: |
           set -euxo pipefail
           brew update
-          brew install ninja cmake llvm python@3 || brew install ninja cmake llvm
-          echo "$(brew --prefix llvm)/bin" >> "$GITHUB_PATH"
+          brew install ninja cmake llvm@19 python@3
+          python3 -m pip install setuptools wheel
+          echo "$(brew --prefix llvm@19)/bin" >> "$GITHUB_PATH"
 
-      - name: Build + package
+      - name: Build staged toolchain
         run: |
           set -euxo pipefail
           VERSION="${GITHUB_REF_NAME#v}"
           PKG="pycircuit-${VERSION}-${RUNNER_OS}-${RUNNER_ARCH}"
-
-          LLVM_CONFIG="$(command -v llvm-config || true)"
-          if [[ -z "${LLVM_CONFIG}" ]]; then
-            LLVM_CONFIG="$(command -v llvm-config-19 || command -v llvm-config-18 || command -v llvm-config-17 || command -v llvm-config-16 || command -v llvm-config-15)"
+          if [[ "${RUNNER_OS}" == "Linux" ]]; then
+            LLVM_CONFIG="/usr/lib/llvm-19/bin/llvm-config"
+          else
+            LLVM_CONFIG="$(brew --prefix llvm@19)/bin/llvm-config"
           fi
 
-          LLVM_DIR="$("${LLVM_CONFIG}" --cmakedir)"
-          MLIR_DIR="$(dirname "$LLVM_DIR")/mlir"
+          bash flows/scripts/pyc build \
+            --llvm-config "${LLVM_CONFIG}" \
+            --build-dir "$PWD/.pycircuit_out/toolchain/build" \
+            --install-prefix "$PWD/.pycircuit_out/toolchain/install"
 
-          cmake -G Ninja -S . -B build \
+          if [[ "${RUNNER_OS}" == "Linux" ]]; then
+            export PYC_TOOLCHAIN_ROOT="$PWD/.pycircuit_out/toolchain/install"
+            export PATH="$PYC_TOOLCHAIN_ROOT/bin:$PATH"
+            unset PYCC
+            bash flows/scripts/run_examples.sh
+            bash flows/scripts/run_sims.sh
+            bash flows/scripts/run_sims_nightly.sh
+          fi
+
+          cmake -S . -B .pycircuit_out/toolchain/build \
             -DCMAKE_BUILD_TYPE=Release \
-            -DLLVM_DIR="$LLVM_DIR" \
-            -DMLIR_DIR="$MLIR_DIR" \
-            -DPYC_BUILD_CPP_EXAMPLES=OFF \
+            -DCMAKE_INSTALL_PREFIX="$PWD/.pycircuit_out/toolchain/install" \
+            -DLLVM_DIR="$("${LLVM_CONFIG}" --cmakedir)" \
+            -DMLIR_DIR="$(dirname "$("${LLVM_CONFIG}" --cmakedir)")/mlir" \
             -DCPACK_PACKAGE_VERSION="$VERSION" \
             -DCPACK_PACKAGE_FILE_NAME="$PKG"
-
-          ninja -C build pycc pyc-opt
-          (cd build && cpack -G TGZ)
+          (cd .pycircuit_out/toolchain/build && cpack -G TGZ)
 
           mkdir -p dist
-          mv "build/${PKG}.tar.gz" "dist/${PKG}.tar.gz"
+          mv ".pycircuit_out/toolchain/build/${PKG}.tar.gz" "dist/${PKG}.tar.gz"
+
+          python3 packaging/wheel/create_wheel.py \
+            --install-dir "$PWD/.pycircuit_out/toolchain/install" \
+            --out-dir "$PWD/dist"
+
+          python3 -m venv .venv-wheel
+          source .venv-wheel/bin/activate
+          pip install dist/*.whl
+          export PYC_TOOLCHAIN_ROOT="$(python -c 'import pycircuit, pathlib; print((pathlib.Path(pycircuit.__file__).resolve().parent / "_toolchain").as_posix())')"
+          export PYC_USE_INSTALLED_PYTHON_PACKAGE=1
+          export PYC_SKIP_SEMANTIC_REGRESSIONS=1
+          unset PYCC
+          bash flows/scripts/run_examples.sh
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: pycircuit-${{ runner.os }}-${{ runner.arch }}
-          path: dist/*.tar.gz
+          path: |
+            dist/*.tar.gz
+            dist/*.whl
+
+      - name: Check wheel metadata
+        run: |
+          set -euxo pipefail
+          python3 -m pip install twine
+          python3 -m twine check dist/*.whl
+
+  github-packages:
+    needs: [build-packages]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Set up ORAS
+        uses: oras-project/setup-oras@v1
+
+      - name: Login to GHCR
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | oras login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Publish GHCR artifacts
+        run: |
+          set -euxo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"
+          shopt -s nullglob
+          for archive in dist/*.tar.gz; do
+            base="$(basename "${archive}" .tar.gz)"
+            platform="${base#pycircuit-${VERSION}-}"
+            platform="$(echo "${platform}" | tr '[:upper:]' '[:lower:]')"
+            platform="${platform/linux-x64/linux-x86_64}"
+            platform="${platform/macos-x64/macos-x86_64}"
+            platform="${platform/macos-arm64/macos-arm64}"
+            ref="ghcr.io/linxisa/pyc-tools-${platform}"
+            oras push "${ref}:v${VERSION}" "${archive}:application/gzip"
+            oras push "${ref}:latest" "${archive}:application/gzip"
+            oras push "${ref}:llvm19" "${archive}:application/gzip"
+          done
 
   github-release:
     needs: [build-packages]
@@ -104,4 +160,25 @@ jobs:
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/*.tar.gz
+          files: |
+            dist/*.tar.gz
+            dist/*.whl
+
+  pypi-publish:
+    needs: [build-packages]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v') && vars.PYC_PUBLISH_PYPI == '1'
+    environment:
+      name: pypi
+    steps:
+      - name: Download wheel artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist
+          skip-existing: true

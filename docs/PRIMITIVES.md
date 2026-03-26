@@ -91,6 +91,12 @@ Handshake:
 - push when `in_valid && in_ready`
 - pop when `out_valid && out_ready`
 
+Notes (prototype):
+
+- `out_data` is defined as 0 when `out_valid == 0` (empty). This keeps
+  C++/Verilog equivalence deterministic without requiring the internal storage
+  array to be cleared on reset.
+
 Note: this is currently **single-clock**; async FIFO should be a separate
 primitive. See `pyc_async_fifo` below.
 
@@ -119,7 +125,8 @@ Notes (prototype constraints):
 Semantics (prototype):
 - Read is combinational: `rdata` reflects `mem[raddr]`.
 - Write is synchronous on posedge: when `wvalid`, update bytes selected by `wstrb`.
-- Reset does not clear memory; testbenches can initialize contents via `memh`/poke helpers.
+- Simulation initializes memory bytes to 0 by default (deterministic).
+- Reset does not clear memory; testbenches can initialize contents via `memh` (SV) or poke helpers (C++).
 
 ### 4.2 `pyc_sync_mem` (1R1W, synchronous read, registered output)
 
@@ -136,6 +143,8 @@ Semantics (prototype):
 
 - Read data updates on posedge when `ren` is asserted (registered read).
 - Write occurs on posedge when `wvalid` is asserted (byte enables via `wstrb`).
+- Read-during-write to the same address returns **old-data** by default (read observes the pre-write value).
+- Simulation initializes memory entries to 0 by default (deterministic). Reset does not clear memory contents.
 
 ### 4.3 `pyc_sync_mem_dp` (2R1W, synchronous read, registered outputs)
 
@@ -148,6 +157,11 @@ Ports:
 - read0: `ren0`, `raddr0`, `rdata0` (registered)
 - read1: `ren1`, `raddr1`, `rdata1` (registered)
 - write: `wvalid`, `waddr`, `wdata`, `wstrb`
+
+Semantics (prototype):
+
+- Read-during-write to the same address returns **old-data** by default on both read ports.
+- Simulation initializes memory entries to 0 by default (deterministic). Reset does not clear memory contents.
 
 ## 5) CDC
 
