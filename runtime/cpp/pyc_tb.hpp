@@ -60,6 +60,19 @@ struct has_transfer : std::false_type {};
 template <typename T>
 struct has_transfer<T, std::void_t<decltype(std::declval<T &>().transfer())>> : std::true_type {};
 
+// DUT may provide split posedge/negedge tick for faster simulation.
+template <typename T, typename = void>
+struct has_tick_posedge : std::false_type {};
+
+template <typename T>
+struct has_tick_posedge<T, std::void_t<decltype(std::declval<T &>().tick_posedge())>> : std::true_type {};
+
+template <typename T, typename = void>
+struct has_tick_negedge : std::false_type {};
+
+template <typename T>
+struct has_tick_negedge<T, std::void_t<decltype(std::declval<T &>().tick_negedge())>> : std::true_type {};
+
 template <typename T>
 inline void maybe_comb(T &dut) {
   if constexpr (has_comb<T>::value) {
@@ -73,6 +86,24 @@ template <typename T>
 inline void maybe_transfer(T &dut) {
   if constexpr (has_transfer<T>::value) {
     dut.transfer();
+  }
+}
+
+template <typename T>
+inline void maybe_tick_posedge(T &dut) {
+  if constexpr (has_tick_posedge<T>::value) {
+    dut.tick_posedge();
+  } else {
+    dut.tick();
+  }
+}
+
+template <typename T>
+inline void maybe_tick_negedge(T &dut) {
+  if constexpr (has_tick_negedge<T>::value) {
+    dut.tick_negedge();
+  } else {
+    dut.tick();
   }
 }
 
@@ -297,7 +328,7 @@ private:
         // Posedge phase.
         detail::maybe_comb(dut_);
         c.set(true);
-        dut_.tick();
+        detail::maybe_tick_posedge(dut_);
         detail::maybe_transfer(dut_);
         detail::maybe_comb(dut_);
         if (shouldDumpVcd(time_))
@@ -306,7 +337,7 @@ private:
 
         // Negedge bookkeeping (no extra combinational settle needed here).
         c.set(false);
-        dut_.tick();
+        detail::maybe_tick_negedge(dut_);
         detail::maybe_transfer(dut_);
         if (shouldDumpVcd(time_))
           vcd_->dump(time_);
@@ -318,12 +349,12 @@ private:
     for (std::uint64_t i = 0; i < cycles; i++) {
       detail::maybe_comb(dut_);
       c.set(true);
-      dut_.tick();
+      detail::maybe_tick_posedge(dut_);
       detail::maybe_transfer(dut_);
       detail::maybe_comb(dut_);
       time_++;
       c.set(false);
-      dut_.tick();
+      detail::maybe_tick_negedge(dut_);
       detail::maybe_transfer(dut_);
       time_++;
     }

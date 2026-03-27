@@ -272,15 +272,24 @@ def get_function_meta(fn: Any, *, fn_name: str | None = None) -> FunctionMeta:
     if cached is not None and (fn_name is None or cached.fdef.name == fn_name):
         return cached
 
-    lines, start_line = inspect.getsourcelines(fn)
-    source = textwrap.dedent("".join(lines))
-    tree = ast.parse(source)
+    synthetic = getattr(fn, "__pycircuit_jit_source__", None)
+    if isinstance(synthetic, str) and synthetic.strip():
+        source = textwrap.dedent(synthetic).strip() + "\n"
+        start_line = int(getattr(fn, "__pycircuit_jit_start_line__", 1) or 1)
+        tree = ast.parse(source)
+    else:
+        lines, start_line = inspect.getsourcelines(fn)
+        source = textwrap.dedent("".join(lines))
+        tree = ast.parse(source)
     name = fn_name if fn_name is not None else getattr(fn, "__name__", None)
     if not isinstance(name, str) or not name:
         raise RuntimeError(f"failed to infer function name for {fn!r}")
     fdef = _find_function_def(tree, name)
 
-    source_file = inspect.getsourcefile(fn) or inspect.getfile(fn)
+    if isinstance(synthetic, str) and synthetic.strip():
+        source_file = getattr(fn, "__pycircuit_jit_source_file__", None) or "<pycircuit_v5>"
+    else:
+        source_file = inspect.getsourcefile(fn) or inspect.getfile(fn)
     source_stem = None
     try:
         if source_file:

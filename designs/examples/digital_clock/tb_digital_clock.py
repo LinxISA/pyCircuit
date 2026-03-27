@@ -3,7 +3,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-from pycircuit import Tb, compile, testbench
+from pycircuit import CycleAwareTb, Tb, compile_cycle_aware, CycleAwareCircuit, CycleAwareDomain, testbench
 
 _THIS_DIR = Path(__file__).resolve().parent
 if str(_THIS_DIR) not in sys.path:
@@ -15,16 +15,18 @@ from digital_clock_config import DEFAULT_PARAMS, TB_PRESETS  # noqa: E402
 
 @testbench
 def tb(t: Tb) -> None:
+    tb = CycleAwareTb(t)
     p = TB_PRESETS["smoke"]
-    t.clock("clk")
-    t.reset("rst", cycles_asserted=2, cycles_deasserted=1)
-    t.timeout(int(p["timeout"]))
-    t.drive("btn_set", 0, at=0)
-    t.drive("btn_plus", 0, at=0)
-    t.drive("btn_minus", 0, at=0)
-    t.expect("seconds_bcd", 0, at=0)
-    t.finish(at=int(p["finish"]))
+    tb.clock("clk")
+    tb.reset("rst", cycles_asserted=2, cycles_deasserted=1)
+    tb.timeout(int(p["timeout"]))
+    # --- cycle 0 ---
+    tb.drive("btn_set", 0)
+    tb.drive("btn_plus", 0)
+    tb.drive("btn_minus", 0)
+    tb.expect("seconds_bcd", 0)
+    tb.finish(at=int(p["finish"]))
 
 
 if __name__ == "__main__":
-    print(compile(build, name="tb_digital_clock_top", **DEFAULT_PARAMS).emit_mlir())
+    print(compile_cycle_aware(build, name="tb_digital_clock_top", **DEFAULT_PARAMS).emit_mlir())

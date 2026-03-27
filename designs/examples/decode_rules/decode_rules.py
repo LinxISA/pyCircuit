@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from pycircuit import Circuit, compile, const, module, spec, u
+from pycircuit import Circuit, compile_cycle_aware, CycleAwareCircuit, CycleAwareDomain, const, module, spec, u
 
 
 @const
@@ -15,8 +15,7 @@ def _decode_rules(m: Circuit):
     )
 
 
-@module
-def build(m: Circuit):
+def build(m: CycleAwareCircuit, domain: CycleAwareDomain) :
     insn = m.input("insn", width=8)
     op = u(4, 0)
     ln = u(3, 0)
@@ -32,4 +31,4 @@ def build(m: Circuit):
 
 build.__pycircuit_name__ = "decode_rules"
 if __name__ == "__main__":
-    print(compile(build, name="decode_rules").emit_mlir())
+    print(compile_cycle_aware(build, name="decode_rules").emit_mlir())

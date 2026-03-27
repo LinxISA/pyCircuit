@@ -152,8 +152,8 @@ pyc_pythonpath() {
   fi
 
   # Prefer editable install (`pip install -e .`), but fall back to PYTHONPATH for
-  # repo-local runs.
-  echo "${PYC_ROOT_DIR}/compiler/frontend:${PYC_ROOT_DIR}/designs"
+  # repo-local runs.  iplib/ is the standard IP library (RegFile, FIFO, Cache, …).
+  echo "${PYC_ROOT_DIR}/compiler/frontend:${PYC_ROOT_DIR}/designs:${PYC_ROOT_DIR}"
 }
 
 pyc_out_root() {

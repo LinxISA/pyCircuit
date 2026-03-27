@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from pycircuit import Circuit, compile, module, u
+from pycircuit import Circuit, module, compile_cycle_aware, CycleAwareCircuit, CycleAwareDomain, u
 
 
 @module(value_params={"gain": "i8", "bias": "i32", "enable": "i1"})
@@ -10,8 +10,8 @@ def _lane(m: Circuit, x, gain, bias, enable, *, width: int = 32):
     m.output("y", y)
 
 
-@module
-def build(m: Circuit, *, width: int = 32):
+def build(m: CycleAwareCircuit, domain: CycleAwareDomain, *, width: int = 32):
+    _ = domain
     seed = m.input("seed", width=width)
 
     lane0 = m.new(
@@ -40,4 +40,4 @@ def build(m: Circuit, *, width: int = 32):
 build.__pycircuit_name__ = "boundary_value_ports"
 
 if __name__ == "__main__":
-    print(compile(build, name="boundary_value_ports", width=32).emit_mlir())
+    print(compile_cycle_aware(build, name="boundary_value_ports", width=32).emit_mlir())

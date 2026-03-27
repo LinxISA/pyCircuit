@@ -5,7 +5,103 @@
 #include <initializer_list>
 #include <limits>
 
+#if defined(__aarch64__) || defined(_M_ARM64)
+#include <arm_neon.h>
+#define PYC_SIMD_NEON 1
+#endif
+
 namespace pyc::cpp {
+
+// ---------------------------------------------------------------------------
+// NEON helpers (compile to nothing on non-ARM)
+// ---------------------------------------------------------------------------
+namespace simd {
+
+#if PYC_SIMD_NEON
+inline void bitwise_and(std::uint64_t *dst, const std::uint64_t *a,
+                        const std::uint64_t *b, unsigned nWords) {
+  unsigned i = 0;
+  for (; i + 2 <= nWords; i += 2) {
+    uint64x2_t va = vld1q_u64(a + i);
+    uint64x2_t vb = vld1q_u64(b + i);
+    vst1q_u64(dst + i, vandq_u64(va, vb));
+  }
+  for (; i < nWords; i++)
+    dst[i] = a[i] & b[i];
+}
+
+inline void bitwise_or(std::uint64_t *dst, const std::uint64_t *a,
+                       const std::uint64_t *b, unsigned nWords) {
+  unsigned i = 0;
+  for (; i + 2 <= nWords; i += 2) {
+    uint64x2_t va = vld1q_u64(a + i);
+    uint64x2_t vb = vld1q_u64(b + i);
+    vst1q_u64(dst + i, vorrq_u64(va, vb));
+  }
+  for (; i < nWords; i++)
+    dst[i] = a[i] | b[i];
+}
+
+inline void bitwise_xor(std::uint64_t *dst, const std::uint64_t *a,
+                        const std::uint64_t *b, unsigned nWords) {
+  unsigned i = 0;
+  for (; i + 2 <= nWords; i += 2) {
+    uint64x2_t va = vld1q_u64(a + i);
+    uint64x2_t vb = vld1q_u64(b + i);
+    vst1q_u64(dst + i, veorq_u64(va, vb));
+  }
+  for (; i < nWords; i++)
+    dst[i] = a[i] ^ b[i];
+}
+
+inline void bitwise_not(std::uint64_t *dst, const std::uint64_t *a,
+                        unsigned nWords) {
+  unsigned i = 0;
+  for (; i + 2 <= nWords; i += 2) {
+    uint64x2_t va = vld1q_u64(a + i);
+    vst1q_u64(dst + i, vmvnq_u8(vreinterpretq_u8_u64(va)));
+  }
+  for (; i < nWords; i++)
+    dst[i] = ~a[i];
+}
+
+inline bool bitwise_eq(const std::uint64_t *a, const std::uint64_t *b,
+                       unsigned nWords) {
+  unsigned i = 0;
+  for (; i + 2 <= nWords; i += 2) {
+    uint64x2_t va = vld1q_u64(a + i);
+    uint64x2_t vb = vld1q_u64(b + i);
+    uint64x2_t cmp = vceqq_u64(va, vb);
+    if (vgetq_lane_u64(cmp, 0) != ~std::uint64_t{0} ||
+        vgetq_lane_u64(cmp, 1) != ~std::uint64_t{0})
+      return false;
+  }
+  for (; i < nWords; i++)
+    if (a[i] != b[i])
+      return false;
+  return true;
+}
+
+// Bitwise select: dst[i] = mask[i] ? a[i] : b[i]  (per-bit)
+inline void bitwise_sel(std::uint64_t *dst, const std::uint64_t *mask,
+                        const std::uint64_t *a, const std::uint64_t *b,
+                        unsigned nWords) {
+  unsigned i = 0;
+  for (; i + 2 <= nWords; i += 2) {
+    uint64x2_t vm = vld1q_u64(mask + i);
+    uint64x2_t va = vld1q_u64(a + i);
+    uint64x2_t vb = vld1q_u64(b + i);
+    vst1q_u64(dst + i,
+              vbslq_u64(vreinterpretq_u64_u8(
+                            vreinterpretq_u8_u64(vm)),
+                        va, vb));
+  }
+  for (; i < nWords; i++)
+    dst[i] = (a[i] & mask[i]) | (b[i] & ~mask[i]);
+}
+#endif
+
+} // namespace simd
 
 template <unsigned Width>
 class Bits {
@@ -58,8 +154,10 @@ public:
     return ((word(wi) >> bi) & 1u) != 0;
   }
 
+  word_type *data() { return words_.data(); }
+  const word_type *data() const { return words_.data(); }
+
   static constexpr word_type mask() {
-    // Legacy helper: returns a low-word mask for widths <= 64.
     if constexpr (Width >= 64)
       return ~word_type{0};
     return (word_type{1} << Width) - 1;
@@ -118,39 +216,71 @@ public:
     return out;
   }
 
-  friend constexpr Bits operator&(Bits a, Bits b) {
+  friend Bits operator&(Bits a, Bits b) {
     Bits out;
+#if PYC_SIMD_NEON
+    if constexpr (kWords >= 2) {
+      simd::bitwise_and(out.words_.data(), a.words_.data(), b.words_.data(), kWords);
+      out.maskTop();
+      return out;
+    }
+#endif
     for (unsigned i = 0; i < kWords; i++)
       out.words_[i] = a.words_[i] & b.words_[i];
     out.maskTop();
     return out;
   }
 
-  friend constexpr Bits operator|(Bits a, Bits b) {
+  friend Bits operator|(Bits a, Bits b) {
     Bits out;
+#if PYC_SIMD_NEON
+    if constexpr (kWords >= 2) {
+      simd::bitwise_or(out.words_.data(), a.words_.data(), b.words_.data(), kWords);
+      out.maskTop();
+      return out;
+    }
+#endif
     for (unsigned i = 0; i < kWords; i++)
       out.words_[i] = a.words_[i] | b.words_[i];
     out.maskTop();
     return out;
   }
 
-  friend constexpr Bits operator^(Bits a, Bits b) {
+  friend Bits operator^(Bits a, Bits b) {
     Bits out;
+#if PYC_SIMD_NEON
+    if constexpr (kWords >= 2) {
+      simd::bitwise_xor(out.words_.data(), a.words_.data(), b.words_.data(), kWords);
+      out.maskTop();
+      return out;
+    }
+#endif
     for (unsigned i = 0; i < kWords; i++)
       out.words_[i] = a.words_[i] ^ b.words_[i];
     out.maskTop();
     return out;
   }
 
-  friend constexpr Bits operator~(Bits a) {
+  friend Bits operator~(Bits a) {
     Bits out;
+#if PYC_SIMD_NEON
+    if constexpr (kWords >= 2) {
+      simd::bitwise_not(out.words_.data(), a.words_.data(), kWords);
+      out.maskTop();
+      return out;
+    }
+#endif
     for (unsigned i = 0; i < kWords; i++)
       out.words_[i] = ~a.words_[i];
     out.maskTop();
     return out;
   }
 
-  friend constexpr bool operator==(Bits a, Bits b) {
+  friend bool operator==(Bits a, Bits b) {
+#if PYC_SIMD_NEON
+    if constexpr (kWords >= 2)
+      return simd::bitwise_eq(a.words_.data(), b.words_.data(), kWords);
+#endif
     for (unsigned i = 0; i < kWords; i++) {
       if (a.words_[i] != b.words_[i])
         return false;
@@ -158,7 +288,7 @@ public:
     return true;
   }
 
-  friend constexpr bool operator!=(Bits a, Bits b) { return !(a == b); }
+  friend bool operator!=(Bits a, Bits b) { return !(a == b); }
 
   friend constexpr bool operator<(Bits a, Bits b) {
     for (unsigned i = 0; i < kWords; i++) {
@@ -189,6 +319,32 @@ private:
 
 template <unsigned Width>
 using Wire = Bits<Width>;
+
+// SIMD-accelerated MUX: returns sel ? a : b (branch-free for wide wires)
+template <unsigned Width>
+inline Wire<Width> mux(Wire<1> sel, Wire<Width> a, Wire<Width> b) {
+#if PYC_SIMD_NEON
+  if constexpr (Wire<Width>::kWords >= 2) {
+    Wire<Width> out;
+    // Broadcast sel to all bits: 0 or all-ones mask
+    std::uint64_t smask = sel.toBool() ? ~std::uint64_t{0} : std::uint64_t{0};
+    uint64x2_t vm = vdupq_n_u64(smask);
+    const auto *pa = a.data();
+    const auto *pb = b.data();
+    auto *po = out.data();
+    unsigned i = 0;
+    for (; i + 2 <= Wire<Width>::kWords; i += 2) {
+      uint64x2_t va = vld1q_u64(pa + i);
+      uint64x2_t vb = vld1q_u64(pb + i);
+      vst1q_u64(po + i, vbslq_u64(vm, va, vb));
+    }
+    for (; i < Wire<Width>::kWords; i++)
+      po[i] = sel.toBool() ? pa[i] : pb[i];
+    return out;
+  }
+#endif
+  return sel.toBool() ? a : b;
+}
 
 template <unsigned Width, std::size_t N>
 inline void appendPackedWireWords(std::array<std::uint64_t, N> &dst, std::size_t &offset, Wire<Width> v) {

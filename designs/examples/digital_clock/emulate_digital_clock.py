@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-from pycircuit import s
 # -*- coding: utf-8 -*-
+from __future__ import annotations
+
 """
 emulate_digital_clock.py — True RTL simulation of the digital clock
 with an animated terminal display.
@@ -17,7 +18,6 @@ Build the shared library first:
 Run:
     python designs/examples/digital_clock/emulate_digital_clock.py
 """
-from __future__ import annotations
 
 import ctypes
 import os

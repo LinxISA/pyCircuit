@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from pycircuit import Circuit, ConnectorStruct, compile, const, module, spec, u
+from pycircuit import Circuit, ConnectorStruct, compile_cycle_aware, CycleAwareCircuit, CycleAwareDomain, const, module, spec, u
 
 
 @const
@@ -18,21 +18,21 @@ def _pipe_struct(m: Circuit, *, width: int):
     )
 
 
-@module
-def build(m: Circuit, *, width: int = 32):
-    clk = m.clock("clk")
-    rst = m.reset("rst")
+def build(m: CycleAwareCircuit, domain: CycleAwareDomain, *, width: int = 32):
+    cd = domain.clock_domain
+    clk = cd.clk
+    rst = cd.rst
 
     s = _pipe_struct(m, width=width)
     in_b = m.inputs(s, prefix="in_")
 
-    st0 = m.state(s, clk=clk, rst=rst, prefix="st0_")
+    st0 = m.state(s, clk=cd.clk, rst=cd.rst, prefix="st0_")
     m.connect(st0, in_b)
 
     st1_in = st0.flatten()
     st1_in["payload.word"] = (st0["payload.word"].read() + u(width, 1))[0:width]
 
-    st1 = m.state(s, clk=clk, rst=rst, prefix="st1_")
+    st1 = m.state(s, clk=cd.clk, rst=cd.rst, prefix="st1_")
     m.connect(st1, ConnectorStruct(st1_in, spec=s))
 
     m.outputs(s, st1, prefix="out_")
@@ -40,4 +40,4 @@ def build(m: Circuit, *, width: int = 32):
 
 build.__pycircuit_name__ = "pipeline_builder"
 if __name__ == "__main__":
-    print(compile(build, name="pipeline_builder", width=32).emit_mlir())
+    print(compile_cycle_aware(build, name="pipeline_builder", width=32).emit_mlir())

@@ -3,7 +3,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-from pycircuit import Tb, compile, testbench
+from pycircuit import CycleAwareTb, Tb, compile_cycle_aware, CycleAwareCircuit, CycleAwareDomain, testbench
 
 _THIS_DIR = Path(__file__).resolve().parent
 if str(_THIS_DIR) not in sys.path:
@@ -15,14 +15,18 @@ from cache_params_config import DEFAULT_PARAMS, TB_PRESETS  # noqa: E402
 
 @testbench
 def tb(t: Tb) -> None:
+    tb = CycleAwareTb(t)
     p = TB_PRESETS["smoke"]
-    t.timeout(int(p["timeout"]))
-    t.drive("addr", 0, at=0)
-    t.expect("tag", 0, at=0)
-    t.expect("line_words", 8, at=0)
-    t.expect("tag_bits", 28, at=0)
-    t.finish(at=int(p["finish"]))
+    tb.timeout(int(p["timeout"]))
+
+    # --- cycle 0 ---
+    tb.drive("addr", 0)
+    tb.expect("tag", 0)
+    tb.expect("line_words", 8)
+    tb.expect("tag_bits", 28)
+
+    tb.finish(at=int(p["finish"]))
 
 
 if __name__ == "__main__":
-    print(compile(build, name="tb_cache_params_top", **DEFAULT_PARAMS).emit_mlir())
+    print(compile_cycle_aware(build, name="tb_cache_params_top", eager=True, **DEFAULT_PARAMS).emit_mlir())

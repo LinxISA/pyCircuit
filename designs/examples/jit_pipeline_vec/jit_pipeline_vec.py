@@ -1,36 +1,34 @@
 from __future__ import annotations
 
-from pycircuit import Circuit, compile, module, u
+from pycircuit import (
+    CycleAwareCircuit,
+    CycleAwareDomain,
+    cas,
+    compile_cycle_aware,
+    mux,
+)
 
 
-@module
-def build(m: Circuit, stages: int = 3) -> None:
-    clk = m.clock("clk")
-    rst = m.reset("rst")
+def build(m: CycleAwareCircuit, domain: CycleAwareDomain, stages: int = 3) -> None:
+    a = cas(domain, m.input("a", width=16), cycle=0)
+    b = cas(domain, m.input("b", width=16), cycle=0)
+    sel = cas(domain, m.input("sel", width=1), cycle=0)
 
-    a = m.input("a", width=16)
-    b = m.input("b", width=16)
-    sel = m.input("sel", width=1)
-
-    tag = a == b
-    data = a + b if sel else a ^ b
+    tag = (a == b)
+    data = mux(sel, a + b, a ^ b)
 
     for i in range(stages):
-        tag_q = m.out(f"tag_s{i}", clk=clk, rst=rst, width=1, init=u(1, 0))
-        data_q = m.out(f"data_s{i}", clk=clk, rst=rst, width=16, init=u(16, 0))
-        tag_q.set(tag)
-        data_q.set(data)
-        tag = tag_q.out()
-        data = data_q.out()
+        domain.next()
+        tag = cas(domain, domain.cycle(tag, name=f"tag_s{i}"), cycle=0)
+        data = cas(domain, domain.cycle(data, name=f"data_s{i}"), cycle=0)
 
-    m.output("tag", tag)
-    m.output("data", data)
-    m.output("lo8", data[0:8])
-
+    m.output("tag", tag.wire)
+    m.output("data", data.wire)
+    m.output("lo8", data.wire[0:8])
 
 
 build.__pycircuit_name__ = "jit_pipeline_vec"
 
 
 if __name__ == "__main__":
-    print(compile(build, name="jit_pipeline_vec", stages=3).emit_mlir())
+    print(compile_cycle_aware(build, name="jit_pipeline_vec", eager=True, stages=3).emit_mlir())

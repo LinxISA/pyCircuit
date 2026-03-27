@@ -1,21 +1,28 @@
 from __future__ import annotations
 
-from pycircuit import Circuit, ProbeBuilder, ProbeView, compile, module, probe
+from pycircuit import (
+    CycleAwareCircuit,
+    CycleAwareDomain,
+    ProbeBuilder,
+    ProbeView,
+    cas,
+    compile_cycle_aware,
+    probe,
+)
 
 
-@module
-def build(m: Circuit, width: int = 8) -> None:
-    clk = m.clock("clk")
-    rst = m.reset("rst")
-    in_a = m.input("in_a", width=width)
+def build(m: CycleAwareCircuit, domain: CycleAwareDomain, width: int = 8) -> None:
+    in_a = cas(domain, m.input("in_a", width=width), cycle=0)
 
-    q = m.out("q", clk=clk, rst=rst, width=width, init=0)
+    q = domain.state(width=width, reset_value=0, name="q")
+    m.output("y", q.wire)
+
+    domain.next()
     q.set(in_a)
-
-    m.output("y", q)
 
 
 build.__pycircuit_name__ = "xz_value_model_smoke"
+build.__pycircuit_kind__ = "module"
 
 
 @probe(target=build, name="value")
@@ -30,4 +37,4 @@ def value_probe(p: ProbeBuilder, dut: ProbeView, width: int = 8) -> None:
 
 
 if __name__ == "__main__":
-    print(compile(build, name="xz_value_model_smoke", width=8).emit_mlir())
+    print(compile_cycle_aware(build, name="xz_value_model_smoke", eager=True, width=8).emit_mlir())

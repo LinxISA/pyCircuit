@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from pycircuit import Circuit, Connector, compile, const, ct, function, module, spec, u
+from pycircuit import Circuit, Connector, compile_cycle_aware, CycleAwareCircuit, CycleAwareDomain, const, ct, function, module, spec, u
 from pycircuit.lib import Cache
 
 
@@ -122,10 +122,7 @@ def _node(
     m.output("y", y)
 
 
-@module
-def build(
-    m: Circuit,
-    *,
+def build(m: CycleAwareCircuit, domain: CycleAwareDomain, *,
     width: int = 64,
     module_count: int = 32,
     hierarchy_depth: int = 2,
@@ -133,8 +130,9 @@ def build(
     cache_ways: int = 4,
     cache_sets: int = 64,
 ):
-    clk = m.clock("clk")
-    rst = m.reset("rst")
+    cd = domain.clock_domain
+    clk = cd.clk
+    rst = cd.rst
 
     in_spec = _top_in_struct(m, width=width)
     top_in = m.inputs(in_spec, prefix="")
@@ -177,13 +175,12 @@ def build(
         cur = _mix3(m, cur, yi.read(), cur.lshr(amount=(i % max(1, width // 8)) + 1))
 
     req_wmask_w = max(1, width // 8)
-    cache_req_wmask = u(req_wmask_w, ct.bitmask(req_wmask_w))
-    cache_req_write = u(1, 0)
-    cache_req_valid = u(1, 1)
+    cache_req_wmask = m.const(ct.bitmask(req_wmask_w), width=req_wmask_w)
+    cache_req_write = m.const(0, width=1)
+    cache_req_valid = m.const(1, width=1)
     cache = Cache(
         m,
-        clk=clk,
-        rst=rst,
+        cd,
         req_valid=cache_req_valid,
         req_addr=cur,
         req_write=cache_req_write,
@@ -210,7 +207,7 @@ build.__pycircuit_name__ = "huge_hierarchy_stress"
 
 if __name__ == "__main__":
     print(
-        compile(build, name="huge_hierarchy_stress",
+        compile_cycle_aware(build, name="huge_hierarchy_stress",
             width=64,
             module_count=16,
             hierarchy_depth=2,

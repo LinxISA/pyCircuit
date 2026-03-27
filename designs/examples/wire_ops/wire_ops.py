@@ -1,27 +1,28 @@
 from __future__ import annotations
 
-from pycircuit import Circuit, compile, module, u
+from pycircuit import (
+    CycleAwareCircuit,
+    CycleAwareDomain,
+    cas,
+    compile_cycle_aware,
+    mux,
+)
 
 
-@module
-def build(m: Circuit) -> None:
-    clk = m.clock("clk")
-    rst = m.reset("rst")
+def build(m: CycleAwareCircuit, domain: CycleAwareDomain) -> None:
+    a = cas(domain, m.input("a", width=8), cycle=0)
+    b = cas(domain, m.input("b", width=8), cycle=0)
+    sel = cas(domain, m.input("sel", width=1), cycle=0)
 
-    a = m.input("a", width=8)
-    b = m.input("b", width=8)
-    sel = m.input("sel", width=1)
+    result = mux(sel, a & b, a ^ b)
 
-    y = a & b if sel else a ^ b
-    y_q = m.out("y_q", clk=clk, rst=rst, width=8, init=u(8, 0))
-    y_q.set(y)
-
-    m.output("y", y_q)
-
+    domain.next()
+    y = domain.cycle(result, name="y")
+    m.output("y", y)
 
 
 build.__pycircuit_name__ = "wire_ops"
 
 
 if __name__ == "__main__":
-    print(compile(build, name="wire_ops").emit_mlir())
+    print(compile_cycle_aware(build, name="wire_ops", eager=True).emit_mlir())

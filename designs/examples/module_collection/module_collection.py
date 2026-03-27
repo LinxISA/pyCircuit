@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from pycircuit import Circuit, compile, const, module, spec, u, wiring
+from pycircuit import Circuit, compile_cycle_aware, CycleAwareCircuit, CycleAwareDomain, const, module, spec, u, wiring
 
 
 @const
@@ -15,7 +15,6 @@ def _lane_out_spec(m: Circuit, *, width: int):
     return _lane_in_spec(m, width=width).rename_field("payload.data", "sum").add_field("meta.idx", width=8)
 
 
-@module(structural=True)
 def _lane(m: Circuit, *, width: int = 32):
     in_spec = _lane_in_spec(m, width=width)
     out_spec = _lane_out_spec(m, width=width)
@@ -36,8 +35,7 @@ def _lane(m: Circuit, *, width: int = 32):
     )
 
 
-@module
-def build(m: Circuit, *, width: int = 32, lanes: int = 8):
+def build(m: CycleAwareCircuit, domain: CycleAwareDomain, *, width: int = 32, lanes: int = 8):
     seed = m.input("seed", width=width)
 
     in_spec = _lane_in_spec(m, width=width)
@@ -72,4 +70,4 @@ def build(m: Circuit, *, width: int = 32, lanes: int = 8):
 
 build.__pycircuit_name__ = "module_collection"
 if __name__ == "__main__":
-    print(compile(build, name="module_collection", width=32, lanes=8).emit_mlir())
+    print(compile_cycle_aware(build, name="module_collection", width=32, lanes=8).emit_mlir())

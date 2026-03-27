@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from pycircuit import Circuit, compile, module, unsigned, u
+from pycircuit import Circuit, module, compile_cycle_aware, CycleAwareCircuit, CycleAwareDomain, unsigned, u
 
 KEY_ADD = 10
 KEY_SUB = 11
@@ -15,18 +15,18 @@ OP_MUL = 2
 OP_DIV = 3
 
 
-@module
-def build(m: Circuit) -> None:
-    clk = m.clock("clk")
-    rst = m.reset("rst")
+def build(m: CycleAwareCircuit, domain: CycleAwareDomain) -> None:
+    cd = domain.clock_domain
+    clk = cd.clk
+    rst = cd.rst
     key = m.input("key", width=5)
     key_press = m.input("key_press", width=1)
 
-    lhs = m.out("lhs", clk=clk, rst=rst, width=64, init=u(64, 0))
-    rhs = m.out("rhs", clk=clk, rst=rst, width=64, init=u(64, 0))
-    op = m.out("op", clk=clk, rst=rst, width=2, init=u(2, 0))
-    in_rhs = m.out("in_rhs", clk=clk, rst=rst, width=1, init=u(1, 0))
-    display = m.out("display_r", clk=clk, rst=rst, width=64, init=u(64, 0))
+    lhs = m.out("lhs", domain=cd, width=64, init=u(64, 0))
+    rhs = m.out("rhs", domain=cd, width=64, init=u(64, 0))
+    op = m.out("op", domain=cd, width=2, init=u(2, 0))
+    in_rhs = m.out("in_rhs", domain=cd, width=1, init=u(1, 0))
+    display = m.out("display_r", domain=cd, width=64, init=u(64, 0))
 
     digit = unsigned(key[0:4]) + u(64, 0)
     is_digit = key_press & (key <= u(5, 9))
@@ -95,4 +95,4 @@ build.__pycircuit_name__ = "calculator"
 
 
 if __name__ == "__main__":
-    print(compile(build, name="calculator").emit_mlir())
+    print(compile_cycle_aware(build, name="calculator").emit_mlir())

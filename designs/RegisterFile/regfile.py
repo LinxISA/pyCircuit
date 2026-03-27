@@ -1,13 +1,17 @@
 from __future__ import annotations
 
-from pycircuit import Circuit, compile, module
-from pycircuit.lib import RegFile
+from pycircuit import (
+    CycleAwareCircuit,
+    CycleAwareDomain,
+    CycleAwareSignal,
+    cas,
+    compile_cycle_aware,
+    mux,
+    u,
+)
 
 
-@module
-def build(
-    m: Circuit,
-    *,
+def build(m: CycleAwareCircuit, domain: CycleAwareDomain, *,
     ptag_count: int = 256,
     const_count: int = 128,
     nr: int = 10,
@@ -27,52 +31,78 @@ def build(
         raise ValueError("regfile nw must be > 0")
 
     ptag_w = max(1, (ptag_n - 1).bit_length())
+    storage_depth = ptag_n - const_n
+    cmp_w = ptag_w + 1
 
-    clk = m.clock("clk")
-    rst = m.reset("rst")
+    # ══════════════════════════════════════════════════════════════
+    # Cycle 0 — Inputs
+    # ══════════════════════════════════════════════════════════════
+    raddr = [cas(domain, m.input(f"raddr{i}", width=ptag_w), cycle=0) for i in range(nr_n)]
+    wen   = [cas(domain, m.input(f"wen{i}",   width=1),      cycle=0) for i in range(nw_n)]
+    waddr = [cas(domain, m.input(f"waddr{i}", width=ptag_w), cycle=0) for i in range(nw_n)]
+    wdata = [cas(domain, m.input(f"wdata{i}", width=64),     cycle=0) for i in range(nw_n)]
 
-    raddr = [m.input(f"raddr{i}", width=ptag_w) for i in range(nr_n)]
-    wen = [m.input(f"wen{i}", width=1) for i in range(nw_n)]
-    waddr = [m.input(f"waddr{i}", width=ptag_w) for i in range(nw_n)]
-    wdata = [m.input(f"wdata{i}", width=64) for i in range(nw_n)]
+    wdata_lo = [wd[0:32] for wd in wdata]
+    wdata_hi = [wd[32:64] for wd in wdata]
 
-    raddr_bus = raddr[0]
-    for i in range(1, nr_n):
-        raddr_bus = m.cat(raddr[i], raddr_bus)
+    # ══════════════════════════════════════════════════════════════
+    # Cycle 0 — Storage state (feedback registers via domain.state)
+    # ══════════════════════════════════════════════════════════════
+    bank0 = [domain.state(width=32, reset_value=0, name=f"rf_bank0_{i}") for i in range(storage_depth)]
+    bank1 = [domain.state(width=32, reset_value=0, name=f"rf_bank1_{i}") for i in range(storage_depth)]
 
-    wen_bus = wen[0]
-    for i in range(1, nw_n):
-        wen_bus = m.cat(wen[i], wen_bus)
+    # ══════════════════════════════════════════════════════════════
+    # Cycle 0 — Combinational read logic
+    # ══════════════════════════════════════════════════════════════
+    zero32 = cas(domain, m.const(0, width=32), cycle=0)
+    zero64 = cas(domain, m.const(0, width=64), cycle=0)
 
-    waddr_bus = waddr[0]
-    for i in range(1, nw_n):
-        waddr_bus = m.cat(waddr[i], waddr_bus)
-
-    wdata_bus = wdata[0]
-    for i in range(1, nw_n):
-        wdata_bus = m.cat(wdata[i], wdata_bus)
-
-    rf = RegFile(
-        m,
-        clk=clk,
-        rst=rst,
-        raddr_bus=raddr_bus,
-        wen_bus=wen_bus,
-        waddr_bus=waddr_bus,
-        wdata_bus=wdata_bus,
-        ptag_count=ptag_n,
-        const_count=const_n,
-        nr=nr_n,
-        nw=nw_n,
-    )
-
-    rdata_bus = rf["rdata_bus"].read()
     for i in range(nr_n):
-        m.output(f"rdata{i}", rdata_bus[i * 64 : (i + 1) * 64])
+        ra = raddr[i]
+        ra_ext = cas(domain, ra.wire + u(cmp_w, 0), cycle=0)
+        is_valid = ra_ext < cas(domain, m.const(ptag_n, width=cmp_w), cycle=0)
+        is_const = ra_ext < cas(domain, m.const(const_n, width=cmp_w), cycle=0)
+
+        if ra.wire.width > 32:
+            const32 = cas(domain, ra.wire[0:32], cycle=0)
+        else:
+            const32 = cas(domain, ra.wire + u(32, 0), cycle=0)
+        const64 = cas(domain, m.cat(const32.wire, const32.wire), cycle=0)
+
+        store_lo: CycleAwareSignal = zero32
+        store_hi: CycleAwareSignal = zero32
+        for sidx in range(storage_depth):
+            ptag = const_n + sidx
+            hit = ra == cas(domain, m.const(ptag, width=ptag_w), cycle=0)
+            store_lo = mux(hit, bank0[sidx], store_lo)
+            store_hi = mux(hit, bank1[sidx], store_hi)
+        store64 = cas(domain, m.cat(store_hi.wire, store_lo.wire), cycle=0)
+
+        lane_data = mux(is_const, const64, store64)
+        lane_data = mux(is_valid, lane_data, zero64)
+        m.output(f"rdata{i}", lane_data.wire)
+
+    # ══════════════════════════════════════════════════════════════
+    # domain.next() → Cycle 1 — Synchronous write (close feedback)
+    # ══════════════════════════════════════════════════════════════
+    domain.next()
+
+    for sidx in range(storage_depth):
+        ptag = const_n + sidx
+        we_any = cas(domain, m.const(0, width=1), cycle=0)
+        next_lo: CycleAwareSignal = bank0[sidx]
+        next_hi: CycleAwareSignal = bank1[sidx]
+        for lane in range(nw_n):
+            hit = wen[lane] & (waddr[lane] == cas(domain, m.const(ptag, width=ptag_w), cycle=0))
+            we_any = we_any | hit
+            next_lo = mux(hit, wdata_lo[lane], next_lo)
+            next_hi = mux(hit, wdata_hi[lane], next_hi)
+        bank0[sidx].set(next_lo, when=we_any)
+        bank1[sidx].set(next_hi, when=we_any)
 
 
 build.__pycircuit_name__ = "regfile"
 
 
 if __name__ == "__main__":
-    print(compile(build, name="regfile").emit_mlir())
+    print(compile_cycle_aware(build, name="regfile", eager=True).emit_mlir())

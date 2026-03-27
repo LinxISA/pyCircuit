@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from pycircuit import Circuit, compile, const, module, spec, u, wiring
+from pycircuit import Circuit, compile_cycle_aware, CycleAwareCircuit, CycleAwareDomain, const, module, spec, u, wiring
 
 
 @const
@@ -15,7 +15,6 @@ def _unit_out_spec(m: Circuit, *, width: int):
     return spec.struct("unit_out").field("y", width=width).field("valid", width=1).build()
 
 
-@module(structural=True)
 def _unit(m: Circuit, *, width: int = 32, gain: int = 1):
     in_spec = _unit_in_spec(m, width=width)
     out_spec = _unit_out_spec(m, width=width)
@@ -34,8 +33,7 @@ def _top_struct(m: Circuit, *, width: int):
     return s.add_field("lsu", width=width).rename_field("bru", "branch").select_fields(["alu", "branch", "lsu"])
 
 
-@module
-def build(m: Circuit, *, width: int = 32):
+def build(m: CycleAwareCircuit, domain: CycleAwareDomain, *, width: int = 32):
     top_spec = _top_struct(m, width=width)
     top_in = m.inputs(top_spec, prefix="in_")
 
@@ -75,4 +73,4 @@ def build(m: Circuit, *, width: int = 32):
 
 build.__pycircuit_name__ = "instance_map"
 if __name__ == "__main__":
-    print(compile(build, name="instance_map", width=32).emit_mlir())
+    print(compile_cycle_aware(build, name="instance_map", width=32).emit_mlir())

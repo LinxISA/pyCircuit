@@ -2168,8 +2168,8 @@ int main(int argc, char **argv) {
 
   GreedyRewriteConfig canonicalizeCfg;
   if (effectiveCanonicalizeBudget > 0) {
-    canonicalizeCfg.maxIterations = static_cast<int64_t>(effectiveCanonicalizeBudget);
-    canonicalizeCfg.maxNumRewrites = static_cast<int64_t>(effectiveCanonicalizeBudget) * 4096;
+    canonicalizeCfg.setMaxIterations(static_cast<int64_t>(effectiveCanonicalizeBudget));
+    canonicalizeCfg.setMaxNumRewrites(static_cast<int64_t>(effectiveCanonicalizeBudget) * 4096);
   }
 
   // Cleanup + optimization pipeline tuned for netlist-style emission.

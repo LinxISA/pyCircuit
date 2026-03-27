@@ -37,3 +37,27 @@ See `docs/TESTBENCH.md` for the full `Tb` API.
 
 These contracts are enforced via MLIR-level verifiers/passes (see `docs/updatePLAN.md`).
 
+## Occurrence cycles on combinational assigns
+
+**Primary style:** `clk = m.clock(...)` returns a **`ClockHandle`**. Use
+**`clk.next()`** to advance the domain’s **current occurrence cycle**. Assigns
+to **`named_wire`** targets then get **`dst_cycle = clk.cycle`** and
+**`src_cycle`** from the RHS expression; `pycc` runs **`pyc-cycle-balance`** to
+insert shared `pyc.reg` delays when needed.
+
+```python
+clk = m.clock("clk")
+raw = m.input("x", width=8)
+clk.next()
+w = m.named_wire("stage1_view", width=8)
+m.assign(w, raw)
+```
+
+**Explicit** metadata is still supported:
+
+```python
+m.assign(w, raw, dst_cycle=1, src_cycle=0)
+```
+
+See `docs/pyCircuit_Tutorial.md` §3.1 and `docs/cycle_balance_improvement.md`.
+

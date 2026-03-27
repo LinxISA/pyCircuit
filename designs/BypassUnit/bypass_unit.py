@@ -1,6 +1,13 @@
 from __future__ import annotations
 
-from pycircuit import Circuit, Tb, compile, function, module, testbench, u
+from pycircuit import (
+    CycleAwareCircuit,
+    CycleAwareDomain,
+    Tb,
+    compile_cycle_aware,
+    mux,
+    testbench,
+)
 
 PTYPE_C = 0
 PTYPE_P = 1
@@ -8,15 +15,12 @@ PTYPE_T = 2
 PTYPE_U = 3
 
 
-@function
-def _not1(m: Circuit, x):
-    _ = m
-    return u(1, 1) ^ x
+def _not1(m, x):
+    return m.const(1, width=1) ^ x
 
 
-@function
 def _select_stage(
-    m: Circuit,
+    m,
     *,
     src_valid,
     src_ptag,
@@ -29,23 +33,22 @@ def _select_stage(
     lane_w: int,
     data_w: int,
 ):
-    has = u(1, 0)
-    sel_lane = u(int(lane_w), 0)
-    sel_data = u(int(data_w), 0)
+    has = m.const(0, width=1)
+    sel_lane = m.const(0, width=int(lane_w))
+    sel_data = m.const(0, width=int(data_w))
 
     for j in range(int(lanes)):
         match = src_valid & lane_valid[j] & (lane_ptag[j] == src_ptag) & (lane_ptype[j] == src_ptype)
         take = match & _not1(m, has)
-        sel_lane = (u(int(lane_w), j)) if take else sel_lane
-        sel_data = lane_data[j] if take else sel_data
+        sel_lane = mux(take, m.const(j, width=int(lane_w)), sel_lane)
+        sel_data = mux(take, lane_data[j], sel_data)
         has = has | match
 
     return has, sel_lane, sel_data
 
 
-@function
 def _resolve_src(
-    m: Circuit,
+    m,
     *,
     src_valid,
     src_ptag,
@@ -68,67 +71,40 @@ def _resolve_src(
     data_w: int,
 ):
     has_w1, lane_w1, data_w1 = _select_stage(
-        m,
-        src_valid=src_valid,
-        src_ptag=src_ptag,
-        src_ptype=src_ptype,
-        lane_valid=w1_valid,
-        lane_ptag=w1_ptag,
-        lane_ptype=w1_ptype,
-        lane_data=w1_data,
-        lanes=lanes,
-        lane_w=lane_w,
-        data_w=data_w,
+        m, src_valid=src_valid, src_ptag=src_ptag, src_ptype=src_ptype,
+        lane_valid=w1_valid, lane_ptag=w1_ptag, lane_ptype=w1_ptype, lane_data=w1_data,
+        lanes=lanes, lane_w=lane_w, data_w=data_w,
     )
     has_w2, lane_w2, data_w2 = _select_stage(
-        m,
-        src_valid=src_valid,
-        src_ptag=src_ptag,
-        src_ptype=src_ptype,
-        lane_valid=w2_valid,
-        lane_ptag=w2_ptag,
-        lane_ptype=w2_ptype,
-        lane_data=w2_data,
-        lanes=lanes,
-        lane_w=lane_w,
-        data_w=data_w,
+        m, src_valid=src_valid, src_ptag=src_ptag, src_ptype=src_ptype,
+        lane_valid=w2_valid, lane_ptag=w2_ptag, lane_ptype=w2_ptype, lane_data=w2_data,
+        lanes=lanes, lane_w=lane_w, data_w=data_w,
     )
     has_w3, lane_w3, data_w3 = _select_stage(
-        m,
-        src_valid=src_valid,
-        src_ptag=src_ptag,
-        src_ptype=src_ptype,
-        lane_valid=w3_valid,
-        lane_ptag=w3_ptag,
-        lane_ptype=w3_ptype,
-        lane_data=w3_data,
-        lanes=lanes,
-        lane_w=lane_w,
-        data_w=data_w,
+        m, src_valid=src_valid, src_ptag=src_ptag, src_ptype=src_ptype,
+        lane_valid=w3_valid, lane_ptag=w3_ptag, lane_ptype=w3_ptype, lane_data=w3_data,
+        lanes=lanes, lane_w=lane_w, data_w=data_w,
     )
 
-    out_data = data_w3 if has_w3 else src_rf_data
-    out_hit = u(1, 1) if has_w3 else u(1, 0)
-    out_stage = u(2, 3) if has_w3 else u(2, 0)
-    out_lane = lane_w3 if has_w3 else u(int(lane_w), 0)
+    out_data = mux(has_w3, data_w3, src_rf_data)
+    out_hit = mux(has_w3, m.const(1, width=1), m.const(0, width=1))
+    out_stage = mux(has_w3, m.const(3, width=2), m.const(0, width=2))
+    out_lane = mux(has_w3, lane_w3, m.const(0, width=int(lane_w)))
 
-    out_data = data_w2 if has_w2 else out_data
-    out_hit = u(1, 1) if has_w2 else out_hit
-    out_stage = u(2, 2) if has_w2 else out_stage
-    out_lane = lane_w2 if has_w2 else out_lane
+    out_data = mux(has_w2, data_w2, out_data)
+    out_hit = mux(has_w2, m.const(1, width=1), out_hit)
+    out_stage = mux(has_w2, m.const(2, width=2), out_stage)
+    out_lane = mux(has_w2, lane_w2, out_lane)
 
-    out_data = data_w1 if has_w1 else out_data
-    out_hit = u(1, 1) if has_w1 else out_hit
-    out_stage = u(2, 1) if has_w1 else out_stage
-    out_lane = lane_w1 if has_w1 else out_lane
+    out_data = mux(has_w1, data_w1, out_data)
+    out_hit = mux(has_w1, m.const(1, width=1), out_hit)
+    out_stage = mux(has_w1, m.const(1, width=2), out_stage)
+    out_lane = mux(has_w1, lane_w1, out_lane)
 
     return out_data, out_hit, out_stage, out_lane
 
 
-@module
-def build(
-    m: Circuit,
-    *,
+def build(m: CycleAwareCircuit, domain: CycleAwareDomain, *,
     lanes: int = 8,
     data_width: int = 64,
     ptag_count: int = 256,
@@ -154,10 +130,6 @@ def build(
     ptype_w = max(1, (ptype_n - 1).bit_length())
     lane_w = max(1, (lanes_n - 1).bit_length())
 
-    # Declared for pyCircuit testbench generation flow.
-    _clk = m.clock("clk")
-    _rst = m.reset("rst")
-
     w_valid: dict[str, list] = {}
     w_ptag: dict[str, list] = {}
     w_ptype: dict[str, list] = {}
@@ -177,25 +149,12 @@ def build(
 
             out_data, out_hit, out_stage, out_lane = _resolve_src(
                 m,
-                src_valid=src_valid,
-                src_ptag=src_ptag,
-                src_ptype=src_ptype,
+                src_valid=src_valid, src_ptag=src_ptag, src_ptype=src_ptype,
                 src_rf_data=src_rf_data,
-                w1_valid=w_valid["w1"],
-                w1_ptag=w_ptag["w1"],
-                w1_ptype=w_ptype["w1"],
-                w1_data=w_data["w1"],
-                w2_valid=w_valid["w2"],
-                w2_ptag=w_ptag["w2"],
-                w2_ptype=w_ptype["w2"],
-                w2_data=w_data["w2"],
-                w3_valid=w_valid["w3"],
-                w3_ptag=w_ptag["w3"],
-                w3_ptype=w_ptype["w3"],
-                w3_data=w_data["w3"],
-                lanes=lanes_n,
-                lane_w=lane_w,
-                data_w=data_w,
+                w1_valid=w_valid["w1"], w1_ptag=w_ptag["w1"], w1_ptype=w_ptype["w1"], w1_data=w_data["w1"],
+                w2_valid=w_valid["w2"], w2_ptag=w_ptag["w2"], w2_ptype=w_ptype["w2"], w2_data=w_data["w2"],
+                w3_valid=w_valid["w3"], w3_ptag=w_ptag["w3"], w3_ptype=w_ptype["w3"], w3_data=w_data["w3"],
+                lanes=lanes_n, lane_w=lane_w, data_w=data_w,
             )
 
             m.output(f"i2{i}_{src}_data", out_data)
@@ -217,12 +176,12 @@ def tb(t: Tb) -> None:
 
 if __name__ == "__main__":
     print(
-        compile(
-            build,
+        compile_cycle_aware(build,
             name="bypass_unit",
+            eager=True,
             lanes=8,
             data_width=64,
             ptag_count=256,
             ptype_count=4,
-        ).emit_mlir()
+        ).emit_mlir()[:500]
     )

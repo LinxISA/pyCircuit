@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from pycircuit import Circuit, ct, module, const, u
+from pycircuit import Circuit, CycleAwareCircuit, CycleAwareDomain, const, ct, u
 
 
 @const
@@ -14,9 +14,8 @@ def _total_engines(m: Circuit, n_fe: int | None, eng_per_lane: int) -> int:
     return max(1, int(eng_per_lane)) * ct.div_ceil(4, 1)
 
 
-@module
 def build(
-    m: Circuit,
+    m: CycleAwareCircuit, domain: CycleAwareDomain,
     N_FE: int | None = None,
     ENG_PER_LANE: int = 1,
     LANE_Q_DEPTH: int = 16,
@@ -27,6 +26,7 @@ def build(
     STASH_WIN: int = 6,
     BKPR_SLACK: int = 1,
 ) -> None:
+    _ = domain
     _ = (LANE_Q_DEPTH, ENG_Q_DEPTH, ROB_DEPTH, SEQ_W, HIST_DEPTH, STASH_WIN, BKPR_SLACK)
     total_eng = _total_engines(m, N_FE, ENG_PER_LANE)
 

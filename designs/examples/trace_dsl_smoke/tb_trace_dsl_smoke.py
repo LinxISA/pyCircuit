@@ -3,7 +3,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-from pycircuit import Tb, compile, testbench
+from pycircuit import CycleAwareTb, Tb, compile_cycle_aware, CycleAwareCircuit, CycleAwareDomain, testbench
 
 _THIS_DIR = Path(__file__).resolve().parent
 if str(_THIS_DIR) not in sys.path:
@@ -15,34 +15,38 @@ from trace_dsl_smoke_config import DEFAULT_PARAMS, TB_PRESETS  # noqa: E402
 
 @testbench
 def tb(t: Tb) -> None:
+    tb = CycleAwareTb(t)
     p = TB_PRESETS["smoke"]
-    t.clock("clk")
-    t.reset("rst", cycles_asserted=2, cycles_deasserted=0)
-    t.timeout(int(p["timeout"]))
+    tb.clock("clk")
+    tb.reset("rst", cycles_asserted=2, cycles_deasserted=0)
+    tb.timeout(int(p["timeout"]))
 
+    # --- cycle 0 ---
     # Cycle 0: pre is init, post sees commit.
-    t.drive("in_x", 0x12, at=0)
-    t.expect("y0", 0x00, at=0, phase="pre")
-    t.expect("y1", 0x00, at=0, phase="pre")
-    t.expect("y0", 0x12, at=0, phase="post")
-    t.expect("y1", 0x12, at=0, phase="post")
+    tb.drive("in_x", 0x12)
+    tb.expect("y0", 0x00, phase="pre")
+    tb.expect("y1", 0x00, phase="pre")
+    tb.expect("y0", 0x12, phase="post")
+    tb.expect("y1", 0x12, phase="post")
 
+    tb.next()  # --- cycle 1 ---
     # Cycle 1: same behavior with a new drive.
-    t.drive("in_x", 0x34, at=1)
-    t.expect("y0", 0x12, at=1, phase="pre")
-    t.expect("y1", 0x12, at=1, phase="pre")
-    t.expect("y0", 0x34, at=1, phase="post")
-    t.expect("y1", 0x34, at=1, phase="post")
+    tb.drive("in_x", 0x34)
+    tb.expect("y0", 0x12, phase="pre")
+    tb.expect("y1", 0x12, phase="pre")
+    tb.expect("y0", 0x34, phase="post")
+    tb.expect("y1", 0x34, phase="post")
 
+    tb.next()  # --- cycle 2 ---
     # Cycle 2: stable drive (committed output holds; trace still records Write intent; Decision 0053).
-    t.drive("in_x", 0x34, at=2)
-    t.expect("y0", 0x34, at=2, phase="pre")
-    t.expect("y1", 0x34, at=2, phase="pre")
-    t.expect("y0", 0x34, at=2, phase="post")
-    t.expect("y1", 0x34, at=2, phase="post")
+    tb.drive("in_x", 0x34)
+    tb.expect("y0", 0x34, phase="pre")
+    tb.expect("y1", 0x34, phase="pre")
+    tb.expect("y0", 0x34, phase="post")
+    tb.expect("y1", 0x34, phase="post")
 
-    t.finish(at=int(p["finish"]))
+    tb.finish(at=int(p["finish"]))
 
 
 if __name__ == "__main__":
-    print(compile(build, name="tb_trace_dsl_smoke_top", **DEFAULT_PARAMS).emit_mlir())
+    print(compile_cycle_aware(build, name="tb_trace_dsl_smoke_top", **DEFAULT_PARAMS).emit_mlir())

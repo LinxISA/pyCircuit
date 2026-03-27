@@ -1,22 +1,26 @@
 from __future__ import annotations
 
-from pycircuit import Circuit, compile, module, u
+from pycircuit import (
+    CycleAwareCircuit,
+    CycleAwareDomain,
+    cas,
+    compile_cycle_aware,
+    mux,
+)
 
 
-@module
-def build(m: Circuit, width: int = 8) -> None:
-    clk = m.clock("clk")
-    rst = m.reset("rst")
-    en = m.input("enable", width=1)
+def build(m: CycleAwareCircuit, domain: CycleAwareDomain, width: int = 8) -> None:
+    enable = cas(domain, m.input("enable", width=1), cycle=0)
+    count = domain.state(width=width, reset_value=0, name="count")
 
-    count = m.out("count_q", clk=clk, rst=rst, width=width, init=u(width, 0))
-    count.set(count.out() + 1, when=en)
-    m.output("count", count)
+    m.output("count", count.wire)
 
+    domain.next()
+    count.set(count + 1, when=enable)
 
 
 build.__pycircuit_name__ = "counter"
 
 
 if __name__ == "__main__":
-    print(compile(build, name="counter", width=8).emit_mlir())
+    print(compile_cycle_aware(build, name="counter", eager=True, width=8).emit_mlir())

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from pycircuit import Circuit, compile, const, module, spec, wiring
+from pycircuit import Circuit, compile_cycle_aware, CycleAwareCircuit, CycleAwareDomain, const, module, spec, wiring
 
 
 @const
@@ -10,7 +10,6 @@ def _pair_spec(m: Circuit, *, width: int):
     return base.remove_field("drop").rename_field("right", "rhs").select_fields(["left", "rhs"])
 
 
-@module
 def pair_add(m: Circuit, *, width: int = 16):
     spec = _pair_spec(m, width=width)
     ins = m.inputs(spec, prefix="in_")
@@ -19,8 +18,7 @@ def pair_add(m: Circuit, *, width: int = 16):
     m.outputs(spec, {"left": a, "rhs": (a + b)[0:width]}, prefix="out_")
 
 
-@module
-def build(m: Circuit, *, width: int = 16):
+def build(m: CycleAwareCircuit, domain: CycleAwareDomain, *, width: int = 16):
     in_spec = _pair_spec(m, width=width)
     top_in = m.inputs(in_spec, prefix="top_in_")
     h = m.new(
@@ -42,4 +40,4 @@ def build(m: Circuit, *, width: int = 16):
 
 build.__pycircuit_name__ = "interface_wiring"
 if __name__ == "__main__":
-    print(compile(build, name="interface_wiring", width=16).emit_mlir())
+    print(compile_cycle_aware(build, name="interface_wiring", width=16).emit_mlir())

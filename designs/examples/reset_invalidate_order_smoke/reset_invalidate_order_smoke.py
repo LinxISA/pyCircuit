@@ -1,20 +1,29 @@
 from __future__ import annotations
 
-from pycircuit import Circuit, ProbeBuilder, ProbeView, compile, module, probe
+from pycircuit import (
+    CycleAwareCircuit,
+    CycleAwareDomain,
+    ProbeBuilder,
+    ProbeView,
+    cas,
+    compile_cycle_aware,
+    mux,
+    probe,
+)
 
 
-@module
-def build(m: Circuit, width: int = 8) -> None:
-    clk = m.clock("clk")
-    rst = m.reset("rst")
-    en = m.input("en", width=1)
+def build(m: CycleAwareCircuit, domain: CycleAwareDomain, width: int = 8) -> None:
+    en = cas(domain, m.input("en", width=1), cycle=0)
 
-    q = m.out("q", clk=clk, rst=rst, width=width, init=0)
-    q.set(q.out() + 1, when=en)
-    m.output("y", q)
+    q = domain.state(width=width, reset_value=0, name="q")
+    m.output("y", q.wire)
+
+    domain.next()
+    q.set(q + 1, when=en)
 
 
 build.__pycircuit_name__ = "reset_invalidate_order_smoke"
+build.__pycircuit_kind__ = "module"
 
 
 @probe(target=build, name="reset")
@@ -29,4 +38,4 @@ def reset_probe(p: ProbeBuilder, dut: ProbeView, width: int = 8) -> None:
 
 
 if __name__ == "__main__":
-    print(compile(build, name="reset_invalidate_order_smoke", width=8).emit_mlir())
+    print(compile_cycle_aware(build, name="reset_invalidate_order_smoke", eager=True, width=8).emit_mlir())

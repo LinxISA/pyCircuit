@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from pycircuit import Circuit, compile, const, module, spec, u
+from pycircuit import Circuit, compile_cycle_aware, CycleAwareCircuit, CycleAwareDomain, const, module, spec, u
 
 
 @const
@@ -27,15 +27,13 @@ def _pipe_struct(m: Circuit, *, width: int):
     return spec.with_prefix("u_")
 
 
-@module
-def build(m: Circuit, *, width: int = 32):
-    clk = m.clock("clk")
-    rst = m.reset("rst")
+def build(m: CycleAwareCircuit, domain: CycleAwareDomain, *, width: int = 32):
+    cd = domain.clock_domain
 
     spec = _pipe_struct(m, width=width)
     ins = m.inputs(spec, prefix="in_")
 
-    regs = m.state(spec, clk=clk, rst=rst, prefix="st_")
+    regs = m.state(spec, clk=cd.clk, rst=cd.rst, prefix="st_")
     m.connect(regs, ins)
 
     op = regs["u_hdr.op"].read()
@@ -49,4 +47,4 @@ def build(m: Circuit, *, width: int = 32):
 
 build.__pycircuit_name__ = "struct_transform"
 if __name__ == "__main__":
-    print(compile(build, name="struct_transform", width=32).emit_mlir())
+    print(compile_cycle_aware(build, name="struct_transform", width=32).emit_mlir())

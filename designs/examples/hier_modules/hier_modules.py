@@ -1,15 +1,17 @@
 from __future__ import annotations
 
-from pycircuit import Circuit, compile, module
+from pycircuit import (
+    CycleAwareCircuit,
+    CycleAwareDomain,
+    compile_cycle_aware,
+)
 
 
-@module
-def _incrementer(m: Circuit, x, *, width: int = 8):
-    m.output("y", (x + 1)[0:width])
+def _incrementer(m, x, *, width: int = 8):
+    return (x + 1)[0:width]
 
 
-@module
-def build(m: Circuit, width: int = 8, stages: int = 3) -> None:
+def build(m: CycleAwareCircuit, domain: CycleAwareDomain, width: int = 8, stages: int = 3) -> None:
     x = m.input("x", width=width)
     v_conn = x
     for i in range(stages):
@@ -17,9 +19,8 @@ def build(m: Circuit, width: int = 8, stages: int = 3) -> None:
     m.output("y", v_conn)
 
 
-
 build.__pycircuit_name__ = "hier_modules"
 
 
 if __name__ == "__main__":
-    print(compile(build, name="hier_modules", width=8, stages=3).emit_mlir())
+    print(compile_cycle_aware(build, name="hier_modules", eager=True, width=8, stages=3).emit_mlir())

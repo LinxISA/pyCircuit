@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-from pycircuit import s
 # -*- coding: utf-8 -*-
+from __future__ import annotations
+
 """
 emulate_calculator.py — True RTL simulation of the 16-digit calculator
 with decimal support, animated terminal display.
@@ -18,7 +19,6 @@ Build (from pyCircuit root):
 Run:
     python designs/examples/calculator/emulate_calculator.py
 """
-from __future__ import annotations
 
 import ctypes, re as _re, sys, time
 from pathlib import Path

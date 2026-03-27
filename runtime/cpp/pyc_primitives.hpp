@@ -71,32 +71,52 @@ public:
   pyc_reg(Wire<1> &clk, Wire<1> &rst, Wire<1> &en, Wire<Width> &d, Wire<Width> &init, Wire<Width> &q)
       : clk(clk), rst(rst), en(en), d(d), init(init), q(q) {}
 
-  void tick_compute() {
+  // Branch-optimized two-phase update.
+  // tick_compute: sample inputs; tick_commit: apply.
+  inline void tick_compute() {
     bool clkNow = clk.toBool();
-    bool posedge = (!clkPrev) && clkNow;
+    bool posedge = (!clkPrev) & clkNow;
     clkPrev = clkNow;
-    pending = false;
-    if (!posedge)
+    if (__builtin_expect(!posedge, 1)) {
+      pending = false;
       return;
+    }
+    posedge_compute_inner();
+  }
 
-    if (rst.toBool()) {
-      pending = true;
+  // Direct posedge path — caller guarantees a 0→1 edge just occurred.
+  // Saves the clkPrev read + posedge check (~2 branches per register).
+  inline void posedge_tick_compute() {
+    clkPrev = true;
+    posedge_compute_inner();
+  }
+
+  // Negedge bookkeeping — just reset clkPrev so next posedge is detected.
+  // Avoids running the full tick_compute logic on the falling edge.
+  inline void negedge_update() {
+    clkPrev = false;
+    pending = false;
+  }
+
+  inline void tick_commit() {
+    if (__builtin_expect(pending, 0)) {
+      q = qNext;
+      pending = false;
+    }
+  }
+
+private:
+  inline void posedge_compute_inner() {
+    bool r = rst.toBool();
+    bool e = en.toBool();
+    pending = r | e;
+    if (r)
       qNext = init;
-      return;
-    }
-    if (en.toBool()) {
-      pending = true;
+    else
       qNext = d;
-      return;
-    }
   }
 
-  void tick_commit() {
-    if (!pending)
-      return;
-    q = qNext;
-    pending = false;
-  }
+public:
 
   Wire<1> &clk;
   Wire<1> &rst;

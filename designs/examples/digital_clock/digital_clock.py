@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from pycircuit import Circuit, cat, compile, function, module, u
+from pycircuit import Circuit, cat, compile_cycle_aware, CycleAwareCircuit, CycleAwareDomain, function, module, u
 
 MODE_RUN = 0
 MODE_SET_HOUR = 1
@@ -15,21 +15,21 @@ def _to_bcd8(m: Circuit, v):
     return cat(tens[0:4], ones[0:4])
 
 
-@module
-def build(m: Circuit, clk_freq: int = 50_000_000) -> None:
-    clk = m.clock("clk")
-    rst = m.reset("rst")
+def build(m: CycleAwareCircuit, domain: CycleAwareDomain, clk_freq: int = 50_000_000) -> None:
+    cd = domain.clock_domain
+    clk = cd.clk
+    rst = cd.rst
     btn_set = m.input("btn_set", width=1)
     btn_plus = m.input("btn_plus", width=1)
     btn_minus = m.input("btn_minus", width=1)
 
     prescaler_w = max((int(clk_freq) - 1).bit_length(), 1)
-    prescaler = m.out("prescaler", clk=clk, rst=rst, width=prescaler_w, init=u(prescaler_w, 0))
-    sec = m.out("sec", clk=clk, rst=rst, width=6, init=u(6, 0))
-    minute = m.out("minute", clk=clk, rst=rst, width=6, init=u(6, 0))
-    hour = m.out("hour", clk=clk, rst=rst, width=5, init=u(5, 0))
-    mode = m.out("mode", clk=clk, rst=rst, width=2, init=u(2, MODE_RUN))
-    blink = m.out("blink", clk=clk, rst=rst, width=1, init=u(1, 0))
+    prescaler = m.out("prescaler", domain=cd, width=prescaler_w, init=u(prescaler_w, 0))
+    sec = m.out("sec", domain=cd, width=6, init=u(6, 0))
+    minute = m.out("minute", domain=cd, width=6, init=u(6, 0))
+    hour = m.out("hour", domain=cd, width=5, init=u(5, 0))
+    mode = m.out("mode", domain=cd, width=2, init=u(2, MODE_RUN))
+    blink = m.out("blink", domain=cd, width=1, init=u(1, 0))
 
     tick_1hz = prescaler == u(prescaler_w, clk_freq - 1)
 
@@ -85,4 +85,4 @@ build.__pycircuit_name__ = "digital_clock"
 
 
 if __name__ == "__main__":
-    print(compile(build, name="digital_clock", clk_freq=50_000_000).emit_mlir())
+    print(compile_cycle_aware(build, name="digital_clock", clk_freq=50_000_000).emit_mlir())

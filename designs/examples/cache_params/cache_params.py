@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from pycircuit import Circuit, compile, ct, module, const, u
+from pycircuit import Circuit, compile_cycle_aware, CycleAwareCircuit, CycleAwareDomain, const, ct, u
 
 
 @const
@@ -28,15 +28,15 @@ def _cache_cfg(
     return (ways_i, sets_i, line_b, off_bits, idx_bits, tag_bits, line_words)
 
 
-@module
 def build(
-    m: Circuit,
+    m: CycleAwareCircuit, domain: CycleAwareDomain,
     ways: int = 4,
     sets: int = 64,
     line_bytes: int = 64,
     addr_width: int = 40,
     data_width: int = 64,
 ) -> None:
+    _ = domain
     ways_cfg, sets_cfg, line_bytes_cfg, off_bits, idx_bits, tag_bits, line_words = _cache_cfg(
         m,
         ways=ways,
@@ -61,7 +61,7 @@ build.__pycircuit_name__ = "cache_params"
 
 if __name__ == "__main__":
     print(
-        compile(build, name="cache_params",
+        compile_cycle_aware(build, name="cache_params", eager=True,
             ways=4,
             sets=64,
             line_bytes=64,

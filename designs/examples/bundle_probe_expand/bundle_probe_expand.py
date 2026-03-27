@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from pycircuit import Circuit, ProbeBuilder, ProbeView, compile, const, module, probe, spec
+from pycircuit import Circuit, ProbeBuilder, ProbeView, compile_cycle_aware, CycleAwareCircuit, CycleAwareDomain, const, module, probe, spec
 
 
 @const
@@ -14,8 +14,7 @@ def _probe_struct(m: Circuit):
     )
 
 
-@module
-def build(m: Circuit) -> None:
+def build(m: CycleAwareCircuit, domain: CycleAwareDomain) -> None:
     _clk = m.clock("clk")
     _rst = m.reset("rst")
 
@@ -23,6 +22,7 @@ def build(m: Circuit) -> None:
     inp = m.inputs(s, prefix="in_")
 
 build.__pycircuit_name__ = "bundle_probe_expand"
+build.__pycircuit_kind__ = "module"
 
 
 @probe(target=build, name="pv")
@@ -39,4 +39,4 @@ def bundle_probe(p: ProbeBuilder, dut: ProbeView) -> None:
 
 
 if __name__ == "__main__":
-    print(compile(build, name="bundle_probe_expand").emit_mlir())
+    print(compile_cycle_aware(build, name="bundle_probe_expand", eager=True).emit_mlir())

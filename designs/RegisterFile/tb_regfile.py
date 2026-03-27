@@ -3,7 +3,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-from pycircuit import Tb, compile, testbench
+from pycircuit import CycleAwareTb, Tb, compile_cycle_aware, CycleAwareCircuit, CycleAwareDomain, testbench
 
 _THIS_DIR = Path(__file__).resolve().parent
 if str(_THIS_DIR) not in sys.path:
@@ -14,9 +14,10 @@ from regfile import build  # noqa: E402
 
 @testbench
 def tb(t: Tb) -> None:
-    t.clock("clk")
-    t.reset("rst", cycles_asserted=2, cycles_deasserted=1)
-    t.timeout(64)
+    tb = CycleAwareTb(t)
+    tb.clock("clk")
+    tb.reset("rst", cycles_asserted=2, cycles_deasserted=1)
+    tb.timeout(64)
 
     nr = 10
     nw = 5
@@ -36,23 +37,23 @@ def tb(t: Tb) -> None:
             return int(storage.get(a, 0)) & mask64
         return 0
 
-    def drive_cycle(cyc: int, reads: list[int], writes: list[tuple[int, int, int]]) -> None:
+    def drive_cycle(reads: list[int], writes: list[tuple[int, int, int]]) -> None:
         if len(reads) != nr:
             raise ValueError(f"tb reads length mismatch: got {len(reads)} expected {nr}")
         for lane in range(nr):
-            t.drive(f"raddr{lane}", int(reads[lane]), at=cyc)
+            tb.drive(f"raddr{lane}", int(reads[lane]))
 
         for lane in range(nw):
-            t.drive(f"wen{lane}", 0, at=cyc)
-            t.drive(f"waddr{lane}", 0, at=cyc)
-            t.drive(f"wdata{lane}", 0, at=cyc)
+            tb.drive(f"wen{lane}", 0)
+            tb.drive(f"waddr{lane}", 0)
+            tb.drive(f"wdata{lane}", 0)
 
         for lane, waddr, wdata in writes:
             if lane < 0 or lane >= nw:
                 raise ValueError(f"tb write lane out of range: {lane}")
-            t.drive(f"wen{lane}", 1, at=cyc)
-            t.drive(f"waddr{lane}", int(waddr), at=cyc)
-            t.drive(f"wdata{lane}", int(wdata) & mask64, at=cyc)
+            tb.drive(f"wen{lane}", 1)
+            tb.drive(f"waddr{lane}", int(waddr))
+            tb.drive(f"wdata{lane}", int(wdata) & mask64)
 
     seq = [
         {
@@ -119,9 +120,12 @@ def tb(t: Tb) -> None:
 
     storage: dict[int, int] = {}
     for cyc, step in enumerate(seq):
+        if cyc > 0:
+            tb.next()  # --- advance to next cycle ---
+
         reads = list(step["reads"])
         writes = list(step["writes"])
-        drive_cycle(cyc, reads, writes)
+        drive_cycle(reads, writes)
 
         for _, waddr, wdata in writes:
             wa = int(waddr)
@@ -130,10 +134,10 @@ def tb(t: Tb) -> None:
 
         for lane in range(nr):
             exp = read_expected(reads[lane], storage)
-            t.expect(f"rdata{lane}", exp, at=cyc, msg=f"regfile mismatch cycle={cyc} lane={lane}")
+            tb.expect(f"rdata{lane}", exp, msg=f"regfile mismatch cycle={cyc} lane={lane}")
 
-    t.finish(at=len(seq) - 1)
+    tb.finish()
 
 
 if __name__ == "__main__":
-    print(compile(build, name="tb_regfile_top").emit_mlir())
+    print(compile_cycle_aware(build, name="tb_regfile_top", eager=True).emit_mlir())

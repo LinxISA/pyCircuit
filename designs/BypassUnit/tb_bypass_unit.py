@@ -3,7 +3,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-from pycircuit import Tb, compile, testbench
+from pycircuit import CycleAwareTb, Tb, compile_cycle_aware, CycleAwareCircuit, CycleAwareDomain, testbench
 from pycircuit.tb import sva
 
 _THIS_DIR = Path(__file__).resolve().parent
@@ -60,45 +60,43 @@ def _resolve_expected(src: dict, wb: dict, *, lanes: int) -> tuple[int, int, int
     return src_rf_data, 0, 0, 0
 
 
-def _drive_cycle(t: Tb, cyc: int, spec: dict, *, lanes: int) -> None:
+def _drive_cycle(tb: CycleAwareTb, spec: dict, *, lanes: int) -> None:
     wb = spec["wb"]
     i2 = spec["i2"]
 
     for stage in _STAGES:
         for lane in range(lanes):
             w = wb[stage][lane]
-            t.drive(f"{stage}{lane}_valid", int(w["valid"]), at=cyc)
-            t.drive(f"{stage}{lane}_ptag", int(w["ptag"]), at=cyc)
-            t.drive(f"{stage}{lane}_ptype", int(w["ptype"]), at=cyc)
-            t.drive(f"{stage}{lane}_data", int(w["data"]), at=cyc)
+            tb.drive(f"{stage}{lane}_valid", int(w["valid"]))
+            tb.drive(f"{stage}{lane}_ptag", int(w["ptag"]))
+            tb.drive(f"{stage}{lane}_ptype", int(w["ptype"]))
+            tb.drive(f"{stage}{lane}_data", int(w["data"]))
 
     for i in range(lanes):
         for src in _SRCS:
             s = i2[i][src]
-            t.drive(f"i2{i}_{src}_valid", int(s["valid"]), at=cyc)
-            t.drive(f"i2{i}_{src}_ptag", int(s["ptag"]), at=cyc)
-            t.drive(f"i2{i}_{src}_ptype", int(s["ptype"]), at=cyc)
-            t.drive(f"i2{i}_{src}_rf_data", int(s["rf_data"]), at=cyc)
+            tb.drive(f"i2{i}_{src}_valid", int(s["valid"]))
+            tb.drive(f"i2{i}_{src}_ptag", int(s["ptag"]))
+            tb.drive(f"i2{i}_{src}_ptype", int(s["ptype"]))
+            tb.drive(f"i2{i}_{src}_rf_data", int(s["rf_data"]))
 
 
-def _expect_cycle(t: Tb, cyc: int, spec: dict, *, lanes: int) -> None:
+def _expect_cycle(tb: CycleAwareTb, cyc: int, spec: dict, *, lanes: int) -> None:
     wb = spec["wb"]
     i2 = spec["i2"]
     for i in range(lanes):
         for src in _SRCS:
             exp_data, exp_hit, exp_stage, exp_lane = _resolve_expected(i2[i][src], wb, lanes=lanes)
-            t.expect(f"i2{i}_{src}_data", exp_data, at=cyc, msg=f"data mismatch lane={i} src={src} cycle={cyc}")
-            t.expect(f"i2{i}_{src}_hit", exp_hit, at=cyc, msg=f"hit mismatch lane={i} src={src} cycle={cyc}")
-            t.expect(
+            tb.expect(f"i2{i}_{src}_data", exp_data, msg=f"data mismatch lane={i} src={src} cycle={cyc}")
+            tb.expect(f"i2{i}_{src}_hit", exp_hit, msg=f"hit mismatch lane={i} src={src} cycle={cyc}")
+            tb.expect(
                 f"i2{i}_{src}_sel_stage",
                 exp_stage,
-                at=cyc,
                 msg=f"sel_stage mismatch lane={i} src={src} cycle={cyc}",
             )
-            t.expect(
+            tb.expect(
                 f"i2{i}_{src}_sel_lane",
                 exp_lane,
-                at=cyc,
                 msg=f"sel_lane mismatch lane={i} src={src} cycle={cyc}",
             )
 
@@ -340,6 +338,7 @@ def _gen_random_stress(*, lanes: int, ptag_count: int, count: int, seed: int) ->
 
 @testbench
 def tb(t: Tb) -> None:
+    tb = CycleAwareTb(t)
     lanes = 8
     ptag_count = 256
 
@@ -393,10 +392,10 @@ def tb(t: Tb) -> None:
     cycles.extend(_gen_invalid_source_sweep(lanes=lanes, ptag_count=ptag_count))
     cycles.extend(_gen_random_stress(lanes=lanes, ptag_count=ptag_count, count=32, seed=0xD1CE_BA5E_F00D_CAFE))
 
-    t.clock("clk")
-    t.reset("rst", cycles_asserted=2, cycles_deasserted=1)
-    t.timeout(len(cycles) + 64)
-    t.print_every("bypass", start=0, every=32, ports=["i20_srcL_hit", "i20_srcR_hit"])
+    tb.clock("clk")
+    tb.reset("rst", cycles_asserted=2, cycles_deasserted=1)
+    tb.timeout(len(cycles) + 64)
+    tb.print_every("bypass", start=0, every=32, ports=["i20_srcL_hit", "i20_srcR_hit"])
 
     for i in range(lanes):
         for src in _SRCS:
@@ -405,7 +404,7 @@ def tb(t: Tb) -> None:
                     for b in range(a + 1, lanes):
                         match_a = _match_expr(stage, a, i, src)
                         match_b = _match_expr(stage, b, i, src)
-                        t.sva_assert(
+                        tb.sva_assert(
                             ~(match_a & match_b),
                             clock="clk",
                             reset="rst",
@@ -413,17 +412,19 @@ def tb(t: Tb) -> None:
                             msg=f"illegal same-stage multihit stage={stage} src={src} lane={i}",
                         )
 
+    # --- cycle 0 ---
     for cyc, spec in enumerate(cycles):
-        _drive_cycle(t, cyc, spec, lanes=lanes)
-        _expect_cycle(t, cyc, spec, lanes=lanes)
+        if cyc > 0:
+            tb.next()  # --- advance to next cycle ---
+        _drive_cycle(tb, spec, lanes=lanes)
+        _expect_cycle(tb, cyc, spec, lanes=lanes)
 
-    t.finish(at=len(cycles) - 1)
+    tb.finish()
 
 
 if __name__ == "__main__":
     print(
-        compile(
-            build,
+        compile_cycle_aware(build,
             name="tb_bypass_unit_top",
             lanes=8,
             data_width=64,

@@ -3,7 +3,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-from pycircuit import Tb, compile, testbench
+from pycircuit import CycleAwareTb, Tb, compile_cycle_aware, CycleAwareCircuit, CycleAwareDomain, testbench
 
 _THIS_DIR = Path(__file__).resolve().parent
 if str(_THIS_DIR) not in sys.path:
@@ -15,29 +15,31 @@ from sync_mem_init_zero_config import DEFAULT_PARAMS, TB_PRESETS  # noqa: E402
 
 @testbench
 def tb(t: Tb) -> None:
+    tb = CycleAwareTb(t)
     p = TB_PRESETS["smoke"]
-    t.clock("clk")
-    t.reset("rst", cycles_asserted=2, cycles_deasserted=1)
-    t.timeout(int(p["timeout"]))
+    tb.clock("clk")
+    tb.reset("rst", cycles_asserted=2, cycles_deasserted=1)
+    tb.timeout(int(p["timeout"]))
 
+    # --- cycle 0 ---
     # Default drives (no writes).
-    t.drive("wvalid", 0, at=0)
-    t.drive("waddr", 0, at=0)
-    t.drive("wdata", 0, at=0)
-    t.drive("wstrb", 0, at=0)
+    tb.drive("wvalid", 0)
+    tb.drive("waddr", 0)
+    tb.drive("wdata", 0)
+    tb.drive("wstrb", 0)
 
     # Read from unwritten addresses: deterministic sim init must be 0.
-    t.drive("ren", 1, at=0)
-    t.drive("raddr", 1, at=0)
-    t.expect("rdata", 0, at=0, phase="post", msg="sync_mem must initialize entries to 0 (deterministic sim)")
+    tb.drive("ren", 1)
+    tb.drive("raddr", 1)
+    tb.expect("rdata", 0, phase="post", msg="sync_mem must initialize entries to 0 (deterministic sim)")
 
-    t.drive("ren", 1, at=1)
-    t.drive("raddr", 3, at=1)
-    t.expect("rdata", 0, at=1, phase="post")
+    tb.next()  # --- cycle 1 ---
+    tb.drive("ren", 1)
+    tb.drive("raddr", 3)
+    tb.expect("rdata", 0, phase="post")
 
-    t.finish(at=int(p["finish"]))
+    tb.finish(at=int(p["finish"]))
 
 
 if __name__ == "__main__":
-    print(compile(build, name="tb_sync_mem_init_zero_top", **DEFAULT_PARAMS).emit_mlir())
-
+    print(compile_cycle_aware(build, name="tb_sync_mem_init_zero_top", eager=True, **DEFAULT_PARAMS).emit_mlir())

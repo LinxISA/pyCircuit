@@ -4,7 +4,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from pycircuit import Circuit, compile, function, module, u
+from pycircuit import Circuit, compile_cycle_aware, CycleAwareCircuit, CycleAwareDomain, function, module, u
 
 _THIS_DIR = Path(__file__).resolve().parent
 if str(_THIS_DIR) not in sys.path:
@@ -347,10 +347,7 @@ def _emit_debug_and_ready(
     m.output("issued_total", issued_total_q.out())
 
 
-@module
-def build(
-    m: Circuit,
-    *,
+def build(m: CycleAwareCircuit, domain: CycleAwareDomain, *,
     entries: int = 16,
     ptag_count: int = 64,
     payload_width: int = 32,
@@ -377,9 +374,9 @@ def build(
     occ_w = int(cfg.occupancy_width)
     issue_cnt_w = int(cfg.issue_count_width)
     issued_total_w = int(cfg.issued_total_width)
-
-    clk = m.clock("clk")
-    rst = m.reset("rst")
+    cd = domain.clock_domain
+    clk = cd.clk
+    rst = cd.rst
 
     uop_spec = _uop_spec(m, cfg)
     entry_spec = _entry_spec(m, cfg)
@@ -388,27 +385,26 @@ def build(
     enq_uops = [m.inputs(uop_spec, prefix=f"enq{k}_") for k in range(n_enq)]
 
     entry_state = [
-        m.state(entry_spec, clk=clk, rst=rst, prefix=f"ent{i}_", init=0)
+        m.state(entry_spec, clk=cd.clk, rst=cd.rst, prefix=f"ent{i}_", init=0)
         for i in range(e)
     ]
 
     age_state = [
-        [m.out(f"age_{i}_{j}", clk=clk, rst=rst, width=1, init=u(1, 0)) for j in range(e)]
+        [m.out(f"age_{i}_{j}", domain=cd, width=1, init=u(1, 0)) for j in range(e)]
         for i in range(e)
     ]
 
     ready_state = [
         m.out(
             f"ready_ptag_{t}",
-            clk=clk,
-            rst=rst,
+            domain=cd,
             width=1,
             init=u(1, (int(cfg.init_ready_mask) >> t) & 1),
         )
         for t in range(p)
     ]
 
-    issued_total_q = m.out("issued_total_q", clk=clk, rst=rst, width=issued_total_w, init=u(issued_total_w, 0))
+    issued_total_q = m.out("issued_total_q", domain=cd, width=issued_total_w, init=u(issued_total_w, 0))
 
     cur = _snapshot_entries(m, entry_state, e)
 
@@ -496,8 +492,7 @@ def build(
 
 if __name__ == "__main__":
     print(
-        compile(
-            build,
+        compile_cycle_aware(build,
             name="issq",
             entries=16,
             ptag_count=64,

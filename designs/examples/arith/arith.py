@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from pycircuit import Circuit, compile, const, ct, module, spec, u
+from pycircuit import Circuit, compile_cycle_aware, CycleAwareCircuit, CycleAwareDomain, const, ct, module, spec, u
 
 
 @spec.valueclass
@@ -28,8 +28,7 @@ def _lane_mask(m: Circuit, *, width: int) -> int:
     return ct.bitmask(w)
 
 
-@module
-def build(m: Circuit, lanes: int = 8, lane_width: int = 16) -> None:
+def build(m: CycleAwareCircuit, domain: CycleAwareDomain, lanes: int = 8, lane_width: int = 16) -> None:
     cfg = _derive_cfg(m, lanes=lanes, lane_width=lane_width)
     acc_w = _acc_width(m, cfg)
     lane_mask = _lane_mask(m, width=int(cfg.lane_width))
@@ -47,4 +46,4 @@ build.__pycircuit_name__ = "arith"
 
 
 if __name__ == "__main__":
-    print(compile(build, name="arith", lanes=8, lane_width=16).emit_mlir())
+    print(compile_cycle_aware(build, name="arith", eager=True, lanes=8, lane_width=16).emit_mlir())

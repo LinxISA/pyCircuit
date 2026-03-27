@@ -3,7 +3,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-from pycircuit import Tb, compile, testbench
+from pycircuit import CycleAwareTb, Tb, compile_cycle_aware, CycleAwareCircuit, CycleAwareDomain, testbench
 
 _THIS_DIR = Path(__file__).resolve().parent
 if str(_THIS_DIR) not in sys.path:
@@ -24,6 +24,7 @@ from issq_config import (  # noqa: E402
 
 @testbench
 def tb(t: Tb) -> None:
+    tb = CycleAwareTb(t)
     entries = 16
     ptag_count = 64
     enq_ports = 2
@@ -89,38 +90,41 @@ def tb(t: Tb) -> None:
     else:
         raise RuntimeError("test stream did not drain (possible deadlock)")
 
-    t.clock("clk")
-    t.reset("rst", cycles_asserted=2, cycles_deasserted=1)
-    t.timeout(len(cycles) + 64)
-    t.expect("occupancy", 0, at=0, phase="pre")
-    t.print_every("issq", start=0, every=8, ports=["occupancy", "issued_total"])
+    tb.clock("clk")
+    tb.reset("rst", cycles_asserted=2, cycles_deasserted=1)
+    tb.timeout(len(cycles) + 64)
+    tb.expect("occupancy", 0, phase="pre")
+    tb.print_every("issq", start=0, every=8, ports=["occupancy", "issued_total"])
 
+    # --- cycle 0 ---
     for cyc, (lane_valid, lane_uops, obs) in enumerate(cycles):
+        if cyc > 0:
+            tb.next()  # --- advance to next cycle ---
+
         for k in range(enq_ports):
             uop = lane_uops[k]
             v = 1 if lane_valid[k] else 0
-            t.drive(f"enq{k}_valid", v, at=cyc)
-            t.drive(f"enq{k}_src0_valid", int(uop.src0.valid), at=cyc)
-            t.drive(f"enq{k}_src0_ptag", int(uop.src0.ptag), at=cyc)
-            t.drive(f"enq{k}_src0_ready", int(uop.src0.ready), at=cyc)
-            t.drive(f"enq{k}_src1_valid", int(uop.src1.valid), at=cyc)
-            t.drive(f"enq{k}_src1_ptag", int(uop.src1.ptag), at=cyc)
-            t.drive(f"enq{k}_src1_ready", int(uop.src1.ready), at=cyc)
-            t.drive(f"enq{k}_dst_valid", int(uop.dst.valid), at=cyc)
-            t.drive(f"enq{k}_dst_ptag", int(uop.dst.ptag), at=cyc)
-            t.drive(f"enq{k}_dst_ready", int(uop.dst.ready), at=cyc)
-            t.drive(f"enq{k}_payload", int(uop.payload), at=cyc)
+            tb.drive(f"enq{k}_valid", v)
+            tb.drive(f"enq{k}_src0_valid", int(uop.src0.valid))
+            tb.drive(f"enq{k}_src0_ptag", int(uop.src0.ptag))
+            tb.drive(f"enq{k}_src0_ready", int(uop.src0.ready))
+            tb.drive(f"enq{k}_src1_valid", int(uop.src1.valid))
+            tb.drive(f"enq{k}_src1_ptag", int(uop.src1.ptag))
+            tb.drive(f"enq{k}_src1_ready", int(uop.src1.ready))
+            tb.drive(f"enq{k}_dst_valid", int(uop.dst.valid))
+            tb.drive(f"enq{k}_dst_ptag", int(uop.dst.ptag))
+            tb.drive(f"enq{k}_dst_ready", int(uop.dst.ready))
+            tb.drive(f"enq{k}_payload", int(uop.payload))
 
         _ = obs
 
-    t.finish(at=len(cycles) - 1)
+    tb.finish()
 
 
 
 if __name__ == "__main__":
     print(
-        compile(
-            build,
+        compile_cycle_aware(build,
             name="tb_issq_top",
             entries=16,
             ptag_count=64,
