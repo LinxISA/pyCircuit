@@ -9,6 +9,10 @@ pyCircuit 的 C++ 仿真引擎采用 **静态编译-直接执行 (Compiled-Code 
 寄存器实例（`pyc_reg`）以及组合逻辑求值函数（`eval()`/`tick()`）。
 仿真通过反复调用这些方法来推进时钟周期，在主机 CPU 上直接执行原生 C++ 代码。
 
+从当前版本开始，`pycircuit build --target cpp` 还会生成 `cmodel/` 外部驱动脚手架：
+- 有 `@testbench` 时，保留 pyCircuit 生成的 TB，并额外导出 `cmodel/tb_program.json`
+- 无 `@testbench` 时，生成可编译的 `cmodel/<Top>_main.cpp` 和 `<Top>_cmodel.hpp`，供手写 C++ / TLM 直接接入
+
 ```
 ┌─────────────────────────────────────────────────────────┐
 │  Python 测试驱动 (ctypes)                                │

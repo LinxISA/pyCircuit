@@ -4,6 +4,10 @@
 - frontend emits a TB `.pyc` payload (JSON encoded in module attrs)
 - backend (`pycc`) lowers that payload to C++ or SystemVerilog testbench text
 
+`@testbench` is optional for `pycircuit build`.
+- If `tb(...)` is present and decorated, pyCircuit emits C++/SV testbench artifacts as before.
+- If `tb(...)` is absent, pyCircuit still builds the DUT and emits a `cmodel/` scaffold for external C++/TLM drivers.
+
 Observation points (pyc4.0):
 
 - `phase="pre"` samples at **TICK-OBS** (after combinational settle, before state commit).
@@ -30,7 +34,7 @@ def tb(t: Tb):
     t.finish(at=10)
 ```
 
-`pycircuit build` expects `tb` to be decorated with `@testbench`.
+If `tb` is present, it must be decorated with `@testbench`.
 
 ## Tb API (selected)
 

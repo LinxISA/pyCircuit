@@ -7,7 +7,9 @@
   - `value_params` are runtime module IO values (not specialization params)
 - `@function`: inline helper (inlined into the caller)
 - `@const`: compile-time helper (pure; may not emit IR or mutate the module)
-- `@testbench`: host-side cycle test program lowered via a `.pyc` payload
+- `@testbench`: optional host-side cycle test program lowered via a `.pyc` payload
+
+When `@testbench` is omitted, `pycircuit build --target cpp` still emits the DUT plus a generated `cmodel/` bridge for external C++ / TLM drivers.
 
 ## Top-level imports (recommended)
 

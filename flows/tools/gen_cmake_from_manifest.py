@@ -41,7 +41,10 @@ def main() -> int:
     data = _load(manifest_path)
 
     srcs = [Path(s).resolve() for s in data.get("sources", []) if isinstance(s, str) and s]
-    tb_cpp = Path(str(data.get("tb_cpp", ""))).resolve()
+    entry_cpp_raw = str(data.get("entry_cpp", "")).strip()
+    if not entry_cpp_raw:
+        entry_cpp_raw = str(data.get("tb_cpp", "")).strip()
+    entry_cpp = Path(entry_cpp_raw).resolve() if entry_cpp_raw else Path()
     incs = [Path(s).resolve() for s in data.get("include_dirs", []) if isinstance(s, str) and s]
     runtime_srcs = [Path(s).resolve() for s in data.get("runtime_sources", []) if isinstance(s, str) and s]
     runtime_incs = [Path(s).resolve() for s in data.get("runtime_include_dirs", []) if isinstance(s, str) and s]
@@ -54,11 +57,12 @@ def main() -> int:
     runtime_cfg_exists = bool(runtime_cfg) and (Path(runtime_cfg) / "pycircuitConfig.cmake").is_file()
     runtime_toolchain_root = str(runtime.get("toolchain_root_hint", ""))
     std = str(data.get("cxx_standard", "c++17"))
+    exe_name = str(data.get("executable_name", "pyc_tb")).strip() or "pyc_tb"
 
     if not srcs:
         raise SystemExit("manifest missing `sources`")
-    if not tb_cpp.is_file():
-        raise SystemExit(f"missing tb cpp: {tb_cpp}")
+    if not entry_cpp_raw or not entry_cpp.is_file():
+        raise SystemExit(f"missing entry cpp: {entry_cpp_raw or '<empty>'}")
     for s in srcs:
         if not s.is_file():
             raise SystemExit(f"missing source: {s}")
@@ -73,12 +77,12 @@ def main() -> int:
     lines.append("set(PYC_TB_SOURCES\n")
     for s in srcs:
         lines.append(f"  \"{_rel(s, out_dir)}\"\n")
-    lines.append(f"  \"{_rel(tb_cpp, out_dir)}\"\n")
+    lines.append(f"  \"{_rel(entry_cpp, out_dir)}\"\n")
     lines.append(")\n\n")
 
-    lines.append("add_executable(pyc_tb ${PYC_TB_SOURCES})\n")
+    lines.append(f"add_executable({exe_name} ${{PYC_TB_SOURCES}})\n")
     if incs:
-        lines.append("target_include_directories(pyc_tb PRIVATE\n")
+        lines.append(f"target_include_directories({exe_name} PRIVATE\n")
         for i in incs:
             lines.append(f"  \"{_rel(i, out_dir)}\"\n")
         lines.append(")\n")
@@ -88,7 +92,7 @@ def main() -> int:
         lines.append(
             f"find_package({runtime_pkg} CONFIG REQUIRED PATHS \"{_cmake_str(runtime_cfg)}\" NO_DEFAULT_PATH)\n"
         )
-        lines.append(f"target_link_libraries(pyc_tb PRIVATE {runtime_target})\n")
+        lines.append(f"target_link_libraries({exe_name} PRIVATE {runtime_target})\n")
     elif runtime_lib_files:
         lines.append("add_library(pyc4_runtime_prebuilt STATIC IMPORTED GLOBAL)\n")
         lines.append("set_target_properties(pyc4_runtime_prebuilt PROPERTIES\n")
@@ -96,7 +100,7 @@ def main() -> int:
         if runtime_incs:
             lines.append(f"  INTERFACE_INCLUDE_DIRECTORIES \"{_cmake_list(runtime_incs)}\"\n")
         lines.append(")\n")
-        lines.append("target_link_libraries(pyc_tb PRIVATE pyc4_runtime_prebuilt)\n")
+        lines.append(f"target_link_libraries({exe_name} PRIVATE pyc4_runtime_prebuilt)\n")
     elif runtime_srcs:
         lines.append("set(PYC_RUNTIME_SOURCES\n")
         for s in runtime_srcs:
@@ -108,7 +112,7 @@ def main() -> int:
             for i in runtime_incs:
                 lines.append(f"  \"{_rel(i, out_dir)}\"\n")
             lines.append(")\n")
-        lines.append("target_link_libraries(pyc_tb PRIVATE pyc4_runtime)\n")
+        lines.append(f"target_link_libraries({exe_name} PRIVATE pyc4_runtime)\n")
     lines.append("\n")
 
     out = out_dir / "CMakeLists.txt"
