@@ -45,3 +45,17 @@ python3 -m pycircuit.cli build \
   --target both \
   --jobs 8
 ```
+
+Build the DUT only and generate an external C++ / TLM scaffold:
+
+```bash
+PYTHONPATH=/Users/zhoubot/pyCircuit/compiler/frontend \
+PYC_TOOLCHAIN_ROOT=/Users/zhoubot/pyCircuit/.pycircuit_out/toolchain/install \
+python3 -m pycircuit.cli build \
+  /Users/zhoubot/pyCircuit/designs/examples/counter/counter.py \
+  --out-dir /tmp/counter_model \
+  --target cpp \
+  --jobs 8
+```
+
+The output includes `cmodel/README.md`, `cmodel/<Top>_cmodel.hpp`, and `cmodel_project_manifest.json`.

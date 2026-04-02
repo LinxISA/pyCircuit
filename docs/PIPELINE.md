@@ -13,7 +13,8 @@ Frontend responsibilities:
 - materialize `@module(value_params=...)` as runtime boundary input ports
 - emit one `.pyc` per specialized module
 - emit a deterministic `project_manifest.json`
-- emit a testbench `.pyc` payload from `@testbench`
+- emit a testbench `.pyc` payload from `@testbench` when present
+- emit `cmodel/` bridge artifacts for external C++ / TLM flows when building C++
 
 All emitted modules are stamped with:
 - `pyc.frontend.contract = "pycircuit"`
@@ -48,6 +49,15 @@ Build a project (multi-module + testbench):
 ```bash
 python3 -m pycircuit.cli build <tb_or_top.py> --out-dir <dir> --target cpp|verilator|both --jobs <N>
 ```
+
+Build a DUT without `@testbench` and get an external C++ driver scaffold:
+
+```bash
+python3 -m pycircuit.cli build <top.py> --out-dir <dir> --target cpp --jobs <N>
+```
+
+In DUT-only mode, `cpp_project_manifest.json` points at the generated `cmodel/<Top>_main.cpp`, and `cmodel_project_manifest.json`
+describes the reusable external-driver interface.
 
 Simulation (Verilator):
 
