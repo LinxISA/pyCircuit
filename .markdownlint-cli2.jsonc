@@ -1,10 +1,5 @@
 {
   "$schema": "https://raw.githubusercontent.com/DavidAnson/markdownlint-cli2/main/schema/markdownlint-cli2-config-schema.json",
-  "globs": [
-    "**/*.md",
-    "!_build/**/*.md",
-    "!docs/gates/logs/**/*.md"
-  ],
   "config": {
     "default": true,
     "MD013": false,

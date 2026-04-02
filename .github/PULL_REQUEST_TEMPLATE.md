@@ -1,6 +1,6 @@
 ## Summary
 
-- 
+-
 
 ## Decision / Contract Impact
 

@@ -1,15 +1,13 @@
 from __future__ import annotations
 
+import pycircuit
 import pytest
-
-from pycircuit import CycleAwareCircuit, compile_cycle_aware
-
 
 pytestmark = pytest.mark.unit
 
 
 def test_state_signal_reads_rebase_to_current_occurrence() -> None:
-    circuit = CycleAwareCircuit("rebased_state")
+    circuit = pycircuit.CycleAwareCircuit("rebased_state")
     domain = circuit.create_domain("clk")
     counter = domain.state(width=8, reset_value=0, name="counter")
 
@@ -20,7 +18,7 @@ def test_state_signal_reads_rebase_to_current_occurrence() -> None:
 
 
 def test_state_signal_feedback_does_not_insert_balance_registers() -> None:
-    circuit = CycleAwareCircuit("counter_feedback")
+    circuit = pycircuit.CycleAwareCircuit("counter_feedback")
     domain = circuit.create_domain("clk")
     counter = domain.state(width=8, reset_value=0, name="counter")
 
@@ -33,7 +31,7 @@ def test_state_signal_feedback_does_not_insert_balance_registers() -> None:
 
 
 def test_state_signal_slice_reads_rebase_to_current_occurrence() -> None:
-    circuit = CycleAwareCircuit("rebased_slice")
+    circuit = pycircuit.CycleAwareCircuit("rebased_slice")
     domain = circuit.create_domain("clk")
     counter = domain.state(width=8, reset_value=0, name="counter")
 
@@ -50,7 +48,7 @@ def test_cycle_aware_reverse_subtraction_compiles_through_jit() -> None:
         result = 1 - counter
         m.output("result", result.wire)
 
-    design = compile_cycle_aware(build, name="reverse_sub_smoke")
+    design = pycircuit.compile_cycle_aware(build, name="reverse_sub_smoke")
     mlir = design.emit_mlir()
 
     assert "_v5_bal_" not in mlir

@@ -125,7 +125,7 @@ For more end-to-end commands, see `docs/QUICKSTART.md`.
 
 ## Repo layout
 
-```
+```text
 pyCircuit
 ├── compiler/
 │   ├── frontend/          # Python frontend (pycircuit package)
