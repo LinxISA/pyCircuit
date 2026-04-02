@@ -1,6 +1,17 @@
 from __future__ import annotations
 
-from pycircuit import Circuit, ProbeBuilder, ProbeView, compile_cycle_aware, CycleAwareCircuit, CycleAwareDomain, module, probe
+import sys
+
+from pycircuit import (
+    Circuit,
+    CycleAwareCircuit,
+    CycleAwareDomain,
+    ProbeBuilder,
+    ProbeView,
+    compile_cycle_aware,
+    module,
+    probe,
+)
 from pycircuit.hw import ClockDomain
 
 
@@ -14,12 +25,23 @@ def leaf(m: Circuit, clk, rst) -> None:
 
     m.output("out_y", r)
 
+
 def build(m: CycleAwareCircuit, domain: CycleAwareDomain) -> None:
     cd = domain.clock_domain
     x = m.input("in_x", width=8)
 
-    u0 = m.new(leaf, name="unit0_long_name", short_name="u0", bind={"clk": cd.clk, "rst": cd.rst, "in_x": x})
-    u1 = m.new(leaf, name="unit1_long_name", short_name="u1", bind={"clk": cd.clk, "rst": cd.rst, "in_x": x})
+    u0 = m.new(
+        leaf,
+        name="unit0_long_name",
+        short_name="u0",
+        bind={"clk": cd.clk, "rst": cd.rst, "in_x": x},
+    )
+    u1 = m.new(
+        leaf,
+        name="unit1_long_name",
+        short_name="u1",
+        bind={"clk": cd.clk, "rst": cd.rst, "in_x": x},
+    )
 
     m.output("y0", u0.outputs)
     m.output("y1", u1.outputs)
@@ -39,4 +61,6 @@ def leaf_pipeview(p: ProbeBuilder, dut: ProbeView) -> None:
 
 
 if __name__ == "__main__":
-    print(compile_cycle_aware(build, name="trace_dsl_smoke").emit_mlir())
+    sys.stdout.write(
+        compile_cycle_aware(build, name="trace_dsl_smoke").emit_mlir() + "\n"
+    )

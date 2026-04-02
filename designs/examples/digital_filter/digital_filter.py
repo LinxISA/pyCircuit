@@ -1,10 +1,12 @@
-# -*- coding: utf-8 -*-
 """4-tap Feed-Forward (FIR) Filter — pyCircuit V5 cycle-aware.
 
 Implements:
     y[n] = c0·x[n] + c1·x[n-1] + c2·x[n-2] + c3·x[n-3]
 """
+
 from __future__ import annotations
+
+import sys
 
 from pycircuit import (
     CycleAwareCircuit,
@@ -15,7 +17,10 @@ from pycircuit import (
 )
 
 
-def build(m: CycleAwareCircuit, domain: CycleAwareDomain, *,
+def build(
+    m: CycleAwareCircuit,
+    domain: CycleAwareDomain,
+    *,
     TAPS: int = 4,
     DATA_W: int = 16,
     COEFF_W: int = 16,
@@ -29,7 +34,10 @@ def build(m: CycleAwareCircuit, domain: CycleAwareDomain, *,
     x_in = cas(domain, m.input("x_in", width=DATA_W), cycle=0)
     x_valid = cas(domain, m.input("x_valid", width=1), cycle=0)
 
-    delay_states = [domain.state(width=DATA_W, reset_value=0, name=f"delay_{i}") for i in range(1, TAPS)]
+    delay_states = [
+        domain.state(width=DATA_W, reset_value=0, name=f"delay_{i}")
+        for i in range(1, TAPS)
+    ]
 
     taps_wire = [x_in.wire] + [st.wire for st in delay_states]
 
@@ -62,5 +70,15 @@ def build(m: CycleAwareCircuit, domain: CycleAwareDomain, *,
 build.__pycircuit_name__ = "digital_filter"
 
 if __name__ == "__main__":
-    print(compile_cycle_aware(build, name="digital_filter", eager=True,
-                  TAPS=4, DATA_W=16, COEFF_W=16, COEFFS=(1, 2, 3, 4)).emit_mlir())
+    sys.stdout.write(
+        compile_cycle_aware(
+            build,
+            name="digital_filter",
+            eager=True,
+            TAPS=4,
+            DATA_W=16,
+            COEFF_W=16,
+            COEFFS=(1, 2, 3, 4),
+        ).emit_mlir()
+        + "\n"
+    )

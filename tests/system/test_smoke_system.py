@@ -10,7 +10,6 @@ from pathlib import Path
 
 import pytest
 
-
 pytestmark = pytest.mark.system
 
 
@@ -71,7 +70,9 @@ def test_trace_dsl_build_emits_probe_manifest(tmp_path: Path) -> None:
         "-m",
         "pycircuit.cli",
         "build",
-        str(root / "designs" / "examples" / "trace_dsl_smoke" / "tb_trace_dsl_smoke.py"),
+        str(
+            root / "designs" / "examples" / "trace_dsl_smoke" / "tb_trace_dsl_smoke.py"
+        ),
         "--out-dir",
         str(out_dir),
         "--target",
@@ -81,13 +82,21 @@ def test_trace_dsl_build_emits_probe_manifest(tmp_path: Path) -> None:
         "--logic-depth",
         "64",
         "--trace-config",
-        str(root / "designs" / "examples" / "trace_dsl_smoke" / "trace_dsl_smoke_trace.json"),
+        str(
+            root
+            / "designs"
+            / "examples"
+            / "trace_dsl_smoke"
+            / "trace_dsl_smoke_trace.json"
+        ),
     ]
     subprocess.run(cmd, cwd=root, env=env, check=True)
 
     manifest = json.loads((out_dir / "probe_manifest.json").read_text(encoding="utf-8"))
     probes = manifest.get("probes", [])
-    assert any(str(probe.get("canonical_path", "")).endswith(":probe.pv.q") for probe in probes)
+    assert any(
+        str(probe.get("canonical_path", "")).endswith(":probe.pv.q") for probe in probes
+    )
 
 
 def test_semantic_regressions_script_passes() -> None:
@@ -103,6 +112,8 @@ def test_semantic_regressions_script_passes() -> None:
         check=True,
     )
 
-    summary_path = root / "docs" / "gates" / "logs" / run_id / "semantic_regressions_summary.json"
+    summary_path = (
+        root / "docs" / "gates" / "logs" / run_id / "semantic_regressions_summary.json"
+    )
     summary = json.loads(summary_path.read_text(encoding="utf-8"))
     assert summary["status"] == "pass"

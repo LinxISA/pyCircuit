@@ -1,9 +1,7 @@
 from __future__ import annotations
 
 import pytest
-
 from pycircuit.cli import _base_name_of, _collect_jit_params, _is_timed_domain_build
-
 
 pytestmark = pytest.mark.unit
 
@@ -21,7 +19,10 @@ def structural_build(m, *, depth: int = 4) -> None:
 
 def test_collect_jit_params_skips_cycle_aware_domain_argument() -> None:
     assert _is_timed_domain_build(timed_build) is True
-    assert _collect_jit_params(timed_build, overrides=[]) == {"signed": False, "width": 8}
+    assert _collect_jit_params(timed_build, overrides=[]) == {
+        "signed": False,
+        "width": 8,
+    }
 
 
 def test_collect_jit_params_keeps_structural_defaults() -> None:

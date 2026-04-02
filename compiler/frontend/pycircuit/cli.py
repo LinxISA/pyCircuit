@@ -11,15 +11,17 @@ import os
 import shutil
 import subprocess
 import sys
+from collections.abc import Mapping
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any
 
 from .api_contract import collect_local_python_graph, nearest_project_root, scan_file
+from .design import FRONTEND_CONTRACT, Design, DesignError, value_params_of
 from .diagnostics import render_diagnostic
 from .dsl import Module
-from .design import FRONTEND_CONTRACT, Design, DesignError, value_params_of
-from .jit import JitError, compile
+from .jit import JitError
+from .jit import compile as jit_compile
 from .packaged_toolchain import bundled_toolchain_root, tool_executable
 from .probe import (
     ProbeError,
@@ -34,7 +36,6 @@ from .testbench import emit_testbench_pyc, testbench_payload_from_tb
 from .trace_dsl import (
     TraceConfigError,
     TracePlan,
-    compute_trace_plan,
     compute_trace_plan_from_artifacts,
     load_trace_config,
 )
@@ -74,7 +75,11 @@ def _resolve_emit_source(src_arg: str) -> tuple[Path | None, object]:
     if "." in src_arg and not Path(src_arg).exists():
         spec = importlib.util.find_spec(src_arg)
         src: Path | None = None
-        if spec is not None and isinstance(spec.origin, str) and spec.origin.endswith(".py"):
+        if (
+            spec is not None
+            and isinstance(spec.origin, str)
+            and spec.origin.endswith(".py")
+        ):
             src = Path(spec.origin).resolve()
         mod = importlib.import_module(src_arg)
         return src, mod
@@ -82,10 +87,16 @@ def _resolve_emit_source(src_arg: str) -> tuple[Path | None, object]:
     return src, _load_py_file(src)
 
 
-def _scan_api_contract(entry: Path, *, project_root_override: str | None = None) -> None:
+def _scan_api_contract(
+    entry: Path, *, project_root_override: str | None = None
+) -> None:
     if not entry.is_file():
         return
-    root = Path(project_root_override).resolve() if project_root_override else nearest_project_root(entry)
+    root = (
+        Path(project_root_override).resolve()
+        if project_root_override
+        else nearest_project_root(entry)
+    )
     files = collect_local_python_graph(entry.resolve(), project_root=root)
     diags = []
     for f in files:
@@ -93,7 +104,7 @@ def _scan_api_contract(entry: Path, *, project_root_override: str | None = None)
     if not diags:
         return
     for d in diags:
-        print(render_diagnostic(d), file=sys.stderr)
+        sys.stderr.write(f"{render_diagnostic(d)}\n")
     raise SystemExit(f"api contract check failed: {len(diags)} violation(s)")
 
 
@@ -147,7 +158,9 @@ def _collect_jit_params(build: Any, *, overrides: list[str]) -> dict[str, object
         if not name:
             raise SystemExit(f"--param expects name=value, got: {spec!r}")
         if name not in jit_params:
-            raise SystemExit(f"unknown JIT parameter: {name!r} (available: {', '.join(jit_params.keys())})")
+            raise SystemExit(
+                f"unknown JIT parameter: {name!r} (available: {', '.join(jit_params.keys())})"
+            )
         try:
             val = ast.literal_eval(raw)
         except Exception:
@@ -165,10 +178,12 @@ def _is_timed_domain_build(build: Any) -> bool:
     return len(params) >= 2 and params[1].name == "domain"
 
 
-def _compile_entrypoint(build: Any, *, top_name: str, jit_params: Mapping[str, object]) -> Module | Design:
+def _compile_entrypoint(
+    build: Any, *, top_name: str, jit_params: Mapping[str, object]
+) -> Module | Design:
     if _is_timed_domain_build(build):
         return compile_cycle_aware(build, name=top_name, **dict(jit_params))
-    return compile(build, name=top_name, **dict(jit_params))
+    return jit_compile(build, name=top_name, **dict(jit_params))
 
 
 def _top_name_for_build(src: Path, build: Any) -> str:
@@ -186,11 +201,15 @@ def _cmd_emit(args: argparse.Namespace) -> int:
     if src is not None:
         _scan_api_contract(src, project_root_override=args.project_root)
     if not hasattr(mod, "build"):
-        raise SystemExit(f"{src_arg} must define a pyCircuit entrypoint: `@module def build(m: Circuit, ...)`")
-    build = getattr(mod, "build")
+        raise SystemExit(
+            f"{src_arg} must define a pyCircuit entrypoint: `@module def build(m: Circuit, ...)`"
+        )
+    build = mod.build
 
     jit_params = _collect_jit_params(build, overrides=list(args.param or []))
-    top_name = _top_name_for_build(src if src is not None else Path(src_arg.replace(".", "/") + ".py"), build)
+    top_name = _top_name_for_build(
+        src if src is not None else Path(src_arg.replace(".", "/") + ".py"), build
+    )
     try:
         design = _compile_entrypoint(build, top_name=top_name, jit_params=jit_params)
     except (DesignError, JitError) as e:
@@ -265,7 +284,9 @@ def _detect_pycc() -> Path:
     if found:
         return Path(found)
 
-    raise SystemExit("missing pycc (set PYCC=... or build it with: flows/scripts/pyc build)")
+    raise SystemExit(
+        "missing pycc (set PYCC=... or build it with: flows/scripts/pyc build)"
+    )
 
 
 def _toolchain_roots(pycc: Path | None = None) -> list[Path]:
@@ -331,7 +352,9 @@ def _runtime_manifest_for_toolchain(toolchain_root: Path | None) -> dict[str, ob
     if not include_dir.is_dir():
         raise SystemExit(f"invalid toolchain root: missing include dir: {include_dir}")
     if not runtime_lib.is_file():
-        raise SystemExit(f"invalid toolchain root: missing runtime library: {runtime_lib}")
+        raise SystemExit(
+            f"invalid toolchain root: missing runtime library: {runtime_lib}"
+        )
 
     return {
         "mode": "prebuilt",
@@ -360,9 +383,11 @@ def _collect_build(mod: object, src: Path, args: argparse.Namespace) -> Module |
             f"{src} must define a pyCircuit entrypoint: `@module def build(m: Circuit, ...)` "
             "or `def build(m: Circuit, domain, ...)`"
         )
-    build = getattr(mod, "build")
+    build = mod.build
 
-    jit_params = _collect_jit_params(build, overrides=list(getattr(args, "param", []) or []))
+    jit_params = _collect_jit_params(
+        build, overrides=list(getattr(args, "param", []) or [])
+    )
     top_name = _top_name_for_build(src, build)
     try:
         return _compile_entrypoint(build, top_name=top_name, jit_params=jit_params)
@@ -371,7 +396,15 @@ def _collect_build(mod: object, src: Path, args: argparse.Namespace) -> Module |
 
 
 class _TopIface:
-    def __init__(self, *, sym: str, in_raw: list[str], in_tys: list[str], out_raw: list[str], out_tys: list[str]) -> None:
+    def __init__(
+        self,
+        *,
+        sym: str,
+        in_raw: list[str],
+        in_tys: list[str],
+        out_raw: list[str],
+        out_tys: list[str],
+    ) -> None:
         self.sym = str(sym)
         self.in_raw = list(in_raw)
         self.in_tys = list(in_tys)
@@ -380,7 +413,9 @@ class _TopIface:
 
         all_raw = [*self.in_raw, *self.out_raw]
         if len(set(all_raw)) != len(all_raw):
-            raise SystemExit("TB generation requires unique port names across inputs and outputs")
+            raise SystemExit(
+                "TB generation requires unique port names across inputs and outputs"
+            )
 
         used: dict[str, int] = {}
         all_names: list[str] = []
@@ -393,9 +428,9 @@ class _TopIface:
         self.out_names = all_names[len(self.in_raw) :]
 
         self._by_raw: dict[str, tuple[str, str, str]] = {}
-        for rn, sn, ty in zip(self.in_raw, self.in_names, self.in_tys):
+        for rn, sn, ty in zip(self.in_raw, self.in_names, self.in_tys, strict=True):
             self._by_raw[rn] = ("in", sn, ty)
-        for rn, sn, ty in zip(self.out_raw, self.out_names, self.out_tys):
+        for rn, sn, ty in zip(self.out_raw, self.out_names, self.out_tys, strict=True):
             self._by_raw[rn] = ("out", sn, ty)
 
     def resolve(self, raw_name: str) -> tuple[str, str, str]:
@@ -422,7 +457,13 @@ def _top_iface(design: Module | Design) -> _TopIface:
     in_tys = [sig.ty for _, sig in getattr(design, "_args", [])]  # noqa: SLF001
     out_raw = [n for n, _ in getattr(design, "_results", [])]  # noqa: SLF001
     out_tys = [sig.ty for _, sig in getattr(design, "_results", [])]  # noqa: SLF001
-    return _TopIface(sym=str(getattr(design, "name", "Top")), in_raw=in_raw, in_tys=in_tys, out_raw=out_raw, out_tys=out_tys)
+    return _TopIface(
+        sym=str(getattr(design, "name", "Top")),
+        in_raw=in_raw,
+        in_tys=in_tys,
+        out_raw=out_raw,
+        out_tys=out_tys,
+    )
 
 
 def _top_iface_from_manifest(manifest: Mapping[str, Any]) -> _TopIface:
@@ -439,11 +480,17 @@ def _top_iface_from_manifest(manifest: Mapping[str, Any]) -> _TopIface:
         in_tys = [str(x) for x in (m.get("arg_types") or [])]
         out_raw = [str(x) for x in (m.get("result_names") or [])]
         out_tys = [str(x) for x in (m.get("result_types") or [])]
-        return _TopIface(sym=top, in_raw=in_raw, in_tys=in_tys, out_raw=out_raw, out_tys=out_tys)
-    raise SystemExit(f"invalid project_manifest.json: top module {top!r} not found in modules list")
+        return _TopIface(
+            sym=top, in_raw=in_raw, in_tys=in_tys, out_raw=out_raw, out_tys=out_tys
+        )
+    raise SystemExit(
+        f"invalid project_manifest.json: top module {top!r} not found in modules list"
+    )
 
 
-def _module_paths_from_manifest(manifest: Mapping[str, Any], *, out_dir: Path) -> dict[str, Path]:
+def _module_paths_from_manifest(
+    manifest: Mapping[str, Any], *, out_dir: Path
+) -> dict[str, Path]:
     modules = manifest.get("modules", None)
     if not isinstance(modules, list) or not modules:
         raise SystemExit("invalid project_manifest.json: missing `modules` list")
@@ -461,7 +508,9 @@ def _module_paths_from_manifest(manifest: Mapping[str, Any], *, out_dir: Path) -
     return out
 
 
-def _render_tb_cpp(iface: _TopIface, t: Tb, *, trace_plan: TracePlan | None = None) -> str:
+def _render_tb_cpp(
+    iface: _TopIface, t: Tb, *, trace_plan: TracePlan | None = None
+) -> str:
     has_clocks = bool(t.clocks)
     has_reset = t.reset_spec is not None
     if has_reset and not has_clocks:
@@ -513,7 +562,9 @@ def _render_tb_cpp(iface: _TopIface, t: Tb, *, trace_plan: TracePlan | None = No
             _dir, sn, ty = iface.resolve(raw)
             w = _as_int_width(ty)
             if w > 64:
-                raise SystemExit(f"print() for i{w} not supported in C++ TB generator (prototype limitation)")
+                raise SystemExit(
+                    f"print() for i{w} not supported in C++ TB generator (prototype limitation)"
+                )
             port_specs.append((str(raw), sn, w))
         if p.at is not None:
             prints_at.setdefault(int(p.at), []).append((fmt, port_specs))
@@ -528,15 +579,21 @@ def _render_tb_cpp(iface: _TopIface, t: Tb, *, trace_plan: TracePlan | None = No
         for r in t.random_streams:
             dir_, sn, ty = iface.resolve(r.port)
             if dir_ != "in":
-                raise SystemExit(f"random() requires input port, got output: {r.port!r}")
+                raise SystemExit(
+                    f"random() requires input port, got output: {r.port!r}"
+                )
             if ty == "!pyc.clock" or ty == "!pyc.reset":
-                raise SystemExit(f"random() cannot target clock/reset ports: {r.port!r}")
+                raise SystemExit(
+                    f"random() cannot target clock/reset ports: {r.port!r}"
+                )
             if sn in used_ports:
                 raise SystemExit(f"duplicate random() stream for port: {r.port!r}")
             used_ports.add(sn)
             w = _as_int_width(ty)
             if w > 64:
-                raise SystemExit(f"random() for i{w} not supported in C++ TB generator (prototype limitation)")
+                raise SystemExit(
+                    f"random() for i{w} not supported in C++ TB generator (prototype limitation)"
+                )
             rand_specs.append((sn, w, int(r.seed), int(r.start), int(r.every)))
 
     clk_sn = ""
@@ -565,7 +622,7 @@ def _render_tb_cpp(iface: _TopIface, t: Tb, *, trace_plan: TracePlan | None = No
     lines.append("#include <string_view>\n\n")
     lines.append("#include <cpp/pyc_tb.hpp>\n\n")
     lines.append("#include <cpp/pyc_trace_bin.hpp>\n\n")
-    lines.append(f"#include \"{hdr}\"\n\n")
+    lines.append(f'#include "{hdr}"\n\n')
     lines.append("using pyc::cpp::Testbench;\n\n")
     lines.append("int main() {\n")
     lines.append(f"  pyc::gen::{top} dut;\n")
@@ -578,29 +635,39 @@ def _render_tb_cpp(iface: _TopIface, t: Tb, *, trace_plan: TracePlan | None = No
             lines.append(f"  std::uint64_t rng_{sn} = 0x{seed64:x}ull;\n")
         lines.append("\n")
     lines.append("  // Optional traces (Decision 0145).\n")
-    lines.append("  const char *trace_dir_env = std::getenv(\"PYC_TRACE_DIR\");\n")
+    lines.append('  const char *trace_dir_env = std::getenv("PYC_TRACE_DIR");\n')
     lines.append(
         "  const bool trace_env_enabled = (trace_dir_env != nullptr) && (std::string(trace_dir_env).size() != 0);\n"
     )
-    lines.append(f"  const bool trace_cfg_enabled = {str(bool(trace_plan and trace_plan.enabled_signals)).lower()};\n")
+    lines.append(
+        f"  const bool trace_cfg_enabled = {str(bool(trace_plan and trace_plan.enabled_signals)).lower()};\n"
+    )
     lines.append("  if (trace_env_enabled || trace_cfg_enabled) {\n")
     lines.append(
-        "    std::filesystem::path out_dir = trace_env_enabled ? std::filesystem::path(trace_dir_env) : std::filesystem::path(\".\");\n"
+        '    std::filesystem::path out_dir = trace_env_enabled ? std::filesystem::path(trace_dir_env) : std::filesystem::path(".");\n'
     )
-    lines.append(f"    out_dir /= \"tb_{iface.sym}\";\n")
+    lines.append(f'    out_dir /= "tb_{iface.sym}";\n')
     lines.append("    std::filesystem::create_directories(out_dir);\n")
-    lines.append(f"    tb.enableVcd((out_dir / \"tb_{iface.sym}.vcd\").string(), /*top=*/\"tb_{iface.sym}\");\n")
+    lines.append(
+        f'    tb.enableVcd((out_dir / "tb_{iface.sym}.vcd").string(), /*top=*/"tb_{iface.sym}");\n'
+    )
     if trace_plan and trace_plan.enabled_signals:
         sigs = list(trace_plan.enabled_signals)
         insts = list(trace_plan.enabled_instances)
         sig_obs = dict(getattr(trace_plan, "signal_obs", {}) or {})
         # Ensure stable ordering for reproducible generated TB text.
-        sigs = sorted(set(str(s) for s in sigs))
-        insts = sorted(set(str(s) for s in insts))
-        sig_obs = {str(k): str(v).strip().lower() for k, v in sig_obs.items() if str(k) in set(sigs)}
+        sigs = sorted({str(s) for s in sigs})
+        insts = sorted({str(s) for s in insts})
+        sig_obs = {
+            str(k): str(v).strip().lower()
+            for k, v in sig_obs.items()
+            if str(k) in set(sigs)
+        }
         tick_sigs = sorted([k for k, v in sig_obs.items() if v == "tick"])
         xfer_sigs = sorted([k for k, v in sig_obs.items() if v == "xfer"])
-        lines.append("    // Trace config selected signals (generated from trace DSL).\n")
+        lines.append(
+            "    // Trace config selected signals (generated from trace DSL).\n"
+        )
         lines.append("    static constexpr std::string_view kEnabledInstances[] = {\n")
         for s in insts:
             lines.append(f"      {json.dumps(s)},\n")
@@ -641,12 +708,18 @@ def _render_tb_cpp(iface: _TopIface, t: Tb, *, trace_plan: TracePlan | None = No
             "      return pyc::cpp::PycTraceBinWriter::SampleAt::Auto;\n"
             "    };\n"
         )
-        lines.append("    dut.pyc_trace_vcd(tb, /*prefix=*/\"dut\", enabledInstance, enabledSignal);\n")
+        lines.append(
+            '    dut.pyc_trace_vcd(tb, /*prefix=*/"dut", enabledInstance, enabledSignal);\n'
+        )
         lines.append("    // Binary trace event stream (Decision 0016).\n")
         lines.append("    pyc::cpp::ProbeRegistry reg;\n")
-        lines.append("    dut.pyc_register_probes(reg, /*prefix=*/\"dut\");\n")
-        lines.append("    std::vector<const pyc::cpp::ProbeRegistry::Entry *> trace_probes;\n")
-        lines.append("    std::vector<pyc::cpp::PycTraceBinWriter::SampleAt> trace_sample_at;\n")
+        lines.append('    dut.pyc_register_probes(reg, /*prefix=*/"dut");\n')
+        lines.append(
+            "    std::vector<const pyc::cpp::ProbeRegistry::Entry *> trace_probes;\n"
+        )
+        lines.append(
+            "    std::vector<pyc::cpp::PycTraceBinWriter::SampleAt> trace_sample_at;\n"
+        )
         lines.append("    trace_probes.reserve(std::size(kEnabledSignals));\n")
         lines.append("    trace_sample_at.reserve(std::size(kEnabledSignals));\n")
         lines.append("    for (auto p : kEnabledSignals) {\n")
@@ -656,14 +729,16 @@ def _render_tb_cpp(iface: _TopIface, t: Tb, *, trace_plan: TracePlan | None = No
         lines.append("    }\n")
         lines.append("    bin_trace.emplace();\n")
         lines.append(
-            f"    if (!bin_trace->open(out_dir / \"tb_{iface.sym}.pyctrace\", std::move(trace_probes), /*external_manifest=*/true, std::move(trace_sample_at))) {{\n"
+            f'    if (!bin_trace->open(out_dir / "tb_{iface.sym}.pyctrace", std::move(trace_probes), /*external_manifest=*/true, std::move(trace_sample_at))) {{\n'
         )
-        lines.append("      std::cerr << \"WARN: failed to open pyc binary trace output\\n\";\n")
+        lines.append(
+            '      std::cerr << "WARN: failed to open pyc binary trace output\\n";\n'
+        )
         lines.append("      bin_trace.reset();\n")
         lines.append("    }\n")
     else:
         for sn in [*iface.in_names, *iface.out_names]:
-            lines.append(f"    tb.vcdTrace(dut.{sn}, \"{sn}\");\n")
+            lines.append(f'    tb.vcdTrace(dut.{sn}, "{sn}");\n')
     lines.append("  }\n\n")
 
     if has_clocks:
@@ -682,18 +757,20 @@ def _render_tb_cpp(iface: _TopIface, t: Tb, *, trace_plan: TracePlan | None = No
         )
         lines.append(
             "    bin_trace->writeInvalidate(__pyc_reset_assert_cycle, pyc::cpp::PycTraceBinWriter::Phase::Tick, "
-            "\"global\", pyc::cpp::PycTraceBinWriter::InvalidateReason::WarmReset, \"global\", \"tb.reset\");\n"
+            '"global", pyc::cpp::PycTraceBinWriter::InvalidateReason::WarmReset, "global", "tb.reset");\n'
         )
         lines.append(
             "    bin_trace->writeResetAssert(__pyc_reset_assert_cycle, pyc::cpp::PycTraceBinWriter::Phase::Tick, "
-            "\"global\", pyc::cpp::PycTraceBinWriter::ResetKind::Warm);\n"
+            '"global", pyc::cpp::PycTraceBinWriter::ResetKind::Warm);\n'
         )
         lines.append(
             "    bin_trace->writeResetDeassert(__pyc_reset_deassert_cycle, pyc::cpp::PycTraceBinWriter::Phase::Tick, "
-            "\"global\", pyc::cpp::PycTraceBinWriter::ResetKind::Warm);\n"
+            '"global", pyc::cpp::PycTraceBinWriter::ResetKind::Warm);\n'
         )
         lines.append("  }\n")
-        lines.append(f"  tb.reset(dut.{rst_sn}, /*cyclesAsserted=*/{int(ca)}, /*cyclesDeasserted=*/{int(cd)});\n\n")
+        lines.append(
+            f"  tb.reset(dut.{rst_sn}, /*cyclesAsserted=*/{int(ca)}, /*cyclesDeasserted=*/{int(cd)});\n\n"
+        )
 
     if trace_plan and trace_plan.enabled_signals and trace_plan.window:
         begin = trace_plan.window.begin_cycle
@@ -701,22 +778,30 @@ def _render_tb_cpp(iface: _TopIface, t: Tb, *, trace_plan: TracePlan | None = No
         if begin is not None and end is not None:
             hp = int(t.clocks[0].half_period_steps) if has_clocks else 0
             steps_per_cycle = 1 if not has_clocks else max(1, 2 * hp)
-            lines.append("  // Bounded trace window (cycles are relative to post-reset cycle 0).\n")
+            lines.append(
+                "  // Bounded trace window (cycles are relative to post-reset cycle 0).\n"
+            )
             lines.append("  if (trace_cfg_enabled) {\n")
             lines.append("    const std::uint64_t trace_base_steps = tb.timeSteps();\n")
-            lines.append(f"    const std::uint64_t steps_per_cycle = {int(steps_per_cycle)}ull;\n")
+            lines.append(
+                f"    const std::uint64_t steps_per_cycle = {int(steps_per_cycle)}ull;\n"
+            )
             lines.append(
                 f"    tb.setVcdWindow(trace_base_steps + ({int(begin)}ull * steps_per_cycle), "
                 f"trace_base_steps + (({int(end)}ull + 1ull) * steps_per_cycle) - 1ull);\n"
             )
             lines.append("  }\n\n")
 
-    lines.append(f"  const std::uint64_t timeout_cycles = {int(t.timeout_cycles)}ull;\n")
+    lines.append(
+        f"  const std::uint64_t timeout_cycles = {int(t.timeout_cycles)}ull;\n"
+    )
     lines.append("  bool ok = false;\n")
     lines.append("  for (std::uint64_t cyc = 0; cyc < timeout_cycles; ++cyc) {\n")
 
     if rand_specs:
-        lines.append("    // Random drives for this cycle (applied before explicit drives).\n")
+        lines.append(
+            "    // Random drives for this cycle (applied before explicit drives).\n"
+        )
         for sn, w, _seed, st, ev in rand_specs:
             mask = (1 << w) - 1 if w < 64 else (1 << 64) - 1
             lines.append(
@@ -754,14 +839,16 @@ def _render_tb_cpp(iface: _TopIface, t: Tb, *, trace_plan: TracePlan | None = No
                 m = msg if msg is not None else f"{sn} mismatch"
                 if w == 1:
                     lines.append(
-                        f"      if (dut.{sn}.value() != {vv}u) {{ std::cerr << \"ERROR(pre): {m}: got=\" << dut.{sn}.value() << \" exp={vv}\\n\"; return 1; }}\n"
+                        f'      if (dut.{sn}.value() != {vv}u) {{ std::cerr << "ERROR(pre): {m}: got=" << dut.{sn}.value() << " exp={vv}\\n"; return 1; }}\n'
                     )
                 elif w <= 64:
                     lines.append(
-                        f"      if (dut.{sn}.value() != {vv}u) {{ std::cerr << \"ERROR(pre): {m}: got=0x\" << std::hex << dut.{sn}.value() << \" exp=0x{vv:x}\" << std::dec << \"\\n\"; return 1; }}\n"
+                        f'      if (dut.{sn}.value() != {vv}u) {{ std::cerr << "ERROR(pre): {m}: got=0x" << std::hex << dut.{sn}.value() << " exp=0x{vv:x}" << std::dec << "\\n"; return 1; }}\n'
                     )
                 else:
-                    lines.append(f"      if (!(dut.{sn} == {exp})) {{ std::cerr << \"ERROR(pre): {m}\\n\"; return 1; }}\n")
+                    lines.append(
+                        f'      if (!(dut.{sn} == {exp})) {{ std::cerr << "ERROR(pre): {m}\\n"; return 1; }}\n'
+                    )
             lines.append("      break; }\n")
         lines.append("    default: break;\n")
         lines.append("    }\n")
@@ -775,9 +862,13 @@ def _render_tb_cpp(iface: _TopIface, t: Tb, *, trace_plan: TracePlan | None = No
                     f"    tb.runCycleAutoTrace(cyc, (bin_trace && cyc >= {int(begin)}ull && cyc <= {int(end)}ull) ? &*bin_trace : nullptr);\n"
                 )
             else:
-                lines.append("    tb.runCycleAutoTrace(cyc, bin_trace ? &*bin_trace : nullptr);\n")
+                lines.append(
+                    "    tb.runCycleAutoTrace(cyc, bin_trace ? &*bin_trace : nullptr);\n"
+                )
         else:
-            lines.append("    tb.runCycleAutoTrace(cyc, bin_trace ? &*bin_trace : nullptr);\n")
+            lines.append(
+                "    tb.runCycleAutoTrace(cyc, bin_trace ? &*bin_trace : nullptr);\n"
+            )
     else:
         lines.append("    tb.runSteps(1);\n")
 
@@ -796,14 +887,16 @@ def _render_tb_cpp(iface: _TopIface, t: Tb, *, trace_plan: TracePlan | None = No
                 # Print decimal for i1, hex for <=64 wider signals.
                 if w == 1:
                     lines.append(
-                        f"      if (dut.{sn}.value() != {vv}u) {{ std::cerr << \"ERROR: {m}: got=\" << dut.{sn}.value() << \" exp={vv}\\n\"; return 1; }}\n"
+                        f'      if (dut.{sn}.value() != {vv}u) {{ std::cerr << "ERROR: {m}: got=" << dut.{sn}.value() << " exp={vv}\\n"; return 1; }}\n'
                     )
                 elif w <= 64:
                     lines.append(
-                        f"      if (dut.{sn}.value() != {vv}u) {{ std::cerr << \"ERROR: {m}: got=0x\" << std::hex << dut.{sn}.value() << \" exp=0x{vv:x}\" << std::dec << \"\\n\"; return 1; }}\n"
+                        f'      if (dut.{sn}.value() != {vv}u) {{ std::cerr << "ERROR: {m}: got=0x" << std::hex << dut.{sn}.value() << " exp=0x{vv:x}" << std::dec << "\\n"; return 1; }}\n'
                     )
                 else:
-                    lines.append(f"      if (!(dut.{sn} == {exp})) {{ std::cerr << \"ERROR: {m}\\n\"; return 1; }}\n")
+                    lines.append(
+                        f'      if (!(dut.{sn} == {exp})) {{ std::cerr << "ERROR: {m}\\n"; return 1; }}\n'
+                    )
             lines.append("      break; }\n")
         lines.append("    default: break;\n")
         lines.append("    }\n")
@@ -816,14 +909,16 @@ def _render_tb_cpp(iface: _TopIface, t: Tb, *, trace_plan: TracePlan | None = No
                 lines.append(f"    case {cyc}: {{\n")
                 for fmt, ports in prints_at[cyc]:
                     msg_lit = json.dumps(f" {fmt}")
-                    lines.append(f"      std::cerr << \"[tb] cyc=\" << cyc << {msg_lit}")
+                    lines.append(f'      std::cerr << "[tb] cyc=" << cyc << {msg_lit}')
                     for raw, sn, w in ports:
                         raw_lit = json.dumps(f" {raw}=")
                         if w == 1:
                             lines.append(f" << {raw_lit} << dut.{sn}.value()")
                         else:
-                            lines.append(f" << {raw_lit} << \"0x\" << std::hex << dut.{sn}.value() << std::dec")
-                    lines.append(" << \"\\n\";\n")
+                            lines.append(
+                                f' << {raw_lit} << "0x" << std::hex << dut.{sn}.value() << std::dec'
+                            )
+                    lines.append(' << "\\n";\n')
                 lines.append("      break; }\n")
             lines.append("    default: break;\n")
             lines.append("    }\n")
@@ -831,29 +926,37 @@ def _render_tb_cpp(iface: _TopIface, t: Tb, *, trace_plan: TracePlan | None = No
             lines.append("    // Periodic prints.\n")
             for fmt, st, ev, ports in prints_every:
                 msg_lit = json.dumps(f" {fmt}")
-                lines.append(f"    if (cyc >= {st}ull && ((cyc - {st}ull) % {ev}ull) == 0ull) {{\n")
-                lines.append(f"      std::cerr << \"[tb] cyc=\" << cyc << {msg_lit}")
+                lines.append(
+                    f"    if (cyc >= {st}ull && ((cyc - {st}ull) % {ev}ull) == 0ull) {{\n"
+                )
+                lines.append(f'      std::cerr << "[tb] cyc=" << cyc << {msg_lit}')
                 for raw, sn, w in ports:
                     raw_lit = json.dumps(f" {raw}=")
                     if w == 1:
                         lines.append(f" << {raw_lit} << dut.{sn}.value()")
                     else:
-                        lines.append(f" << {raw_lit} << \"0x\" << std::hex << dut.{sn}.value() << std::dec")
-                lines.append(" << \"\\n\";\n")
+                        lines.append(
+                            f' << {raw_lit} << "0x" << std::hex << dut.{sn}.value() << std::dec'
+                        )
+                lines.append(' << "\\n";\n')
                 lines.append("    }\n")
 
     if t.finish_cycle is not None:
-        lines.append(f"    if (cyc == {int(t.finish_cycle)}ull) {{ ok = true; break; }}\n")
+        lines.append(
+            f"    if (cyc == {int(t.finish_cycle)}ull) {{ ok = true; break; }}\n"
+        )
 
     lines.append("  }\n")
-    lines.append("  if (!ok) { std::cerr << \"TIMEOUT\\n\"; return 1; }\n")
-    lines.append("  std::cerr << \"OK\\n\";\n")
+    lines.append('  if (!ok) { std::cerr << "TIMEOUT\\n"; return 1; }\n')
+    lines.append('  std::cerr << "OK\\n";\n')
     lines.append("  return 0;\n")
     lines.append("}\n")
     return "".join(lines)
 
 
-def _render_tb_sv(iface: _TopIface, t: Tb, *, trace_plan: TracePlan | None = None) -> str:
+def _render_tb_sv(
+    iface: _TopIface, t: Tb, *, trace_plan: TracePlan | None = None
+) -> str:
     has_clocks = bool(t.clocks)
     has_reset = t.reset_spec is not None
     if has_reset and not has_clocks:
@@ -916,15 +1019,21 @@ def _render_tb_sv(iface: _TopIface, t: Tb, *, trace_plan: TracePlan | None = Non
         for r in t.random_streams:
             dir_, sn, ty = iface.resolve(r.port)
             if dir_ != "in":
-                raise SystemExit(f"random() requires input port, got output: {r.port!r}")
+                raise SystemExit(
+                    f"random() requires input port, got output: {r.port!r}"
+                )
             if ty == "!pyc.clock" or ty == "!pyc.reset":
-                raise SystemExit(f"random() cannot target clock/reset ports: {r.port!r}")
+                raise SystemExit(
+                    f"random() cannot target clock/reset ports: {r.port!r}"
+                )
             if sn in used_ports:
                 raise SystemExit(f"duplicate random() stream for port: {r.port!r}")
             used_ports.add(sn)
             w = _as_int_width(ty)
             if w > 64:
-                raise SystemExit(f"random() for i{w} not supported in SV TB generator (prototype limitation)")
+                raise SystemExit(
+                    f"random() for i{w} not supported in SV TB generator (prototype limitation)"
+                )
             rand_specs.append((sn, w, int(r.seed), int(r.start), int(r.every)))
 
     clk_sn = ""
@@ -946,9 +1055,9 @@ def _render_tb_sv(iface: _TopIface, t: Tb, *, trace_plan: TracePlan | None = Non
     lines.append(f"module tb_{top};\n")
     lines.append("  /* verilator lint_off UNUSEDSIGNAL */\n")
 
-    for n, ty in zip(iface.in_names, iface.in_tys):
+    for n, ty in zip(iface.in_names, iface.in_tys, strict=True):
         lines.append(decl(n, ty))
-    for n, ty in zip(iface.out_names, iface.out_tys):
+    for n, ty in zip(iface.out_names, iface.out_tys, strict=True):
         lines.append(decl(n, ty))
     if rand_specs:
         lines.append("\n")
@@ -972,7 +1081,7 @@ def _render_tb_sv(iface: _TopIface, t: Tb, *, trace_plan: TracePlan | None = Non
     if trace_plan and trace_plan.enabled_signals:
         # Decision 0023: enabled_signals are canonical `<instance_path>:<field_path>` strings.
         # SystemVerilog `$dumpvars` expects hierarchical references, so map ":" -> ".".
-        sigs = sorted(set(str(s) for s in trace_plan.enabled_signals))
+        sigs = sorted({str(s) for s in trace_plan.enabled_signals})
 
         def canonical_to_sv_ref(p: str) -> str:
             inst, sep, field = str(p).partition(":")
@@ -987,16 +1096,20 @@ def _render_tb_sv(iface: _TopIface, t: Tb, *, trace_plan: TracePlan | None = Non
             # backend applies `_sanitize_id` on port names, so do the same here.
             return f"{inst}.{_sanitize_id(field)}"
 
-        sv_sigs = sorted(set(canonical_to_sv_ref(s) for s in sigs))
+        sv_sigs = sorted({canonical_to_sv_ref(s) for s in sigs})
         lines.append("  // Optional traces (generated from trace DSL).\n")
         lines.append("  initial begin : __pyc_tb_trace\n")
-        lines.append(f"    $dumpfile(\"tb_{top}.vcd\");\n")
+        lines.append(f'    $dumpfile("tb_{top}.vcd");\n')
         # Chunk long `$dumpvars` arg lists to keep tool limits reasonable.
         chunk = 64
         for i in range(0, len(sv_sigs), chunk):
             args = ", ".join(sv_sigs[i : i + chunk])
             lines.append(f"    $dumpvars(0, {args});\n")
-        if trace_plan.window and trace_plan.window.begin_cycle is not None and trace_plan.window.end_cycle is not None:
+        if (
+            trace_plan.window
+            and trace_plan.window.begin_cycle is not None
+            and trace_plan.window.end_cycle is not None
+        ):
             if int(trace_plan.window.begin_cycle) > 0:
                 lines.append("    $dumpoff;\n")
         lines.append("  end\n\n")
@@ -1005,16 +1118,20 @@ def _render_tb_sv(iface: _TopIface, t: Tb, *, trace_plan: TracePlan | None = Non
     if has_clocks:
         hp = int(t.clocks[0].half_period_steps)
         if hp != 1:
-            lines.append("  // NOTE: half_period_steps != 1 is approximated by scaling delay.\n")
+            lines.append(
+                "  // NOTE: half_period_steps != 1 is approximated by scaling delay.\n"
+            )
         lines.append("  initial begin\n")
-        lines.append(f"    {clk_sn} = {1 if (t.clocks and t.clocks[0].start_high) else 0};\n")
+        lines.append(
+            f"    {clk_sn} = {1 if (t.clocks and t.clocks[0].start_high) else 0};\n"
+        )
         lines.append("  end\n")
         lines.append(f"  always #{hp} {clk_sn} = ~{clk_sn};\n\n")
 
     # Main stimulus loop.
     lines.append("  initial begin : __pyc_tb_main\n")
     # Initialize all driven inputs to 0.
-    for sn, ty in zip(iface.in_names, iface.in_tys):
+    for sn, ty in zip(iface.in_names, iface.in_tys, strict=True):
         if sn == clk_sn:
             continue
         w = _as_int_width(ty)
@@ -1054,12 +1171,18 @@ def _render_tb_sv(iface: _TopIface, t: Tb, *, trace_plan: TracePlan | None = Non
             lines.append(f"      if (cyc == {int(e) + 1}) $dumpoff;\n\n")
 
     if rand_specs:
-        lines.append("      // Random drives for this cycle (applied before explicit drives).\n")
+        lines.append(
+            "      // Random drives for this cycle (applied before explicit drives).\n"
+        )
         for sn, w, _seed, st, ev in rand_specs:
             hi = 63 if w >= 64 else (w - 1)
-            lines.append(f"      if (cyc >= {int(st)} && (((cyc - {int(st)}) % {int(ev)}) == 0)) begin\n")
+            lines.append(
+                f"      if (cyc >= {int(st)} && (((cyc - {int(st)}) % {int(ev)}) == 0)) begin\n"
+            )
             lines.append("        // LCG: state = state * 6364136223846793005 + 1.\n")
-            lines.append(f"        rng_{sn} = (rng_{sn} * 64'd6364136223846793005) + 64'd1;\n")
+            lines.append(
+                f"        rng_{sn} = (rng_{sn} * 64'd6364136223846793005) + 64'd1;\n"
+            )
             lines.append(f"        {sn} = rng_{sn}[{hi}:0];\n")
             lines.append("      end\n")
         lines.append("\n")
@@ -1081,14 +1204,18 @@ def _render_tb_sv(iface: _TopIface, t: Tb, *, trace_plan: TracePlan | None = Non
         # drives in this TB process. This keeps pre-step sampling stable and
         # avoids racey reads of DUT outputs.
         lines.append("      #0;\n")
-        lines.append("      // Pre-step expects for this cycle (checked before posedge).\n")
+        lines.append(
+            "      // Pre-step expects for this cycle (checked before posedge).\n"
+        )
         lines.append("      unique case (cyc)\n")
         for cyc in sorted(expects_pre_by.keys()):
             lines.append(f"        {cyc}: begin\n")
             for sn, val, msg, ty in expects_pre_by[cyc]:
                 w = _as_int_width(ty)
                 m = msg if msg is not None else f"{sn} mismatch"
-                lines.append(f"          if ({sn} !== {sv_lit(w, val)}) $fatal(1, \"PRE: {m}\");\n")
+                lines.append(
+                    f'          if ({sn} !== {sv_lit(w, val)}) $fatal(1, "PRE: {m}");\n'
+                )
             lines.append("        end\n")
         lines.append("        default: begin end\n")
         lines.append("      endcase\n")
@@ -1101,14 +1228,18 @@ def _render_tb_sv(iface: _TopIface, t: Tb, *, trace_plan: TracePlan | None = Non
     lines.append("      __pyc_tb_active = 1'b1;\n")
 
     if expects_post_by:
-        lines.append("      // Expects for this cycle (checked after posedge updates).\n")
+        lines.append(
+            "      // Expects for this cycle (checked after posedge updates).\n"
+        )
         lines.append("      unique case (cyc)\n")
         for cyc in sorted(expects_post_by.keys()):
             lines.append(f"        {cyc}: begin\n")
             for sn, val, msg, ty in expects_post_by[cyc]:
                 w = _as_int_width(ty)
                 m = msg if msg is not None else f"{sn} mismatch"
-                lines.append(f"          if ({sn} !== {sv_lit(w, val)}) $fatal(1, \"{m}\");\n")
+                lines.append(
+                    f'          if ({sn} !== {sv_lit(w, val)}) $fatal(1, "{m}");\n'
+                )
             lines.append("        end\n")
         lines.append("        default: begin end\n")
         lines.append("      endcase\n")
@@ -1119,13 +1250,15 @@ def _render_tb_sv(iface: _TopIface, t: Tb, *, trace_plan: TracePlan | None = Non
         for cyc in sorted(prints_at.keys()):
             lines.append(f"        {cyc}: begin\n")
             for fmt, ports in prints_at[cyc]:
-                esc = str(fmt).replace("\\", "\\\\").replace("\"", "\\\"")
+                esc = str(fmt).replace("\\", "\\\\").replace('"', '\\"')
                 if ports:
                     suffix = "".join(f" {p}=%0h" for p in ports)
                     args = ", ".join(["cyc", *ports])
-                    lines.append(f"          $display(\"[tb] cyc=%0d {esc}{suffix}\", {args});\n")
+                    lines.append(
+                        f'          $display("[tb] cyc=%0d {esc}{suffix}", {args});\n'
+                    )
                 else:
-                    lines.append(f"          $display(\"[tb] cyc=%0d {esc}\", cyc);\n")
+                    lines.append(f'          $display("[tb] cyc=%0d {esc}", cyc);\n')
             lines.append("        end\n")
         lines.append("        default: begin end\n")
         lines.append("      endcase\n")
@@ -1133,27 +1266,31 @@ def _render_tb_sv(iface: _TopIface, t: Tb, *, trace_plan: TracePlan | None = Non
     if prints_every:
         lines.append("      // Periodic prints.\n")
         for fmt, st, ev, ports in prints_every:
-            esc = str(fmt).replace("\\", "\\\\").replace("\"", "\\\"")
-            lines.append(f"      if (cyc >= {st} && (((cyc - {st}) % {ev}) == 0)) begin\n")
+            esc = str(fmt).replace("\\", "\\\\").replace('"', '\\"')
+            lines.append(
+                f"      if (cyc >= {st} && (((cyc - {st}) % {ev}) == 0)) begin\n"
+            )
             if ports:
                 suffix = "".join(f" {p}=%0h" for p in ports)
                 args = ", ".join(["cyc", *ports])
-                lines.append(f"        $display(\"[tb] cyc=%0d {esc}{suffix}\", {args});\n")
+                lines.append(
+                    f'        $display("[tb] cyc=%0d {esc}{suffix}", {args});\n'
+                )
             else:
-                lines.append(f"        $display(\"[tb] cyc=%0d {esc}\", cyc);\n")
+                lines.append(f'        $display("[tb] cyc=%0d {esc}", cyc);\n')
             lines.append("      end\n")
 
     if t.finish_cycle is not None:
         lines.append(f"      if (cyc == {int(t.finish_cycle)}) begin\n")
         lines.append("        __pyc_tb_done = 1'b1;\n")
-        lines.append("        $display(\"OK\");\n")
+        lines.append('        $display("OK");\n')
         lines.append("        $finish;\n")
         lines.append("        disable __pyc_tb_main;\n")
         lines.append("      end\n")
 
     lines.append("    end\n")
     if t.finish_cycle is None:
-        lines.append("    if (!__pyc_tb_done) $fatal(1, \"TIMEOUT\");\n")
+        lines.append('    if (!__pyc_tb_done) $fatal(1, "TIMEOUT");\n')
     lines.append("  end\n\n")
 
     # SVA assertions.
@@ -1165,7 +1302,9 @@ def _render_tb_sv(iface: _TopIface, t: Tb, *, trace_plan: TracePlan | None = Non
             nm = a.name or f"sva_{i}"
             clk_dir, clk_port, _ = iface.resolve(a.clock)
             if clk_dir != "in":
-                raise SystemExit(f"sva_assert clock must be an input port, got output: {a.clock!r}")
+                raise SystemExit(
+                    f"sva_assert clock must be an input port, got output: {a.clock!r}"
+                )
             pv = f"__pyc_sva_past_valid_{i}"
             # Guard against `$past` being undefined in the first sampled cycle by
             # generating a per-assertion past-valid bit.
@@ -1175,7 +1314,9 @@ def _render_tb_sv(iface: _TopIface, t: Tb, *, trace_plan: TracePlan | None = Non
             if a.reset:
                 rst_dir, rst_port, _ = iface.resolve(a.reset)
                 if rst_dir != "in":
-                    raise SystemExit(f"sva_assert reset must be an input port, got output: {a.reset!r}")
+                    raise SystemExit(
+                        f"sva_assert reset must be an input port, got output: {a.reset!r}"
+                    )
                 disable_terms.insert(0, rst_port)
                 lines.append(f"  always_ff @(posedge {clk_port}) begin\n")
                 lines.append(f"    if ({rst_port}) {pv} <= 1'b0; else {pv} <= 1'b1;\n")
@@ -1190,7 +1331,7 @@ def _render_tb_sv(iface: _TopIface, t: Tb, *, trace_plan: TracePlan | None = Non
             # Sample on negedge so assertions observe values after posedge-triggered
             # sequential updates in common designs.
             lines.append(
-                f"  assert property (@(negedge {clk_port}){rst_expr} {expr}) else $fatal(1, \"{msg}\");\n"
+                f'  assert property (@(negedge {clk_port}){rst_expr} {expr}) else $fatal(1, "{msg}");\n'
             )
         lines.append("\n")
 
@@ -1220,11 +1361,15 @@ def _run_backend_job(job: tuple[str, list[str]]) -> tuple[str, str]:
     if proc.returncode != 0:
         err = proc.stderr.strip()
         out = proc.stdout.strip()
-        raise RuntimeError(f"backend job {name!r} failed ({proc.returncode})\ncmd: {' '.join(cmd)}\n{err}\n{out}")
+        raise RuntimeError(
+            f"backend job {name!r} failed ({proc.returncode})\ncmd: {' '.join(cmd)}\n{err}\n{out}"
+        )
     return (name, proc.stdout.strip())
 
 
-def _emit_multi_pyc_artifacts(design: Design, *, out_dir: Path) -> tuple[Path, dict[str, Any], dict[str, Path], Path]:
+def _emit_multi_pyc_artifacts(
+    design: Design, *, out_dir: Path
+) -> tuple[Path, dict[str, Any], dict[str, Path], Path]:
     module_map = design.emit_module_mlir_map()
     module_dir = out_dir / "device" / "modules"
     module_dir.mkdir(parents=True, exist_ok=True)
@@ -1241,7 +1386,9 @@ def _emit_multi_pyc_artifacts(design: Design, *, out_dir: Path) -> tuple[Path, d
     manifest = design.emit_project_manifest(module_dir_rel="device/modules")
     manifest["design_pyc"] = str(design_pyc_path.relative_to(out_dir))
     manifest_path = out_dir / "project_manifest.json"
-    _write_text_atomic(manifest_path, json.dumps(manifest, sort_keys=True, indent=2) + "\n")
+    _write_text_atomic(
+        manifest_path, json.dumps(manifest, sort_keys=True, indent=2) + "\n"
+    )
     return (manifest_path, manifest, module_paths, design_pyc_path)
 
 
@@ -1252,9 +1399,9 @@ def _collect_testbench_payload(
     trace_plan: TracePlan | None = None,
     tb_probes: TbProbes | None = None,
 ) -> tuple[str, str]:
-    if not hasattr(mod, "tb") or not callable(getattr(mod, "tb")):
+    if not hasattr(mod, "tb") or not callable(mod.tb):
         raise SystemExit("build requires `@testbench def tb(t: Tb): ...`")
-    tb_fn = getattr(mod, "tb")
+    tb_fn = mod.tb
     if not bool(getattr(tb_fn, "__pycircuit_testbench__", False)):
         raise SystemExit("build requires tb(...) to be decorated with `@testbench`")
     t = Tb()
@@ -1287,7 +1434,10 @@ def _collect_testbench_payload(
         payload["trace_plan"] = trace_plan.as_dict()
     payload["cpp_text"] = _render_tb_cpp(iface, t, trace_plan=trace_plan)
     payload["sv_text"] = _render_tb_sv(iface, t, trace_plan=trace_plan)
-    return (str(tb_name), json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False))
+    return (
+        str(tb_name),
+        json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False),
+    )
 
 
 def _emit_testbench_pyc_file(
@@ -1302,7 +1452,9 @@ def _emit_testbench_pyc_file(
     payload = json.loads(payload_json)
     _write_text_atomic(
         tb_pyc_path,
-        emit_testbench_pyc(payload=payload, tb_name=tb_name, frontend_contract=FRONTEND_CONTRACT),
+        emit_testbench_pyc(
+            payload=payload, tb_name=tb_name, frontend_contract=FRONTEND_CONTRACT
+        ),
     )
     return tb_pyc_path
 
@@ -1358,7 +1510,9 @@ def _frontend_compiler_hash() -> str:
 
 
 def _canonical_hash(payload: dict[str, Any]) -> str:
-    blob = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    blob = json.dumps(
+        payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+    ).encode("utf-8")
     return hashlib.sha256(blob).hexdigest()
 
 
@@ -1380,7 +1534,9 @@ def _base_name_of(fn: Any) -> str:
     return getattr(fn, "__name__", "Module")
 
 
-def _module_params_from_manifest(manifest: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
+def _module_params_from_manifest(
+    manifest: Mapping[str, Any]
+) -> dict[str, dict[str, Any]]:
     out: dict[str, dict[str, Any]] = {}
     modules = manifest.get("modules", [])
     if not isinstance(modules, list):
@@ -1467,7 +1623,9 @@ def _resolve_probe_outputs(
     for probe_fn in probe_fns:
         target_fn = getattr(probe_fn, "__pycircuit_probe_target__", None)
         if target_fn is None:
-            raise SystemExit(f"invalid @probe without target: {getattr(probe_fn, '__name__', probe_fn)!r}")
+            raise SystemExit(
+                f"invalid @probe without target: {getattr(probe_fn, '__name__', probe_fn)!r}"
+            )
         target_base = _base_name_of(target_fn)
         target_symbols = bases.get(target_base, [])
         plan = resolve_probe_function(
@@ -1521,13 +1679,15 @@ def _cmd_build(args: argparse.Namespace) -> int:
     project_root = _project_root(src, project_root_override=args.project_root)
     _scan_api_contract(src, project_root_override=str(project_root))
     mod = _load_py_file(src)
-    if not hasattr(mod, "build") or not callable(getattr(mod, "build")):
+    if not hasattr(mod, "build") or not callable(mod.build):
         raise SystemExit(
             f"{src} must define a pyCircuit entrypoint: `@module def build(m: Circuit, ...)` "
             "or `def build(m: Circuit, domain, ...)`"
         )
-    build = getattr(mod, "build")
-    jit_params = _collect_jit_params(build, overrides=list(getattr(args, "param", []) or []))
+    build = mod.build
+    jit_params = _collect_jit_params(
+        build, overrides=list(getattr(args, "param", []) or [])
+    )
     top_name = _top_name_for_build(src, build)
 
     from .design import canonical_params_json
@@ -1563,25 +1723,33 @@ def _cmd_build(args: argparse.Namespace) -> int:
             if not all(p.is_file() for p in module_paths.values()):
                 raise FileNotFoundError("missing cached .pyc modules")
             design_pyc_rel = str(manifest.get("design_pyc", "")).strip()
-            design_pyc_path = (out_dir / design_pyc_rel) if design_pyc_rel else (out_dir / "device" / "design.pyc")
+            design_pyc_path = (
+                (out_dir / design_pyc_rel)
+                if design_pyc_rel
+                else (out_dir / "device" / "design.pyc")
+            )
             if not design_pyc_path.is_file():
                 raise FileNotFoundError("missing cached design.pyc")
             iface = _top_iface_from_manifest(manifest)
-            print("jit-cache: hit")
+            sys.stdout.write("jit-cache: hit\n")
         except Exception:
             cache_hit = False
 
     if not cache_hit:
         try:
-            design_obj = _compile_entrypoint(build, top_name=top_name, jit_params=jit_params)
+            design_obj = _compile_entrypoint(
+                build, top_name=top_name, jit_params=jit_params
+            )
         except (DesignError, JitError) as e:
             raise SystemExit(f"design compile failed: {e}") from e
         if not isinstance(design_obj, Design):
             raise SystemExit("internal error: expected Design from compile(...)")
         design = design_obj
         iface = _top_iface(design)
-        manifest_path, manifest, module_paths, design_pyc_path = _emit_multi_pyc_artifacts(design, out_dir=out_dir)
-        print("jit-cache: miss")
+        manifest_path, manifest, module_paths, design_pyc_path = (
+            _emit_multi_pyc_artifacts(design, out_dir=out_dir)
+        )
+        sys.stdout.write("jit-cache: miss\n")
 
     pycc = _detect_pycc()
     jobs = max(1, int(args.jobs))
@@ -1679,9 +1847,16 @@ def _cmd_build(args: argparse.Namespace) -> int:
                 raise SystemExit(f"trace config error: {e}") from e
 
     tb_probes = TbProbes.from_probe_manifest(probe_manifest_obj)
-    tb_name, tb_payload_json = _collect_testbench_payload(mod, iface, trace_plan=trace_plan, tb_probes=tb_probes)
-    tb_pyc_path = _emit_testbench_pyc_file(out_dir=out_dir, tb_name=tb_name, payload_json=tb_payload_json)
-    manifest["testbench"] = {"name": tb_name, "pyc": str(tb_pyc_path.relative_to(out_dir))}
+    tb_name, tb_payload_json = _collect_testbench_payload(
+        mod, iface, trace_plan=trace_plan, tb_probes=tb_probes
+    )
+    tb_pyc_path = _emit_testbench_pyc_file(
+        out_dir=out_dir, tb_name=tb_name, payload_json=tb_payload_json
+    )
+    manifest["testbench"] = {
+        "name": tb_name,
+        "pyc": str(tb_pyc_path.relative_to(out_dir)),
+    }
     if trace_plan is not None:
         trace_path = out_dir / "trace_plan.json"
         _save_json(trace_path, trace_plan.as_dict())
@@ -1696,7 +1871,11 @@ def _cmd_build(args: argparse.Namespace) -> int:
         unchanged = same_flags and old_hashes.get(sym) == h
 
         cpp_out_dir = device_cpp_root / sym
-        cpp_ready = cpp_out_dir.is_dir() and any(cpp_out_dir.glob("*.cpp")) and any(cpp_out_dir.glob("*.hpp"))
+        cpp_ready = (
+            cpp_out_dir.is_dir()
+            and any(cpp_out_dir.glob("*.cpp"))
+            and any(cpp_out_dir.glob("*.hpp"))
+        )
         if do_cpp and not (unchanged and cpp_ready):
             cpp_out_dir.mkdir(parents=True, exist_ok=True)
             pycc_jobs.append(
@@ -1745,7 +1924,13 @@ def _cmd_build(args: argparse.Namespace) -> int:
             pycc_jobs.append(
                 (
                     f"tb-cpp:{tb_name}",
-                    [str(pycc), str(tb_pyc_path), *pycc_hard_hierarchy_flags, "-cpp", str(tb_cpp_out)],
+                    [
+                        str(pycc),
+                        str(tb_pyc_path),
+                        *pycc_hard_hierarchy_flags,
+                        "-cpp",
+                        str(tb_cpp_out),
+                    ],
                 )
             )
     if do_v:
@@ -1757,7 +1942,13 @@ def _cmd_build(args: argparse.Namespace) -> int:
             pycc_jobs.append(
                 (
                     f"tb-sv:{tb_name}",
-                    [str(pycc), str(tb_pyc_path), *pycc_hard_hierarchy_flags, "-verilog", str(tb_sv_out)],
+                    [
+                        str(pycc),
+                        str(tb_pyc_path),
+                        *pycc_hard_hierarchy_flags,
+                        "-verilog",
+                        str(tb_sv_out),
+                    ],
                 )
             )
 
@@ -1772,7 +1963,9 @@ def _cmd_build(args: argparse.Namespace) -> int:
         if not cpp_sources:
             raise SystemExit("build(cpp): no generated C++ sources found")
         if not tb_cpp_out.is_file():
-            raise SystemExit(f"build(cpp): missing generated TB C++ source: {tb_cpp_out}")
+            raise SystemExit(
+                f"build(cpp): missing generated TB C++ source: {tb_cpp_out}"
+            )
         cpp_headers = _gather_cpp_headers(device_cpp_root)
         include_dirs: list[str] = []
         include_dirs.append(str(device_cpp_root))
@@ -1804,7 +1997,14 @@ def _cmd_build(args: argparse.Namespace) -> int:
         cmake_build.mkdir(parents=True, exist_ok=True)
 
         subprocess.run(
-            [sys.executable, str(gen_script), "--manifest", str(cpp_manifest), "--out-dir", str(cmake_src)],
+            [
+                sys.executable,
+                str(gen_script),
+                "--manifest",
+                str(cpp_manifest),
+                "--out-dir",
+                str(cmake_src),
+            ],
             check=True,
         )
         build_type = "Release" if str(args.profile) == "release" else "RelWithDebInfo"
@@ -1836,12 +2036,16 @@ def _cmd_build(args: argparse.Namespace) -> int:
             ]
 
         subprocess.run(cmake_cmd, check=True)
-        subprocess.run(["cmake", "--build", str(cmake_build), "-j", str(jobs)], check=True)
+        subprocess.run(
+            ["cmake", "--build", str(cmake_build), "-j", str(jobs)], check=True
+        )
         manifest["cpp_executable"] = str(cmake_build / "pyc_tb")
 
     if do_v:
         if not tb_sv_out.is_file():
-            raise SystemExit(f"build(verilator): missing generated TB SV source: {tb_sv_out}")
+            raise SystemExit(
+                f"build(verilator): missing generated TB SV source: {tb_sv_out}"
+            )
         prim_file: Path | None = None
         verilog_module_sources: list[str] = []
         for p in sorted(device_v_root.rglob("*.v")):
@@ -1854,7 +2058,9 @@ def _cmd_build(args: argparse.Namespace) -> int:
             verilog_module_sources.append(str(p))
         if not verilog_module_sources:
             raise SystemExit("build(verilator): no generated Verilog sources found")
-        verilog_sources = ([str(prim_file)] if prim_file is not None else []) + verilog_module_sources
+        verilog_sources = (
+            [str(prim_file)] if prim_file is not None else []
+        ) + verilog_module_sources
         verilog_manifest = {
             "version": 1,
             "top": tb_name,
@@ -1933,7 +2139,7 @@ def _cmd_build(args: argparse.Namespace) -> int:
     )
     _save_json(cache_path, cache_out)
     _save_json(manifest_path, manifest)
-    print(str(manifest_path))
+    sys.stdout.write(f"{manifest_path}\n")
     return 0
 
 
@@ -1941,8 +2147,13 @@ def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="pycircuit")
     sub = p.add_subparsers(dest="cmd", required=True)
 
-    emit = sub.add_parser("emit", help="Emit PYC MLIR (*.pyc) from a Python design file.")
-    emit.add_argument("python_file", help="Python source defining `@module def build(m: Circuit, ...)`")
+    emit = sub.add_parser(
+        "emit", help="Emit PYC MLIR (*.pyc) from a Python design file."
+    )
+    emit.add_argument(
+        "python_file",
+        help="Python source defining `@module def build(m: Circuit, ...)`",
+    )
     emit.add_argument("-o", "--output", required=True, help="Output .pyc path")
     emit.add_argument(
         "--param",
@@ -2003,9 +2214,17 @@ def main(argv: list[str] | None = None) -> int:
     )
     emit.set_defaults(fn=_cmd_emit)
 
-    build = sub.add_parser("build", help="Canonical flow: multi-.pyc emit + parallel pycc + CMake/Verilator.")
-    build.add_argument("python_file", help="Python source defining `@module build(...)` and `@testbench tb(...)`")
-    build.add_argument("--out-dir", required=True, help="Output directory for project artifacts")
+    build = sub.add_parser(
+        "build",
+        help="Canonical flow: multi-.pyc emit + parallel pycc + CMake/Verilator.",
+    )
+    build.add_argument(
+        "python_file",
+        help="Python source defining `@module build(...)` and `@testbench tb(...)`",
+    )
+    build.add_argument(
+        "--out-dir", required=True, help="Output directory for project artifacts"
+    )
     build.add_argument(
         "--param",
         action="append",
@@ -2017,15 +2236,30 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="Optional project root for strict API contract scan (defaults to nearest .git/pyproject.toml).",
     )
-    build.add_argument("--jobs", type=int, default=max(1, os.cpu_count() or 1), help="Parallel backend jobs")
-    build.add_argument("--profile", choices=["dev", "release"], default="release", help="C++ build profile")
+    build.add_argument(
+        "--jobs",
+        type=int,
+        default=max(1, os.cpu_count() or 1),
+        help="Parallel backend jobs",
+    )
+    build.add_argument(
+        "--profile",
+        choices=["dev", "release"],
+        default="release",
+        help="C++ build profile",
+    )
     build.add_argument(
         "--target",
         choices=["cpp", "verilator", "both"],
         default="both",
         help="Backend targets to generate/build",
     )
-    build.add_argument("--logic-depth", type=int, default=32, help="Max combinational logic depth for pycc")
+    build.add_argument(
+        "--logic-depth",
+        type=int,
+        default=32,
+        help="Max combinational logic depth for pycc",
+    )
     build.add_argument(
         "--trace-config",
         default=None,
