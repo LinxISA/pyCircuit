@@ -967,7 +967,7 @@ class _Compiler:
                 if _is_cycleaware_value(lhs):
                     return lhs - rhs
                 if _is_cycleaware_value(rhs):
-                    raise JitError("cycle-aware subtraction requires the cycle-aware value on the left side")
+                    return rhs.__rsub__(lhs)
                 if isinstance(lhs, (Wire, Reg)):
                     return _expect_wire(lhs, ctx="-") - rhs
                 if isinstance(rhs, (Wire, Reg)):

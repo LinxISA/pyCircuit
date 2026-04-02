@@ -248,6 +248,9 @@ class StateSignal:
     def __sub__(self, other: object) -> "CycleAwareSignal":
         return self._current_view().__sub__(other)
 
+    def __rsub__(self, other: object) -> "CycleAwareSignal":
+        return self._current_view().__rsub__(other)
+
     def __mul__(self, other: object) -> "CycleAwareSignal":
         return self._current_view().__mul__(other)
 
@@ -284,7 +287,7 @@ class StateSignal:
         return self._current_view().__ge__(other)
 
     def __getitem__(self, idx: int | slice) -> "CycleAwareSignal":
-        return self._cas.__getitem__(idx)
+        return self._current_view().__getitem__(idx)
 
     def __repr__(self) -> str:
         return f"StateSignal({self._cas.wire}, cycle={self._cas.cycle})"
@@ -380,6 +383,10 @@ class CycleAwareSignal:
     def __sub__(self, other: object) -> "CycleAwareSignal":
         a, b, c = self._align(other)  # type: ignore[arg-type]
         return CycleAwareSignal(self._domain, a - b, c)
+
+    def __rsub__(self, other: object) -> "CycleAwareSignal":
+        a, b, c = self._align(other)  # type: ignore[arg-type]
+        return CycleAwareSignal(self._domain, b - a, c)
 
     def __mul__(self, other: object) -> "CycleAwareSignal":
         a, b, c = self._align(other)  # type: ignore[arg-type]
@@ -950,4 +957,3 @@ class CycleAwareTb:
 
     def random(self, port: str, **kw: Any) -> None:
         self._t.random(port, **kw)
-
