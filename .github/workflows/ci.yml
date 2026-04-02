@@ -317,6 +317,7 @@ jobs:
 
       - name: Run counter compile smoke
         run: |
+          export PYTHONPATH="$PWD/compiler/frontend"
           export PYC_TOOLCHAIN_ROOT="$PWD/.pycircuit_out/toolchain/install"
           export PATH="$PYC_TOOLCHAIN_ROOT/bin:$PATH"
           unset PYCC

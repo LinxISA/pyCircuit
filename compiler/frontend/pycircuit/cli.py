@@ -2102,8 +2102,6 @@ def _cmd_build(args: argparse.Namespace) -> int:
                 "-Wno-DECLFILENAME",
                 "-Wno-UNUSEDSIGNAL",
                 "-Wno-WIDTHEXPAND",
-                "--quiet",
-                # MSYS2/Windows Verilator wrapper does not support --quiet-build.
                 "--timing",
                 "--trace",
                 "--top-module",
