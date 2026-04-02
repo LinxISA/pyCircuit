@@ -38,6 +38,7 @@ from .trace_dsl import (
     compute_trace_plan_from_artifacts,
     load_trace_config,
 )
+from .v5 import compile_cycle_aware
 
 
 def _default_top_name(src: Path) -> str:
@@ -104,18 +105,27 @@ def _project_root(entry: Path, *, project_root_override: str | None = None) -> P
 
 def _collect_jit_params(build: Any, *, overrides: list[str]) -> dict[str, object]:
     if not callable(build):
-        raise SystemExit("build must be a callable @module entrypoint: `def build(m: Circuit, ...)`")
+        raise SystemExit(
+            "build must be a callable pyCircuit entrypoint: `@module def build(m: Circuit, ...)` "
+            "or `def build(m: Circuit, domain, ...)`"
+        )
 
     sig = inspect.signature(build)
     params = list(sig.parameters.values())
     if not params:
-        raise SystemExit("build must use JIT entry semantics: `@module def build(m: Circuit, ...)`")
+        raise SystemExit(
+            "build must use a pyCircuit entry signature: `@module def build(m: Circuit, ...)` "
+            "or `def build(m: Circuit, domain, ...)`"
+        )
     value_param_names = set(value_params_of(build).keys())
+    domain_param_index = 1 if _is_timed_domain_build(build) else None
 
     # Collect JIT-time parameters from defaults.
     jit_params: dict[str, object] = {}
     missing: list[str] = []
-    for p in params[1:]:
+    for idx, p in enumerate(params[1:], start=1):
+        if domain_param_index is not None and idx == domain_param_index:
+            continue
         if p.name in value_param_names:
             continue
         if p.default is inspect._empty:
@@ -147,6 +157,20 @@ def _collect_jit_params(build: Any, *, overrides: list[str]) -> dict[str, object
     return jit_params
 
 
+def _is_timed_domain_build(build: Any) -> bool:
+    if not callable(build):
+        return False
+    sig = inspect.signature(build)
+    params = list(sig.parameters.values())
+    return len(params) >= 2 and params[1].name == "domain"
+
+
+def _compile_entrypoint(build: Any, *, top_name: str, jit_params: Mapping[str, object]) -> Module | Design:
+    if _is_timed_domain_build(build):
+        return compile_cycle_aware(build, name=top_name, **dict(jit_params))
+    return compile(build, name=top_name, **dict(jit_params))
+
+
 def _top_name_for_build(src: Path, build: Any) -> str:
     top_name = _default_top_name(src)
     override = getattr(build, "__pycircuit_name__", None)
@@ -168,7 +192,7 @@ def _cmd_emit(args: argparse.Namespace) -> int:
     jit_params = _collect_jit_params(build, overrides=list(args.param or []))
     top_name = _top_name_for_build(src if src is not None else Path(src_arg.replace(".", "/") + ".py"), build)
     try:
-        design = compile(build, name=top_name, **jit_params)
+        design = _compile_entrypoint(build, top_name=top_name, jit_params=jit_params)
     except (DesignError, JitError) as e:
         raise SystemExit(f"design compile failed: {e}") from e
 
@@ -332,13 +356,16 @@ def _as_int_width(ty: str) -> int:
 
 def _collect_build(mod: object, src: Path, args: argparse.Namespace) -> Module | Design:
     if not hasattr(mod, "build"):
-        raise SystemExit(f"{src} must define a pyCircuit entrypoint: `@module def build(m: Circuit, ...)`")
+        raise SystemExit(
+            f"{src} must define a pyCircuit entrypoint: `@module def build(m: Circuit, ...)` "
+            "or `def build(m: Circuit, domain, ...)`"
+        )
     build = getattr(mod, "build")
 
     jit_params = _collect_jit_params(build, overrides=list(getattr(args, "param", []) or []))
     top_name = _top_name_for_build(src, build)
     try:
-        return compile(build, name=top_name, **jit_params)
+        return _compile_entrypoint(build, top_name=top_name, jit_params=jit_params)
     except (DesignError, JitError) as e:
         raise SystemExit(f"design compile failed: {e}") from e
 
@@ -1316,6 +1343,20 @@ def _deps_hash(entry: Path, *, project_root: Path) -> str:
     return h.hexdigest()
 
 
+def _frontend_compiler_hash() -> str:
+    pkg_root = Path(__file__).resolve().parent
+    h = hashlib.sha256()
+    for p in sorted(pkg_root.rglob("*.py")):
+        if not p.is_file():
+            continue
+        rel = str(p.relative_to(pkg_root))
+        h.update(rel.encode("utf-8"))
+        h.update(b"\0")
+        h.update(hashlib.sha256(p.read_bytes()).digest())
+        h.update(b"\0")
+    return h.hexdigest()
+
+
 def _canonical_hash(payload: dict[str, Any]) -> str:
     blob = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
     return hashlib.sha256(blob).hexdigest()
@@ -1333,6 +1374,9 @@ def _base_name_of(fn: Any) -> str:
     override = getattr(fn, "__pycircuit_module_name__", None)
     if isinstance(override, str) and override.strip():
         return override.strip()
+    public_name = getattr(fn, "__pycircuit_name__", None)
+    if isinstance(public_name, str) and public_name.strip():
+        return public_name.strip()
     return getattr(fn, "__name__", "Module")
 
 
@@ -1478,7 +1522,10 @@ def _cmd_build(args: argparse.Namespace) -> int:
     _scan_api_contract(src, project_root_override=str(project_root))
     mod = _load_py_file(src)
     if not hasattr(mod, "build") or not callable(getattr(mod, "build")):
-        raise SystemExit(f"{src} must define a pyCircuit entrypoint: `@module def build(m: Circuit, ...)`")
+        raise SystemExit(
+            f"{src} must define a pyCircuit entrypoint: `@module def build(m: Circuit, ...)` "
+            "or `def build(m: Circuit, domain, ...)`"
+        )
     build = getattr(mod, "build")
     jit_params = _collect_jit_params(build, overrides=list(getattr(args, "param", []) or []))
     top_name = _top_name_for_build(src, build)
@@ -1493,6 +1540,7 @@ def _cmd_build(args: argparse.Namespace) -> int:
         "version": 1,
         "entry_hash": _module_hash(src),
         "deps_hash": _deps_hash(src, project_root=project_root),
+        "frontend_hash": _frontend_compiler_hash(),
         "jit_params_json": jit_params_json,
         "top_name": top_name,
         "frontend_contract": FRONTEND_CONTRACT,
@@ -1525,7 +1573,7 @@ def _cmd_build(args: argparse.Namespace) -> int:
 
     if not cache_hit:
         try:
-            design_obj = compile(build, name=top_name, **jit_params)
+            design_obj = _compile_entrypoint(build, top_name=top_name, jit_params=jit_params)
         except (DesignError, JitError) as e:
             raise SystemExit(f"design compile failed: {e}") from e
         if not isinstance(design_obj, Design):

@@ -1,51 +1,42 @@
 # Development Guide
 
-This page lists the active pyc4.0 development entrypoints and gate commands.
+This section collects the repo-facing workflow rules for pyCircuit contributors
+and coding agents.
 
-## Core references
+The public frontend surface is the current pyc5 API. The active semantic
+evidence corpus remains:
 
 - `docs/rfcs/pyc4.0-decisions.md`
 - `docs/updatePLAN.md`
-- `docs/gates/README.md`
 - `docs/gates/decision_status_v40.md`
 
-## Build and gate commands
+## Read in this order
+
+1. `docs/development/contributing-workflow.md`
+2. `docs/development/testing-and-gates.md`
+3. `docs/development/review-and-merge.md`
+4. `docs/gates/README.md`
+
+## Standard commands
 
 - `bash flows/scripts/pyc build`
 - `bash flows/scripts/run_examples.sh`
 - `bash flows/scripts/run_sims.sh`
 - `bash flows/scripts/run_sims_nightly.sh`
+- `bash flows/scripts/run_semantic_regressions_v40.sh`
+- `python3 flows/tools/check_api_hygiene.py compiler/frontend/pycircuit designs/examples docs README.md`
 
-## Repository layout
+## Guide map
 
-pyCircuit is organized as follows:
+- `contributing-workflow.md`: contributor workflow, blocker handling, and
+  documentation expectations
+- `testing-and-gates.md`: required validation matrix by change type
+- `review-and-merge.md`: review standard, PR content, and merge blockers
 
-```
-pyCircuit
-├── compiler/
-│   ├── frontend/          # Python-based frontend
-│   │   └── pycircuit/    # Core DSL implementation
-│   └── mlir/             # MLIR-based backend
-│       ├── lib/          # Dialect definitions
-│       └── tools/        # Compiler tools
-├── runtime/
-│   ├── cpp/              # C++ simulation runtime
-│   └── verilog/          # Verilog primitives
-├── designs/
-│   └── examples/         # Example designs
-└── docs/                 # Documentation
-```
-
-## Quick Links
+## Related references
 
 - `docs/FRONTEND_API.md`
 - `docs/TESTBENCH.md`
 - `docs/IR_SPEC.md`
 - `docs/DIAGNOSTICS.md`
-- `designs/examples/README.md`
-
-## Getting Help
-
-- GitHub Issues: Report bugs and request features
-- GitHub Discussions: Ask questions and share ideas
-- Discord: Join our community chat
+- `docs/gates/README.md`

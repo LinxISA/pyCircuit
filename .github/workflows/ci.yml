@@ -6,13 +6,71 @@ on:
     branches: [main, develop]
   pull_request:
 
+permissions:
+  contents: read
+
 env:
   LLVM_VERSION: "19"
   CMAKE_BUILD_TYPE: Release
 
 jobs:
-  lint:
-    name: Python Checks
+  pre-commit:
+    name: Pre-commit
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install pre-commit
+        run: python -m pip install pre-commit
+
+      - name: Determine pre-commit diff range
+        id: precommit-range
+        shell: bash
+        run: |
+          set -euxo pipefail
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            echo "mode=range" >> "$GITHUB_OUTPUT"
+            echo "from_ref=${{ github.event.pull_request.base.sha }}" >> "$GITHUB_OUTPUT"
+            echo "to_ref=${{ github.event.pull_request.head.sha }}" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [[ "${{ github.event_name }}" == "push" && "${{ github.event.before }}" != "0000000000000000000000000000000000000000" ]]; then
+            echo "mode=range" >> "$GITHUB_OUTPUT"
+            echo "from_ref=${{ github.event.before }}" >> "$GITHUB_OUTPUT"
+            echo "to_ref=${{ github.sha }}" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          git fetch --no-tags --prune origin main develop || true
+          if git rev-parse --verify origin/main >/dev/null 2>&1; then
+            echo "mode=range" >> "$GITHUB_OUTPUT"
+            echo "from_ref=$(git merge-base HEAD origin/main)" >> "$GITHUB_OUTPUT"
+            echo "to_ref=${{ github.sha }}" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "mode=all-files" >> "$GITHUB_OUTPUT"
+
+      - name: Run pre-commit hooks on changed files
+        if: steps.precommit-range.outputs.mode == 'range'
+        run: |
+          pre-commit run \
+            --show-diff-on-failure \
+            --from-ref "${{ steps.precommit-range.outputs.from_ref }}" \
+            --to-ref "${{ steps.precommit-range.outputs.to_ref }}"
+
+      - name: Run pre-commit hooks on all files
+        if: steps.precommit-range.outputs.mode == 'all-files'
+        run: pre-commit run --all-files --show-diff-on-failure
+
+  unit-tests:
+    name: Unit Tests
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -23,10 +81,10 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install Python check deps
-        run: python -m pip install pyyaml
+      - name: Install Python deps
+        run: python -m pip install -e ".[dev]"
 
-      - name: Validate cross-platform wheel tag helper
+      - name: Validate wheel tag helper
         run: |
           python packaging/wheel/get_wheel_plat_name.py --system linux --arch x86_64
           python packaging/wheel/get_wheel_plat_name.py --system macos --arch arm64
@@ -41,13 +99,81 @@ jobs:
             compiler/frontend/pycircuit/packaged_toolchain.py \
             compiler/frontend/pycircuit/cli.py
 
-      - name: Run API hygiene gate
-        run: python flows/tools/check_api_hygiene.py compiler/frontend/pycircuit designs/examples docs README.md
+      - name: Run unit tests
+        run: pytest tests/unit -m unit
+
+  docs:
+    name: Docs Build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install docs deps
+        run: python -m pip install -e ".[docs]"
+
+      - name: Build docs
+        run: mkdocs build
+
+  system-tests-linux:
+    name: System Tests (Linux)
+    runs-on: ubuntu-latest
+    needs: [pre-commit, unit-tests, docs]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Python deps
+        run: python -m pip install -e ".[dev]"
+
+      - name: Install LLVM 19 + simulation deps
+        run: |
+          set -euxo pipefail
+          sudo apt-get update
+          sudo apt-get install -y wget gnupg software-properties-common cmake ninja-build clang verilator iverilog
+          wget https://apt.llvm.org/llvm.sh
+          chmod +x llvm.sh
+          sudo ./llvm.sh "${LLVM_VERSION}"
+          sudo apt-get install -y llvm-${LLVM_VERSION}-dev mlir-${LLVM_VERSION}-tools libmlir-${LLVM_VERSION}-dev
+          echo "/usr/lib/llvm-${LLVM_VERSION}/bin" >> "$GITHUB_PATH"
+
+      - name: Build staged toolchain
+        run: |
+          bash flows/scripts/pyc build \
+            --llvm-config /usr/lib/llvm-${LLVM_VERSION}/bin/llvm-config \
+            --build-dir "$PWD/.pycircuit_out/toolchain/build" \
+            --install-prefix "$PWD/.pycircuit_out/toolchain/install"
+
+      - name: Export toolchain env
+        run: |
+          echo "PYC_TOOLCHAIN_ROOT=$PWD/.pycircuit_out/toolchain/install" >> "$GITHUB_ENV"
+          echo "$PWD/.pycircuit_out/toolchain/install/bin" >> "$GITHUB_PATH"
+
+      - name: Run system tests
+        run: pytest tests/system -m system
+
+      - name: Upload gate logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pyc-system-test-logs
+          path: docs/gates/logs/
+          retention-days: 7
 
   build-linux:
     name: Build Toolchain (Linux)
     runs-on: ubuntu-latest
-    needs: lint
+    needs: [pre-commit, unit-tests, docs, system-tests-linux]
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -64,10 +190,10 @@ jobs:
         run: |
           set -euxo pipefail
           sudo apt-get update
-          sudo apt-get install -y wget gnupg software-properties-common cmake ninja-build clang verilator iverilog
+          sudo apt-get install -y wget gnupg software-properties-common cmake ninja-build clang
           wget https://apt.llvm.org/llvm.sh
           chmod +x llvm.sh
-          sudo ./llvm.sh ${LLVM_VERSION}
+          sudo ./llvm.sh "${LLVM_VERSION}"
           sudo apt-get install -y llvm-${LLVM_VERSION}-dev mlir-${LLVM_VERSION}-tools libmlir-${LLVM_VERSION}-dev
           echo "/usr/lib/llvm-${LLVM_VERSION}/bin" >> "$GITHUB_PATH"
 
@@ -90,14 +216,6 @@ jobs:
           set -euxo pipefail
           wheel="$(basename dist/*.whl)"
           [[ "${wheel}" == pycircuit_hisi-*-py3-none-*.whl ]]
-
-      - name: Run examples
-        run: |
-          export PYC_TOOLCHAIN_ROOT="$PWD/.pycircuit_out/toolchain/install"
-          export PATH="$PYC_TOOLCHAIN_ROOT/bin:$PATH"
-          export PYC_SKIP_SEMANTIC_REGRESSIONS=1
-          unset PYCC
-          bash flows/scripts/run_examples.sh
 
       - name: Upload toolchain
         uses: actions/upload-artifact@v4
@@ -137,7 +255,7 @@ jobs:
           name: pyc-wheel-linux
           path: dist
 
-      - name: Install wheel and run example gate
+      - name: Install wheel and run counter smoke
         shell: bash
         run: |
           set -euxo pipefail
@@ -146,14 +264,19 @@ jobs:
           pip install dist/*.whl
           export PYC_TOOLCHAIN_ROOT="$(python -c 'import pycircuit, pathlib; print((pathlib.Path(pycircuit.__file__).resolve().parent / "_toolchain").as_posix())')"
           export PYC_USE_INSTALLED_PYTHON_PACKAGE=1
-          export PYC_SKIP_SEMANTIC_REGRESSIONS=1
           unset PYCC
-          bash flows/scripts/run_examples.sh
+          python -m pycircuit.cli build \
+            designs/examples/counter/tb_counter.py \
+            --out-dir /tmp/pyc-wheel-counter \
+            --target both \
+            --jobs 1 \
+            --logic-depth 64 \
+            --run-verilator
 
   build-macos:
     name: Build Toolchain (macOS)
     runs-on: macos-latest
-    needs: lint
+    needs: [pre-commit, unit-tests, docs]
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -192,13 +315,17 @@ jobs:
           wheel="$(basename dist/*.whl)"
           [[ "${wheel}" == pycircuit_hisi-*-py3-none-*.whl ]]
 
-      - name: Run example compile gate
+      - name: Run counter compile smoke
         run: |
           export PYC_TOOLCHAIN_ROOT="$PWD/.pycircuit_out/toolchain/install"
           export PATH="$PYC_TOOLCHAIN_ROOT/bin:$PATH"
-          export PYC_SKIP_SEMANTIC_REGRESSIONS=1
           unset PYCC
-          bash flows/scripts/run_examples.sh
+          python -m pycircuit.cli build \
+            designs/examples/counter/tb_counter.py \
+            --out-dir /tmp/pyc-counter-macos \
+            --target cpp \
+            --jobs 1 \
+            --logic-depth 64
 
       - name: Smoke test installed wheel
         shell: bash
@@ -209,9 +336,13 @@ jobs:
           pip install dist/*.whl
           export PYC_TOOLCHAIN_ROOT="$(python -c 'import pycircuit, pathlib; print((pathlib.Path(pycircuit.__file__).resolve().parent / "_toolchain").as_posix())')"
           export PYC_USE_INSTALLED_PYTHON_PACKAGE=1
-          export PYC_SKIP_SEMANTIC_REGRESSIONS=1
           unset PYCC
-          bash flows/scripts/run_examples.sh
+          python -m pycircuit.cli build \
+            designs/examples/counter/tb_counter.py \
+            --out-dir /tmp/pyc-wheel-counter-macos \
+            --target cpp \
+            --jobs 1 \
+            --logic-depth 64
 
       - name: Upload wheel
         uses: actions/upload-artifact@v4

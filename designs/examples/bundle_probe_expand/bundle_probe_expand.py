@@ -15,11 +15,10 @@ def _probe_struct(m: Circuit):
 
 
 def build(m: CycleAwareCircuit, domain: CycleAwareDomain) -> None:
-    _clk = m.clock("clk")
-    _rst = m.reset("rst")
+    _ = domain
 
     s = _probe_struct(m)
-    inp = m.inputs(s, prefix="in_")
+    _inp = m.inputs(s, prefix="in_")
 
 build.__pycircuit_name__ = "bundle_probe_expand"
 build.__pycircuit_kind__ = "module"

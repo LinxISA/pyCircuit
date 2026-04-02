@@ -62,7 +62,8 @@ the installed compiler command remains `pycc`.
 Install the frontend from source for development:
 
 ```bash
-python3 -m pip install -e .
+python3 -m pip install -e ".[dev,docs]"
+pre-commit install
 python3 -m pycircuit.cli --help
 ```
 
@@ -73,9 +74,24 @@ toolchain with `bash flows/scripts/pyc build` and point `PYC_TOOLCHAIN_ROOT` at
 Run the smoke gates:
 
 ```bash
+pre-commit run --files <changed-file> [<changed-file> ...]
+pytest tests/unit -m unit
 bash flows/scripts/run_examples.sh
 bash flows/scripts/run_sims.sh
 ```
+
+Use `pre-commit run --all-files` only when you are intentionally doing a wider
+repo hygiene sweep. CI runs the pre-commit lane against the PR or push diff so
+legacy backlog outside the change set does not block unrelated work.
+
+System smoke tests that exercise the CLI end-to-end are available via:
+
+```bash
+pytest tests/system -m system
+```
+
+They require a built toolchain (`PYC_TOOLCHAIN_ROOT` or `PYCC`) plus
+`verilator`.
 
 ### Minimal design snippet (counter)
 
@@ -129,6 +145,19 @@ pyCircuit
 - `docs/TESTBENCH.md`
 - `docs/IR_SPEC.md`
 - `docs/updatePLAN.md` and `docs/rfcs/pyc4.0-decisions.md`
+
+## Contributing and Governance
+
+The current contributor workflow uses the pyc5 frontend surface while retaining
+the `pyc4.0` decision corpus and gate evidence as the active semantic source of
+truth.
+
+- Contributor guide: `CONTRIBUTING.md`
+- Development workflow: `docs/development/index.md`
+- Gate matrix: `docs/development/testing-and-gates.md`
+- Merge and review expectations: `docs/development/review-and-merge.md`
+- Semantic evidence corpus: `docs/rfcs/pyc4.0-decisions.md`
+- Evidence archive contract: `docs/gates/README.md`
 
 ## Examples
 

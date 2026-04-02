@@ -1,0 +1,32 @@
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: check-merge-conflict
+      - id: check-yaml
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.11.8
+    hooks:
+      - id: ruff
+
+  - repo: https://github.com/psf/black
+    rev: 24.10.0
+    hooks:
+      - id: black
+
+  - repo: https://github.com/DavidAnson/markdownlint-cli2
+    rev: v0.18.1
+    hooks:
+      - id: markdownlint-cli2
+
+  - repo: local
+    hooks:
+      - id: pyc-api-hygiene
+        name: pyCircuit API hygiene gate
+        entry: python3 flows/tools/check_api_hygiene.py
+        language: system
+        files: ^(compiler/frontend/pycircuit/|designs/examples/|docs/|README\.md$|CONTRIBUTING\.md$)
+        exclude: ^docs/gates/logs/

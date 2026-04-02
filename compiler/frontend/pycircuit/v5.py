@@ -197,6 +197,11 @@ class StateSignal:
         self._reg = reg
         self._cas = CycleAwareSignal(domain, reg.out(), cycle)
 
+    def _current_view(self) -> "CycleAwareSignal":
+        # A state register's Q is readable at every later logical occurrence
+        # without introducing a physical balance register.
+        return CycleAwareSignal(self._domain, self._reg.out(), self._domain.cycle_index)
+
     def set(
         self,
         next_val: "Wire | Reg | CycleAwareSignal | StateSignal",
@@ -232,51 +237,51 @@ class StateSignal:
         return self._domain
 
     def __getattr__(self, name: str) -> object:
-        return getattr(self._cas, name)
+        return getattr(self._current_view(), name)
 
     def __add__(self, other: object) -> "CycleAwareSignal":
-        return self._cas.__add__(other)
+        return self._current_view().__add__(other)
 
     def __radd__(self, other: object) -> "CycleAwareSignal":
-        return self._cas.__radd__(other)
+        return self._current_view().__radd__(other)
 
     def __sub__(self, other: object) -> "CycleAwareSignal":
-        return self._cas.__sub__(other)
+        return self._current_view().__sub__(other)
 
     def __mul__(self, other: object) -> "CycleAwareSignal":
-        return self._cas.__mul__(other)
+        return self._current_view().__mul__(other)
 
     def __and__(self, other: object) -> "CycleAwareSignal":
-        return self._cas.__and__(other)
+        return self._current_view().__and__(other)
 
     def __or__(self, other: object) -> "CycleAwareSignal":
         if isinstance(other, str):
-            return self._cas
-        return self._cas.__or__(other)
+            return self._current_view()
+        return self._current_view().__or__(other)
 
     def __xor__(self, other: object) -> "CycleAwareSignal":
-        return self._cas.__xor__(other)
+        return self._current_view().__xor__(other)
 
     def __invert__(self) -> "CycleAwareSignal":
-        return self._cas.__invert__()
+        return self._current_view().__invert__()
 
     def __eq__(self, other: object) -> "CycleAwareSignal":  # type: ignore[override]
-        return self._cas.__eq__(other)
+        return self._current_view().__eq__(other)
 
     def __ne__(self, other: object) -> "CycleAwareSignal":  # type: ignore[override]
-        return self._cas.__ne__(other)
+        return self._current_view().__ne__(other)
 
     def __lt__(self, other: object) -> "CycleAwareSignal":
-        return self._cas.__lt__(other)
+        return self._current_view().__lt__(other)
 
     def __gt__(self, other: object) -> "CycleAwareSignal":
-        return self._cas.__gt__(other)
+        return self._current_view().__gt__(other)
 
     def __le__(self, other: object) -> "CycleAwareSignal":
-        return self._cas.__le__(other)
+        return self._current_view().__le__(other)
 
     def __ge__(self, other: object) -> "CycleAwareSignal":
-        return self._cas.__ge__(other)
+        return self._current_view().__ge__(other)
 
     def __getitem__(self, idx: int | slice) -> "CycleAwareSignal":
         return self._cas.__getitem__(idx)
@@ -945,5 +950,4 @@ class CycleAwareTb:
 
     def random(self, port: str, **kw: Any) -> None:
         self._t.random(port, **kw)
-
 

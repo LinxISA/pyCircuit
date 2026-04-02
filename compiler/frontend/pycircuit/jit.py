@@ -126,6 +126,10 @@ def _assigned_names(stmts: list[ast.stmt]) -> frozenset[str]:
 def _expect_wire(v: Any, *, ctx: str) -> Wire:
     if isinstance(v, Connector):
         v = v.read()
+    if _is_cycleaware_value(v):
+        w = getattr(v, "wire", None)
+        if isinstance(w, Wire):
+            return w
     if isinstance(v, Wire):
         return v
     if isinstance(v, Reg):
@@ -133,7 +137,19 @@ def _expect_wire(v: Any, *, ctx: str) -> Wire:
     raise JitError(f"{ctx}: expected a Wire/Reg, got {type(v).__name__}")
 
 
+def _is_cycleaware_value(v: Any) -> bool:
+    try:
+        from .v5 import CycleAwareSignal, StateSignal
+    except Exception:
+        return False
+    return isinstance(v, (CycleAwareSignal, StateSignal))
+
+
 def _wire_ifexpr(cond: Wire, true_v: Any, false_v: Any) -> Wire:
+    if _is_cycleaware_value(cond) or _is_cycleaware_value(true_v) or _is_cycleaware_value(false_v):
+        from .v5 import mux as cycleaware_mux
+
+        return cycleaware_mux(cond, true_v, false_v)
     if cond.ty != "i1":
         raise JitError("if-expression condition must be an i1 wire")
     if isinstance(true_v, Connector):
@@ -429,6 +445,8 @@ class _Compiler:
     def _is_hw_value(v: Any) -> bool:
         if isinstance(v, (Wire, Reg, Signal, Vec, Bundle, Connector, LiteralValue)):
             return True
+        if _is_cycleaware_value(v):
+            return True
         if is_connector_bundle(v):
             return True
         if isinstance(v, (list, tuple)):
@@ -458,6 +476,7 @@ class _Compiler:
             or mod.startswith("pycircuit.wiring")
             or mod.startswith("pycircuit.logic")
             or mod.startswith("pycircuit.lib")
+            or mod.startswith("pycircuit.v5")
         )
 
     @staticmethod
@@ -929,6 +948,10 @@ class _Compiler:
                 return int(v)
 
             if isinstance(node.op, ast.Add):
+                if _is_cycleaware_value(lhs):
+                    return lhs + rhs
+                if _is_cycleaware_value(rhs):
+                    return rhs + lhs
                 if isinstance(lhs, (Wire, Reg)):
                     return lhs + rhs
                 if isinstance(rhs, (Wire, Reg)):
@@ -941,12 +964,20 @@ class _Compiler:
                     return Vec((*lhs.elems, *rhs.elems))
                 return _as_py_int(lhs) + _as_py_int(rhs)
             if isinstance(node.op, ast.Sub):
+                if _is_cycleaware_value(lhs):
+                    return lhs - rhs
+                if _is_cycleaware_value(rhs):
+                    raise JitError("cycle-aware subtraction requires the cycle-aware value on the left side")
                 if isinstance(lhs, (Wire, Reg)):
                     return _expect_wire(lhs, ctx="-") - rhs
                 if isinstance(rhs, (Wire, Reg)):
                     return _as_py_int(lhs) - _expect_wire(rhs, ctx="-")
                 return _as_py_int(lhs) - _as_py_int(rhs)
             if isinstance(node.op, ast.Mult):
+                if _is_cycleaware_value(lhs):
+                    return lhs * rhs
+                if _is_cycleaware_value(rhs):
+                    return rhs * lhs
                 if isinstance(lhs, (Wire, Reg)):
                     return _expect_wire(lhs, ctx="*") * rhs
                 if isinstance(rhs, (Wire, Reg)):
@@ -969,18 +1000,30 @@ class _Compiler:
                     return lhs_w % w
                 return _as_py_int(lhs) % _as_py_int(rhs)
             if isinstance(node.op, ast.BitAnd):
+                if _is_cycleaware_value(lhs):
+                    return lhs & rhs
+                if _is_cycleaware_value(rhs):
+                    return rhs & lhs
                 if isinstance(lhs, (Wire, Reg)):
                     return lhs & rhs
                 if isinstance(rhs, (Wire, Reg)):
                     return rhs & lhs
                 return _as_py_int(lhs) & _as_py_int(rhs)
             if isinstance(node.op, ast.BitOr):
+                if _is_cycleaware_value(lhs):
+                    return lhs | rhs
+                if _is_cycleaware_value(rhs):
+                    return rhs | lhs
                 if isinstance(lhs, (Wire, Reg)):
                     return lhs | rhs
                 if isinstance(rhs, (Wire, Reg)):
                     return rhs | lhs
                 return _as_py_int(lhs) | _as_py_int(rhs)
             if isinstance(node.op, ast.BitXor):
+                if _is_cycleaware_value(lhs):
+                    return lhs ^ rhs
+                if _is_cycleaware_value(rhs):
+                    return rhs ^ lhs
                 if isinstance(lhs, (Wire, Reg)):
                     return lhs ^ rhs
                 if isinstance(rhs, (Wire, Reg)):
@@ -1029,8 +1072,12 @@ class _Compiler:
                     b = self.eval_expr(nxt)
                     if isinstance(b, Connector):
                         b = b.read()
-                    if isinstance(out, (Wire, Reg)) or isinstance(b, (Wire, Reg)):
-                        if isinstance(out, (Wire, Reg)):
+                    if _is_cycleaware_value(out) or _is_cycleaware_value(b) or isinstance(out, (Wire, Reg)) or isinstance(b, (Wire, Reg)):
+                        if _is_cycleaware_value(out):
+                            out = out & b
+                        elif _is_cycleaware_value(b):
+                            out = b & out
+                        elif isinstance(out, (Wire, Reg)):
                             out = _expect_wire(out, ctx="and") & b
                         else:
                             out = _expect_wire(b, ctx="and") & out
@@ -1045,8 +1092,12 @@ class _Compiler:
                     b = self.eval_expr(nxt)
                     if isinstance(b, Connector):
                         b = b.read()
-                    if isinstance(out, (Wire, Reg)) or isinstance(b, (Wire, Reg)):
-                        if isinstance(out, (Wire, Reg)):
+                    if _is_cycleaware_value(out) or _is_cycleaware_value(b) or isinstance(out, (Wire, Reg)) or isinstance(b, (Wire, Reg)):
+                        if _is_cycleaware_value(out):
+                            out = out | b
+                        elif _is_cycleaware_value(b):
+                            out = b | out
+                        elif isinstance(out, (Wire, Reg)):
                             out = _expect_wire(out, ctx="or") | b
                         else:
                             out = _expect_wire(b, ctx="or") | out
@@ -1075,17 +1126,29 @@ class _Compiler:
                 if isinstance(op, ast.IsNot):
                     return lhs is not rhs
                 if isinstance(op, ast.Eq):
+                    if _is_cycleaware_value(lhs):
+                        return lhs == rhs
+                    if _is_cycleaware_value(rhs):
+                        return rhs == lhs
                     if not isinstance(lhs, (Wire, Reg)) and not isinstance(rhs, (Wire, Reg)):
                         return _py_cmp_value(lhs) == _py_cmp_value(rhs)
                     w = _expect_wire(lhs, ctx="==") if isinstance(lhs, (Wire, Reg)) else _expect_wire(rhs, ctx="==")
                     return w == (rhs if isinstance(lhs, (Wire, Reg)) else lhs)
                 if isinstance(op, ast.NotEq):
+                    if _is_cycleaware_value(lhs):
+                        return lhs != rhs
+                    if _is_cycleaware_value(rhs):
+                        return rhs != lhs
                     if not isinstance(lhs, (Wire, Reg)) and not isinstance(rhs, (Wire, Reg)):
                         return _py_cmp_value(lhs) != _py_cmp_value(rhs)
                     w = _expect_wire(lhs, ctx="!=") if isinstance(lhs, (Wire, Reg)) else _expect_wire(rhs, ctx="!=")
                     eq = w == (rhs if isinstance(lhs, (Wire, Reg)) else lhs)
                     return ~eq
                 if isinstance(op, ast.Lt):
+                    if _is_cycleaware_value(lhs):
+                        return lhs < rhs
+                    if _is_cycleaware_value(rhs):
+                        return rhs > lhs
                     if isinstance(lhs, (Wire, Reg)):
                         return _expect_wire(lhs, ctx="<") < rhs
                     if isinstance(rhs, (Wire, Reg)):
@@ -1095,6 +1158,10 @@ class _Compiler:
                     rhs_i = int(rhs.value) if isinstance(rhs, LiteralValue) else int(rhs)
                     return lhs_i < rhs_i
                 if isinstance(op, ast.LtE):
+                    if _is_cycleaware_value(lhs):
+                        return lhs <= rhs
+                    if _is_cycleaware_value(rhs):
+                        return rhs >= lhs
                     if isinstance(lhs, (Wire, Reg)):
                         return _expect_wire(lhs, ctx="<=") <= rhs
                     if isinstance(rhs, (Wire, Reg)):
@@ -1103,6 +1170,10 @@ class _Compiler:
                     rhs_i = int(rhs.value) if isinstance(rhs, LiteralValue) else int(rhs)
                     return lhs_i <= rhs_i
                 if isinstance(op, ast.Gt):
+                    if _is_cycleaware_value(lhs):
+                        return lhs > rhs
+                    if _is_cycleaware_value(rhs):
+                        return rhs < lhs
                     if isinstance(lhs, (Wire, Reg)):
                         return _expect_wire(lhs, ctx=">") > rhs
                     if isinstance(rhs, (Wire, Reg)):
@@ -1112,6 +1183,10 @@ class _Compiler:
                     rhs_i = int(rhs.value) if isinstance(rhs, LiteralValue) else int(rhs)
                     return lhs_i > rhs_i
                 if isinstance(op, ast.GtE):
+                    if _is_cycleaware_value(lhs):
+                        return lhs >= rhs
+                    if _is_cycleaware_value(rhs):
+                        return rhs <= lhs
                     if isinstance(lhs, (Wire, Reg)):
                         return _expect_wire(lhs, ctx=">=") >= rhs
                     if isinstance(rhs, (Wire, Reg)):
@@ -1132,8 +1207,12 @@ class _Compiler:
                 cmp_out = _eval_single_compare(op, lhs, rhs)
                 if chain_out is None:
                     chain_out = cmp_out
-                elif isinstance(chain_out, (Wire, Reg)) or isinstance(cmp_out, (Wire, Reg)):
-                    if isinstance(chain_out, (Wire, Reg)):
+                elif _is_cycleaware_value(chain_out) or _is_cycleaware_value(cmp_out) or isinstance(chain_out, (Wire, Reg)) or isinstance(cmp_out, (Wire, Reg)):
+                    if _is_cycleaware_value(chain_out):
+                        chain_out = chain_out & cmp_out
+                    elif _is_cycleaware_value(cmp_out):
+                        chain_out = cmp_out & chain_out
+                    elif isinstance(chain_out, (Wire, Reg)):
                         chain_out = _expect_wire(chain_out, ctx="comparison chain") & cmp_out
                     else:
                         chain_out = _expect_wire(cmp_out, ctx="comparison chain") & chain_out

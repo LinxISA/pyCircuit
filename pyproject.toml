@@ -28,16 +28,16 @@ classifiers = [
     "Topic :: Electronic Design Automation (EDA)",
 ]
 
+dependencies = [
+    "click>=8.0.0",
+    "pyyaml>=6.0",
+]
+
 [project.urls]
 Homepage = "https://github.com/LinxISA/pyCircuit"
 Repository = "https://github.com/LinxISA/pyCircuit"
 Issues = "https://github.com/LinxISA/pyCircuit/issues"
 Releases = "https://github.com/LinxISA/pyCircuit/releases"
-
-dependencies = [
-    "click>=8.0.0",
-    "pyyaml>=6.0",
-]
 
 [project.optional-dependencies]
 dev = [
@@ -46,6 +46,7 @@ dev = [
     "black>=23.0.0",
     "ruff>=0.1.0",
     "mypy>=1.0.0",
+    "pre-commit>=3.7.0",
 ]
 docs = [
     "mkdocs>=1.5.0",
@@ -84,3 +85,7 @@ python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
 addopts = "-v --tb=short"
+markers = [
+    "unit: fast Python-only tests",
+    "system: end-to-end smoke tests that require pycc and simulation tools",
+]

@@ -76,7 +76,7 @@ nav:
       - tutorial/index.md
       - tutorial/unified-signal-model.md
       - tutorial/cycle-aware-computing.md
-      - pyCircuit_Tutorial.md
+      - PyCircuit V5 Programming Tutorial.md
   - Core Docs:
       - QUICKSTART.md
       - FRONTEND_API.md
@@ -90,7 +90,11 @@ nav:
       - PIPELINE.md
   - API Reference:
       - api/index.md
-  - Development: development/index.md
+  - Development:
+      - development/index.md
+      - development/contributing-workflow.md
+      - development/testing-and-gates.md
+      - development/review-and-merge.md
   - Upgrade:
       - updatePLAN.md
       - rfcs/pyc4.0-decisions.md

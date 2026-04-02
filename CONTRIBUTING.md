@@ -1,171 +1,141 @@
 # Contributing to pyCircuit
 
-Thank you for your interest in contributing to pyCircuit! This guide will help you get started with development.
+pyCircuit is a hardware construction and compile-flow project. Contributions are
+expected to preserve MLIR semantics, gate evidence, and the public pyc5 authoring
+surface.
 
-## Table of Contents
+Start with these repo-native references:
 
-- [Code of Conduct](#code-of-conduct)
-- [Getting Started](#getting-started)
-- [Development Setup](#development-setup)
-- [Coding Standards](#coding-standards)
-- [Pull Request Process](#pull-request-process)
-- [Reporting Bugs](#reporting-bugs)
-- [Feature Requests](#feature-requests)
+- `docs/updatePLAN.md`
+- `docs/rfcs/pyc4.0-decisions.md`
+- `docs/development/contributing-workflow.md`
+- `docs/development/testing-and-gates.md`
+- `docs/development/review-and-merge.md`
 
-## Code of Conduct
+## Environment setup
 
-Please read and follow our [Code of Conduct](CODE_OF_CONDUCT.md). We expect all contributors to be respectful and professional.
+Prerequisites:
 
-## Getting Started
-
-pyCircuit is a Python-based hardware description framework that compiles Python to RTL through MLIR. Before contributing, please:
-
-1. Read the [Documentation](docs/)
-2. Try the [Quickstart Guide](docs/getting-started/quickstart.md)
-3. Explore the [Examples](designs/examples/)
-
-## Development Setup
-
-### Prerequisites
-
-- Python 3.9 or later
-- LLVM/MLIR 19 (for compiler backend)
+- Python 3.10+
+- LLVM/MLIR 19
 - CMake 3.20+
-- Ninja build system
-- Git
+- Ninja
+- Verilator and Icarus Verilog for simulation lanes
 
-### Clone and Install
+Recommended bootstrap:
 
 ```bash
-# Clone the repository
-git clone https://github.com/LinxISA/pyCircuit.git
-cd pyCircuit
-
-# Install Python package in development mode
-pip install -e ".[dev]"
-
-# Build the compiler
+python3 -m pip install -e ".[dev,docs]"
+pre-commit install
 bash flows/scripts/pyc build
 ```
 
-### Running Tests
+Editable install is frontend-only. Build the staged toolchain in the current
+worktree and point `PYC_TOOLCHAIN_ROOT` at
+`.pycircuit_out/toolchain/install`, or use a release wheel.
+
+## Core working rules
+
+- Build and test from the current worktree. Do not copy compiled artifacts from
+  another checkout.
+- Treat `docs/rfcs/pyc4.0-decisions.md` and `docs/updatePLAN.md` as the active
+  semantic evidence base until renamed.
+- Semantic changes must be encoded in dialect semantics and MLIR passes or
+  verifiers. Backend-only semantic patches are not acceptable.
+- Keep the repo hard-break only. Do not add legacy compatibility flags or
+  compatibility APIs back into pyc5.
+- Keep documentation current when user-visible behavior, gate expectations, or
+  contributor workflow changes.
+
+## Tests, examples, and docs have different jobs
+
+- Tests validate correctness and regressions.
+- Examples demonstrate supported design and flow behavior.
+- Docs explain contracts, workflow, and user-facing guidance.
+
+Do not create temporary test scripts, one-off playground examples, or Markdown
+files outside the documented locations. Reuse the existing test structure,
+`designs/examples/`, and `docs/`.
+
+## Required checks by change type
+
+Use `docs/development/testing-and-gates.md` as the canonical matrix. The minimum
+expectation is:
+
+| Change type | Minimum checks |
+| --- | --- |
+| Docs, templates, contributor workflow | `mkdocs build`; run `python3 flows/tools/check_api_hygiene.py compiler/frontend/pycircuit designs/examples docs README.md` when touching docs or README |
+| Frontend, CLI, manifest, packaging, example discovery | API hygiene gate plus `bash flows/scripts/run_examples.sh` |
+| Testbench flow, examples, simulation entrypoints | `bash flows/scripts/run_examples.sh`, `bash flows/scripts/run_sims.sh`, `bash flows/scripts/run_sims_nightly.sh` |
+| Dialect, passes, runtime, codegen, semantic behavior | `bash flows/scripts/run_examples.sh`, `bash flows/scripts/run_sims.sh`, `bash flows/scripts/run_sims_nightly.sh`, `bash flows/scripts/run_semantic_regressions_v40.sh`, and strict decision-status validation |
+| Linx integration flows | Run the required `linx-pycircuit` gates in addition to the pyCircuit lanes |
+
+For multi-lane validation, prefer a shared `PYC_GATE_RUN_ID=<run-id>` so all
+artifacts land under one evidence bundle.
+
+## Fast local validation
+
+Use the lightweight local checks before opening a PR:
 
 ```bash
-# Run all examples (smoke test)
-bash flows/scripts/run_examples.sh
-
-# Run simulations
-bash flows/scripts/run_sims.sh
-
-# Run Linx CPU regression
-bash contrib/linx/flows/tools/run_linx_cpu_pyc_cpp.sh
-
-# Run Python tests (if available)
-pytest
+pre-commit run --files <changed-file> [<changed-file> ...]
+pytest tests/unit -m unit
+pytest tests/system -m system
+mkdocs build
 ```
 
-## Coding Standards
+`tests/system` requires a built toolchain plus simulation tools. Export
+`PYC_TOOLCHAIN_ROOT` or `PYCC` before running it locally.
+Run `pre-commit run --all-files` only when you are intentionally sweeping the
+repo for broader hygiene debt. CI runs the pre-commit lane on the PR or push
+diff.
 
-### Python Style
+## Decision IDs and evidence
 
-We follow Python's PEP 8 with some modifications:
+PRs that affect semantics, legality, flow behavior, examples, or documented
+contracts must include:
 
-- Line length: 88 characters (Black default)
-- Use type hints where beneficial
-- Use docstrings for all public functions
+- the affected decision IDs from `docs/rfcs/pyc4.0-decisions.md`
+- the commands you ran
+- evidence paths under `docs/gates/logs/<run-id>/`
+- documentation updates, if behavior or workflow changed
+- compatibility or risk notes when the change is hard-break visible
 
-### Code Formatting
+If a change is docs-only or template-only, say so explicitly in the PR and list
+the checks you ran.
 
-We use several tools to maintain code quality:
+## Commit and branch expectations
 
-```bash
-# Format code
-black .
-ruff check --fix .
+- Keep commits focused and reviewable.
+- Use present-tense commit messages, preferably `type(scope): description`.
+- Do not add AI co-author lines.
+- Do not mix unrelated cleanup with semantic or flow changes unless the cleanup
+  is required for the fix.
 
-# Run linters
-ruff check .
-mypy .
-```
+## Pull request expectations
 
-### Git Conventions
+Use the pull request template. A merge-ready PR should make it easy for a
+reviewer to answer:
 
-- Use meaningful commit messages
-- Keep commits atomic (one feature/fix per commit)
-- Use present tense: "Add feature" not "Added feature"
-- Reference issues in commits: "Fix #123"
+1. What changed?
+2. Which decisions or contracts are affected?
+3. Which gates ran?
+4. Where is the evidence?
+5. What documentation changed?
+6. What risk or compatibility impact remains?
 
-## Pull Request Process
+## Reporting bugs and feature requests
 
-### Before Submitting
+Use the GitHub issue templates and include enough detail to reproduce or scope
+the work:
 
-1. **Run tests**: Ensure all tests pass
-2. **Format code**: Run Black and Ruff
-3. **Update documentation**: If adding new features, update docs
-4. **Update examples**: If changing codegen, regenerate examples
-
-### PR Description
-
-Include in your PR description:
-
-1. **Summary**: What does this PR do?
-2. **Motivation**: Why is this change needed?
-3. **Testing**: How did you test this change?
-4. **Screenshots**: If applicable, show before/after
-
-### PR Checklist
-
-- [ ] Tests pass
-- [ ] Code is formatted
-- [ ] Documentation updated
-- [ ] Examples regenerated (if applicable)
-- [ ] No new warnings
-
-## Reporting Bugs
-
-When reporting bugs, please include:
-
-1. **Environment**: OS, Python version, LLVM version
-2. **Steps to reproduce**: Detailed reproduction steps
-3. **Expected behavior**: What you expected to happen
-4. **Actual behavior**: What actually happened
-5. **Logs**: Any relevant error messages
-
-Use the [GitHub Issue Tracker](https://github.com/LinxISA/pyCircuit/issues) to report bugs.
-
-## Feature Requests
-
-We welcome feature requests! Please include:
-
-1. **Use case**: What problem are you solving?
-2. **Proposed solution**: How do you think it should work?
-3. **Alternatives**: What other approaches have you considered?
-
-## Directory Structure
-
-```
-pyCircuit
-├── compiler/
-│   ├── frontend/          # Python frontend (pycircuit package)
-│   │   └── pycircuit/    # Core DSL implementation
-│   └── mlir/             # MLIR backend
-│       ├── lib/           # Dialect definitions and passes
-│       └── tools/         # pycc, pyc-opt compilers
-├── runtime/
-│   ├── cpp/              # C++ simulation runtime
-│   └── verilog/          # Verilog primitives
-├── designs/
-│   └── examples/         # Example designs
-├── docs/                 # Documentation
-└── flows/               # Build and test scripts
-```
-
-## Communication
-
-- **Issues**: GitHub Issues for bugs and features
-- **Discussions**: GitHub Discussions for questions
-- **Discord**: Join our community for real-time chat
+- design or testbench path
+- backend or toolchain path involved
+- expected vs actual behavior
+- relevant gate or command output
+- minimal reproducer when available
 
 ## License
 
-By contributing to pyCircuit, you agree that your contributions will be licensed under the [MIT License](LICENSE).
+By contributing to pyCircuit, you agree that your contributions are licensed
+under the [MIT License](LICENSE).

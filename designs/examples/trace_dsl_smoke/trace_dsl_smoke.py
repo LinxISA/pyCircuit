@@ -15,13 +15,11 @@ def leaf(m: Circuit, clk, rst) -> None:
     m.output("out_y", r)
 
 def build(m: CycleAwareCircuit, domain: CycleAwareDomain) -> None:
-    _ = domain
-    clk = m.clock("clk")
-    rst = m.reset("rst")
+    cd = domain.clock_domain
     x = m.input("in_x", width=8)
 
-    u0 = m.new(leaf, name="unit0_long_name", short_name="u0", bind={"clk": clk, "rst": rst, "in_x": x})
-    u1 = m.new(leaf, name="unit1_long_name", short_name="u1", bind={"clk": clk, "rst": rst, "in_x": x})
+    u0 = m.new(leaf, name="unit0_long_name", short_name="u0", bind={"clk": cd.clk, "rst": cd.rst, "in_x": x})
+    u1 = m.new(leaf, name="unit1_long_name", short_name="u1", bind={"clk": cd.clk, "rst": cd.rst, "in_x": x})
 
     m.output("y0", u0.outputs)
     m.output("y1", u1.outputs)
