@@ -102,29 +102,29 @@ def build_ftq(
 
     # ── State ─────────────────────────────────────────────────────────
 
-    bpu_ptr = domain.state(width=ptr_w, reset_value=0, name=f"{prefix}_bpu_ptr")
-    ifu_ptr = domain.state(width=ptr_w, reset_value=0, name=f"{prefix}_ifu_ptr")
-    ifu_wb_ptr = domain.state(width=ptr_w, reset_value=0, name=f"{prefix}_ifu_wb_ptr")
-    commit_ptr = domain.state(width=ptr_w, reset_value=0, name=f"{prefix}_commit_ptr")
+    bpu_ptr = domain.signal(width=ptr_w, reset_value=0, name=f"{prefix}_bpu_ptr")
+    ifu_ptr = domain.signal(width=ptr_w, reset_value=0, name=f"{prefix}_ifu_ptr")
+    ifu_wb_ptr = domain.signal(width=ptr_w, reset_value=0, name=f"{prefix}_ifu_wb_ptr")
+    commit_ptr = domain.signal(width=ptr_w, reset_value=0, name=f"{prefix}_commit_ptr")
 
     entry_start_pc = [
-        domain.state(width=pc_width, reset_value=0, name=f"{prefix}_ent_pc_{i}")
+        domain.signal(width=pc_width, reset_value=0, name=f"{prefix}_ent_pc_{i}")
         for i in range(size)
     ]
     entry_target = [
-        domain.state(width=pc_width, reset_value=0, name=f"{prefix}_ent_tgt_{i}")
+        domain.signal(width=pc_width, reset_value=0, name=f"{prefix}_ent_tgt_{i}")
         for i in range(size)
     ]
     entry_taken = [
-        domain.state(width=1, reset_value=0, name=f"{prefix}_ent_tkn_{i}")
+        domain.signal(width=1, reset_value=0, name=f"{prefix}_ent_tkn_{i}")
         for i in range(size)
     ]
     entry_cfi_off = [
-        domain.state(width=cfi_offset_width, reset_value=0, name=f"{prefix}_ent_cfi_{i}")
+        domain.signal(width=cfi_offset_width, reset_value=0, name=f"{prefix}_ent_cfi_{i}")
         for i in range(size)
     ]
     entry_valid = [
-        domain.state(width=1, reset_value=0, name=f"{prefix}_ent_v_{i}")
+        domain.signal(width=1, reset_value=0, name=f"{prefix}_ent_v_{i}")
         for i in range(size)
     ]
 
@@ -210,11 +210,11 @@ def build_ftq(
         j_c = cas(domain, m.const(j, width=idx_w), cycle=0)
         hit = bpu_idx == j_c
         we = bpu_enq_fire & hit
-        entry_start_pc[j].set(mux(we, bpu_in_start_pc, entry_start_pc[j]), when=we)
-        entry_target[j].set(mux(we, bpu_in_target, entry_target[j]), when=we)
-        entry_taken[j].set(mux(we, bpu_in_taken, entry_taken[j]), when=we)
-        entry_cfi_off[j].set(mux(we, bpu_in_cfi_offset, entry_cfi_off[j]), when=we)
-        entry_valid[j].set(
+        entry_start_pc[j].assign(mux(we, bpu_in_start_pc, entry_start_pc[j]), when=we)
+        entry_target[j].assign(mux(we, bpu_in_target, entry_target[j]), when=we)
+        entry_taken[j].assign(mux(we, bpu_in_taken, entry_taken[j]), when=we)
+        entry_cfi_off[j].assign(mux(we, bpu_in_cfi_offset, entry_cfi_off[j]), when=we)
+        entry_valid[j].assign(
             mux(we, cas(domain, m.const(1, width=1), cycle=0), entry_valid[j]),
             when=we,
         )
@@ -226,17 +226,17 @@ def build_ftq(
         j_c = cas(domain, m.const(j, width=idx_w), cycle=0)
         hit = s3_idx == j_c
         we = s3_fire & hit
-        entry_start_pc[j].set(mux(we, bpu_in_start_pc, entry_start_pc[j]), when=we)
-        entry_target[j].set(mux(we, bpu_in_target, entry_target[j]), when=we)
-        entry_taken[j].set(mux(we, bpu_in_taken, entry_taken[j]), when=we)
-        entry_cfi_off[j].set(mux(we, bpu_in_cfi_offset, entry_cfi_off[j]), when=we)
+        entry_start_pc[j].assign(mux(we, bpu_in_start_pc, entry_start_pc[j]), when=we)
+        entry_target[j].assign(mux(we, bpu_in_target, entry_target[j]), when=we)
+        entry_taken[j].assign(mux(we, bpu_in_taken, entry_taken[j]), when=we)
+        entry_cfi_off[j].assign(mux(we, bpu_in_cfi_offset, entry_cfi_off[j]), when=we)
 
     # -- Invalidate committed entry --
     for j in range(size):
         j_c = cas(domain, m.const(j, width=idx_w), cycle=0)
         hit = commit_idx == j_c
         ce = commit_valid & hit
-        entry_valid[j].set(cas(domain, m.const(0, width=1), cycle=0), when=ce)
+        entry_valid[j].assign(cas(domain, m.const(0, width=1), cycle=0), when=ce)
 
     # -- Pointer updates --
 
@@ -263,10 +263,10 @@ def build_ftq(
     # S3 override also rolls back ifu/ifu_wb if they went past the override point
     s3_rollback_ifu = s3_fire & (dist_bpu_ifu == zero_cnt)
 
-    bpu_ptr.set(mux(redirect_valid, redir_new_ptr, next_bpu))
-    ifu_ptr.set(mux(redirect_valid, redir_new_ptr, next_ifu))
-    ifu_wb_ptr.set(mux(redirect_valid, redir_new_ptr, next_ifu_wb))
-    commit_ptr.set(next_commit)
+    bpu_ptr <<= mux(redirect_valid, redir_new_ptr, next_bpu)
+    ifu_ptr <<= mux(redirect_valid, redir_new_ptr, next_ifu)
+    ifu_wb_ptr <<= mux(redirect_valid, redir_new_ptr, next_ifu_wb)
+    commit_ptr <<= next_commit
     return _out
 
 

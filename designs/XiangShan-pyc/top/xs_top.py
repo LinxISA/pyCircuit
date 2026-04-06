@@ -150,8 +150,7 @@ def build_xs_top(
     # Shared bus arbiter (round-robin simplified)
     # ================================================================
 
-    arb_sel_r = domain.state(width=core_sel_w, reset_value=0, name=f"{prefix}_xs_arb_sel")
-    arb_sel = cas(domain, arb_sel_r.wire, cycle=0)
+    arb_sel = domain.signal(width=core_sel_w, reset_value=0, name=f"{prefix}_xs_arb_sel")
 
     # Priority select: check current arb_sel first, then wrap
     bus_req_valid = ZERO_1
@@ -245,7 +244,7 @@ def build_xs_top(
     wrap_sel = mux(arb_sel == max_sel,
                    cas(domain, m.const(0, width=core_sel_w), cycle=0),
                    next_sel)
-    arb_sel_r.set(mux(bus_req_valid, wrap_sel, arb_sel))
+    arb_sel <<= mux(bus_req_valid, wrap_sel, arb_sel)
 
     # AXI write channel (simplified: no write support yet)
     m.output(f"{prefix}_axi_aw_valid", ZERO_1.wire)

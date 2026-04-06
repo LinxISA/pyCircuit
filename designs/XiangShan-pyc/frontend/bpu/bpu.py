@@ -55,11 +55,6 @@ from frontend.bpu.ittage import build_ittage
 from frontend.bpu.ras import build_ras
 
 
-def _r(domain, state_reg):
-    """Read a state register as a CAS signal at cycle 0."""
-    return cas(domain, state_reg.wire, cycle=0)
-
-
 def build_bpu(
     m: CycleAwareCircuit,
     domain: CycleAwareDomain,
@@ -134,56 +129,37 @@ def build_bpu(
     fallthrough_offset = cas(domain, m.const(pred_block_bytes, width=pc_width), cycle=0)
 
     # ── Pipeline state registers ──────────────────────────────────────
-    s1_valid_r = domain.state(width=1, reset_value=0, name=f"{prefix}_s1_valid")
-    s2_valid_r = domain.state(width=1, reset_value=0, name=f"{prefix}_s2_valid")
-    s3_valid_r = domain.state(width=1, reset_value=0, name=f"{prefix}_s3_valid")
+    s1_valid = domain.signal(width=1, reset_value=0, name=f"{prefix}_s1_valid")
+    s2_valid = domain.signal(width=1, reset_value=0, name=f"{prefix}_s2_valid")
+    s3_valid = domain.signal(width=1, reset_value=0, name=f"{prefix}_s3_valid")
 
-    s0_pc_r = domain.state(width=pc_width, reset_value=0, name=f"{prefix}_s0_pc")
+    s0_pc = domain.signal(width=pc_width, reset_value=0, name=f"{prefix}_s0_pc")
 
-    s1_pc_r = domain.state(width=pc_width, reset_value=0, name=f"{prefix}_s1_pc")
-    s1_target_r = domain.state(width=target_w, reset_value=0, name=f"{prefix}_s1_target")
-    s1_taken_r = domain.state(width=1, reset_value=0, name=f"{prefix}_s1_taken")
-    s1_hit_r = domain.state(width=1, reset_value=0, name=f"{prefix}_s1_hit")
-    s1_cfi_pos_r = domain.state(width=cfi_pos_width, reset_value=0, name=f"{prefix}_s1_cfi_pos")
-    s1_attr_r = domain.state(width=attr_width, reset_value=0, name=f"{prefix}_s1_attr")
+    s1_pc = domain.signal(width=pc_width, reset_value=0, name=f"{prefix}_s1_pc")
+    s1_target = domain.signal(width=target_w, reset_value=0, name=f"{prefix}_s1_target")
+    s1_taken = domain.signal(width=1, reset_value=0, name=f"{prefix}_s1_taken")
+    s1_hit = domain.signal(width=1, reset_value=0, name=f"{prefix}_s1_hit")
+    s1_cfi_pos = domain.signal(width=cfi_pos_width, reset_value=0, name=f"{prefix}_s1_cfi_pos")
+    s1_attr = domain.signal(width=attr_width, reset_value=0, name=f"{prefix}_s1_attr")
 
-    s2_pc_r = domain.state(width=pc_width, reset_value=0, name=f"{prefix}_s2_pc")
-    s2_target_r = domain.state(width=target_w, reset_value=0, name=f"{prefix}_s2_target")
-    s2_taken_r = domain.state(width=1, reset_value=0, name=f"{prefix}_s2_taken")
-    s2_cfi_pos_r = domain.state(width=cfi_pos_width, reset_value=0, name=f"{prefix}_s2_cfi_pos")
-    s2_attr_r = domain.state(width=attr_width, reset_value=0, name=f"{prefix}_s2_attr")
+    s2_pc = domain.signal(width=pc_width, reset_value=0, name=f"{prefix}_s2_pc")
+    s2_target = domain.signal(width=target_w, reset_value=0, name=f"{prefix}_s2_target")
+    s2_taken = domain.signal(width=1, reset_value=0, name=f"{prefix}_s2_taken")
+    s2_cfi_pos = domain.signal(width=cfi_pos_width, reset_value=0, name=f"{prefix}_s2_cfi_pos")
+    s2_attr = domain.signal(width=attr_width, reset_value=0, name=f"{prefix}_s2_attr")
 
-    s3_pc_r = domain.state(width=pc_width, reset_value=0, name=f"{prefix}_s3_pc")
-    s3_target_r = domain.state(width=target_w, reset_value=0, name=f"{prefix}_s3_target")
-    s3_taken_r = domain.state(width=1, reset_value=0, name=f"{prefix}_s3_taken")
-    s3_cfi_pos_r = domain.state(width=cfi_pos_width, reset_value=0, name=f"{prefix}_s3_cfi_pos")
-    s3_attr_r = domain.state(width=attr_width, reset_value=0, name=f"{prefix}_s3_attr")
-    s3_hit_r = domain.state(width=1, reset_value=0, name=f"{prefix}_s3_hit")
+    s3_pc = domain.signal(width=pc_width, reset_value=0, name=f"{prefix}_s3_pc")
+    s3_target = domain.signal(width=target_w, reset_value=0, name=f"{prefix}_s3_target")
+    s3_taken = domain.signal(width=1, reset_value=0, name=f"{prefix}_s3_taken")
+    s3_cfi_pos = domain.signal(width=cfi_pos_width, reset_value=0, name=f"{prefix}_s3_cfi_pos")
+    s3_attr = domain.signal(width=attr_width, reset_value=0, name=f"{prefix}_s3_attr")
+    s3_hit = domain.signal(width=1, reset_value=0, name=f"{prefix}_s3_hit")
 
-    s3_s1_target_r = domain.state(width=target_w, reset_value=0, name=f"{prefix}_s3_s1_target")
-    s3_s1_taken_r = domain.state(width=1, reset_value=0, name=f"{prefix}_s3_s1_taken")
+    s3_s1_target = domain.signal(width=target_w, reset_value=0, name=f"{prefix}_s3_s1_target")
+    s3_s1_taken = domain.signal(width=1, reset_value=0, name=f"{prefix}_s3_s1_taken")
 
-    s2_s1_target_r = domain.state(width=target_w, reset_value=0, name=f"{prefix}_s2_s1_target")
-    s2_s1_taken_r = domain.state(width=1, reset_value=0, name=f"{prefix}_s2_s1_taken")
-
-    # ── Read state as combinational signals ───────────────────────────
-    s1_valid = _r(domain, s1_valid_r)
-    s2_valid = _r(domain, s2_valid_r)
-    s3_valid = _r(domain, s3_valid_r)
-
-    s1_pc = _r(domain, s1_pc_r)
-    s1_target = _r(domain, s1_target_r)
-    s1_taken = _r(domain, s1_taken_r)
-    s1_hit = _r(domain, s1_hit_r)
-    s1_cfi_pos = _r(domain, s1_cfi_pos_r)
-    s1_attr = _r(domain, s1_attr_r)
-
-    s3_pc = _r(domain, s3_pc_r)
-    s3_target = _r(domain, s3_target_r)
-    s3_taken = _r(domain, s3_taken_r)
-    s3_hit = _r(domain, s3_hit_r)
-    s3_s1_target = _r(domain, s3_s1_target_r)
-    s3_s1_taken = _r(domain, s3_s1_taken_r)
+    s2_s1_target = domain.signal(width=target_w, reset_value=0, name=f"{prefix}_s2_s1_target")
+    s2_s1_taken = domain.signal(width=1, reset_value=0, name=f"{prefix}_s2_s1_taken")
 
     # ── Pipeline control ──────────────────────────────────────────────
     # s3 override: APD disagrees with NLP
@@ -215,7 +191,6 @@ def build_bpu(
     s3_pred_target = mux(s3_pred_taken, s3_target, s3_ft_target)
 
     # ── Sub-predictor calls (explicit signal passing) ─────────────────
-    s0_pc = _r(domain, s0_pc_r)
     _tag_w = min(pc_width - 2, 22)
     _tgt_w = min(pc_width - 2, 22)
 
@@ -292,7 +267,6 @@ def build_bpu(
         apd_hit = ittage_out.get("pred_valid", apd_hit)
 
     # ── s0 PC selection ───────────────────────────────────────────────
-    s0_pc = _r(domain, s0_pc_r)
     s0_pc_next = s0_pc
     s0_pc_next = mux(s1_valid, s1_pred_target, s0_pc_next)
     s0_pc_next = mux(s3_override, s3_pred_target, s0_pc_next)
@@ -306,8 +280,8 @@ def build_bpu(
     out_pc = mux(s3_override, s3_pc, s1_pc)
     out_target = mux(s3_override, s3_pred_target, s1_pred_target)
     out_taken = mux(s3_override, s3_pred_taken, s1_pred_taken)
-    out_cfi_pos = mux(s3_override, _r(domain, s3_cfi_pos_r), s1_pred_cfi)
-    out_attr = mux(s3_override, _r(domain, s3_attr_r), s1_pred_attr)
+    out_cfi_pos = mux(s3_override, s3_cfi_pos, s1_pred_cfi)
+    out_attr = mux(s3_override, s3_attr, s1_pred_attr)
 
     m.output(f"{prefix}_pred_pc", out_pc.wire)
     _out["pred_pc"] = out_pc
@@ -349,51 +323,48 @@ def build_bpu(
     # ── domain.next() → Cycle 1: register updates ────────────────────
     domain.next()
 
-    s0_pc_r.set(mux(s0_fire, s0_pc_next, s0_pc))
+    s0_pc <<= mux(s0_fire, s0_pc_next, s0_pc)
 
     s1_v_next = mux(s0_fire, one1, s1_valid)
     s1_v_next = mux(s1_fire & (~s0_fire), zero1, s1_v_next)
     s1_v_next = mux(s1_flush, zero1, s1_v_next)
-    s1_valid_r.set(s1_v_next)
+    s1_valid <<= s1_v_next
 
-    s1_pc_r.set(mux(s0_fire, s0_pc_next, s1_pc))
-    s1_target_r.set(mux(s0_fire, nlp_target, s1_target))
-    s1_taken_r.set(mux(s0_fire, nlp_taken, s1_taken))
-    s1_hit_r.set(mux(s0_fire, nlp_hit, s1_hit))
-    s1_cfi_pos_r.set(mux(s0_fire, nlp_cfi_pos, s1_cfi_pos))
-    s1_attr_r.set(mux(s0_fire, nlp_attr, s1_attr))
+    s1_pc <<= mux(s0_fire, s0_pc_next, s1_pc)
+    s1_target <<= mux(s0_fire, nlp_target, s1_target)
+    s1_taken <<= mux(s0_fire, nlp_taken, s1_taken)
+    s1_hit <<= mux(s0_fire, nlp_hit, s1_hit)
+    s1_cfi_pos <<= mux(s0_fire, nlp_cfi_pos, s1_cfi_pos)
+    s1_attr <<= mux(s0_fire, nlp_attr, s1_attr)
 
     s2_v_next = mux(s1_fire, one1, s2_valid)
     s2_v_next = mux(s2_fire & (~s1_fire), zero1, s2_v_next)
     s2_v_next = mux(s2_flush, zero1, s2_v_next)
-    s2_valid_r.set(s2_v_next)
+    s2_valid <<= s2_v_next
 
-    s2_pc_r.set(mux(s1_fire, s1_pc, _r(domain, s2_pc_r)))
-    s2_target_r.set(mux(s1_fire, s1_pred_target, _r(domain, s2_target_r)))
-    s2_taken_r.set(mux(s1_fire, s1_pred_taken, _r(domain, s2_taken_r)))
-    s2_cfi_pos_r.set(mux(s1_fire, s1_pred_cfi, _r(domain, s2_cfi_pos_r)))
-    s2_attr_r.set(mux(s1_fire, s1_pred_attr, _r(domain, s2_attr_r)))
+    s2_pc <<= mux(s1_fire, s1_pc, s2_pc)
+    s2_target <<= mux(s1_fire, s1_pred_target, s2_target)
+    s2_taken <<= mux(s1_fire, s1_pred_taken, s2_taken)
+    s2_cfi_pos <<= mux(s1_fire, s1_pred_cfi, s2_cfi_pos)
+    s2_attr <<= mux(s1_fire, s1_pred_attr, s2_attr)
 
     s3_v_next = mux(s2_fire, one1, s3_valid)
     s3_v_next = mux(s3_fire & (~s2_fire), zero1, s3_v_next)
     s3_v_next = mux(s3_flush, zero1, s3_v_next)
-    s3_valid_r.set(s3_v_next)
+    s3_valid <<= s3_v_next
 
-    s2_pc = _r(domain, s2_pc_r)
-    s3_pc_r.set(mux(s2_fire, s2_pc, s3_pc))
-    s3_target_r.set(mux(s2_fire, apd_target, s3_target))
-    s3_taken_r.set(mux(s2_fire, apd_taken, s3_taken))
-    s3_cfi_pos_r.set(mux(s2_fire, apd_cfi_pos, _r(domain, s3_cfi_pos_r)))
-    s3_attr_r.set(mux(s2_fire, apd_attr, _r(domain, s3_attr_r)))
-    s3_hit_r.set(mux(s2_fire, apd_hit, s3_hit))
+    s3_pc <<= mux(s2_fire, s2_pc, s3_pc)
+    s3_target <<= mux(s2_fire, apd_target, s3_target)
+    s3_taken <<= mux(s2_fire, apd_taken, s3_taken)
+    s3_cfi_pos <<= mux(s2_fire, apd_cfi_pos, s3_cfi_pos)
+    s3_attr <<= mux(s2_fire, apd_attr, s3_attr)
+    s3_hit <<= mux(s2_fire, apd_hit, s3_hit)
 
-    s2_s1_target_r.set(mux(s1_fire, s1_pred_target, _r(domain, s2_s1_target_r)))
-    s2_s1_taken_r.set(mux(s1_fire, s1_pred_taken, _r(domain, s2_s1_taken_r)))
+    s2_s1_target <<= mux(s1_fire, s1_pred_target, s2_s1_target)
+    s2_s1_taken <<= mux(s1_fire, s1_pred_taken, s2_s1_taken)
 
-    s2_s1_target = _r(domain, s2_s1_target_r)
-    s2_s1_taken = _r(domain, s2_s1_taken_r)
-    s3_s1_target_r.set(mux(s2_fire, s2_s1_target, s3_s1_target))
-    s3_s1_taken_r.set(mux(s2_fire, s2_s1_taken, s3_s1_taken))
+    s3_s1_target <<= mux(s2_fire, s2_s1_target, s3_s1_target)
+    s3_s1_taken <<= mux(s2_fire, s2_s1_taken, s3_s1_taken)
     return _out
 
 

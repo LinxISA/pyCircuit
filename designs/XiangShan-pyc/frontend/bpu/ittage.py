@@ -103,10 +103,10 @@ def build_ittage(
     tbl_entry_useful = []
 
     for t_idx, (tbl_size, _hl) in enumerate(table_infos):
-        ev = [domain.state(width=1, reset_value=0, name=f"{prefix}_it{t_idx}_v_{i}") for i in range(tbl_size)]
-        etag = [domain.state(width=tag_width, reset_value=0, name=f"{prefix}_it{t_idx}_tag_{i}") for i in range(tbl_size)]
-        etar = [domain.state(width=pc_width, reset_value=0, name=f"{prefix}_it{t_idx}_tar_{i}") for i in range(tbl_size)]
-        euse = [domain.state(width=useful_width, reset_value=0, name=f"{prefix}_it{t_idx}_u_{i}") for i in range(tbl_size)]
+        ev = [domain.signal(width=1, reset_value=0, name=f"{prefix}_it{t_idx}_v_{i}") for i in range(tbl_size)]
+        etag = [domain.signal(width=tag_width, reset_value=0, name=f"{prefix}_it{t_idx}_tag_{i}") for i in range(tbl_size)]
+        etar = [domain.signal(width=pc_width, reset_value=0, name=f"{prefix}_it{t_idx}_tar_{i}") for i in range(tbl_size)]
+        euse = [domain.signal(width=useful_width, reset_value=0, name=f"{prefix}_it{t_idx}_u_{i}") for i in range(tbl_size)]
         tbl_entry_valid.append(ev)
         tbl_entry_tag.append(etag)
         tbl_entry_target.append(etar)
@@ -134,9 +134,9 @@ def build_ittage(
         rd_target = zero_pc
         for j in range(tbl_size):
             idx_hit = tbl_index == cas(domain, m.const(j, width=idx_w), cycle=0)
-            e_v = cas(domain, ev[j].wire, cycle=0)
-            e_tag = cas(domain, etag[j].wire, cycle=0)
-            e_tar = cas(domain, etar[j].wire, cycle=0)
+            e_v = ev[j]
+            e_tag = etag[j]
+            e_tar = etar[j]
             tag_match = e_tag == tbl_tag_comp
             entry_hit = idx_hit & e_v & tag_match
             rd_hit = mux(entry_hit, one1, rd_hit)
@@ -167,8 +167,7 @@ def build_ittage(
     _out["provider_id"] = provider_id
 
     # ── Tick counter for periodic useful reset ───────────────────────
-    tick_r = domain.state(width=8, reset_value=0, name=f"{prefix}_it_tick")
-    tick_val = cas(domain, tick_r.wire, cycle=0)
+    tick_val = domain.signal(width=8, reset_value=0, name=f"{prefix}_it_tick")
     tick_overflow = tick_val == cas(domain, m.const(255, width=8), cycle=0)
 
     # ── domain.next() → Cycle 1: Training ────────────────────────────
@@ -193,15 +192,15 @@ def build_ittage(
 
         for j in range(tbl_size):
             idx_hit = t_index == cas(domain, m.const(j, width=idx_w), cycle=0)
-            e_v = cas(domain, ev[j].wire, cycle=0)
-            e_tag = cas(domain, etag[j].wire, cycle=0)
-            e_tar = cas(domain, etar[j].wire, cycle=0)
-            e_u = cas(domain, euse[j].wire, cycle=0)
+            e_v = ev[j]
+            e_tag = etag[j]
+            e_tar = etar[j]
+            e_u = euse[j]
             tag_match = e_tag == t_tag
 
             # Provider hit: update target
             we_update = train_valid & is_provider & idx_hit & e_v & tag_match
-            etar[j].set(mux(we_update, train_target, e_tar), when=we_update)
+            etar[j].assign(mux(we_update, train_target, e_tar), when=we_update)
 
             # Useful update: correct prediction → inc, wrong → dec
             target_correct = e_tar == train_target
@@ -213,25 +212,25 @@ def build_ittage(
                         cas(domain, (e_u.wire - u(useful_width, 1))[0:useful_width], cycle=0))
             new_u = mux(target_correct, u_inc, u_dec)
             we_useful = train_valid & is_provider & idx_hit & e_v & tag_match
-            euse[j].set(mux(we_useful, new_u, e_u), when=we_useful)
+            euse[j].assign(mux(we_useful, new_u, e_u), when=we_useful)
 
             # Allocation on misprediction into longer-history tables
             is_alloc = (train_provider_id < cas(domain, m.const(t_idx + 1, width=prov_id_w), cycle=0))
             we_alloc = train_valid & train_mispred & idx_hit & is_alloc & \
                        ((~e_v) | (e_u == cas(domain, m.const(0, width=useful_width), cycle=0)))
-            ev[j].set(mux(we_alloc, one1, ev[j]), when=we_alloc)
-            etag[j].set(mux(we_alloc, t_tag, etag[j]), when=we_alloc)
-            etar[j].set(mux(we_alloc, train_target, etar[j]), when=we_alloc)
-            euse[j].set(mux(we_alloc, cas(domain, m.const(0, width=useful_width), cycle=0), euse[j]), when=we_alloc)
+            ev[j].assign(mux(we_alloc, one1, ev[j]), when=we_alloc)
+            etag[j].assign(mux(we_alloc, t_tag, etag[j]), when=we_alloc)
+            etar[j].assign(mux(we_alloc, train_target, etar[j]), when=we_alloc)
+            euse[j].assign(mux(we_alloc, cas(domain, m.const(0, width=useful_width), cycle=0), euse[j]), when=we_alloc)
 
             # Periodic useful reset
-            euse[j].set(cas(domain, m.const(0, width=useful_width), cycle=0), when=tick_overflow)
+            euse[j].assign(cas(domain, m.const(0, width=useful_width), cycle=0), when=tick_overflow)
 
     # Tick counter update
     next_tick = mux(tick_overflow,
                     cas(domain, m.const(0, width=8), cycle=0),
                     cas(domain, (tick_val.wire + u(8, 1))[0:8], cycle=0))
-    tick_r.set(mux(train_valid & train_mispred, next_tick, tick_val))
+    tick_val <<= mux(train_valid & train_mispred, next_tick, tick_val)
     return _out
 
 

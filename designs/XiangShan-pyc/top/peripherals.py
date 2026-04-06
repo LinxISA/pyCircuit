@@ -82,11 +82,11 @@ def build_plic(
         cas(domain, m.input(f"{prefix}_threshold", width=prio_width), cycle=0))
 
     # ── State ────────────────────────────────────────────────────
-    claimed = domain.state(width=num_sources, reset_value=0, name=f"{prefix}_claimed")
+    claimed = domain.signal(width=num_sources, reset_value=0, name=f"{prefix}_claimed")
 
     # Per-source priority (simplified: stored as state, writable)
     src_prio = [
-        domain.state(width=prio_width, reset_value=0, name=f"{prefix}_prio_{i}")
+        domain.signal(width=prio_width, reset_value=0, name=f"{prefix}_prio_{i}")
         for i in range(min(num_sources, 8))
     ]
 
@@ -134,7 +134,7 @@ def build_plic(
         complete_mask = complete_mask | bit
 
     new_claimed = (claimed | claim_mask) & (~complete_mask)
-    claimed.set(new_claimed)
+    claimed <<= new_claimed
     return _out
 
 
@@ -174,9 +174,9 @@ def build_clint(
 
     # ── State ────────────────────────────────────────────────────
 
-    mtime    = domain.state(width=timer_width, reset_value=0, name=f"{prefix}_mtime")
-    mtimecmp = domain.state(width=timer_width, reset_value=0, name=f"{prefix}_mtimecmp")
-    msip_reg = domain.state(width=1, reset_value=0, name=f"{prefix}_msip")
+    mtime    = domain.signal(width=timer_width, reset_value=0, name=f"{prefix}_mtime")
+    mtimecmp = domain.signal(width=timer_width, reset_value=0, name=f"{prefix}_mtimecmp")
+    msip_reg = domain.signal(width=1, reset_value=0, name=f"{prefix}_msip")
 
     # ── Cycle 0: Combinational ───────────────────────────────────
 
@@ -203,13 +203,13 @@ def build_clint(
 
     # mtime increments every cycle (free-running counter)
     next_mtime = cas(domain, (mtime.wire + one.wire)[0:timer_width], cycle=0)
-    mtime.set(next_mtime)
+    mtime <<= next_mtime
 
     # mtimecmp updated on write
-    mtimecmp.set(mux(mtimecmp_write_valid, mtimecmp_write_data, mtimecmp))
+    mtimecmp <<= mux(mtimecmp_write_valid, mtimecmp_write_data, mtimecmp)
 
     # msip updated on write
-    msip_reg.set(mux(msip_write_valid, msip_write_data, msip_reg))
+    msip_reg <<= mux(msip_write_valid, msip_write_data, msip_reg)
     return _out
 
 

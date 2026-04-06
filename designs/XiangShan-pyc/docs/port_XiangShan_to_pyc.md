@@ -151,7 +151,7 @@ designs/XiangShan-pyc/
 
 | 动作 | 内容 |
 |------|------|
-| 阅读 PyCircuit V5 API | `docs/PyCurcit V5_CYCLE_AWARE_API.md`，`docs/PyCircuit V5 Programming Tutorial.md` |
+| 阅读 PyCircuit V5 编程规范 | `docs/PyCircuit_V5_Spec.md` |
 | 阅读测试框架 | `docs/TESTBENCH.md` |
 | 阅读 IR / 编译 | `docs/IR_SPEC.md`，`docs/PIPELINE.md`，`docs/PRIMITIVES.md` |
 | 参考实现 | `designs/BypassUnit/`，`designs/IssueQueue/`，`designs/RegisterFile/` |

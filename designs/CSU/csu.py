@@ -166,34 +166,34 @@ def build_csu(m: CycleAwareCircuit, domain: CycleAwareDomain) -> None:
     z_fl = _zero(m, W_RXFILL)
     z_snp = _zero(m, W_SNP_DIGEST)
 
-    tracker = domain.state(width=W_TRACKER, reset_value=0, name="txn_tracker_stub")
-    tracker.set(mux(rst, z_tr, digest32))
+    tracker = domain.signal(width=W_TRACKER, reset_value=0, name="txn_tracker_stub")
+    tracker <<= mux(rst, z_tr, digest32)
 
-    latched_txreq = domain.state(width=W_TXREQ, reset_value=0, name="latched_txreq")
+    latched_txreq = domain.signal(width=W_TXREQ, reset_value=0, name="latched_txreq")
     next_seed = mux(tb_issue_req, tb_txreq_seed, latched_txreq)
-    latched_txreq.set(mux(rst, z_req, next_seed))
+    latched_txreq <<= mux(rst, z_req, next_seed)
 
     opc = latched_txreq.slice(_OPCODE_HI, _OPCODE_LO)
     legal = _req_opcode_supported(m, opc)
     # F-002: payload is full latched flit; F-003 clears illegal opcodes
-    txreq_payload = mux(rst, z_req, mux(legal, latched_txreq.wire, z_req))
+    txreq_payload = mux(rst, z_req, mux(legal, latched_txreq, z_req))
 
-    pend = domain.state(width=W_TXREQ_PEND, reset_value=0, name="txreq_pend_stub")
+    pend = domain.signal(width=W_TXREQ_PEND, reset_value=0, name="txreq_pend_stub")
     inc = tb_issue_req.wire & legal & run
-    pend_next = pend.wire + m.const(1, width=W_TXREQ_PEND)
-    pend.set(mux(rst, z_pend, mux(inc, pend_next, pend.wire)))
+    pend_next = pend + m.const(1, width=W_TXREQ_PEND)
+    pend <<= mux(rst, z_pend, mux(inc, pend_next, pend))
 
     # F-009 / F-010 / F-011: sideband absorption registers (placeholder)
-    side_wkup = domain.state(width=W_RXWKUP, reset_value=0, name="side_rxwkup_hold")
-    side_wkup.set(mux(rst, z_wk, rxwkup.wire))
-    side_err = domain.state(width=W_RXERR, reset_value=0, name="side_rxerr_hold")
-    side_err.set(mux(rst, z_er, rxerr.wire))
-    side_fill = domain.state(width=W_RXFILL, reset_value=0, name="side_rxfill_hold")
-    side_fill.set(mux(rst, z_fl, rxfill.wire))
+    side_wkup = domain.signal(width=W_RXWKUP, reset_value=0, name="side_rxwkup_hold")
+    side_wkup <<= mux(rst, z_wk, rxwkup.wire)
+    side_err = domain.signal(width=W_RXERR, reset_value=0, name="side_rxerr_hold")
+    side_err <<= mux(rst, z_er, rxerr.wire)
+    side_fill = domain.signal(width=W_RXFILL, reset_value=0, name="side_rxfill_hold")
+    side_fill <<= mux(rst, z_fl, rxfill.wire)
 
     # F-008: snoop digest (rsp1 used in occ2 combine for txrsp stub)
-    snp_digest = domain.state(width=W_SNP_DIGEST, reset_value=0, name="snoop_digest_stub")
-    snp_digest.set(mux(rst, z_snp, snp_in))
+    snp_digest = domain.signal(width=W_SNP_DIGEST, reset_value=0, name="snoop_digest_stub")
+    snp_digest <<= mux(rst, z_snp, snp_in)
 
     cd = domain.clock_domain
     z64 = _zero(m, 64)
@@ -203,13 +203,13 @@ def build_csu(m: CycleAwareCircuit, domain: CycleAwareDomain) -> None:
     z8 = _zero(m, 8)
 
     megas = [
-        domain.state(width=64, reset_value=0, name=f"mega_feature_{i}") for i in range(8)
+        domain.signal(width=64, reset_value=0, name=f"mega_feature_{i}") for i in range(8)
     ]
-    feat = domain.state(width=128, reset_value=0, name="feat_shaft_stub")
-    lfsr = domain.state(width=16, reset_value=0, name="f060_lfsr_stub")
-    brq = domain.state(width=4, reset_value=0, name="f042_brq_stub")
-    pmu = domain.state(width=16, reset_value=0, name="f047_pmu_stub")
-    rrip = domain.state(width=8, reset_value=0, name="f061_rrip_stub")
+    feat = domain.signal(width=128, reset_value=0, name="feat_shaft_stub")
+    lfsr = domain.signal(width=16, reset_value=0, name="f060_lfsr_stub")
+    brq = domain.signal(width=4, reset_value=0, name="f042_brq_stub")
+    pmu = domain.signal(width=16, reset_value=0, name="f047_pmu_stub")
+    rrip = domain.signal(width=8, reset_value=0, name="f061_rrip_stub")
 
     base_mix = (
         digest32.zext(width=64)
@@ -220,12 +220,12 @@ def build_csu(m: CycleAwareCircuit, domain: CycleAwareDomain) -> None:
         ^ rxerr.wire.zext(width=64)
         ^ rxfill.wire.zext(width=64)
         ^ cfg_word.wire.zext(width=64)
-        ^ latched_txreq.slice(31, 0).wire.zext(width=64)
-        ^ pend.wire.zext(width=64)
+        ^ latched_txreq.slice(31, 0).zext(width=64)
+        ^ pend.zext(width=64)
     )
 
     raddr4 = rxdat.slice(3, 0).wire
-    waddr4 = latched_txreq.slice(34, 31).wire
+    waddr4 = latched_txreq.slice(34, 31)
     wd32 = rxdat.slice(31, 0).wire
     wstrb4 = m.const(15, width=4)
     mem_rd = m.sync_mem(
@@ -244,36 +244,36 @@ def build_csu(m: CycleAwareCircuit, domain: CycleAwareDomain) -> None:
 
     for i, mega in enumerate(megas):
         delta = base_mix ^ m.const(_MEGA_COEFF[i], width=64) ^ mem_z
-        mega.set(mux(rst, z64, mega.wire ^ delta))
+        mega <<= mux(rst, z64, mega ^ delta)
 
-    fb = lfsr.wire[15] ^ lfsr.wire[12]
-    lfsr_sh = (lfsr.wire << 1).trunc(width=16)
+    fb = lfsr[15] ^ lfsr[12]
+    lfsr_sh = (lfsr << 1).trunc(width=16)
     lfsr_next = lfsr_sh | fb.zext(width=16)
-    lfsr.set(mux(rst, z16, lfsr_next))
+    lfsr <<= mux(rst, z16, lfsr_next)
 
-    brq_next = brq.wire + m.const(1, width=4)
-    brq.set(mux(rst, z4, mux(inc, brq_next, brq.wire)))
+    brq_next = brq + m.const(1, width=4)
+    brq <<= mux(rst, z4, mux(inc, brq_next, brq))
 
-    pmu_next = pmu.wire + m.const(1, width=16)
-    pmu.set(mux(rst, z16, mux(inc, pmu_next, pmu.wire)))
+    pmu_next = pmu + m.const(1, width=16)
+    pmu <<= mux(rst, z16, mux(inc, pmu_next, pmu))
 
-    rrip_next = rrip.wire + m.const(1, width=8)
-    rrip.set(mux(rst, z8, rrip_next))
+    rrip_next = rrip + m.const(1, width=8)
+    rrip <<= mux(rst, z8, rrip_next)
 
-    h01 = m.cat(megas[0].wire, megas[1].wire)
-    h23 = m.cat(megas[2].wire, megas[3].wire)
-    h45 = m.cat(megas[4].wire, megas[5].wire)
-    h67 = m.cat(megas[6].wire, megas[7].wire)
+    h01 = m.cat(megas[0], megas[1])
+    h23 = m.cat(megas[2], megas[3])
+    h45 = m.cat(megas[4], megas[5])
+    h67 = m.cat(megas[6], megas[7])
     mix_128 = h01 ^ h23 ^ h45 ^ h67
     mix_128 = (
         mix_128
-        ^ lfsr.wire.zext(width=128)
-        ^ brq.wire.zext(width=128)
-        ^ pmu.wire.zext(width=128)
-        ^ rrip.wire.zext(width=128)
+        ^ lfsr.zext(width=128)
+        ^ brq.zext(width=128)
+        ^ pmu.zext(width=128)
+        ^ rrip.zext(width=128)
         ^ mem_rd.zext(width=128)
     )
-    feat.set(mux(rst, z128, feat.wire ^ mix_128))
+    feat <<= mux(rst, z128, feat ^ mix_128)
 
     domain.next()
 
@@ -286,7 +286,7 @@ def build_csu(m: CycleAwareCircuit, domain: CycleAwareDomain) -> None:
     txrsp_q = domain.cycle(txrsp_src, name="txrsp_q")
     txdat_wide = rxdat.wire.zext(width=W_TXDAT)
     txdat_q = domain.cycle(txdat_wide, name="txdat_q")
-    pend_q = domain.cycle(pend.wire, name="txreq_pend_q")
+    pend_q = domain.cycle(pend, name="txreq_pend_q")
 
     domain.next()
 

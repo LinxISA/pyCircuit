@@ -28,9 +28,9 @@ def build(m: CycleAwareCircuit, domain: CycleAwareDomain, *,
     x_in = cas(domain, m.input("x_in", width=DATA_W), cycle=0)
     x_valid = cas(domain, m.input("x_valid", width=1), cycle=0)
 
-    delay_states = [domain.state(width=DATA_W, reset_value=0, name=f"delay_{i}") for i in range(1, TAPS)]
+    delay_states = [domain.signal(width=DATA_W, reset_value=0, name=f"delay_{i}") for i in range(1, TAPS)]
 
-    taps_wire = [x_in.wire] + [st.wire for st in delay_states]
+    taps_wire = [x_in.wire] + [st for st in delay_states]
 
     coeff_wires = [m.const(cv, width=ACC_W) for cv in COEFFS]
 
@@ -42,20 +42,20 @@ def build(m: CycleAwareCircuit, domain: CycleAwareDomain, *,
 
     y_comb = cas(domain, acc_w[0:ACC_W], cycle=0)
 
-    y_out_state = domain.state(width=ACC_W, reset_value=0, name="y_out_reg")
-    y_valid_state = domain.state(width=1, reset_value=0, name="y_valid_reg")
+    y_out_state = domain.signal(width=ACC_W, reset_value=0, name="y_out_reg")
+    y_valid_state = domain.signal(width=1, reset_value=0, name="y_valid_reg")
 
-    m.output("y_out", y_out_state.wire)
-    m.output("y_valid", y_valid_state.wire)
+    m.output("y_out", y_out_state)
+    m.output("y_valid", y_valid_state)
 
     domain.next()
 
-    delay_states[0].set(x_in, when=x_valid)
+    delay_states[0].assign(x_in, when=x_valid)
     for i in range(1, len(delay_states)):
-        delay_states[i].set(delay_states[i - 1], when=x_valid)
+        delay_states[i].assign(delay_states[i - 1], when=x_valid)
 
-    y_out_state.set(y_comb, when=x_valid)
-    y_valid_state.set(x_valid)
+    y_out_state.assign(y_comb, when=x_valid)
+    y_valid_state <<= x_valid
 
 
 build.__pycircuit_name__ = "digital_filter"

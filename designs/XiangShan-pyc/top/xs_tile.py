@@ -187,11 +187,8 @@ def build_xs_tile(
     # ================================================================
 
     # Frontend fetch PC state
-    fetch_pc_r = domain.state(width=pc_width, reset_value=0, name=f"{prefix}_xt_fetch_pc")
-    bpu_valid_r = domain.state(width=1, reset_value=0, name=f"{prefix}_xt_bpu_v")
-
-    fetch_pc = cas(domain, fetch_pc_r.wire, cycle=0)
-    bpu_valid = cas(domain, bpu_valid_r.wire, cycle=0)
+    fetch_pc = domain.signal(width=pc_width, reset_value=0, name=f"{prefix}_xt_fetch_pc")
+    bpu_valid = domain.signal(width=1, reset_value=0, name=f"{prefix}_xt_bpu_v")
 
     # Redirect
     redirect_valid = bru_redirect_valid | rob_exception_valid
@@ -316,8 +313,8 @@ def build_xs_tile(
 
     domain.next()
 
-    bpu_valid_r.set(ONE_1)
-    fetch_pc_r.set(next_pc)
+    bpu_valid <<= ONE_1
+    fetch_pc <<= next_pc
     return _out
 
 

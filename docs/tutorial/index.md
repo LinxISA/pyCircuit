@@ -9,8 +9,7 @@ This section covers **pyc4.0** (`@module` / `Circuit`) authoring and the **tick/
 
 ## PyCircuit V5 (cycle-aware Python front-end)
 
-- [PyCircuit V5 Programming Tutorial](../PyCircuit%20V5%20Programming%20Tutorial.md) (narrative + patterns)
-- [Cycle-Aware API reference](../PyCurcit%20V5_CYCLE_AWARE_API.md) (normative signatures)
+- [PyCircuit V5 编程规范](../PyCircuit_V5_Spec.md) (unified spec: API + tutorial + patterns)
 
 ## Start here
 

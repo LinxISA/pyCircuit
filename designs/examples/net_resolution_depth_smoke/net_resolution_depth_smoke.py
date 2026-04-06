@@ -16,11 +16,11 @@ def build(m: CycleAwareCircuit, domain: CycleAwareDomain, width: int = 8) -> Non
     d2 = d1 + 1
     d3 = d2 + 1
 
-    q = domain.state(width=width, reset_value=0, name="q")
-    m.output("y", q.wire)
+    q = domain.signal(width=width, reset_value=0, name="q")
+    m.output("y", q)
 
     domain.next()
-    q.set(d3)
+    q <<= d3
 
 
 build.__pycircuit_name__ = "net_resolution_depth_smoke"

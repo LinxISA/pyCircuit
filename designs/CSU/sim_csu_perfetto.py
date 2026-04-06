@@ -15,7 +15,7 @@
 
 * 两条 ``_v5_bal_*`` 延迟寄存器（``tb_issue_req`` +1拍、``tb_txreq_seed`` +1拍）。
 * ``pyc.sync_mem``（``f035_data_ram_stub``，深度 16×32b，同步读输出）。
-* 所有 ``domain.state`` / ``domain.cycle`` DFF 在同一时钟沿采样。
+* 所有 ``domain.signal`` / ``domain.cycle`` DFF 在同一时钟沿采样。
 * 输出端口为纯组合（``mux(rst, 0, reg_q)``）。
 
 信号组（Perfetto pid 区分）

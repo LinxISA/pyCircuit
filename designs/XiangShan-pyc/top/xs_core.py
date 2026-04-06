@@ -128,21 +128,15 @@ def build_xs_core(
     # ================================================================
 
     # Frontend state: fetch PC
-    fetch_pc_r = domain.state(width=pc_width, reset_value=0, name=f"{prefix}_xc_fetch_pc")
-    bpu_valid_r = domain.state(width=1, reset_value=0, name=f"{prefix}_xc_bpu_valid")
+    fetch_pc = domain.signal(width=pc_width, reset_value=0, name=f"{prefix}_xc_fetch_pc")
+    bpu_valid = domain.signal(width=1, reset_value=0, name=f"{prefix}_xc_bpu_valid")
 
-    fetch_pc = cas(domain, fetch_pc_r.wire, cycle=0)
-    bpu_valid = cas(domain, bpu_valid_r.wire, cycle=0)
+    # Backend redirect (computed below, forward-declared via signal)
+    redirect_valid = domain.signal(width=1, reset_value=0, name=f"{prefix}_xc_redir_v")
+    redirect_target = domain.signal(width=pc_width, reset_value=0, name=f"{prefix}_xc_redir_t")
 
-    # Backend redirect (computed below, forward-declared via state)
-    redirect_valid_r = domain.state(width=1, reset_value=0, name=f"{prefix}_xc_redir_v")
-    redirect_target_r = domain.state(width=pc_width, reset_value=0, name=f"{prefix}_xc_redir_t")
-    redirect_valid = cas(domain, redirect_valid_r.wire, cycle=0)
-    redirect_target = cas(domain, redirect_target_r.wire, cycle=0)
-
-    # Backend stall (forward-declared via state)
-    be_stall_r = domain.state(width=1, reset_value=0, name=f"{prefix}_xc_be_stall")
-    be_stall = cas(domain, be_stall_r.wire, cycle=0)
+    # Backend stall (forward-declared via signal)
+    be_stall = domain.signal(width=1, reset_value=0, name=f"{prefix}_xc_be_stall")
 
     # Frontend ibuf ready = ~stall
     ibuf_ready = ~be_stall
@@ -383,11 +377,11 @@ def build_xs_core(
 
     domain.next()
 
-    bpu_valid_r.set(ONE_1)
-    fetch_pc_r.set(next_pc)
-    redirect_valid_r.set(new_redir_valid)
-    redirect_target_r.set(new_redir_target)
-    be_stall_r.set(pipeline_stall)
+    bpu_valid <<= ONE_1
+    fetch_pc <<= next_pc
+    redirect_valid <<= new_redir_valid
+    redirect_target <<= new_redir_target
+    be_stall <<= pipeline_stall
     return _out
 
 

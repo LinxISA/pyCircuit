@@ -98,22 +98,22 @@ def build_rob(
         cas(domain, m.input(f"{prefix}_redirect_rob_ptr", width=ptr_w), cycle=0))
 
     # ── State ────────────────────────────────────────────────────
-    head_ptr = domain.state(width=ptr_w, reset_value=0, name=f"{prefix}_head_ptr")
-    tail_ptr = domain.state(width=ptr_w, reset_value=0, name=f"{prefix}_tail_ptr")
+    head_ptr = domain.signal(width=ptr_w, reset_value=0, name=f"{prefix}_head_ptr")
+    tail_ptr = domain.signal(width=ptr_w, reset_value=0, name=f"{prefix}_tail_ptr")
 
-    ent_valid = [domain.state(width=1, reset_value=0, name=f"{prefix}_ev_{i}")
+    ent_valid = [domain.signal(width=1, reset_value=0, name=f"{prefix}_ev_{i}")
                  for i in range(rob_size)]
-    ent_wb = [domain.state(width=1, reset_value=0, name=f"{prefix}_ewb_{i}")
+    ent_wb = [domain.signal(width=1, reset_value=0, name=f"{prefix}_ewb_{i}")
               for i in range(rob_size)]
-    ent_pc = [domain.state(width=pc_width, reset_value=0, name=f"{prefix}_epc_{i}")
+    ent_pc = [domain.signal(width=pc_width, reset_value=0, name=f"{prefix}_epc_{i}")
               for i in range(rob_size)]
-    ent_rd = [domain.state(width=lreg_w, reset_value=0, name=f"{prefix}_erd_{i}")
+    ent_rd = [domain.signal(width=lreg_w, reset_value=0, name=f"{prefix}_erd_{i}")
               for i in range(rob_size)]
-    ent_pdest = [domain.state(width=ptag_w, reset_value=0, name=f"{prefix}_epd_{i}")
+    ent_pdest = [domain.signal(width=ptag_w, reset_value=0, name=f"{prefix}_epd_{i}")
                  for i in range(rob_size)]
-    ent_old_pdest = [domain.state(width=ptag_w, reset_value=0, name=f"{prefix}_eopd_{i}")
+    ent_old_pdest = [domain.signal(width=ptag_w, reset_value=0, name=f"{prefix}_eopd_{i}")
                      for i in range(rob_size)]
-    ent_exc = [domain.state(width=1, reset_value=0, name=f"{prefix}_eex_{i}")
+    ent_exc = [domain.signal(width=1, reset_value=0, name=f"{prefix}_eex_{i}")
                for i in range(rob_size)]
 
     # ── Constants ────────────────────────────────────────────────
@@ -217,21 +217,21 @@ def build_rob(
         for j in range(rob_size):
             hit = wr_idx == cas(domain, m.const(j, width=idx_w), cycle=0)
             we = do_enq & hit
-            ent_valid[j].set(ONE_1, when=we)
-            ent_wb[j].set(ZERO_1, when=we)
-            ent_pc[j].set(enq_pc[i], when=we)
-            ent_rd[j].set(enq_rd[i], when=we)
-            ent_pdest[j].set(enq_pdest[i], when=we)
-            ent_old_pdest[j].set(enq_old_pdest[i], when=we)
-            ent_exc[j].set(ZERO_1, when=we)
+            ent_valid[j].assign(ONE_1, when=we)
+            ent_wb[j].assign(ZERO_1, when=we)
+            ent_pc[j].assign(enq_pc[i], when=we)
+            ent_rd[j].assign(enq_rd[i], when=we)
+            ent_pdest[j].assign(enq_pdest[i], when=we)
+            ent_old_pdest[j].assign(enq_old_pdest[i], when=we)
+            ent_exc[j].assign(ZERO_1, when=we)
 
     # ── Writeback: set completed + exception flags ────────────────
     for w in range(wb_ports):
         for j in range(rob_size):
             hit = wb_rob_idx[w] == cas(domain, m.const(j, width=idx_w), cycle=0)
             we = wb_valid[w] & hit
-            ent_wb[j].set(ONE_1, when=we)
-            ent_exc[j].set(mux(wb_exception[w], ONE_1, ent_exc[j]), when=we)
+            ent_wb[j].assign(ONE_1, when=we)
+            ent_exc[j].assign(mux(wb_exception[w], ONE_1, ent_exc[j]), when=we)
 
     # ── Commit: invalidate retired entries ────────────────────────
     for i in range(commit_width):
@@ -242,7 +242,7 @@ def build_rob(
         for j in range(rob_size):
             hit = clr_idx == cas(domain, m.const(j, width=idx_w), cycle=0)
             ce = commit_valids[i] & hit
-            ent_valid[j].set(ZERO_1, when=ce)
+            ent_valid[j].assign(ZERO_1, when=ce)
 
     # ── Pointer updates ──────────────────────────────────────────
     new_head = cas(domain,
@@ -255,12 +255,12 @@ def build_rob(
     tail_nxt = mux(redirect_valid & (~flush), redirect_rob_ptr, tail_nxt)
 
     ZERO_PTR = cas(domain, m.const(0, width=ptr_w), cycle=0)
-    head_ptr.set(mux(flush, ZERO_PTR, new_head))
-    tail_ptr.set(mux(flush, ZERO_PTR, tail_nxt))
+    head_ptr <<= mux(flush, ZERO_PTR, new_head)
+    tail_ptr <<= mux(flush, ZERO_PTR, tail_nxt)
 
     # ── Flush: clear all valid bits ──────────────────────────────
     for j in range(rob_size):
-        ent_valid[j].set(ZERO_1, when=flush)
+        ent_valid[j].assign(ZERO_1, when=flush)
     return _out
 
 

@@ -29,8 +29,7 @@ Internalize how **pyCircuit** expresses hardware so CSU implementation does not 
 
 | # | Path | Depth | Focus for CSU |
 |---|------|-------|---------------|
-| 1 | `docs/PyCurcit V5_CYCLE_AWARE_API.md` | Full read | `cas`, `mux`, `state`, `cycle`, `push`/`pop`, `compile_cycle_aware` |
-| 2 | `docs/PyCircuit V5 Programming Tutorial.md` | Skim + bookmark | Module context, `signal[hi:lo]`, naming |
+| 1 | `docs/PyCircuit_V5_Spec.md` | Full read | `cas`, `mux`, `domain.signal()`, `domain.call()`, `submodule_input`, `wire_of`, `compile_cycle_aware` |
 | 3 | `docs/FRONTEND_API.md` | Read | When a child `@module` is needed inside CSU |
 | 4 | `docs/TESTBENCH.md` | Read | How `tb_csu.py` will drive/expect |
 | 5 | `docs/tutorial/unified-signal-model.md` | Read | Relationship V5 vs `@module` |

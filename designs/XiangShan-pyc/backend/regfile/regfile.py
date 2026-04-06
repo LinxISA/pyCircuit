@@ -73,7 +73,7 @@ def build_regfile(
                for i in range(num_write)]
 
     # ── State: register entries ──────────────────────────────────
-    regs = [domain.state(width=data_width, reset_value=0, name=f"{prefix}_r{i}")
+    regs = [domain.signal(width=data_width, reset_value=0, name=f"{prefix}_r{i}")
             for i in range(num_entries)]
 
     # ── Cycle 0: Combinational read ──────────────────────────────
@@ -99,7 +99,7 @@ def build_regfile(
         for j in range(num_entries):
             hit = wr_addr[w] == cas(domain, m.const(j, width=addr_width), cycle=0)
             we = do_write & hit
-            regs[j].set(wr_data[w], when=we)
+            regs[j].assign(wr_data[w], when=we)
     return _out
 
 

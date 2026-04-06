@@ -276,8 +276,7 @@ def build_backend(
     # ================================================================
     # Commit: ROB retire state tracking (simplified counter)
     # ================================================================
-    commit_cnt_r = domain.state(width=dp_cnt_w, reset_value=0, name=f"{prefix}_be_cm_cnt")
-    cur_cm = cas(domain, commit_cnt_r.wire, cycle=0)
+    cur_cm = domain.signal(width=dp_cnt_w, reset_value=0, name=f"{prefix}_be_cm_cnt")
 
     # Count incoming writeback as proxy for commit readiness
     wb_cnt = cas(domain, m.const(0, width=dp_cnt_w), cycle=0)
@@ -320,9 +319,9 @@ def build_backend(
     MAX_CM = cas(domain, m.const((1 << dp_cnt_w) - 1, width=dp_cnt_w), cycle=0)
     new_cm = mux(cur_cm == MAX_CM, cur_cm,
                  cas(domain, (cur_cm.wire + wb_cnt.wire)[0:dp_cnt_w], cycle=0))
-    commit_cnt_r.set(mux(redirect_flush,
-                         cas(domain, m.const(0, width=dp_cnt_w), cycle=0),
-                         new_cm))
+    cur_cm <<= mux(redirect_flush,
+                    cas(domain, m.const(0, width=dp_cnt_w), cycle=0),
+                    new_cm)
     return _out
 
 

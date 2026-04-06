@@ -5,7 +5,7 @@ Transforms:
   - def build_xxx(m, domain, *, ...) → def build_xxx(m, domain, *, prefix="xxx", ...)
   - m.input("name", ...) → m.input(f"{prefix}_name", ...)
   - m.output("name", ...) → m.output(f"{prefix}_name", ...)
-  - domain.state(..., name="name") → domain.state(..., name=f"{prefix}_name")
+  - domain.signal(..., name="name") → domain.signal(..., name=f"{prefix}_name")
   - domain.cycle(..., name="name") → domain.cycle(..., name=f"{prefix}_name")
 
 Usage: python tools/add_prefix.py [--dry-run] [--file path]
@@ -106,7 +106,7 @@ def transform_file(filepath: Path, default_prefix: str, *, dry_run: bool = False
 
 def _transform_function_in_text(text: str, func_name: str, prefix: str,
                                  stats: dict) -> str:
-    """Add prefix param and transform m.input/m.output/domain.state/domain.cycle."""
+    """Add prefix param and transform m.input/m.output/domain.signal/domain.cycle."""
 
     # 1) Add prefix parameter to function signature
     # Match: def build_xxx(\n    m: ...,\n    domain: ...,\n    *,\n
@@ -176,7 +176,7 @@ def _transform_function_in_text(text: str, func_name: str, prefix: str,
 
     # 4) Transform name="literal" → name=f"{prefix}_literal"
     #    AND       name=f"literal_{var}" → name=f"{prefix}_literal_{var}"
-    #    in domain.state / domain.cycle calls
+    #    in domain.signal / domain.cycle calls
     def replace_name_literal(match):
         name = match.group(1)
         stats["state"] += 1
@@ -230,7 +230,7 @@ def main():
     print(f"  Signatures added: {total_stats['sig']}")
     print(f"  m.input:          {total_stats['input']}")
     print(f"  m.output:         {total_stats['output']}")
-    print(f"  domain.state:     {total_stats['state']}")
+    print(f"  domain.signal:    {total_stats['state']}")
     print(f"  domain.cycle:     {total_stats['cycle']}")
     print(f"  Total:            {sum(total_stats.values())}")
     if args.dry_run:

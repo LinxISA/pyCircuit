@@ -91,11 +91,10 @@ def build_ras(
     zero_pc = cas(domain, m.const(0, width=pc_width), cycle=0)
 
     # ── Speculative stack storage ────────────────────────────────────
-    spec_addr = [domain.state(width=pc_width, reset_value=0, name=f"{prefix}_sa_{i}") for i in range(spec_size)]
-    spec_ctr = [domain.state(width=ctr_width, reset_value=0, name=f"{prefix}_sc_{i}") for i in range(spec_size)]
-    spec_sp_r = domain.state(width=spec_ptr_w, reset_value=0, name=f"{prefix}_spec_sp")
+    spec_addr = [domain.signal(width=pc_width, reset_value=0, name=f"{prefix}_sa_{i}") for i in range(spec_size)]
+    spec_ctr = [domain.signal(width=ctr_width, reset_value=0, name=f"{prefix}_sc_{i}") for i in range(spec_size)]
+    sp = domain.signal(width=spec_ptr_w, reset_value=0, name=f"{prefix}_spec_sp")
 
-    sp = cas(domain, spec_sp_r.wire, cycle=0)
     sp_m1 = cas(domain, (sp.wire - u(spec_ptr_w, 1))[0:spec_ptr_w], cycle=0)
     sp_p1 = cas(domain, (sp.wire + u(spec_ptr_w, 1))[0:spec_ptr_w], cycle=0)
 
@@ -104,14 +103,14 @@ def build_ras(
     tos_ctr = cas(domain, m.const(0, width=ctr_width), cycle=0)
     for j in range(spec_size):
         hit = sp == cas(domain, m.const(j, width=spec_ptr_w), cycle=0)
-        tos_addr = mux(hit, cas(domain, spec_addr[j].wire, cycle=0), tos_addr)
-        tos_ctr = mux(hit, cas(domain, spec_ctr[j].wire, cycle=0), tos_ctr)
+        tos_addr = mux(hit, spec_addr[j], tos_addr)
+        tos_ctr = mux(hit, spec_ctr[j], tos_ctr)
 
     # Read TOS-1 for pop with ctr==0
     tos_m1_addr = zero_pc
     for j in range(spec_size):
         hit = sp_m1 == cas(domain, m.const(j, width=spec_ptr_w), cycle=0)
-        tos_m1_addr = mux(hit, cas(domain, spec_addr[j].wire, cycle=0), tos_m1_addr)
+        tos_m1_addr = mux(hit, spec_addr[j], tos_m1_addr)
 
     # Push: same address → increment counter; different → advance pointer
     same_addr = tos_addr == push_addr
@@ -132,11 +131,10 @@ def build_ras(
     _out["ras_top_ctr"] = tos_ctr
 
     # ── Commit stack storage ─────────────────────────────────────────
-    c_addr = [domain.state(width=pc_width, reset_value=0, name=f"{prefix}_ca_{i}") for i in range(commit_size)]
-    c_ctr = [domain.state(width=ctr_width, reset_value=0, name=f"{prefix}_cc_{i}") for i in range(commit_size)]
-    c_sp_r = domain.state(width=commit_ptr_w, reset_value=0, name=f"{prefix}_commit_sp")
+    c_addr = [domain.signal(width=pc_width, reset_value=0, name=f"{prefix}_ca_{i}") for i in range(commit_size)]
+    c_ctr = [domain.signal(width=ctr_width, reset_value=0, name=f"{prefix}_cc_{i}") for i in range(commit_size)]
+    c_sp = domain.signal(width=commit_ptr_w, reset_value=0, name=f"{prefix}_commit_sp")
 
-    c_sp = cas(domain, c_sp_r.wire, cycle=0)
     c_sp_m1 = cas(domain, (c_sp.wire - u(commit_ptr_w, 1))[0:commit_ptr_w], cycle=0)
     c_sp_p1 = cas(domain, (c_sp.wire + u(commit_ptr_w, 1))[0:commit_ptr_w], cycle=0)
 
@@ -144,8 +142,8 @@ def build_ras(
     c_tos_ctr = cas(domain, m.const(0, width=ctr_width), cycle=0)
     for j in range(commit_size):
         hit = c_sp == cas(domain, m.const(j, width=commit_ptr_w), cycle=0)
-        c_tos_addr = mux(hit, cas(domain, c_addr[j].wire, cycle=0), c_tos_addr)
-        c_tos_ctr = mux(hit, cas(domain, c_ctr[j].wire, cycle=0), c_tos_ctr)
+        c_tos_addr = mux(hit, c_addr[j], c_tos_addr)
+        c_tos_ctr = mux(hit, c_ctr[j], c_tos_ctr)
 
     c_same_addr = c_tos_addr == commit_push_addr
     c_tos_ctr_zero = c_tos_ctr == cas(domain, m.const(0, width=ctr_width), cycle=0)
@@ -159,65 +157,65 @@ def build_ras(
         # Increment counter case (push same address)
         hit_sp = sp == cas(domain, m.const(j, width=spec_ptr_w), cycle=0)
         we_inc = push_fire & same_addr & hit_sp
-        old_c = cas(domain, spec_ctr[j].wire, cycle=0)
+        old_c = spec_ctr[j]
         inc_c = mux(old_c == cas(domain, m.const(ctr_max, width=ctr_width), cycle=0),
                      old_c,
                      cas(domain, (old_c.wire + u(ctr_width, 1))[0:ctr_width], cycle=0))
-        spec_ctr[j].set(mux(we_inc, inc_c, old_c), when=we_inc)
+        spec_ctr[j].assign(mux(we_inc, inc_c, old_c), when=we_inc)
 
         # New entry case (push different address)
         hit_sp1 = sp_p1 == cas(domain, m.const(j, width=spec_ptr_w), cycle=0)
         we_new = push_fire & (~same_addr) & hit_sp1
-        spec_addr[j].set(mux(we_new, push_addr, spec_addr[j]), when=we_new)
-        spec_ctr[j].set(mux(we_new, cas(domain, m.const(0, width=ctr_width), cycle=0), spec_ctr[j]), when=we_new)
+        spec_addr[j].assign(mux(we_new, push_addr, spec_addr[j]), when=we_new)
+        spec_ctr[j].assign(mux(we_new, cas(domain, m.const(0, width=ctr_width), cycle=0), spec_ctr[j]), when=we_new)
 
         # Pop: decrement counter or move pointer
         we_pop_dec = pop_fire & (~tos_ctr_is_zero) & hit_sp
         dec_c = mux(old_c == cas(domain, m.const(0, width=ctr_width), cycle=0),
                      old_c,
                      cas(domain, (old_c.wire - u(ctr_width, 1))[0:ctr_width], cycle=0))
-        spec_ctr[j].set(mux(we_pop_dec, dec_c, spec_ctr[j]), when=we_pop_dec)
+        spec_ctr[j].assign(mux(we_pop_dec, dec_c, spec_ctr[j]), when=we_pop_dec)
 
     # Stack pointer update
     next_sp = sp
     next_sp = mux(push_fire & (~same_addr), sp_p1, next_sp)
     next_sp = mux(pop_fire & tos_ctr_is_zero, sp_m1, next_sp)
     next_sp = mux(redirect_valid, redirect_sp, next_sp)
-    spec_sp_r.set(next_sp)
+    sp <<= next_sp
 
     # Redirect: restore TOS
     for j in range(spec_size):
         hit = redirect_sp == cas(domain, m.const(j, width=spec_ptr_w), cycle=0)
         we_restore = redirect_valid & hit
-        spec_addr[j].set(mux(we_restore, redirect_top_addr, spec_addr[j]), when=we_restore)
-        spec_ctr[j].set(mux(we_restore, redirect_top_ctr, spec_ctr[j]), when=we_restore)
+        spec_addr[j].assign(mux(we_restore, redirect_top_addr, spec_addr[j]), when=we_restore)
+        spec_ctr[j].assign(mux(we_restore, redirect_top_ctr, spec_ctr[j]), when=we_restore)
 
     # Commit stack updates
     for j in range(commit_size):
         hit_csp = c_sp == cas(domain, m.const(j, width=commit_ptr_w), cycle=0)
         hit_csp1 = c_sp_p1 == cas(domain, m.const(j, width=commit_ptr_w), cycle=0)
-        old_cc = cas(domain, c_ctr[j].wire, cycle=0)
+        old_cc = c_ctr[j]
 
         we_c_inc = commit_push & c_same_addr & hit_csp
         inc_cc = mux(old_cc == cas(domain, m.const(ctr_max, width=ctr_width), cycle=0),
                       old_cc,
                       cas(domain, (old_cc.wire + u(ctr_width, 1))[0:ctr_width], cycle=0))
-        c_ctr[j].set(mux(we_c_inc, inc_cc, old_cc), when=we_c_inc)
+        c_ctr[j].assign(mux(we_c_inc, inc_cc, old_cc), when=we_c_inc)
 
         we_c_new = commit_push & (~c_same_addr) & hit_csp1
-        c_addr[j].set(mux(we_c_new, commit_push_addr, c_addr[j]), when=we_c_new)
-        c_ctr[j].set(mux(we_c_new, cas(domain, m.const(0, width=ctr_width), cycle=0), c_ctr[j]), when=we_c_new)
+        c_addr[j].assign(mux(we_c_new, commit_push_addr, c_addr[j]), when=we_c_new)
+        c_ctr[j].assign(mux(we_c_new, cas(domain, m.const(0, width=ctr_width), cycle=0), c_ctr[j]), when=we_c_new)
 
         we_c_pop = commit_pop & (~c_tos_ctr_zero) & hit_csp
         dec_cc = mux(old_cc == cas(domain, m.const(0, width=ctr_width), cycle=0),
                       old_cc,
                       cas(domain, (old_cc.wire - u(ctr_width, 1))[0:ctr_width], cycle=0))
-        c_ctr[j].set(mux(we_c_pop, dec_cc, c_ctr[j]), when=we_c_pop)
+        c_ctr[j].assign(mux(we_c_pop, dec_cc, c_ctr[j]), when=we_c_pop)
 
     next_csp = c_sp
     next_csp = mux(commit_push & (~c_same_addr), c_sp_p1, next_csp)
     next_csp = mux(commit_pop & c_tos_ctr_zero, c_sp_m1, next_csp)
-    c_sp_r.set(next_csp)
+    c_sp <<= next_csp
     return _out
 
 

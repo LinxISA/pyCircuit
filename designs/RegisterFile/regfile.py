@@ -46,10 +46,10 @@ def build(m: CycleAwareCircuit, domain: CycleAwareDomain, *,
     wdata_hi = [wd[32:64] for wd in wdata]
 
     # ══════════════════════════════════════════════════════════════
-    # Cycle 0 — Storage state (feedback registers via domain.state)
+    # Cycle 0 — Storage state (feedback registers via domain.signal)
     # ══════════════════════════════════════════════════════════════
-    bank0 = [domain.state(width=32, reset_value=0, name=f"rf_bank0_{i}") for i in range(storage_depth)]
-    bank1 = [domain.state(width=32, reset_value=0, name=f"rf_bank1_{i}") for i in range(storage_depth)]
+    bank0 = [domain.signal(width=32, reset_value=0, name=f"rf_bank0_{i}") for i in range(storage_depth)]
+    bank1 = [domain.signal(width=32, reset_value=0, name=f"rf_bank1_{i}") for i in range(storage_depth)]
 
     # ══════════════════════════════════════════════════════════════
     # Cycle 0 — Combinational read logic
@@ -97,8 +97,8 @@ def build(m: CycleAwareCircuit, domain: CycleAwareDomain, *,
             we_any = we_any | hit
             next_lo = mux(hit, wdata_lo[lane], next_lo)
             next_hi = mux(hit, wdata_hi[lane], next_hi)
-        bank0[sidx].set(next_lo, when=we_any)
-        bank1[sidx].set(next_hi, when=we_any)
+        bank0[sidx].assign(next_lo, when=we_any)
+        bank1[sidx].assign(next_hi, when=we_any)
 
 
 build.__pycircuit_name__ = "regfile"

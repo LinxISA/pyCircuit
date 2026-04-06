@@ -94,14 +94,14 @@ def build_ibuffer(
 
     # ── State registers ──────────────────────────────────────────────
     # Circular queue pointers (with wrap bit for full/empty disambiguation)
-    enq_ptr = domain.state(width=ptr_w, reset_value=0, name=f"{prefix}_enq_ptr")
-    deq_ptr = domain.state(width=ptr_w, reset_value=0, name=f"{prefix}_deq_ptr")
+    enq_ptr = domain.signal(width=ptr_w, reset_value=0, name=f"{prefix}_enq_ptr")
+    deq_ptr = domain.signal(width=ptr_w, reset_value=0, name=f"{prefix}_deq_ptr")
 
     # Storage: per-entry inst and pc
-    entry_inst = [domain.state(width=inst_width, reset_value=0, name=f"{prefix}_ent_inst_{i}") for i in range(size)]
-    entry_pc = [domain.state(width=pc_width, reset_value=0, name=f"{prefix}_ent_pc_{i}") for i in range(size)]
-    entry_rvc = [domain.state(width=1, reset_value=0, name=f"{prefix}_ent_rvc_{i}") for i in range(size)]
-    entry_valid = [domain.state(width=1, reset_value=0, name=f"{prefix}_ent_v_{i}") for i in range(size)]
+    entry_inst = [domain.signal(width=inst_width, reset_value=0, name=f"{prefix}_ent_inst_{i}") for i in range(size)]
+    entry_pc = [domain.signal(width=pc_width, reset_value=0, name=f"{prefix}_ent_pc_{i}") for i in range(size)]
+    entry_rvc = [domain.signal(width=1, reset_value=0, name=f"{prefix}_ent_rvc_{i}") for i in range(size)]
+    entry_valid = [domain.signal(width=1, reset_value=0, name=f"{prefix}_ent_v_{i}") for i in range(size)]
 
     # ── Cycle 0: Combinational logic ─────────────────────────────────
 
@@ -190,10 +190,10 @@ def build_ibuffer(
         for j in range(size):
             hit = wr_idx == cas(domain, m.const(j, width=idx_w), cycle=0)
             we = do_write & hit
-            entry_inst[j].set(mux(we, in_insts[i], entry_inst[j]), when=we)
-            entry_pc[j].set(mux(we, in_pcs[i], entry_pc[j]), when=we)
-            entry_rvc[j].set(mux(we, in_is_rvc[i], entry_rvc[j]), when=we)
-            entry_valid[j].set(mux(we, cas(domain, m.const(1, width=1), cycle=0), entry_valid[j]), when=we)
+            entry_inst[j].assign(mux(we, in_insts[i], entry_inst[j]), when=we)
+            entry_pc[j].assign(mux(we, in_pcs[i], entry_pc[j]), when=we)
+            entry_rvc[j].assign(mux(we, in_is_rvc[i], entry_rvc[j]), when=we)
+            entry_valid[j].assign(mux(we, cas(domain, m.const(1, width=1), cycle=0), entry_valid[j]), when=we)
 
     # Update enq pointer
     next_enq = cas(domain, (enq_ptr.wire + actual_enq.wire + u(ptr_w, 0))[0:ptr_w], cycle=0)
@@ -208,15 +208,15 @@ def build_ibuffer(
         for j in range(size):
             hit = clr_idx == cas(domain, m.const(j, width=idx_w), cycle=0)
             ce = do_clear & hit
-            entry_valid[j].set(cas(domain, m.const(0, width=1), cycle=0), when=ce)
+            entry_valid[j].assign(cas(domain, m.const(0, width=1), cycle=0), when=ce)
 
     # Flush: reset pointers and all valid bits
     flush_val = cas(domain, m.const(0, width=ptr_w), cycle=0)
-    enq_ptr.set(mux(flush, flush_val, next_enq))
-    deq_ptr.set(mux(flush, flush_val, next_deq))
+    enq_ptr <<= mux(flush, flush_val, next_enq)
+    deq_ptr <<= mux(flush, flush_val, next_deq)
 
     for j in range(size):
-        entry_valid[j].set(cas(domain, m.const(0, width=1), cycle=0), when=flush)
+        entry_valid[j].assign(cas(domain, m.const(0, width=1), cycle=0), when=flush)
     return _out
 
 

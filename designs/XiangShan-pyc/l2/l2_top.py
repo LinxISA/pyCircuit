@@ -113,14 +113,14 @@ def build_l2_top(
     # Request queue state
     # ================================================================
 
-    enq_ptr = domain.state(width=ptr_w, reset_value=0, name=f"{prefix}_l2_enq_ptr")
-    deq_ptr = domain.state(width=ptr_w, reset_value=0, name=f"{prefix}_l2_deq_ptr")
+    enq_ptr = domain.signal(width=ptr_w, reset_value=0, name=f"{prefix}_l2_enq_ptr")
+    deq_ptr = domain.signal(width=ptr_w, reset_value=0, name=f"{prefix}_l2_deq_ptr")
 
-    q_addr = [domain.state(width=addr_width, reset_value=0, name=f"{prefix}_l2_q_addr_{i}")
+    q_addr = [domain.signal(width=addr_width, reset_value=0, name=f"{prefix}_l2_q_addr_{i}")
               for i in range(queue_size)]
-    q_source = [domain.state(width=1, reset_value=0, name=f"{prefix}_l2_q_src_{i}")
+    q_source = [domain.signal(width=1, reset_value=0, name=f"{prefix}_l2_q_src_{i}")
                 for i in range(queue_size)]
-    q_valid = [domain.state(width=1, reset_value=0, name=f"{prefix}_l2_q_v_{i}")
+    q_valid = [domain.signal(width=1, reset_value=0, name=f"{prefix}_l2_q_v_{i}")
                for i in range(queue_size)]
 
     enq_idx = enq_ptr[0:q_idx_w]
@@ -148,9 +148,9 @@ def build_l2_top(
     # ================================================================
 
     # Tag RAM state: one tag per way for the set addressed by head-of-queue
-    tag_ram = [domain.state(width=tag_w, reset_value=0, name=f"{prefix}_l2_tag_{w}")
+    tag_ram = [domain.signal(width=tag_w, reset_value=0, name=f"{prefix}_l2_tag_{w}")
                for w in range(num_ways)]
-    tag_valid = [domain.state(width=1, reset_value=0, name=f"{prefix}_l2_tv_{w}")
+    tag_valid = [domain.signal(width=1, reset_value=0, name=f"{prefix}_l2_tv_{w}")
                  for w in range(num_ways)]
 
     # Read head entry for tag comparison
@@ -229,9 +229,9 @@ def build_l2_top(
         j_c = cas(domain, m.const(j, width=q_idx_w), cycle=0)
         hit = enq_idx == j_c
         we = enq_fire & hit
-        q_addr[j].set(mux(we, sel_addr, q_addr[j]), when=we)
-        q_source[j].set(mux(we, sel_source, q_source[j]), when=we)
-        q_valid[j].set(mux(we, ONE_1, q_valid[j]), when=we)
+        q_addr[j].assign(mux(we, sel_addr, q_addr[j]), when=we)
+        q_source[j].assign(mux(we, sel_source, q_source[j]), when=we)
+        q_valid[j].assign(mux(we, ONE_1, q_valid[j]), when=we)
 
     # Dequeue completed request — deq_fire is a wire, so use .wire on CAS
     deq_fire_cas = cas(domain, deq_fire, cycle=0)
@@ -239,18 +239,18 @@ def build_l2_top(
         j_c = cas(domain, m.const(j, width=q_idx_w), cycle=0)
         hit = deq_idx == j_c
         ce = deq_fire_cas & hit
-        q_valid[j].set(ZERO_1, when=ce)
+        q_valid[j].assign(ZERO_1, when=ce)
 
     # Update tag RAM on refill (simplified: write to way 0)
     refill_tag = head_addr[addr_width - tag_w:addr_width]
-    tag_ram[0].set(mux(ds_resp_valid, refill_tag, tag_ram[0]))
-    tag_valid[0].set(mux(ds_resp_valid, ONE_1, tag_valid[0]))
+    tag_ram[0] <<= mux(ds_resp_valid, refill_tag, tag_ram[0])
+    tag_valid[0] <<= mux(ds_resp_valid, ONE_1, tag_valid[0])
 
     # Pointer updates
     next_enq = cas(domain, (enq_ptr.wire + one_ptr.wire)[0:ptr_w], cycle=0)
     next_deq = cas(domain, (deq_ptr.wire + one_ptr.wire)[0:ptr_w], cycle=0)
-    enq_ptr.set(mux(enq_fire, next_enq, enq_ptr))
-    deq_ptr.set(mux(deq_fire_cas, next_deq, deq_ptr))
+    enq_ptr <<= mux(enq_fire, next_enq, enq_ptr)
+    deq_ptr <<= mux(deq_fire_cas, next_deq, deq_ptr)
 
     m.output(f"{prefix}_l2_busy", has_entry.wire)
     _out["l2_busy"] = has_entry

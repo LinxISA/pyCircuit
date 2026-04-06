@@ -54,7 +54,7 @@ Grow `csu.py` from **shell** to **full CSU** with **continuous regression** — 
 Enable JIT (`compile_cycle_aware` default) only when:
 
 - No `if Wire` misuse remains, and  
-- `docs/PyCircuit V5 Programming Tutorial.md` patterns satisfied, or  
+- `docs/PyCircuit_V5_Spec.md` patterns satisfied, or  
 - Child uses `@module` with clear boundaries.
 
 ---

@@ -108,15 +108,13 @@ def build_sc(
     # ── Counter table storage ────────────────────────────────────────
     tbl_ctrs = []
     for t_idx, (tbl_size, _hl) in enumerate(table_infos):
-        ctrs = [domain.state(width=ctr_width, reset_value=0, name=f"{prefix}_sc{t_idx}_c_{i}")
+        ctrs = [domain.signal(width=ctr_width, reset_value=0, name=f"{prefix}_sc{t_idx}_c_{i}")
                 for i in range(tbl_size)]
         tbl_ctrs.append(ctrs)
 
     # ── Dynamic threshold ────────────────────────────────────────────
-    threshold_r = domain.state(width=threshold_width, reset_value=threshold_init, name=f"{prefix}_sc_thr")
-    thr_tc_r = domain.state(width=6, reset_value=0, name=f"{prefix}_sc_thr_tc")
-    thr_val = cas(domain, threshold_r.wire, cycle=0)
-    tc_val = cas(domain, thr_tc_r.wire, cycle=0)
+    thr_val = domain.signal(width=threshold_width, reset_value=threshold_init, name=f"{prefix}_sc_thr")
+    tc_val = domain.signal(width=6, reset_value=0, name=f"{prefix}_sc_thr_tc")
 
     # ── Lookup: read counter from each table, compute sum ────────────
     sum_acc = cas(domain, m.const(0, width=sum_width), cycle=0)
@@ -137,7 +135,7 @@ def build_sc(
         rd_val = cas(domain, m.const(0, width=ctr_width), cycle=0)
         for j in range(tbl_size):
             hit = tbl_idx == cas(domain, m.const(j, width=idx_w), cycle=0)
-            rd_val = mux(hit, cas(domain, ctrs[j].wire, cycle=0), rd_val)
+            rd_val = mux(hit, ctrs[j], rd_val)
         tbl_rd_ctr.append(rd_val)
 
         ctr_sign_ext = cas(domain, rd_val.wire + u(sum_width, 0), cycle=0)[0:sum_width]
@@ -188,7 +186,7 @@ def build_sc(
         for j in range(tbl_size):
             hit = t_idx_val == cas(domain, m.const(j, width=idx_w), cycle=0)
             we = train_valid & train_sc_used & hit
-            old_c = cas(domain, ctrs[j].wire, cycle=0)
+            old_c = ctrs[j]
             inc_c = mux(old_c == cas(domain, m.const(ctr_max_u, width=ctr_width), cycle=0),
                         old_c,
                         cas(domain, (old_c.wire + u(ctr_width, 1))[0:ctr_width], cycle=0))
@@ -196,7 +194,7 @@ def build_sc(
                         old_c,
                         cas(domain, (old_c.wire - u(ctr_width, 1))[0:ctr_width], cycle=0))
             new_c = mux(train_taken, inc_c, dec_c)
-            ctrs[j].set(mux(we, new_c, old_c), when=we)
+            ctrs[j].assign(mux(we, new_c, old_c), when=we)
 
     # Threshold adaptation
     tc_one = cas(domain, m.const(1, width=6), cycle=0)
@@ -209,7 +207,7 @@ def build_sc(
 
     we_tc = train_valid & train_sc_used
     new_tc = mux(train_mispred, tc_inc, tc_dec)
-    thr_tc_r.set(mux(we_tc, new_tc, tc_val))
+    tc_val <<= mux(we_tc, new_tc, tc_val)
 
     tc_overflow = tc_val == tc_max_c
     tc_underflow = tc_val == tc_zero
@@ -223,7 +221,7 @@ def build_sc(
 
     new_thr = mux(tc_overflow & train_mispred, thr_inc,
                   mux(tc_underflow & (~train_mispred), thr_dec, thr_val))
-    threshold_r.set(mux(we_tc, new_thr, thr_val))
+    thr_val <<= mux(we_tc, new_thr, thr_val)
     return _out
 
 

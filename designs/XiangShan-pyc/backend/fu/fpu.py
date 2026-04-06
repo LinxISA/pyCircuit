@@ -125,17 +125,11 @@ def build_fpu(
         pipe_r = cas(domain, pipe_r_w, cycle=0)
 
     # ── FDIV FSM path ────────────────────────────────────────────
-    div_state = domain.state(width=STATE_WIDTH, reset_value=ST_IDLE, name=f"{prefix}_fdiv_fsm")
-    div_counter = domain.state(width=cnt_w, reset_value=0, name=f"{prefix}_fdiv_cnt")
-    div_src1 = domain.state(width=data_width, reset_value=0, name=f"{prefix}_fdiv_s1")
-    div_src2 = domain.state(width=data_width, reset_value=0, name=f"{prefix}_fdiv_s2")
-    div_result_r = domain.state(width=data_width, reset_value=0, name=f"{prefix}_fdiv_res")
-
-    cur_state = cas(domain, div_state.wire, cycle=0)
-    cur_cnt = cas(domain, div_counter.wire, cycle=0)
-    cur_ds1 = cas(domain, div_src1.wire, cycle=0)
-    cur_ds2 = cas(domain, div_src2.wire, cycle=0)
-    cur_dres = cas(domain, div_result_r.wire, cycle=0)
+    cur_state = domain.signal(width=STATE_WIDTH, reset_value=ST_IDLE, name=f"{prefix}_fdiv_fsm")
+    cur_cnt = domain.signal(width=cnt_w, reset_value=0, name=f"{prefix}_fdiv_cnt")
+    cur_ds1 = domain.signal(width=data_width, reset_value=0, name=f"{prefix}_fdiv_s1")
+    cur_ds2 = domain.signal(width=data_width, reset_value=0, name=f"{prefix}_fdiv_s2")
+    cur_dres = domain.signal(width=data_width, reset_value=0, name=f"{prefix}_fdiv_res")
 
     is_idle = cur_state == cas(domain, m.const(ST_IDLE, width=STATE_WIDTH), cycle=0)
     is_busy = cur_state == cas(domain, m.const(ST_BUSY, width=STATE_WIDTH), cycle=0)
@@ -173,25 +167,25 @@ def build_fpu(
 
     # FDIV: IDLE → BUSY on valid fdiv input
     div_start = is_idle & in_valid & is_fdiv & (~flush)
-    div_state.set(cas(domain, m.const(ST_BUSY, width=STATE_WIDTH), cycle=0), when=div_start)
-    div_counter.set(LAT_CONST, when=div_start)
-    div_src1.set(src1, when=div_start)
-    div_src2.set(src2, when=div_start)
+    cur_state.assign(cas(domain, m.const(ST_BUSY, width=STATE_WIDTH), cycle=0), when=div_start)
+    cur_cnt.assign(LAT_CONST, when=div_start)
+    cur_ds1.assign(src1, when=div_start)
+    cur_ds2.assign(src2, when=div_start)
 
     # BUSY: decrement counter; → DONE when counter reaches zero
     busy_tick = is_busy & (~flush)
-    div_counter.set(CNT_DEC, when=busy_tick)
+    cur_cnt.assign(CNT_DEC, when=busy_tick)
     busy_to_done = is_busy & cnt_zero & (~flush)
-    div_state.set(cas(domain, m.const(ST_DONE, width=STATE_WIDTH), cycle=0), when=busy_to_done)
-    div_result_r.set(div_safe, when=busy_to_done)
+    cur_state.assign(cas(domain, m.const(ST_DONE, width=STATE_WIDTH), cycle=0), when=busy_to_done)
+    cur_dres.assign(div_safe, when=busy_to_done)
 
     # DONE → IDLE on downstream accept
     done_ack = is_done & out_ready & (~flush)
-    div_state.set(cas(domain, m.const(ST_IDLE, width=STATE_WIDTH), cycle=0), when=done_ack)
+    cur_state.assign(cas(domain, m.const(ST_IDLE, width=STATE_WIDTH), cycle=0), when=done_ack)
 
     # Flush: return to IDLE
-    div_state.set(cas(domain, m.const(ST_IDLE, width=STATE_WIDTH), cycle=0), when=flush)
-    div_counter.set(cas(domain, m.const(0, width=cnt_w), cycle=0), when=flush)
+    cur_state.assign(cas(domain, m.const(ST_IDLE, width=STATE_WIDTH), cycle=0), when=flush)
+    cur_cnt.assign(cas(domain, m.const(0, width=cnt_w), cycle=0), when=flush)
     return _out
 
 

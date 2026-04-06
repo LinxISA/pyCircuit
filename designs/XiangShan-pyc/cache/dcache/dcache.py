@@ -124,31 +124,31 @@ def build_dcache(
     # ── Feedback state ────────────────────────────────────────────
 
     valid_regs = [
-        domain.state(width=n_sets, reset_value=0, name=f"{prefix}_vld{w}")
+        domain.signal(width=n_sets, reset_value=0, name=f"{prefix}_vld{w}")
         for w in range(n_ways)
     ]
     dirty_regs = [
-        domain.state(width=n_sets, reset_value=0, name=f"{prefix}_drt{w}")
+        domain.signal(width=n_sets, reset_value=0, name=f"{prefix}_drt{w}")
         for w in range(n_ways)
     ]
 
-    mshr_valid = domain.state(width=1, reset_value=0, name=f"{prefix}_mshr_v")
-    mshr_set = domain.state(width=index_bits, reset_value=0, name=f"{prefix}_mshr_set")
-    mshr_tag = domain.state(width=tag_bits, reset_value=0, name=f"{prefix}_mshr_tag")
+    mshr_valid = domain.signal(width=1, reset_value=0, name=f"{prefix}_mshr_v")
+    mshr_set = domain.signal(width=index_bits, reset_value=0, name=f"{prefix}_mshr_set")
+    mshr_tag = domain.signal(width=tag_bits, reset_value=0, name=f"{prefix}_mshr_tag")
 
-    swb_valid = domain.state(width=1, reset_value=0, name=f"{prefix}_swb_v")
-    swb_set = domain.state(width=index_bits, reset_value=0, name=f"{prefix}_swb_set")
-    swb_way = domain.state(width=way_bits, reset_value=0, name=f"{prefix}_swb_way")
-    swb_data = domain.state(width=block_bits, reset_value=0, name=f"{prefix}_swb_data")
-    swb_mask = domain.state(width=block_bytes, reset_value=0, name=f"{prefix}_swb_mask")
+    swb_valid = domain.signal(width=1, reset_value=0, name=f"{prefix}_swb_v")
+    swb_set = domain.signal(width=index_bits, reset_value=0, name=f"{prefix}_swb_set")
+    swb_way = domain.signal(width=way_bits, reset_value=0, name=f"{prefix}_swb_way")
+    swb_data = domain.signal(width=block_bits, reset_value=0, name=f"{prefix}_swb_data")
+    swb_mask = domain.signal(width=block_bytes, reset_value=0, name=f"{prefix}_swb_mask")
 
     # ── Data SRAM write mux: refill has priority over store writeback ─
 
-    swb_v_c0 = cas(domain, swb_valid.wire, cycle=0)
-    swb_set_c0 = cas(domain, swb_set.wire, cycle=0)
-    swb_way_c0 = cas(domain, swb_way.wire, cycle=0)
-    swb_data_c0 = cas(domain, swb_data.wire, cycle=0)
-    swb_mask_c0 = cas(domain, swb_mask.wire, cycle=0)
+    swb_v_c0 = swb_valid
+    swb_set_c0 = swb_set
+    swb_way_c0 = swb_way
+    swb_data_c0 = swb_data
+    swb_mask_c0 = swb_mask
 
     data_wr_valid = refill_valid | swb_v_c0
     data_wr_set = mux(refill_valid, refill_set, swb_set_c0)
@@ -292,14 +292,14 @@ def build_dcache(
         wr_way = refill_valid.wire & (refill_way.wire == m.const(w, width=way_bits))
         one_hot = m.const(1, width=n_sets).shl(amount=refill_set.wire)
         new_vld = valid_regs[w].wire | one_hot
-        valid_regs[w].set(wr_way.select(new_vld, valid_regs[w].wire))
+        valid_regs[w] <<= wr_way.select(new_vld, valid_regs[w].wire)
 
     # Dirty bits: set on store hit
     for w in range(n_ways):
         st_way = s2_store_hit & (s2_hit_way_w == m.const(w, width=way_bits))
         one_hot_d = m.const(1, width=n_sets).shl(amount=s2_set_idx_w)
         new_drt = dirty_regs[w].wire | one_hot_d
-        dirty_regs[w].set(st_way.select(new_drt, dirty_regs[w].wire))
+        dirty_regs[w] <<= st_way.select(new_drt, dirty_regs[w].wire)
 
     # Store writeback buffer: capture on store hit, drain to SRAM next cycle
     swb_drain = swb_valid.wire & (~refill_valid.wire)
@@ -308,12 +308,12 @@ def build_dcache(
         swb_drain.select(m.const(0, width=1), swb_valid.wire),
     )
     new_swb_v = flush.wire.select(m.const(0, width=1), new_swb_v)
-    swb_valid.set(new_swb_v)
+    swb_valid <<= new_swb_v
 
-    swb_set.set(s2_store_hit.select(s2_set_idx_w, swb_set.wire))
-    swb_way.set(s2_store_hit.select(s2_hit_way_w, swb_way.wire))
-    swb_data.set(s2_store_hit.select(s2_store_data_w, swb_data.wire))
-    swb_mask.set(s2_store_hit.select(s2_store_mask_w, swb_mask.wire))
+    swb_set <<= s2_store_hit.select(s2_set_idx_w, swb_set.wire)
+    swb_way <<= s2_store_hit.select(s2_hit_way_w, swb_way.wire)
+    swb_data <<= s2_store_hit.select(s2_store_data_w, swb_data.wire)
+    swb_mask <<= s2_store_hit.select(s2_store_mask_w, swb_mask.wire)
 
     # MSHR: allocate on miss, clear on refill, clear on flush
     mshr_clear = refill_valid.wire & mshr_valid.wire
@@ -322,10 +322,10 @@ def build_dcache(
         mshr_alloc.select(m.const(1, width=1), mshr_valid.wire),
     )
     nv = flush.wire.select(m.const(0, width=1), nv)
-    mshr_valid.set(nv)
+    mshr_valid <<= nv
 
-    mshr_set.set(mshr_alloc.select(s2_set_idx_w, mshr_set.wire))
-    mshr_tag.set(mshr_alloc.select(s2_ptag_w, mshr_tag.wire))
+    mshr_set <<= mshr_alloc.select(s2_set_idx_w, mshr_set.wire)
+    mshr_tag <<= mshr_alloc.select(s2_ptag_w, mshr_tag.wire)
 
     # ================================================================
     # Output ports

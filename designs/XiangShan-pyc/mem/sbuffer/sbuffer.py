@@ -84,15 +84,14 @@ def build_sbuffer(
 
     # ── Entry storage ─────────────────────────────────────────────────
 
-    e_valid = [domain.state(width=1, reset_value=0, name=f"{prefix}_sb_v_{i}") for i in range(size)]
-    e_tag = [domain.state(width=tag_w, reset_value=0, name=f"{prefix}_sb_t_{i}") for i in range(size)]
-    e_data = [domain.state(width=data_width, reset_value=0, name=f"{prefix}_sb_d_{i}") for i in range(size)]
-    e_mask = [domain.state(width=mask_w, reset_value=0, name=f"{prefix}_sb_m_{i}") for i in range(size)]
+    e_valid = [domain.signal(width=1, reset_value=0, name=f"{prefix}_sb_v_{i}") for i in range(size)]
+    e_tag = [domain.signal(width=tag_w, reset_value=0, name=f"{prefix}_sb_t_{i}") for i in range(size)]
+    e_data = [domain.signal(width=data_width, reset_value=0, name=f"{prefix}_sb_d_{i}") for i in range(size)]
+    e_mask = [domain.signal(width=mask_w, reset_value=0, name=f"{prefix}_sb_m_{i}") for i in range(size)]
 
     # ── Occupancy counter ─────────────────────────────────────────────
 
-    occ_r = domain.state(width=cnt_w, reset_value=0, name=f"{prefix}_sb_occ")
-    occ = cas(domain, occ_r.wire, cycle=0)
+    occ = domain.signal(width=cnt_w, reset_value=0, name=f"{prefix}_sb_occ")
     above_thresh = occ == cas(domain, m.const(threshold, width=cnt_w), cycle=0)
 
     enq_tag = enq_addr[line_bits:addr_width]
@@ -102,8 +101,8 @@ def build_sbuffer(
     merge_hit = zero1
     merge_idx = cas(domain, m.const(0, width=idx_w), cycle=0)
     for j in range(size):
-        ev = cas(domain, e_valid[j].wire, cycle=0)
-        et = cas(domain, e_tag[j].wire, cycle=0)
+        ev = e_valid[j]
+        et = e_tag[j]
         tag_eq = et == enq_tag
         hit = ev & tag_eq & enq_valid
         merge_hit = mux(hit, one1, merge_hit)
@@ -114,7 +113,7 @@ def build_sbuffer(
     alloc_found = zero1
     alloc_idx = cas(domain, m.const(0, width=idx_w), cycle=0)
     for j in range(size):
-        ev = cas(domain, e_valid[j].wire, cycle=0)
+        ev = e_valid[j]
         is_free = (~ev) & (~alloc_found)
         alloc_found = mux(is_free, one1, alloc_found)
         alloc_idx = mux(is_free, cas(domain, m.const(j, width=idx_w), cycle=0), alloc_idx)
@@ -131,13 +130,13 @@ def build_sbuffer(
     drain_mask = cas(domain, m.const(0, width=mask_w), cycle=0)
 
     for j in range(size):
-        ev = cas(domain, e_valid[j].wire, cycle=0)
+        ev = e_valid[j]
         should_drain = ev & (~drain_valid)
         drain_valid = mux(should_drain, one1, drain_valid)
         drain_idx = mux(should_drain, cas(domain, m.const(j, width=idx_w), cycle=0), drain_idx)
-        drain_tag = mux(should_drain, cas(domain, e_tag[j].wire, cycle=0), drain_tag)
-        drain_data = mux(should_drain, cas(domain, e_data[j].wire, cycle=0), drain_data)
-        drain_mask = mux(should_drain, cas(domain, e_mask[j].wire, cycle=0), drain_mask)
+        drain_tag = mux(should_drain, e_tag[j], drain_tag)
+        drain_data = mux(should_drain, e_data[j], drain_data)
+        drain_mask = mux(should_drain, e_mask[j], drain_mask)
 
     do_drain = drain_valid & dcache_ready & (above_thresh | full | flush)
     drain_addr = cas(domain,
@@ -162,31 +161,31 @@ def build_sbuffer(
     do_enq = enq_valid & (~flush)
     for j in range(size):
         j_const = cas(domain, m.const(j, width=idx_w), cycle=0)
-        old_v = cas(domain, e_valid[j].wire, cycle=0)
-        old_d = cas(domain, e_data[j].wire, cycle=0)
-        old_m = cas(domain, e_mask[j].wire, cycle=0)
+        old_v = e_valid[j]
+        old_d = e_data[j]
+        old_m = e_mask[j]
 
         # Merge path
         is_merge = do_enq & merge_hit & (merge_idx == j_const)
         merged_data = cas(domain, (old_d.wire & ~enq_data.wire) | enq_data.wire, cycle=0)
         merged_mask = cas(domain, (old_m.wire | enq_mask.wire)[0:mask_w], cycle=0)
-        e_data[j].set(mux(is_merge, merged_data, old_d), when=is_merge)
-        e_mask[j].set(mux(is_merge, merged_mask, old_m), when=is_merge)
+        e_data[j].assign(mux(is_merge, merged_data, old_d), when=is_merge)
+        e_mask[j].assign(mux(is_merge, merged_mask, old_m), when=is_merge)
 
         # Allocate path
         is_alloc = do_enq & (~merge_hit) & (alloc_idx == j_const) & alloc_found
-        e_valid[j].set(mux(is_alloc, one1, old_v), when=is_alloc)
-        e_tag[j].set(mux(is_alloc, enq_tag, cas(domain, e_tag[j].wire, cycle=0)), when=is_alloc)
-        e_data[j].set(mux(is_alloc, enq_data, old_d), when=is_alloc)
-        e_mask[j].set(mux(is_alloc, enq_mask, old_m), when=is_alloc)
+        e_valid[j].assign(mux(is_alloc, one1, old_v), when=is_alloc)
+        e_tag[j].assign(mux(is_alloc, enq_tag, e_tag[j]), when=is_alloc)
+        e_data[j].assign(mux(is_alloc, enq_data, old_d), when=is_alloc)
+        e_mask[j].assign(mux(is_alloc, enq_mask, old_m), when=is_alloc)
 
         # Drain: invalidate drained entry
         is_drain = do_drain & (drain_idx == j_const)
-        e_valid[j].set(mux(is_drain, zero1, old_v), when=is_drain)
+        e_valid[j].assign(mux(is_drain, zero1, old_v), when=is_drain)
 
     # Flush: invalidate all
     for j in range(size):
-        e_valid[j].set(zero1, when=flush)
+        e_valid[j].assign(zero1, when=flush)
 
     # Occupancy update
     enq_inc = do_enq & (~merge_hit) & alloc_found
@@ -196,7 +195,7 @@ def build_sbuffer(
                   cas(domain, (occ.wire - u(cnt_w, 1))[0:cnt_w], cycle=0),
                   occ))
     net = mux(flush, cas(domain, m.const(0, width=cnt_w), cycle=0), net)
-    occ_r.set(net)
+    occ <<= net
     return _out
 
 

@@ -19,8 +19,8 @@ def build(m: CycleAwareCircuit, domain: CycleAwareDomain) -> None:
     out0_ready = cas(domain, m.input("out0_ready", width=1), cycle=0)
     out1_ready = cas(domain, m.input("out1_ready", width=1), cycle=0)
 
-    vals = [domain.state(width=1, reset_value=0, name=f"val{i}") for i in range(4)]
-    data = [domain.state(width=8, reset_value=0, name=f"data{i}") for i in range(4)]
+    vals = [domain.signal(width=1, reset_value=0, name=f"val{i}") for i in range(4)]
+    data = [domain.signal(width=8, reset_value=0, name=f"data{i}") for i in range(4)]
 
     v0 = [x for x in vals]
     d0 = [x for x in data]
@@ -47,17 +47,17 @@ def build(m: CycleAwareCircuit, domain: CycleAwareDomain) -> None:
         en.append(en_i)
         pref = pref & a2_v[i]
 
-    m.output("in_ready", in_ready.wire)
-    m.output("out0_valid", out0_valid.wire)
-    m.output("out0_data", d0[0].wire)
-    m.output("out1_valid", out1_valid.wire)
-    m.output("out1_data", d0[1].wire)
+    m.output("in_ready", in_ready)
+    m.output("out0_valid", out0_valid)
+    m.output("out0_data", d0[0])
+    m.output("out1_valid", out1_valid)
+    m.output("out1_data", d0[1])
 
     domain.next()
 
     for i in range(4):
-        vals[i].set(a2_v[i] | en[i])
-        data[i].set(mux(en[i], in_data, a2_d[i]))
+        vals[i] <<= a2_v[i] | en[i]
+        data[i] <<= mux(en[i], in_data, a2_d[i])
 
 
 build.__pycircuit_name__ = "issue_queue_2picker"

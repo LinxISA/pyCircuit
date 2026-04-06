@@ -23,7 +23,7 @@ from pycircuit import (
 )
 ```
 
-See `docs/PyCurcit V5_CYCLE_AWARE_API.md`.
+See `docs/PyCircuit_V5_Spec.md`.
 
 ## Key decorators
 

@@ -102,20 +102,16 @@ def build_store_queue(
 
     # ── Entry storage ─────────────────────────────────────────────────
 
-    e_valid = [domain.state(width=1, reset_value=0, name=f"{prefix}_sq_v_{i}") for i in range(size)]
-    e_addr_valid = [domain.state(width=1, reset_value=0, name=f"{prefix}_sq_av_{i}") for i in range(size)]
-    e_committed = [domain.state(width=1, reset_value=0, name=f"{prefix}_sq_cm_{i}") for i in range(size)]
-    e_addr = [domain.state(width=addr_width, reset_value=0, name=f"{prefix}_sq_a_{i}") for i in range(size)]
-    e_data = [domain.state(width=data_width, reset_value=0, name=f"{prefix}_sq_d_{i}") for i in range(size)]
-    e_rob = [domain.state(width=rob_idx_width, reset_value=0, name=f"{prefix}_sq_r_{i}") for i in range(size)]
+    e_valid = [domain.signal(width=1, reset_value=0, name=f"{prefix}_sq_v_{i}") for i in range(size)]
+    e_addr_valid = [domain.signal(width=1, reset_value=0, name=f"{prefix}_sq_av_{i}") for i in range(size)]
+    e_committed = [domain.signal(width=1, reset_value=0, name=f"{prefix}_sq_cm_{i}") for i in range(size)]
+    e_addr = [domain.signal(width=addr_width, reset_value=0, name=f"{prefix}_sq_a_{i}") for i in range(size)]
+    e_data = [domain.signal(width=data_width, reset_value=0, name=f"{prefix}_sq_d_{i}") for i in range(size)]
+    e_rob = [domain.signal(width=rob_idx_width, reset_value=0, name=f"{prefix}_sq_r_{i}") for i in range(size)]
 
-    enq_ptr_r = domain.state(width=ptr_w, reset_value=0, name=f"{prefix}_sq_enq")
-    deq_ptr_r = domain.state(width=ptr_w, reset_value=0, name=f"{prefix}_sq_deq")
-    commit_ptr_r = domain.state(width=ptr_w, reset_value=0, name=f"{prefix}_sq_cmt")
-
-    enq_ptr = cas(domain, enq_ptr_r.wire, cycle=0)
-    deq_ptr = cas(domain, deq_ptr_r.wire, cycle=0)
-    commit_ptr = cas(domain, commit_ptr_r.wire, cycle=0)
+    enq_ptr = domain.signal(width=ptr_w, reset_value=0, name=f"{prefix}_sq_enq")
+    deq_ptr = domain.signal(width=ptr_w, reset_value=0, name=f"{prefix}_sq_deq")
+    commit_ptr = domain.signal(width=ptr_w, reset_value=0, name=f"{prefix}_sq_cmt")
 
     enq_idx = enq_ptr[0:idx_w]
     deq_idx = deq_ptr[0:idx_w]
@@ -137,10 +133,10 @@ def build_store_queue(
     fwd_hit = zero1
     fwd_data_out = zero_data
     for j in range(size):
-        ev = cas(domain, e_valid[j].wire, cycle=0)
-        eav = cas(domain, e_addr_valid[j].wire, cycle=0)
-        ea = cas(domain, e_addr[j].wire, cycle=0)
-        ed = cas(domain, e_data[j].wire, cycle=0)
+        ev = e_valid[j]
+        eav = e_addr_valid[j]
+        ea = e_addr[j]
+        ed = e_data[j]
         entry_tag = ea[line_bits:addr_width]
         tag_match = entry_tag == fwd_tag
         entry_hit = fwd_valid & ev & eav & tag_match
@@ -148,8 +144,8 @@ def build_store_queue(
         fwd_data_out = mux(entry_hit, ed, fwd_data_out)
 
     # Drain: head committed entry → SBuffer
-    head_valid = cas(domain, e_valid[0].wire, cycle=0)
-    head_committed = cas(domain, e_committed[0].wire, cycle=0)
+    head_valid = e_valid[0]
+    head_committed = e_committed[0]
 
     drain_head_valid = zero1
     drain_head_addr = cas(domain, m.const(0, width=addr_width), cycle=0)
@@ -157,13 +153,13 @@ def build_store_queue(
     for j in range(size):
         j_const = cas(domain, m.const(j, width=idx_w), cycle=0)
         is_head = deq_idx == j_const
-        ev = cas(domain, e_valid[j].wire, cycle=0)
-        ecm = cas(domain, e_committed[j].wire, cycle=0)
-        eav = cas(domain, e_addr_valid[j].wire, cycle=0)
+        ev = e_valid[j]
+        ecm = e_committed[j]
+        eav = e_addr_valid[j]
         can_drain = is_head & ev & ecm & eav
         drain_head_valid = mux(can_drain, one1, drain_head_valid)
-        drain_head_addr = mux(can_drain, cas(domain, e_addr[j].wire, cycle=0), drain_head_addr)
-        drain_head_data = mux(can_drain, cas(domain, e_data[j].wire, cycle=0), drain_head_data)
+        drain_head_addr = mux(can_drain, e_addr[j], drain_head_addr)
+        drain_head_data = mux(can_drain, e_data[j], drain_head_data)
 
     drain_fire = drain_head_valid & sbuf_ready
 
@@ -192,51 +188,51 @@ def build_store_queue(
         j_const = cas(domain, m.const(j, width=idx_w), cycle=0)
         is_enq_slot = enq_idx == j_const
         we_enq = can_enq & is_enq_slot
-        e_valid[j].set(mux(we_enq, one1, cas(domain, e_valid[j].wire, cycle=0)), when=we_enq)
-        e_addr_valid[j].set(mux(we_enq, zero1, cas(domain, e_addr_valid[j].wire, cycle=0)), when=we_enq)
-        e_committed[j].set(mux(we_enq, zero1, cas(domain, e_committed[j].wire, cycle=0)), when=we_enq)
-        e_rob[j].set(mux(we_enq, enq_rob_idx, cas(domain, e_rob[j].wire, cycle=0)), when=we_enq)
+        e_valid[j].assign(mux(we_enq, one1, e_valid[j]), when=we_enq)
+        e_addr_valid[j].assign(mux(we_enq, zero1, e_addr_valid[j]), when=we_enq)
+        e_committed[j].assign(mux(we_enq, zero1, e_committed[j]), when=we_enq)
+        e_rob[j].assign(mux(we_enq, enq_rob_idx, e_rob[j]), when=we_enq)
 
     # Data/address fill from store unit
     for j in range(size):
         j_const = cas(domain, m.const(j, width=idx_w), cycle=0)
         is_write = write_valid & (write_idx == j_const)
-        e_addr[j].set(mux(is_write, write_addr, cas(domain, e_addr[j].wire, cycle=0)), when=is_write)
-        e_data[j].set(mux(is_write, write_data, cas(domain, e_data[j].wire, cycle=0)), when=is_write)
-        e_addr_valid[j].set(mux(is_write, one1, cas(domain, e_addr_valid[j].wire, cycle=0)), when=is_write)
+        e_addr[j].assign(mux(is_write, write_addr, e_addr[j]), when=is_write)
+        e_data[j].assign(mux(is_write, write_data, e_data[j]), when=is_write)
+        e_addr_valid[j].assign(mux(is_write, one1, e_addr_valid[j]), when=is_write)
 
     # Commit
     for j in range(size):
         j_const = cas(domain, m.const(j, width=idx_w), cycle=0)
         is_cmt = commit_valid & (commit_idx == j_const)
-        e_committed[j].set(mux(is_cmt, one1, cas(domain, e_committed[j].wire, cycle=0)), when=is_cmt)
+        e_committed[j].assign(mux(is_cmt, one1, e_committed[j]), when=is_cmt)
 
     # Drain (dequeue committed head to SBuffer)
     for j in range(size):
         j_const = cas(domain, m.const(j, width=idx_w), cycle=0)
         is_deq = drain_fire & (deq_idx == j_const)
-        e_valid[j].set(mux(is_deq, zero1, cas(domain, e_valid[j].wire, cycle=0)), when=is_deq)
+        e_valid[j].assign(mux(is_deq, zero1, e_valid[j]), when=is_deq)
 
     # Pointer updates
     next_enq = mux(can_enq,
                     cas(domain, (enq_ptr.wire + u(ptr_w, 1))[0:ptr_w], cycle=0),
                     enq_ptr)
     next_enq = mux(redirect_valid | flush, commit_ptr, next_enq)
-    enq_ptr_r.set(next_enq)
+    enq_ptr <<= next_enq
 
     next_deq = mux(drain_fire,
                     cas(domain, (deq_ptr.wire + u(ptr_w, 1))[0:ptr_w], cycle=0),
                     deq_ptr)
-    deq_ptr_r.set(next_deq)
+    deq_ptr <<= next_deq
 
     next_cmt = mux(commit_valid,
                     cas(domain, (commit_ptr.wire + u(ptr_w, 1))[0:ptr_w], cycle=0),
                     commit_ptr)
-    commit_ptr_r.set(next_cmt)
+    commit_ptr <<= next_cmt
 
     # Flush
     for j in range(size):
-        e_valid[j].set(zero1, when=flush)
+        e_valid[j].assign(zero1, when=flush)
     return _out
 
 

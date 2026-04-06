@@ -117,31 +117,31 @@ def build_rename(
         cas(domain, m.input(f"{prefix}_redirect_snap_id", width=snap_id_w), cycle=0))
 
     # ── State: RAT (logical reg i → physical reg i at reset) ─────
-    rat = [domain.state(width=ptag_w, reset_value=i, name=f"{prefix}_rat_{i}")
+    rat = [domain.signal(width=ptag_w, reset_value=i, name=f"{prefix}_rat_{i}")
            for i in range(int_logic_regs)]
 
     # ── State: FreeList circular queue ───────────────────────────
     # Initially physical regs [int_logic_regs .. int_phys_regs-1] are free.
     fl_mem = [
-        domain.state(
+        domain.signal(
             width=ptag_w,
             reset_value=(int_logic_regs + i) if i < fl_init_count else 0,
             name=f"fl_{i}",
         )
         for i in range(fl_size)
     ]
-    fl_head = domain.state(width=fl_ptr_w, reset_value=0, name=f"{prefix}_fl_head")
-    fl_tail = domain.state(width=fl_ptr_w, reset_value=fl_init_count, name=f"{prefix}_fl_tail")
+    fl_head = domain.signal(width=fl_ptr_w, reset_value=0, name=f"{prefix}_fl_head")
+    fl_tail = domain.signal(width=fl_ptr_w, reset_value=fl_init_count, name=f"{prefix}_fl_tail")
 
     # ── State: Snapshots for redirect recovery ───────────────────
-    snap_fl_head = [domain.state(width=fl_ptr_w, reset_value=0, name=f"{prefix}_snap_flh_{s}")
+    snap_fl_head = [domain.signal(width=fl_ptr_w, reset_value=0, name=f"{prefix}_snap_flh_{s}")
                     for s in range(snapshot_num)]
     snap_rat = [
-        [domain.state(width=ptag_w, reset_value=j, name=f"{prefix}_srat_{s}_{j}")
+        [domain.signal(width=ptag_w, reset_value=j, name=f"{prefix}_srat_{s}_{j}")
          for j in range(int_logic_regs)]
         for s in range(snapshot_num)
     ]
-    snap_next = domain.state(width=snap_id_w, reset_value=0, name=f"{prefix}_snap_next")
+    snap_next = domain.signal(width=snap_id_w, reset_value=0, name=f"{prefix}_snap_next")
 
     # ── Constants ────────────────────────────────────────────────
     ZERO_P = cas(domain, m.const(0, width=ptag_w), cycle=0)
@@ -247,7 +247,7 @@ def build_rename(
             nxt = mux(sel, snap_rat[s][j], nxt)
         # Flush: identity mapping
         nxt = mux(flush, cas(domain, m.const(j, width=ptag_w), cycle=0), nxt)
-        rat[j].set(nxt)
+        rat[j] <<= nxt
 
     # ── FreeList: enqueue freed regs from commit ─────────────────
     cm_run = cas(domain, m.const(0, width=cm_cnt_w), cycle=0)
@@ -270,7 +270,7 @@ def build_rename(
         do_free = commit_valid[i] & commit_rd_valid[i]
         for j in range(fl_size):
             we = do_free & (widx == cas(domain, m.const(j, width=fl_idx_w), cycle=0))
-            fl_mem[j].set(commit_old_pdest[i], when=we)
+            fl_mem[j].assign(commit_old_pdest[i], when=we)
 
     # ── FreeList head (priority: advance < redirect < flush) ─────
     adv_head = cas(domain,
@@ -282,31 +282,31 @@ def build_rename(
         sel = redirect_valid & (~flush) & (redirect_snap_id == sc)
         h = mux(sel, snap_fl_head[s], h)
     h = mux(flush, cas(domain, m.const(0, width=fl_ptr_w), cycle=0), h)
-    fl_head.set(h)
+    fl_head <<= h
 
     # ── FreeList tail (advance on commit, reset on flush) ────────
     adv_tail = cas(domain,
                    (fl_tail.wire + total_free.wire + u(fl_ptr_w, 0))[0:fl_ptr_w],
                    cycle=0)
-    fl_tail.set(mux(flush,
-                    cas(domain, m.const(fl_init_count, width=fl_ptr_w), cycle=0),
-                    adv_tail))
+    fl_tail <<= mux(flush,
+                     cas(domain, m.const(fl_init_count, width=fl_ptr_w), cycle=0),
+                     adv_tail)
 
     # ── Snapshot save (on rename fire, capture pre-rename state) ──
     take = rename_fire & (~flush) & (~redirect_valid)
     for s in range(snapshot_num):
         sc = cas(domain, m.const(s, width=snap_id_w), cycle=0)
         sw = take & (snap_next == sc)
-        snap_fl_head[s].set(fl_head, when=sw)
+        snap_fl_head[s].assign(fl_head, when=sw)
         for j in range(int_logic_regs):
-            snap_rat[s][j].set(rat[j], when=sw)
+            snap_rat[s][j].assign(rat[j], when=sw)
 
     nxt_snap = cas(domain,
                    (snap_next.wire + m.const(1, width=snap_id_w))[0:snap_id_w],
                    cycle=0)
-    snap_next.set(mux(flush,
-                      cas(domain, m.const(0, width=snap_id_w), cycle=0),
-                      mux(take, nxt_snap, snap_next)))
+    snap_next <<= mux(flush,
+                       cas(domain, m.const(0, width=snap_id_w), cycle=0),
+                       mux(take, nxt_snap, snap_next))
     return _out
 
 

@@ -141,11 +141,8 @@ def build_frontend(
     FALLTHROUGH = cas(domain, m.const(pred_block_bytes, width=pc_width), cycle=0)
 
     # BPU state: fetch PC register
-    fetch_pc_r = domain.state(width=pc_width, reset_value=0, name=f"{prefix}_fetch_pc")
-    bpu_valid_r = domain.state(width=1, reset_value=0, name=f"{prefix}_bpu_valid")
-
-    fetch_pc = cas(domain, fetch_pc_r.wire, cycle=0)
-    bpu_valid = cas(domain, bpu_valid_r.wire, cycle=0)
+    fetch_pc = domain.signal(width=pc_width, reset_value=0, name=f"{prefix}_fetch_pc")
+    bpu_valid = domain.signal(width=1, reset_value=0, name=f"{prefix}_bpu_valid")
 
     # BPU simplified prediction: fallthrough unless redirected
     bpu_pred_target = cas(
@@ -242,8 +239,8 @@ def build_frontend(
 
     domain.next()
 
-    bpu_valid_r.set(ONE_1)
-    fetch_pc_r.set(next_pc)
+    bpu_valid <<= ONE_1
+    fetch_pc <<= next_pc
     return _out
 
 

@@ -55,8 +55,7 @@ def test_step01_style_docs_exist():
     """Step 1: canonical pyCircuit / V5 docs present."""
     root_docs = _REPO_ROOT / "docs"
     for name in (
-        "PyCurcit V5_CYCLE_AWARE_API.md",
-        "PyCircuit V5 Programming Tutorial.md",
+        "PyCircuit_V5_Spec.md",
         "pycircuit_implementation_method.md",
         "FRONTEND_API.md",
         "TESTBENCH.md",

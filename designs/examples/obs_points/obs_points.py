@@ -12,13 +12,13 @@ def build(m: CycleAwareCircuit, domain: CycleAwareDomain, width: int = 8) -> Non
     x = cas(domain, m.input("x", width=width), cycle=0)
     y = x + 1
 
-    q = domain.state(width=width, reset_value=0, name="q")
+    q = domain.signal(width=width, reset_value=0, name="q")
 
     m.output("y", y.wire)
-    m.output("q", q.wire)
+    m.output("q", q)
 
     domain.next()
-    q.set(y)
+    q <<= y
 
 
 build.__pycircuit_name__ = "obs_points"

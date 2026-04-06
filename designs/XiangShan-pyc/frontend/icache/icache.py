@@ -101,13 +101,13 @@ def build_icache(
     # ── Feedback state (registers read at cycle 0, updated at end) ──
 
     valid_regs = [
-        domain.state(width=n_sets, reset_value=0, name=f"{prefix}_vld{w}")
+        domain.signal(width=n_sets, reset_value=0, name=f"{prefix}_vld{w}")
         for w in range(n_ways)
     ]
 
-    mshr_valid = domain.state(width=1, reset_value=0, name=f"{prefix}_mshr_v")
-    mshr_set = domain.state(width=index_bits, reset_value=0, name=f"{prefix}_mshr_set")
-    mshr_tag = domain.state(width=tag_bits, reset_value=0, name=f"{prefix}_mshr_tag")
+    mshr_valid = domain.signal(width=1, reset_value=0, name=f"{prefix}_mshr_v")
+    mshr_set = domain.signal(width=index_bits, reset_value=0, name=f"{prefix}_mshr_set")
+    mshr_tag = domain.signal(width=tag_bits, reset_value=0, name=f"{prefix}_mshr_tag")
 
     # ── Per-way Tag & Data SRAMs (synchronous read) ─────────────────
     # Address presented at s0; read data available one cycle later (s1).
@@ -218,7 +218,7 @@ def build_icache(
         wr_way = refill_valid.wire & (refill_way.wire == m.const(w, width=way_bits))
         one_hot = m.const(1, width=n_sets).shl(amount=refill_set.wire)
         new_vld = valid_regs[w].wire | one_hot
-        valid_regs[w].set(wr_way.select(new_vld, valid_regs[w].wire))
+        valid_regs[w] <<= wr_way.select(new_vld, valid_regs[w].wire)
 
     # MSHR: allocate on miss, clear on refill completion, clear on flush
     mshr_clear = refill_valid.wire & mshr_valid.wire
@@ -227,10 +227,10 @@ def build_icache(
         mshr_alloc.select(m.const(1, width=1), mshr_valid.wire),
     )
     nv = flush.wire.select(m.const(0, width=1), nv)
-    mshr_valid.set(nv)
+    mshr_valid <<= nv
 
-    mshr_set.set(mshr_alloc.select(s2_set_idx_w, mshr_set.wire))
-    mshr_tag.set(mshr_alloc.select(s2_ptag_w, mshr_tag.wire))
+    mshr_set <<= mshr_alloc.select(s2_set_idx_w, mshr_set.wire)
+    mshr_tag <<= mshr_alloc.select(s2_ptag_w, mshr_tag.wire)
 
     # ================================================================
     # Output ports
