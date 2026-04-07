@@ -782,9 +782,8 @@ def wire_of(
 
         m.output("result", wire_of(outs["result"]))
 
-    This is the **only** sanctioned way to obtain a bare ``Wire`` from a
-    ``CycleAwareSignal`` / ``ForwardSignal`` / ``StateSignal``.
-    Direct ``.wire`` access is removed from the public API.
+    This is the preferred public helper for converting signal wrappers back to
+    a bare ``Wire`` at API boundaries such as ``m.output()``.
     """
     if isinstance(sig, ForwardSignal):
         return sig._state._cas._w

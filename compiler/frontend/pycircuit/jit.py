@@ -1774,12 +1774,11 @@ class _Compiler:
                 try:
                     from .v5 import ForwardSignal
                 except Exception:
-                    ForwardSignal = ()  # type: ignore[assignment]
-                if isinstance(cur, Reg):
-                    cur <<= rhs
-                    self.env[name] = cur
-                    return
-                if isinstance(cur, ForwardSignal):
+                    ForwardSignal = None  # type: ignore[assignment]
+                supported_types: tuple[type[Any], ...] = (
+                    (Reg, ForwardSignal) if ForwardSignal is not None else (Reg,)
+                )
+                if isinstance(cur, supported_types):
                     cur <<= rhs
                     self.env[name] = cur
                     return
