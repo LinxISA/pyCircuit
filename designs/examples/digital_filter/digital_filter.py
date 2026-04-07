@@ -13,6 +13,7 @@ from pycircuit import (
     CycleAwareDomain,
     cas,
     compile_cycle_aware,
+    u,
     wire_of,
 )
 
@@ -41,9 +42,9 @@ def build(
 
     taps_wire = [wire_of(x_in)] + [wire_of(st) for st in delay_states]
 
-    coeff_wires = [m.const(int(cv), width=ACC_W) for cv in COEFFS]
+    coeff_wires = [u(ACC_W, int(cv)) for cv in COEFFS]
 
-    acc_w = m.const(0, width=ACC_W)
+    acc_w = u(ACC_W, 0)
     for i in range(TAPS):
         tap_ext = taps_wire[i].as_signed()._sext(width=ACC_W)
         product = tap_ext * coeff_wires[i]

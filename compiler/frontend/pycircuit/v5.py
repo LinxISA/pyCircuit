@@ -175,6 +175,16 @@ class CycleAwareDomain:
         st = self._state(width=width, reset_value=reset_value, name=name)
         return ForwardSignal(st)
 
+    def state(
+        self,
+        *,
+        width: int,
+        reset_value: int = 0,
+        name: str = "",
+    ) -> "StateSignal":
+        """Back-compat V5 state-register API retained for current public examples/tests."""
+        return self._state(width=width, reset_value=reset_value, name=name)
+
     def call(
         self,
         fn: Callable[..., Any],
@@ -610,6 +620,10 @@ class ForwardSignal:
     def name(self) -> str:
         return str(self._state._cas._w)
 
+    @property
+    def wire(self) -> Wire:
+        return self._state._cas._w
+
     # ── arithmetic / logic operators (forward to inner CAS) ──────────
 
     def __add__(self, other: object) -> "CycleAwareSignal":
@@ -786,6 +800,10 @@ class CycleAwareSignal:
     @property
     def signed(self) -> bool:
         return bool(self._w.signed)
+
+    @property
+    def wire(self) -> Wire:
+        return self._w
 
     def named(self, name: str) -> "CycleAwareSignal":
         nw = self._domain._m.named(self._w, str(name))

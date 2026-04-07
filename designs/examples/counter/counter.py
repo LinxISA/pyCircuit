@@ -12,12 +12,12 @@ from pycircuit import (
 
 def build(m: CycleAwareCircuit, domain: CycleAwareDomain, width: int = 8) -> None:
     enable = cas(domain, m.input("enable", width=1), cycle=0)
-    count = domain.signal(width=width, reset_value=0, name="count")
+    count = domain.state(width=width, reset_value=0, name="count")
 
     m.output("count", wire_of(count))
 
     domain.next()
-    count.assign(count + 1, when=enable)
+    count.set(count + 1, when=enable)
 
 
 build.__pycircuit_name__ = "counter"

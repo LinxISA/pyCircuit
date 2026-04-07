@@ -172,11 +172,11 @@ result = a ^ b
 result = ~a
 
 # 比较
-result = a == b       # 或 a.eq(b)
-result = a < b        # 或 a.lt(b)
-result = a > b        # 或 a.gt(b)
-result = a <= b       # 或 a.le(b)
-result = a >= b       # 或 a.ge(b)
+result = a == b
+result = a < b
+result = a > b
+result = a <= b
+result = a >= b
 
 # 切片/索引（返回 CycleAwareSignal）
 low_byte = data[0:8]
@@ -210,7 +210,7 @@ bit5     = data[5]
 counter = domain.signal(width=8, reset_value=0, name="counter")
 
 # 2. 组合逻辑（cycle 0）：直接在 CAS 上运算
-count_next = mux(enable, counter + 1, counter)
+count_next = (counter + 1) if enable else counter
 m.output("count", wire_of(counter))
 
 # 3. domain.next() → cycle 1
@@ -298,15 +298,15 @@ m.output("result", wire_of(outs["result"]))
 
 支持 `CycleAwareSignal`、`ForwardSignal`、裸 `Wire` 和 `Reg` 输入。
 
-### mux()
+### 条件选择
 
-条件选择器，自动进行周期对齐。
+条件表达式会自动进行周期对齐。
 
 ```python
-result = mux(condition, true_value, false_value)
+result = true_value if condition else false_value
 ```
 
-三个参数均为 `CycleAwareSignal`（或 `int` 字面量）。返回 `CycleAwareSignal`。
+两个分支可以是 `CycleAwareSignal` 或 `int` 字面量；结果会被提升为合适的硬件值。
 
 ---
 
@@ -457,7 +457,7 @@ def my_module(
     acc = domain.signal(width=data_width, reset_value=0, name=f"{prefix}_acc")
 
     # 组合逻辑（cycle 0）
-    acc_next = mux(valid, acc + data_in, acc)
+    acc_next = (acc + data_in) if valid else acc
 
     # 状态更新（cycle 1）
     domain.next()
@@ -650,7 +650,7 @@ for i in range(W):                           # 循环：每 slot 一组信号
     srs_inputs[f"disp_pdst{i}"]   = ds_pdst[i]
 for c in range(CDB_PORTS):
     srs_inputs[f"cdb_valid{c}"] = zero1
-    srs_inputs[f"cdb_tag{c}"]   = cas(domain, m.const(0, width=TAG_W), cycle=0)
+    srs_inputs[f"cdb_tag{c}"]   = cas(domain, u(TAG_W, 0), cycle=0)
 
 srs_out = domain.call(scalar_rs, inputs=srs_inputs,
                       n_entries=32, n_dispatch=W, n_cdb=CDB_PORTS,
@@ -660,8 +660,8 @@ srs_out = domain.call(scalar_rs, inputs=srs_inputs,
 **在 dict 中传递常量（无有效信号时）：**
 
 ```python
-zero1  = cas(domain, m.const(0, width=1), cycle=0)
-zero64 = cas(domain, m.const(0, width=64), cycle=0)
+zero1  = cas(domain, u(1, 0), cycle=0)
+zero64 = cas(domain, u(64, 0), cycle=0)
 
 fetch_out = domain.call(fetch, inputs={
     "stall":      stall_in,
@@ -1057,7 +1057,7 @@ from pycircuit import CycleAwareTb, Tb, testbench
 ```python
 from pycircuit import (
     CycleAwareCircuit, CycleAwareDomain, CycleAwareTb,
-    Tb, cas, compile_cycle_aware, mux, testbench, wire_of,
+    Tb, cas, compile_cycle_aware, testbench, wire_of,
 )
 
 def counter(m: CycleAwareCircuit, domain: CycleAwareDomain):
@@ -1065,7 +1065,7 @@ def counter(m: CycleAwareCircuit, domain: CycleAwareDomain):
     count = domain.signal(width=8, reset_value=0, name="count")
     m.output("count", wire_of(count))
     domain.next()
-    count <<= mux(enable, count + 1, count)
+    count <<= ((count + 1) if enable else count)
 
 counter.__pycircuit_name__ = "counter"
 
@@ -1388,7 +1388,7 @@ def counter(
 
     count = domain.signal(width=width, reset_value=0, name=f"{prefix}_count")
 
-    count_next = mux(enable, count + 1, count)
+    count_next = (count + 1) if enable else count
 
     domain.next()
     count <<= count_next
@@ -1418,16 +1418,16 @@ def sram_bank(m, domain, *, depth, width, prefix,
     ]
 
     # Cycle 0: 组合读
-    zero = cas(domain, m.const(0, width=width), cycle=0)
+    zero = cas(domain, u(width, 0), cycle=0)
     rd_data = zero
     for d in range(depth):
-        hit = rd_addr.eq(d)
-        rd_data = mux(hit, storage[d], rd_data)
+        hit = rd_addr == d
+        rd_data = storage[d] if hit else rd_data
 
     # Deferred write（在 domain.next() 之后调用）
     def commit_write():
         for d in range(depth):
-            hit = wr_en & wr_addr.eq(d)
+            hit = wr_en & (wr_addr == d)
             storage[d].assign(wr_data, when=hit)
 
     return rd_data, commit_write
@@ -1458,8 +1458,8 @@ def frontend(m, domain, *, inputs=None, pc_width=32, prefix="fe") -> dict:
 
     pc = domain.signal(width=pc_width, reset_value=0, name=f"{prefix}_pc")
 
-    FOUR = cas(domain, m.const(4, width=pc_width), cycle=0)
-    next_pc = mux(redirect_valid, redirect_target, pc + FOUR)
+    FOUR = cas(domain, u(pc_width, 4), cycle=0)
+    next_pc = redirect_target if redirect_valid else (pc + FOUR)
 
     domain.next()
     pc <<= next_pc
@@ -1481,7 +1481,7 @@ def backend(m, domain, *, inputs=None, data_width=32, prefix="be") -> dict:
 
     add_r = op_a + op_b
     sub_r = op_a - op_b
-    result = mux(alu_op[0], sub_r, add_r)
+    result = sub_r if alu_op[0] else add_r
 
     wb_data = domain.signal(width=data_width, name=f"{prefix}_wb_data")
     domain.next()
@@ -1508,8 +1508,8 @@ def cpu_core(m, domain, *, inputs=None, data_width=32, pc_width=32, prefix="cpu"
 
     be_out = domain.call(backend, inputs={
         "op_a": fe_out["pc"],
-        "op_b": cas(domain, m.const(0, width=data_width), cycle=0),
-        "alu_op": cas(domain, m.const(0, width=4), cycle=0),
+        "op_b": cas(domain, u(data_width, 0), cycle=0),
+        "alu_op": cas(domain, u(4, 0), cycle=0),
     }, data_width=data_width, prefix=f"{prefix}_be")
 
     outs = {"pc": fe_out["pc"], "wb_data": be_out["wb_data"]}
@@ -1560,7 +1560,7 @@ Davinci 核（`designs/outerCube/davinci/davinci_top.py`）展示了所有模式
 ```python
 def davinci_top(m, domain, *, inputs=None, prefix="dv") -> dict:
     _in = submodule_input
-    zero1 = cas(domain, m.const(0, width=1), cycle=0)
+    zero1 = cas(domain, u(1, 0), cycle=0)
 
     # ── 外部输入 ──
     stall_in     = _in(inputs, "stall",        m, domain, prefix=prefix, width=1)
@@ -1611,7 +1611,7 @@ davinci_top.__pycircuit_name__ = "davinci_top"
 ```python
 # ✅ 所有运算在 CAS 上进行
 result = a + b                              # CAS + CAS → CAS
-flag   = result.eq(0)                       # CAS → CAS
+flag   = result == 0                        # CAS → CAS
 
 # ✅ wire_of() 仅在 m.output() 边界
 m.output("result", wire_of(result))
@@ -1743,7 +1743,7 @@ designs/my_soc/
 | 函数 | 说明 |
 |------|------|
 | `cas(domain, wire, cycle=N)` | 将 Wire 包装为 CycleAwareSignal |
-| `mux(condition, true_val, false_val)` | 多路选择器（自动周期对齐） |
+| `true_val if condition else false_val` | 多路选择（自动周期对齐） |
 | `submodule_input(io, key, m, domain, *, prefix, width, cycle=0)` | 双模输入：有 inputs 时返回传入信号，否则创建 m.input() |
 | `wire_of(sig)` | 安全提取 Wire（**仅用于 m.output()**） |
 

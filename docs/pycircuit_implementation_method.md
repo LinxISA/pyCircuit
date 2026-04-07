@@ -272,7 +272,7 @@ For complex blocks, mirror this repository's **10-step** narrative in **block-lo
    - `sig = domain.signal(width=W, reset_value=0, name="...")` for registers
    - `sig <<= expr` for unconditional register assignment
    - `sig.assign(expr, when=cond)` for conditional assignment
-   - `mux(cond, true_val, false_val)` for selection
+   - Python conditional expressions for selection (`true_val if cond else false_val`)
    - `cas(domain, m.input(...), cycle=0)` or `submodule_input(inputs, key, ...)` for inputs
    - `wire_of(sig)` only in `m.output()` calls
    - `domain.call(sub_fn, inputs={...}, prefix=...)` for sub-module invocation

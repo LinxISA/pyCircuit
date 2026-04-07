@@ -6,7 +6,6 @@ from pycircuit import (
     CycleAwareCircuit,
     CycleAwareDomain,
     compile_cycle_aware,
-    mux,
 )
 
 PKT_W = 32
@@ -31,18 +30,18 @@ def build(m: CycleAwareCircuit, domain: CycleAwareDomain, *, N_PORTS: int = 4, F
     hbm_port = hbm_dst[0:PORT_BITS]
 
     for j in range(N_PORTS):
-        merged_data = m.const(0, width=PKT_W)
-        merged_valid = m.const(0, width=1)
+        merged_data = 0
+        merged_valid = 0
 
         for i in range(N_PORTS):
             rx_dst_i = rx_pkts[i][24:28]
             rx_port_i = rx_dst_i[0:PORT_BITS]
-            fwd_match = (rx_port_i == m.const(j, width=PORT_BITS)) & rx_vals[i]
-            merged_data = mux(fwd_match, rx_pkts[i], merged_data)
+            fwd_match = (rx_port_i == j) & rx_vals[i]
+            merged_data = rx_pkts[i] if fwd_match else merged_data
             merged_valid = fwd_match | merged_valid
 
-        hbm_match_j = hbm_valid & (hbm_port == m.const(j, width=PORT_BITS))
-        merged_data = mux(hbm_match_j, hbm_pkt, merged_data)
+        hbm_match_j = hbm_valid & (hbm_port == j)
+        merged_data = hbm_pkt if hbm_match_j else merged_data
         merged_valid = hbm_match_j | merged_valid
 
         fifos[j].push(merged_data, when=merged_valid)
@@ -50,11 +49,11 @@ def build(m: CycleAwareCircuit, domain: CycleAwareDomain, *, N_PORTS: int = 4, F
     tx_pkts = []
     tx_vals = []
     for i in range(N_PORTS):
-        pop_result = fifos[i].pop(when=m.const(1, width=1))
+        pop_result = fifos[i].pop(when=1)
         tx_pkts.append(pop_result.data)
         tx_vals.append(pop_result.valid)
 
-    hbm_ready_sig = m.const(1, width=1)
+    hbm_ready_sig = 1
 
     for i in range(N_PORTS):
         m.output(f"tx_pkt_{i}", tx_pkts[i])
@@ -65,7 +64,7 @@ def build(m: CycleAwareCircuit, domain: CycleAwareDomain, *, N_PORTS: int = 4, F
 build.__pycircuit_name__ = "npu_node"
 
 if __name__ == "__main__":
-    circuit = compile_cycle_aware(build, name="npu_node", eager=True,
+    circuit = compile_cycle_aware(build, name="npu_node",
                       N_PORTS=4, FIFO_DEPTH=8, NODE_ID=0)
     print(circuit.emit_mlir()[:500])
     print(f"... ({len(circuit.emit_mlir())} chars)")

@@ -153,10 +153,10 @@ def _expect_wire(v: Any, *, ctx: str) -> Wire:
 
 def _is_cycleaware_value(v: Any) -> bool:
     try:
-        from .v5 import CycleAwareSignal, StateSignal
+        from .v5 import CycleAwareSignal, ForwardSignal, StateSignal
     except Exception:
         return False
-    return isinstance(v, (CycleAwareSignal, StateSignal))
+    return isinstance(v, (CycleAwareSignal, ForwardSignal, StateSignal))
 
 
 def _wire_ifexpr(cond: Wire, true_v: Any, false_v: Any) -> Wire:
@@ -1771,13 +1771,21 @@ class _Compiler:
                 )
                 return
             if isinstance(node.op, ast.LShift):
-                if not isinstance(cur, Reg):
-                    raise JitError(
-                        "<<= is only supported for Reg variables (use x = x.shl(amount=...) for wires)"
-                    )
-                cur <<= rhs
-                self.env[name] = cur
-                return
+                try:
+                    from .v5 import ForwardSignal
+                except Exception:
+                    ForwardSignal = ()  # type: ignore[assignment]
+                if isinstance(cur, Reg):
+                    cur <<= rhs
+                    self.env[name] = cur
+                    return
+                if isinstance(cur, ForwardSignal):
+                    cur <<= rhs
+                    self.env[name] = cur
+                    return
+                raise JitError(
+                    "<<= is only supported for Reg or ForwardSignal variables"
+                )
             raise JitError("unsupported augmented assignment operator")
         if isinstance(node, ast.Assert):
             test_v = self.eval_expr(node.test)

@@ -5,7 +5,6 @@ from pycircuit import (
     CycleAwareDomain,
     cas,
     compile_cycle_aware,
-    mux,
     wire_of,
 )
 
@@ -16,7 +15,7 @@ def build(m: CycleAwareCircuit, domain: CycleAwareDomain, stages: int = 3) -> No
     sel = cas(domain, m.input("sel", width=1), cycle=0)
 
     tag = (a == b)
-    data = mux(sel, a + b, a ^ b)
+    data = (a + b) if sel else (a ^ b)
 
     for i in range(stages):
         domain.next()
@@ -32,4 +31,4 @@ build.__pycircuit_name__ = "jit_pipeline_vec"
 
 
 if __name__ == "__main__":
-    print(compile_cycle_aware(build, name="jit_pipeline_vec", eager=True, stages=3).emit_mlir())
+    print(compile_cycle_aware(build, name="jit_pipeline_vec", stages=3).emit_mlir())

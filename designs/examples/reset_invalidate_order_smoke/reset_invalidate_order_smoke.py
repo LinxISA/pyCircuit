@@ -7,7 +7,6 @@ from pycircuit import (
     ProbeView,
     cas,
     compile_cycle_aware,
-    mux,
     probe,
     wire_of,
 )
@@ -16,11 +15,11 @@ from pycircuit import (
 def build(m: CycleAwareCircuit, domain: CycleAwareDomain, width: int = 8) -> None:
     en = cas(domain, m.input("en", width=1), cycle=0)
 
-    q = domain.signal(width=width, reset_value=0, name="q")
+    q = domain.state(width=width, reset_value=0, name="q")
     m.output("y", wire_of(q))
 
     domain.next()
-    q.assign(q + 1, when=en)
+    q.set(q + 1, when=en)
 
 
 build.__pycircuit_name__ = "reset_invalidate_order_smoke"
