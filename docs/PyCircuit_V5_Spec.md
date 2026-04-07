@@ -793,7 +793,7 @@ return outs
 
 ### 完整生命周期图
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────────────────┐
 │                       父模块 (top)                                      │
 │                                                                         │
@@ -1346,7 +1346,7 @@ build/bin/pycc davinci_top.mlir \
 
 #### 流水线对比总结
 
-```
+```text
                   ┌─ --hierarchical ─→ 14 个独立 .v（层次化）
 Python ─→ MLIR ──┤
  (--hierarchical) └─ --flatten ──────→ 1 个扁平 .v（全内联）
@@ -1438,7 +1438,7 @@ def sram_bank(m, domain, *, depth, width, prefix,
 
 ### 范例3：SoC 层次化集成
 
-```
+```text
 SoC Top
 ├── CPU Core
 │   ├── Frontend (fetch + decode)

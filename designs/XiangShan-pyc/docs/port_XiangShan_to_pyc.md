@@ -71,7 +71,7 @@ XSTop (SoC)
 
 ### 目录布局
 
-```
+```text
 designs/XiangShan-pyc/
 ├── docs/
 │   ├── port_XiangShan_to_pyc.md        ← 本文件
