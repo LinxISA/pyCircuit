@@ -33,6 +33,7 @@ from pycircuit import (
     compile_cycle_aware,
     mux,
     u,
+    wire_of,
 )
 
 from top.parameters import (
@@ -48,7 +49,7 @@ PARCEL_WIDTH = 16
 INST_WIDTH = 32
 
 
-def build_ifu(
+def ifu(
     m: CycleAwareCircuit,
     domain: CycleAwareDomain,
     *,
@@ -93,16 +94,16 @@ def build_ifu(
 
     s0_valid = ftq_valid & (~flush)
 
-    m.output(f"{prefix}_icache_req_valid", s0_valid.wire)
+    m.output(f"{prefix}_icache_req_valid", wire_of(s0_valid))
     _out["icache_req_valid"] = s0_valid
-    m.output(f"{prefix}_icache_req_vaddr", ftq_pc.wire)
+    m.output(f"{prefix}_icache_req_vaddr", wire_of(ftq_pc))
     _out["icache_req_vaddr"] = ftq_pc
-    m.output(f"{prefix}_ftq_to_ifu_ready", cas(domain, m.const(1, width=1), cycle=0).wire)
+    m.output(f"{prefix}_ftq_to_ifu_ready", wire_of(cas(domain, m.const(1, width=1), cycle=0)))
 
     # Pipeline registers s0 → s1
-    s1_v_r = domain.cycle(s0_valid.wire, name=f"{prefix}_s1_v")
-    s1_pc_r = domain.cycle(ftq_pc.wire, name=f"{prefix}_s1_pc")
-    s1_tgt_r = domain.cycle(ftq_target.wire, name=f"{prefix}_s1_tgt")
+    s1_v_r = domain.cycle(wire_of(s0_valid), name=f"{prefix}_s1_v")
+    s1_pc_r = domain.cycle(wire_of(ftq_pc), name=f"{prefix}_s1_pc")
+    s1_tgt_r = domain.cycle(wire_of(ftq_target), name=f"{prefix}_s1_tgt")
 
     domain.next()  # ──────────────── s0 → s1 ────────────────
 
@@ -110,13 +111,13 @@ def build_ifu(
     # s1 — ICache response arrives; gate with pipeline valid
     # ================================================================
 
-    s1_fire = s1_v_r & icache_resp_valid.wire & icache_resp_hit.wire & (~flush.wire)
+    s1_fire = s1_v_r & wire_of(icache_resp_valid) & wire_of(icache_resp_hit) & (~wire_of(flush))
 
     # Pipeline registers s1 → s2
     s2_v_r = domain.cycle(s1_fire, name=f"{prefix}_s2_v")
     s2_pc_r = domain.cycle(s1_pc_r, name=f"{prefix}_s2_pc")
     s2_tgt_r = domain.cycle(s1_tgt_r, name=f"{prefix}_s2_tgt")
-    s2_data_r = domain.cycle(icache_resp_data.wire, name=f"{prefix}_s2_data")
+    s2_data_r = domain.cycle(wire_of(icache_resp_data), name=f"{prefix}_s2_data")
 
     domain.next()  # ──────────────── s1 → s2 ────────────────
 
@@ -124,7 +125,7 @@ def build_ifu(
     # s2 — Pre-decode: RVC detection, instruction assembly, output
     # ================================================================
 
-    out_valid = s2_v_r & (~flush.wire)
+    out_valid = s2_v_r & (~wire_of(flush))
     m.output(f"{prefix}_ifu_to_ibuf_valid", out_valid)
     _out["ifu_to_ibuf_valid"] = cas(domain, out_valid, cycle=domain.cycle_index)
 
@@ -174,12 +175,12 @@ def build_ifu(
     return _out
 
 
-build_ifu.__pycircuit_name__ = "ifu"
+ifu.__pycircuit_name__ = "ifu"
 
 
 if __name__ == "__main__":
     print(compile_cycle_aware(
-        build_ifu, name="ifu", eager=True,
+        ifu, name="ifu", eager=True,
         fetch_width=4, pc_width=PC_WIDTH,
         cache_data_width=64,
     ).emit_mlir())

@@ -13,7 +13,7 @@ from pycircuit import (
     CycleAwareDomain,
     cas,
     compile_cycle_aware,
-    u,
+    wire_of,
 )
 
 
@@ -35,15 +35,15 @@ def build(
     x_valid = cas(domain, m.input("x_valid", width=1), cycle=0)
 
     delay_states = [
-        domain.state(width=DATA_W, reset_value=0, name=f"delay_{i}")
+        domain.signal(width=DATA_W, reset_value=0, name=f"delay_{i}")
         for i in range(1, TAPS)
     ]
 
-    taps_wire = [x_in.wire] + [st.wire for st in delay_states]
+    taps_wire = [wire_of(x_in)] + [wire_of(st) for st in delay_states]
 
-    coeff_wires = [u(ACC_W, int(cv)) for cv in COEFFS]
+    coeff_wires = [m.const(int(cv), width=ACC_W) for cv in COEFFS]
 
-    acc_w = u(ACC_W, 0)
+    acc_w = m.const(0, width=ACC_W)
     for i in range(TAPS):
         tap_ext = taps_wire[i].as_signed()._sext(width=ACC_W)
         product = tap_ext * coeff_wires[i]
@@ -51,20 +51,20 @@ def build(
 
     y_comb = cas(domain, acc_w[0:ACC_W], cycle=0)
 
-    y_out_state = domain.state(width=ACC_W, reset_value=0, name="y_out_reg")
-    y_valid_state = domain.state(width=1, reset_value=0, name="y_valid_reg")
+    y_out_state = domain.signal(width=ACC_W, reset_value=0, name="y_out_reg")
+    y_valid_state = domain.signal(width=1, reset_value=0, name="y_valid_reg")
 
-    m.output("y_out", y_out_state.wire)
-    m.output("y_valid", y_valid_state.wire)
+    m.output("y_out", wire_of(y_out_state))
+    m.output("y_valid", wire_of(y_valid_state))
 
     domain.next()
 
-    delay_states[0].set(x_in, when=x_valid)
+    delay_states[0].assign(x_in, when=x_valid)
     for i in range(1, len(delay_states)):
-        delay_states[i].set(delay_states[i - 1], when=x_valid)
+        delay_states[i].assign(delay_states[i - 1], when=x_valid)
 
-    y_out_state.set(y_comb, when=x_valid)
-    y_valid_state.set(x_valid)
+    y_out_state.assign(y_comb, when=x_valid)
+    y_valid_state <<= x_valid
 
 
 build.__pycircuit_name__ = "digital_filter"

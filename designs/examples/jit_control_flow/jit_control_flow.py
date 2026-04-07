@@ -7,6 +7,7 @@ from pycircuit import (
     compile_cycle_aware,
     mux,
     u,
+    wire_of,
 )
 
 
@@ -27,7 +28,7 @@ def build(m: CycleAwareCircuit, domain: CycleAwareDomain, rounds: int = 4) -> No
     for _ in range(rounds):
         acc = acc + 1
 
-    m.output("result", acc.wire)
+    m.output("result", wire_of(acc))
 
 
 build.__pycircuit_name__ = "jit_control_flow"

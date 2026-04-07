@@ -35,6 +35,7 @@ from pycircuit import (
     compile_cycle_aware,
     mux,
     u,
+    wire_of,
 )
 
 from top.parameters import DECODE_WIDTH, PC_WIDTH
@@ -81,7 +82,7 @@ def _sext_wire(m, val, from_w: int, to_w: int):
     return m.cat(ext, val)
 
 
-def build_decode(
+def decode(
     m: CycleAwareCircuit,
     domain: CycleAwareDomain,
     *,
@@ -110,7 +111,7 @@ def build_decode(
         in_pc     = cas(domain, m.input(f"{prefix}_in_pc_{i}", width=pc_width), cycle=0)
         in_is_rvc = cas(domain, m.input(f"{prefix}_in_is_rvc_{i}", width=1), cycle=0)
 
-        inst = in_inst.wire  # wire for downstream slicing
+        inst = wire_of(in_inst)
 
         # ── Fixed-position field extraction ──
         opcode = inst[0:7]
@@ -199,8 +200,8 @@ def build_decode(
 
         # ── Pipeline registers (cycle 0 → cycle 1) ──
         tag = f"d{i}"
-        reg_out[f"v_{i}"]          = domain.cycle(dec_valid.wire, name=f"{prefix}_{tag}_v")
-        reg_out[f"pc_{i}"]         = domain.cycle(in_pc.wire,     name=f"{prefix}_{tag}_pc")
+        reg_out[f"v_{i}"]          = domain.cycle(wire_of(dec_valid), name=f"{prefix}_{tag}_v")
+        reg_out[f"pc_{i}"]         = domain.cycle(wire_of(in_pc),     name=f"{prefix}_{tag}_pc")
         reg_out[f"inst_{i}"]       = domain.cycle(inst,           name=f"{prefix}_{tag}_inst")
         reg_out[f"rd_{i}"]         = domain.cycle(rd,             name=f"{prefix}_{tag}_rd")
         reg_out[f"rs1_{i}"]        = domain.cycle(rs1,            name=f"{prefix}_{tag}_rs1")
@@ -250,11 +251,11 @@ def build_decode(
     return _out
 
 
-build_decode.__pycircuit_name__ = "decode"
+decode.__pycircuit_name__ = "decode"
 
 
 if __name__ == "__main__":
     print(compile_cycle_aware(
-        build_decode, name="decode", eager=True,
+        decode, name="decode", eager=True,
         decode_width=2, pc_width=PC_WIDTH,
     ).emit_mlir())

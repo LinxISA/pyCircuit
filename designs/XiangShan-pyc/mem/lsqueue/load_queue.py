@@ -32,11 +32,12 @@ from pycircuit import (
     compile_cycle_aware,
     mux,
     u,
+    wire_of,
 )
 from top.parameters import *
 
 
-def build_load_queue(
+def load_queue(
     m: CycleAwareCircuit,
     domain: CycleAwareDomain,
     *,
@@ -96,23 +97,20 @@ def build_load_queue(
 
     # ── Entry storage ─────────────────────────────────────────────────
 
-    e_valid = [domain.state(width=1, reset_value=0, name=f"{prefix}_lq_v_{i}") for i in range(size)]
-    e_addr_valid = [domain.state(width=1, reset_value=0, name=f"{prefix}_lq_av_{i}") for i in range(size)]
-    e_committed = [domain.state(width=1, reset_value=0, name=f"{prefix}_lq_cm_{i}") for i in range(size)]
-    e_addr = [domain.state(width=addr_width, reset_value=0, name=f"{prefix}_lq_a_{i}") for i in range(size)]
-    e_rob = [domain.state(width=rob_idx_width, reset_value=0, name=f"{prefix}_lq_r_{i}") for i in range(size)]
+    e_valid = [domain.signal(width=1, reset_value=0, name=f"{prefix}_lq_v_{i}") for i in range(size)]
+    e_addr_valid = [domain.signal(width=1, reset_value=0, name=f"{prefix}_lq_av_{i}") for i in range(size)]
+    e_committed = [domain.signal(width=1, reset_value=0, name=f"{prefix}_lq_cm_{i}") for i in range(size)]
+    e_addr = [domain.signal(width=addr_width, reset_value=0, name=f"{prefix}_lq_a_{i}") for i in range(size)]
+    e_rob = [domain.signal(width=rob_idx_width, reset_value=0, name=f"{prefix}_lq_r_{i}") for i in range(size)]
 
-    enq_ptr_r = domain.state(width=ptr_w, reset_value=0, name=f"{prefix}_lq_enq")
-    deq_ptr_r = domain.state(width=ptr_w, reset_value=0, name=f"{prefix}_lq_deq")
-
-    enq_ptr = cas(domain, enq_ptr_r.wire, cycle=0)
-    deq_ptr = cas(domain, deq_ptr_r.wire, cycle=0)
+    enq_ptr = domain.signal(width=ptr_w, reset_value=0, name=f"{prefix}_lq_enq")
+    deq_ptr = domain.signal(width=ptr_w, reset_value=0, name=f"{prefix}_lq_deq")
 
     enq_idx = enq_ptr[0:idx_w]
     deq_idx = deq_ptr[0:idx_w]
 
     # Count for full/empty detection
-    count = cas(domain, (enq_ptr.wire - deq_ptr.wire)[0:ptr_w], cycle=0)
+    count = cas(domain, (wire_of(enq_ptr) - wire_of(deq_ptr))[0:ptr_w], cycle=0)
     full = count == cas(domain, m.const(size, width=ptr_w), cycle=0)
     empty = count == cas(domain, m.const(0, width=ptr_w), cycle=0)
 
@@ -128,21 +126,21 @@ def build_load_queue(
 
     violation_found = zero1
     for j in range(size):
-        ev = cas(domain, e_valid[j].wire, cycle=0)
-        eav = cas(domain, e_addr_valid[j].wire, cycle=0)
-        ea = cas(domain, e_addr[j].wire, cycle=0)
+        ev = e_valid[j]
+        eav = e_addr_valid[j]
+        ea = e_addr[j]
         entry_tag = ea[line_bits:addr_width]
         tag_match = entry_tag == lookup_tag
         entry_hit = lookup_valid & ev & eav & tag_match
         violation_found = mux(entry_hit, one1, violation_found)
 
-    m.output(f"{prefix}_violation_found", violation_found.wire)
+    m.output(f"{prefix}_violation_found", wire_of(violation_found))
     _out["violation_found"] = violation_found
-    m.output(f"{prefix}_can_enqueue", can_enq.wire)
+    m.output(f"{prefix}_can_enqueue", wire_of(can_enq))
     _out["can_enqueue"] = can_enq
-    m.output(f"{prefix}_enq_idx", enq_idx.wire)
+    m.output(f"{prefix}_enq_idx", wire_of(enq_idx))
     _out["enq_idx"] = enq_idx
-    m.output(f"{prefix}_count", count.wire)
+    m.output(f"{prefix}_count", wire_of(count))
     _out["count"] = count
 
     # ── domain.next() → Cycle 1: state updates ──────────────────────
@@ -153,50 +151,50 @@ def build_load_queue(
         j_const = cas(domain, m.const(j, width=idx_w), cycle=0)
         is_enq_slot = enq_idx == j_const
         we_enq = can_enq & is_enq_slot
-        e_valid[j].set(mux(we_enq, one1, cas(domain, e_valid[j].wire, cycle=0)), when=we_enq)
-        e_addr_valid[j].set(mux(we_enq, zero1, cas(domain, e_addr_valid[j].wire, cycle=0)), when=we_enq)
-        e_committed[j].set(mux(we_enq, zero1, cas(domain, e_committed[j].wire, cycle=0)), when=we_enq)
-        e_rob[j].set(mux(we_enq, enq_rob_idx, cas(domain, e_rob[j].wire, cycle=0)), when=we_enq)
+        e_valid[j].assign(mux(we_enq, one1, e_valid[j]), when=we_enq)
+        e_addr_valid[j].assign(mux(we_enq, zero1, e_addr_valid[j]), when=we_enq)
+        e_committed[j].assign(mux(we_enq, zero1, e_committed[j]), when=we_enq)
+        e_rob[j].assign(mux(we_enq, enq_rob_idx, e_rob[j]), when=we_enq)
 
     # Address update (from load unit s1)
     for j in range(size):
         j_const = cas(domain, m.const(j, width=idx_w), cycle=0)
         is_upd = addr_update_valid & (addr_update_idx == j_const)
-        e_addr[j].set(mux(is_upd, addr_update_addr, cas(domain, e_addr[j].wire, cycle=0)), when=is_upd)
-        e_addr_valid[j].set(mux(is_upd, one1, cas(domain, e_addr_valid[j].wire, cycle=0)), when=is_upd)
+        e_addr[j].assign(mux(is_upd, addr_update_addr, e_addr[j]), when=is_upd)
+        e_addr_valid[j].assign(mux(is_upd, one1, e_addr_valid[j]), when=is_upd)
 
     # Commit (dequeue head)
     for j in range(size):
         j_const = cas(domain, m.const(j, width=idx_w), cycle=0)
         is_deq = commit_valid & (~empty) & (deq_idx == j_const)
-        e_committed[j].set(mux(is_deq, one1, cas(domain, e_committed[j].wire, cycle=0)), when=is_deq)
-        e_valid[j].set(mux(is_deq, zero1, cas(domain, e_valid[j].wire, cycle=0)), when=is_deq)
+        e_committed[j].assign(mux(is_deq, one1, e_committed[j]), when=is_deq)
+        e_valid[j].assign(mux(is_deq, zero1, e_valid[j]), when=is_deq)
 
     # Pointer updates
     next_enq = mux(can_enq,
-                    cas(domain, (enq_ptr.wire + u(ptr_w, 1))[0:ptr_w], cycle=0),
+                    cas(domain, (wire_of(enq_ptr) + u(ptr_w, 1))[0:ptr_w], cycle=0),
                     enq_ptr)
     next_enq = mux(redirect_valid, deq_ptr, next_enq)
     next_enq = mux(flush, deq_ptr, next_enq)
-    enq_ptr_r.set(next_enq)
+    enq_ptr <<= next_enq
 
     deq_commit = commit_valid & (~empty)
     next_deq = mux(deq_commit,
-                    cas(domain, (deq_ptr.wire + u(ptr_w, 1))[0:ptr_w], cycle=0),
+                    cas(domain, (wire_of(deq_ptr) + u(ptr_w, 1))[0:ptr_w], cycle=0),
                     deq_ptr)
-    deq_ptr_r.set(next_deq)
+    deq_ptr <<= next_deq
 
     # Flush: invalidate all entries
     for j in range(size):
-        e_valid[j].set(zero1, when=flush)
+        e_valid[j].assign(zero1, when=flush)
     return _out
 
 
-build_load_queue.__pycircuit_name__ = "load_queue"
+load_queue.__pycircuit_name__ = "load_queue"
 
 
 if __name__ == "__main__":
     print(compile_cycle_aware(
-        build_load_queue, name="load_queue", eager=True,
+        load_queue, name="load_queue", eager=True,
         size=8, addr_width=36,
     ).emit_mlir())

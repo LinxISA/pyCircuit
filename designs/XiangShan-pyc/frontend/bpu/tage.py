@@ -37,6 +37,7 @@ from pycircuit import (
     compile_cycle_aware,
     mux,
     u,
+    wire_of,
 )
 
 from top.parameters import PC_WIDTH
@@ -54,7 +55,7 @@ TAG_WIDTH = 8
 USEFUL_WIDTH = 1
 
 
-def build_tage(
+def tage(
     m: CycleAwareCircuit,
     domain: CycleAwareDomain,
     *,
@@ -115,14 +116,14 @@ def build_tage(
     one1 = cas(domain, m.const(1, width=1), cycle=0)
 
     # ── Base predictor (bimodal) ─────────────────────────────────────
-    base_ctr = [domain.state(width=ctr_width, reset_value=ctr_weak_taken, name=f"{prefix}_base_{i}")
+    base_ctr = [domain.signal(width=ctr_width, reset_value=ctr_weak_taken, name=f"{prefix}_base_{i}")
                 for i in range(base_size)]
 
     base_idx = s0_pc[1:1 + base_idx_w]
     base_val_0 = cas(domain, m.const(0, width=ctr_width), cycle=0)
     for j in range(base_size):
         hit = base_idx == cas(domain, m.const(j, width=base_idx_w), cycle=0)
-        base_val_0 = mux(hit, cas(domain, base_ctr[j].wire, cycle=0), base_val_0)
+        base_val_0 = mux(hit, base_ctr[j], base_val_0)
 
     base_pred_0 = base_val_0[ctr_width - 1:ctr_width]
 
@@ -133,10 +134,10 @@ def build_tage(
     tbl_entry_useful = []
 
     for t_idx, (tbl_size, _hist_len) in enumerate(table_infos):
-        ev = [domain.state(width=1, reset_value=0, name=f"{prefix}_t{t_idx}_v_{i}") for i in range(tbl_size)]
-        etag = [domain.state(width=tag_width, reset_value=0, name=f"{prefix}_t{t_idx}_tag_{i}") for i in range(tbl_size)]
-        ectr = [domain.state(width=ctr_width, reset_value=ctr_weak_taken, name=f"{prefix}_t{t_idx}_ctr_{i}") for i in range(tbl_size)]
-        euse = [domain.state(width=useful_width, reset_value=0, name=f"{prefix}_t{t_idx}_u_{i}") for i in range(tbl_size)]
+        ev = [domain.signal(width=1, reset_value=0, name=f"{prefix}_t{t_idx}_v_{i}") for i in range(tbl_size)]
+        etag = [domain.signal(width=tag_width, reset_value=0, name=f"{prefix}_t{t_idx}_tag_{i}") for i in range(tbl_size)]
+        ectr = [domain.signal(width=ctr_width, reset_value=ctr_weak_taken, name=f"{prefix}_t{t_idx}_ctr_{i}") for i in range(tbl_size)]
+        euse = [domain.signal(width=useful_width, reset_value=0, name=f"{prefix}_t{t_idx}_u_{i}") for i in range(tbl_size)]
         tbl_entry_valid.append(ev)
         tbl_entry_tag.append(etag)
         tbl_entry_ctr.append(ectr)
@@ -151,11 +152,11 @@ def build_tage(
         idx_w = max(1, math.ceil(math.log2(tbl_size)))
         folded_hist = global_hist[0:idx_w]
         pc_bits = s0_pc[1:1 + idx_w]
-        tbl_index = cas(domain, (pc_bits.wire ^ folded_hist.wire)[0:idx_w], cycle=0)
+        tbl_index = cas(domain, (wire_of(pc_bits) ^ wire_of(folded_hist))[0:idx_w], cycle=0)
 
         tag_hist = global_hist[0:tag_width]
         pc_tag_bits = s0_pc[1:1 + tag_width]
-        tbl_tag_computed = cas(domain, (pc_tag_bits.wire ^ tag_hist.wire)[0:tag_width], cycle=0)
+        tbl_tag_computed = cas(domain, (wire_of(pc_tag_bits) ^ wire_of(tag_hist))[0:tag_width], cycle=0)
 
         ev = tbl_entry_valid[t_idx]
         etag = tbl_entry_tag[t_idx]
@@ -165,9 +166,9 @@ def build_tage(
         rd_ctr = cas(domain, m.const(0, width=ctr_width), cycle=0)
         for j in range(tbl_size):
             idx_hit = tbl_index == cas(domain, m.const(j, width=idx_w), cycle=0)
-            e_v = cas(domain, ev[j].wire, cycle=0)
-            e_tag = cas(domain, etag[j].wire, cycle=0)
-            e_ctr = cas(domain, ectr[j].wire, cycle=0)
+            e_v = ev[j]
+            e_tag = etag[j]
+            e_ctr = ectr[j]
             tag_match = e_tag == tbl_tag_computed
             entry_hit = idx_hit & e_v & tag_match
             rd_valid = mux(entry_hit, one1, rd_valid)
@@ -195,8 +196,7 @@ def build_tage(
         provider_id = mux(is_hit, cas(domain, m.const(t_idx + 1, width=prov_id_w), cycle=0), provider_id)
 
     # USE_ALT_ON_NA: use alt prediction when provider counter is weak
-    use_alt_r = domain.state(width=4, reset_value=8, name=f"{prefix}_use_alt_cnt")
-    use_alt_val = cas(domain, use_alt_r.wire, cycle=0)
+    use_alt_val = domain.signal(width=4, reset_value=8, name=f"{prefix}_use_alt_cnt")
     use_alt = use_alt_val[3:4]
 
     ctr_is_weak = (provider_ctr == cas(domain, m.const(ctr_weak_taken, width=ctr_width), cycle=0)) | \
@@ -207,18 +207,17 @@ def build_tage(
     final_pred = mux(do_use_alt, alt_pred, final_pred)
 
     pred_valid = s0_fire
-    m.output(f"{prefix}_pred_taken_0", (pred_valid & final_pred).wire)
-    m.output(f"{prefix}_pred_taken_1", zero1.wire)
+    m.output(f"{prefix}_pred_taken_0", wire_of(pred_valid & final_pred))
+    m.output(f"{prefix}_pred_taken_1", wire_of(zero1))
     _out["pred_taken_1"] = zero1
-    m.output(f"{prefix}_provider_valid", provider_valid.wire)
+    m.output(f"{prefix}_provider_valid", wire_of(provider_valid))
     _out["provider_valid"] = provider_valid
-    m.output(f"{prefix}_provider_id", provider_id.wire)
+    m.output(f"{prefix}_provider_id", wire_of(provider_id))
     _out["provider_id"] = provider_id
-    m.output(f"{prefix}_alt_differs", cas(domain, (alt_pred.wire ^ provider_pred.wire)[0:1], cycle=0).wire)
+    m.output(f"{prefix}_alt_differs", wire_of(cas(domain, (wire_of(alt_pred) ^ wire_of(provider_pred))[0:1], cycle=0)))
 
     # ── Tick counter for periodic useful reset ───────────────────────
-    tick_r = domain.state(width=8, reset_value=0, name=f"{prefix}_tick")
-    tick_val = cas(domain, tick_r.wire, cycle=0)
+    tick_val = domain.signal(width=8, reset_value=0, name=f"{prefix}_tick")
     tick_max = cas(domain, m.const(255, width=8), cycle=0)
     tick_overflow = tick_val == tick_max
 
@@ -230,26 +229,26 @@ def build_tage(
     for j in range(base_size):
         idx_hit = t_base_idx == cas(domain, m.const(j, width=base_idx_w), cycle=0)
         we = train_valid & idx_hit & (~train_provider_valid)
-        old_ctr = cas(domain, base_ctr[j].wire, cycle=0)
+        old_ctr = base_ctr[j]
         inc = mux(old_ctr == cas(domain, m.const(ctr_max, width=ctr_width), cycle=0),
                   old_ctr,
-                  cas(domain, (old_ctr.wire + u(ctr_width, 1))[0:ctr_width], cycle=0))
+                  cas(domain, (wire_of(old_ctr) + u(ctr_width, 1))[0:ctr_width], cycle=0))
         dec = mux(old_ctr == cas(domain, m.const(0, width=ctr_width), cycle=0),
                   old_ctr,
-                  cas(domain, (old_ctr.wire - u(ctr_width, 1))[0:ctr_width], cycle=0))
+                  cas(domain, (wire_of(old_ctr) - u(ctr_width, 1))[0:ctr_width], cycle=0))
         new_ctr = mux(train_taken_0, inc, dec)
-        base_ctr[j].set(mux(we, new_ctr, old_ctr), when=we)
+        base_ctr[j].assign(mux(we, new_ctr, old_ctr), when=we)
 
     # Tagged table counter + useful update
     for t_idx, (tbl_size, hist_len) in enumerate(table_infos):
         idx_w = max(1, math.ceil(math.log2(tbl_size)))
         t_folded = train_hist[0:idx_w]
         t_pc_bits = train_pc[1:1 + idx_w]
-        t_index = cas(domain, (t_pc_bits.wire ^ t_folded.wire)[0:idx_w], cycle=0)
+        t_index = cas(domain, (wire_of(t_pc_bits) ^ wire_of(t_folded))[0:idx_w], cycle=0)
 
         t_tag_hist = train_hist[0:tag_width]
         t_pc_tag = train_pc[1:1 + tag_width]
-        t_tag = cas(domain, (t_pc_tag.wire ^ t_tag_hist.wire)[0:tag_width], cycle=0)
+        t_tag = cas(domain, (wire_of(t_pc_tag) ^ wire_of(t_tag_hist))[0:tag_width], cycle=0)
 
         is_provider = train_provider_valid & (train_provider_id == cas(domain, m.const(t_idx + 1, width=prov_id_w), cycle=0))
 
@@ -260,71 +259,71 @@ def build_tage(
 
         for j in range(tbl_size):
             idx_hit = t_index == cas(domain, m.const(j, width=idx_w), cycle=0)
-            e_v = cas(domain, ev[j].wire, cycle=0)
-            e_tag = cas(domain, etag[j].wire, cycle=0)
-            e_ctr = cas(domain, ectr[j].wire, cycle=0)
-            e_u = cas(domain, euse[j].wire, cycle=0)
+            e_v = ev[j]
+            e_tag = etag[j]
+            e_ctr = ectr[j]
+            e_u = euse[j]
             tag_match = e_tag == t_tag
 
             we_update = train_valid & is_provider & idx_hit & e_v & tag_match
 
             inc_c = mux(e_ctr == cas(domain, m.const(ctr_max, width=ctr_width), cycle=0),
                         e_ctr,
-                        cas(domain, (e_ctr.wire + u(ctr_width, 1))[0:ctr_width], cycle=0))
+                        cas(domain, (wire_of(e_ctr) + u(ctr_width, 1))[0:ctr_width], cycle=0))
             dec_c = mux(e_ctr == cas(domain, m.const(0, width=ctr_width), cycle=0),
                         e_ctr,
-                        cas(domain, (e_ctr.wire - u(ctr_width, 1))[0:ctr_width], cycle=0))
+                        cas(domain, (wire_of(e_ctr) - u(ctr_width, 1))[0:ctr_width], cycle=0))
             new_c = mux(train_taken_0, inc_c, dec_c)
-            ectr[j].set(mux(we_update, new_c, e_ctr), when=we_update)
+            ectr[j].assign(mux(we_update, new_c, e_ctr), when=we_update)
 
             useful_inc = mux(e_u == cas(domain, m.const(useful_max, width=useful_width), cycle=0),
                              e_u,
-                             cas(domain, (e_u.wire + u(useful_width, 1))[0:useful_width], cycle=0))
+                             cas(domain, (wire_of(e_u) + u(useful_width, 1))[0:useful_width], cycle=0))
             useful_dec = mux(e_u == cas(domain, m.const(0, width=useful_width), cycle=0),
                              e_u,
-                             cas(domain, (e_u.wire - u(useful_width, 1))[0:useful_width], cycle=0))
+                             cas(domain, (wire_of(e_u) - u(useful_width, 1))[0:useful_width], cycle=0))
             we_useful = train_valid & is_provider & idx_hit & e_v & tag_match & train_alt_differs
             new_u = mux(~train_mispred_0, useful_inc, useful_dec)
-            euse[j].set(mux(we_useful, new_u, e_u), when=we_useful)
+            euse[j].assign(mux(we_useful, new_u, e_u), when=we_useful)
 
             # Allocation on misprediction: find first table with unused entry
             is_alloc_candidate = (train_provider_id < cas(domain, m.const(t_idx + 1, width=prov_id_w), cycle=0))
             we_alloc = train_valid & train_mispred_0 & idx_hit & is_alloc_candidate & \
                        ((~e_v) | (e_u == cas(domain, m.const(0, width=useful_width), cycle=0)))
             new_alloc_ctr = cas(domain, m.const(ctr_weak_taken if True else ctr_weak_ntaken, width=ctr_width), cycle=0)
-            ev[j].set(mux(we_alloc, one1, ev[j]), when=we_alloc)
-            etag[j].set(mux(we_alloc, t_tag, etag[j]), when=we_alloc)
-            ectr[j].set(mux(we_alloc, mux(train_taken_0, new_alloc_ctr, cas(domain, m.const(ctr_weak_ntaken, width=ctr_width), cycle=0)), ectr[j]), when=we_alloc)
-            euse[j].set(mux(we_alloc, cas(domain, m.const(0, width=useful_width), cycle=0), euse[j]), when=we_alloc)
+            ev[j].assign(mux(we_alloc, one1, ev[j]), when=we_alloc)
+            etag[j].assign(mux(we_alloc, t_tag, etag[j]), when=we_alloc)
+            ectr[j].assign(mux(we_alloc, mux(train_taken_0, new_alloc_ctr, cas(domain, m.const(ctr_weak_ntaken, width=ctr_width), cycle=0)), ectr[j]), when=we_alloc)
+            euse[j].assign(mux(we_alloc, cas(domain, m.const(0, width=useful_width), cycle=0), euse[j]), when=we_alloc)
 
             # Periodic useful reset
-            euse[j].set(cas(domain, m.const(0, width=useful_width), cycle=0), when=tick_overflow)
+            euse[j].assign(cas(domain, m.const(0, width=useful_width), cycle=0), when=tick_overflow)
 
     # USE_ALT_ON_NA counter update
     ua_inc = mux(use_alt_val == cas(domain, m.const(15, width=4), cycle=0),
                  use_alt_val,
-                 cas(domain, (use_alt_val.wire + u(4, 1))[0:4], cycle=0))
+                 cas(domain, (wire_of(use_alt_val) + u(4, 1))[0:4], cycle=0))
     ua_dec = mux(use_alt_val == cas(domain, m.const(0, width=4), cycle=0),
                  use_alt_val,
-                 cas(domain, (use_alt_val.wire - u(4, 1))[0:4], cycle=0))
+                 cas(domain, (wire_of(use_alt_val) - u(4, 1))[0:4], cycle=0))
     ua_we = train_valid & train_provider_valid & train_alt_differs
     new_ua = mux(train_mispred_0, ua_inc, ua_dec)
-    use_alt_r.set(mux(ua_we, new_ua, use_alt_val))
+    use_alt_val <<= mux(ua_we, new_ua, use_alt_val)
 
     # Tick counter
     next_tick = mux(tick_overflow,
                     cas(domain, m.const(0, width=8), cycle=0),
-                    cas(domain, (tick_val.wire + u(8, 1))[0:8], cycle=0))
-    tick_r.set(mux(train_valid & train_mispred_0, next_tick, tick_val))
+                    cas(domain, (wire_of(tick_val) + u(8, 1))[0:8], cycle=0))
+    tick_val <<= mux(train_valid & train_mispred_0, next_tick, tick_val)
     return _out
 
 
-build_tage.__pycircuit_name__ = "tage"
+tage.__pycircuit_name__ = "tage"
 
 
 if __name__ == "__main__":
     print(compile_cycle_aware(
-        build_tage, name="tage", eager=True,
+        tage, name="tage", eager=True,
         table_infos=SMALL_TAGE_TABLE_INFOS,
         base_size=BASE_TABLE_SIZE,
     ).emit_mlir())

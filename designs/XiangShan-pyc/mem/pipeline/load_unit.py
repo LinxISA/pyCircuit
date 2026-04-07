@@ -32,11 +32,12 @@ from pycircuit import (
     compile_cycle_aware,
     mux,
     u,
+    wire_of,
 )
 from top.parameters import *
 
 
-def build_load_unit(
+def load_unit(
     m: CycleAwareCircuit,
     domain: CycleAwareDomain,
     *,
@@ -95,17 +96,17 @@ def build_load_unit(
     s0_vpn = issue_addr[12:12 + (addr_width - 12)]
 
     # TLB request
-    m.output(f"{prefix}_tlb_req_valid", s0_fire.wire)
+    m.output(f"{prefix}_tlb_req_valid", wire_of(s0_fire))
     _out["tlb_req_valid"] = s0_fire
-    m.output(f"{prefix}_tlb_req_vpn", s0_vpn.wire)
+    m.output(f"{prefix}_tlb_req_vpn", wire_of(s0_vpn))
     _out["tlb_req_vpn"] = s0_vpn
 
     # ── Pipeline registers s0 → s1 ───────────────────────────────
 
-    s1_valid_w = domain.cycle(s0_fire.wire, name=f"{prefix}_s1_v")
-    s1_addr_w = domain.cycle(issue_addr.wire, name=f"{prefix}_s1_addr")
-    s1_rob_idx_w = domain.cycle(issue_rob_idx.wire, name=f"{prefix}_s1_rob")
-    s1_lq_idx_w = domain.cycle(issue_lq_idx.wire, name=f"{prefix}_s1_lq")
+    s1_valid_w = domain.cycle(wire_of(s0_fire), name=f"{prefix}_s1_v")
+    s1_addr_w = domain.cycle(wire_of(issue_addr), name=f"{prefix}_s1_addr")
+    s1_rob_idx_w = domain.cycle(wire_of(issue_rob_idx), name=f"{prefix}_s1_rob")
+    s1_lq_idx_w = domain.cycle(wire_of(issue_lq_idx), name=f"{prefix}_s1_lq")
 
     domain.next()  # ─────────────── s0 → s1 boundary ──────────────
 
@@ -113,15 +114,15 @@ def build_load_unit(
     # s1 — TLB result + DCache access
     # ================================================================
 
-    s1_kill = flush.wire
+    s1_kill = wire_of(flush)
     s1_alive = s1_valid_w & (~s1_kill)
-    s1_tlb_miss = s1_alive & (~tlb_resp_hit.wire)
+    s1_tlb_miss = s1_alive & (~wire_of(tlb_resp_hit))
 
     paddr_lo = s1_addr_w[0:12]
-    s1_paddr = m.cat(tlb_resp_ppn.wire, paddr_lo)
+    s1_paddr = m.cat(wire_of(tlb_resp_ppn), paddr_lo)
     paddr_width = ppn_width + 12
 
-    s1_dcache_fire = s1_alive & tlb_resp_hit.wire
+    s1_dcache_fire = s1_alive & wire_of(tlb_resp_hit)
 
     m.output(f"{prefix}_dcache_req_valid", s1_dcache_fire)
     _out["dcache_req_valid"] = cas(domain, s1_dcache_fire, cycle=domain.cycle_index)
@@ -149,11 +150,11 @@ def build_load_unit(
     # s2 — Data return + forwarding check + writeback
     # ================================================================
 
-    s2_kill = flush.wire
+    s2_kill = wire_of(flush)
     s2_alive = s2_valid_w & (~s2_kill)
 
-    s2_data = fwd_valid.wire.select(fwd_data.wire, dcache_resp_data.wire)
-    s2_hit = dcache_resp_valid.wire | fwd_valid.wire
+    s2_data = wire_of(fwd_valid).select(wire_of(fwd_data), wire_of(dcache_resp_data))
+    s2_hit = wire_of(dcache_resp_valid) | wire_of(fwd_valid)
 
     wb_valid = s2_alive & s2_hit
     wb_data = s2_data
@@ -178,10 +179,10 @@ def build_load_unit(
     return _out
 
 
-build_load_unit.__pycircuit_name__ = "load_unit"
+load_unit.__pycircuit_name__ = "load_unit"
 
 
 if __name__ == "__main__":
     print(compile_cycle_aware(
-        build_load_unit, name="load_unit", eager=True,
+        load_unit, name="load_unit", eager=True,
     ).emit_mlir())

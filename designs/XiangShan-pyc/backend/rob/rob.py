@@ -30,6 +30,7 @@ from pycircuit import (
     compile_cycle_aware,
     mux,
     u,
+    wire_of,
 )
 
 from top.parameters import (
@@ -41,7 +42,7 @@ from top.parameters import (
 )
 
 
-def build_rob(
+def rob(
     m: CycleAwareCircuit,
     domain: CycleAwareDomain,
     *,
@@ -98,22 +99,22 @@ def build_rob(
         cas(domain, m.input(f"{prefix}_redirect_rob_ptr", width=ptr_w), cycle=0))
 
     # ── State ────────────────────────────────────────────────────
-    head_ptr = domain.state(width=ptr_w, reset_value=0, name=f"{prefix}_head_ptr")
-    tail_ptr = domain.state(width=ptr_w, reset_value=0, name=f"{prefix}_tail_ptr")
+    head_ptr = domain.signal(width=ptr_w, reset_value=0, name=f"{prefix}_head_ptr")
+    tail_ptr = domain.signal(width=ptr_w, reset_value=0, name=f"{prefix}_tail_ptr")
 
-    ent_valid = [domain.state(width=1, reset_value=0, name=f"{prefix}_ev_{i}")
+    ent_valid = [domain.signal(width=1, reset_value=0, name=f"{prefix}_ev_{i}")
                  for i in range(rob_size)]
-    ent_wb = [domain.state(width=1, reset_value=0, name=f"{prefix}_ewb_{i}")
+    ent_wb = [domain.signal(width=1, reset_value=0, name=f"{prefix}_ewb_{i}")
               for i in range(rob_size)]
-    ent_pc = [domain.state(width=pc_width, reset_value=0, name=f"{prefix}_epc_{i}")
+    ent_pc = [domain.signal(width=pc_width, reset_value=0, name=f"{prefix}_epc_{i}")
               for i in range(rob_size)]
-    ent_rd = [domain.state(width=lreg_w, reset_value=0, name=f"{prefix}_erd_{i}")
+    ent_rd = [domain.signal(width=lreg_w, reset_value=0, name=f"{prefix}_erd_{i}")
               for i in range(rob_size)]
-    ent_pdest = [domain.state(width=ptag_w, reset_value=0, name=f"{prefix}_epd_{i}")
+    ent_pdest = [domain.signal(width=ptag_w, reset_value=0, name=f"{prefix}_epd_{i}")
                  for i in range(rob_size)]
-    ent_old_pdest = [domain.state(width=ptag_w, reset_value=0, name=f"{prefix}_eopd_{i}")
+    ent_old_pdest = [domain.signal(width=ptag_w, reset_value=0, name=f"{prefix}_eopd_{i}")
                      for i in range(rob_size)]
-    ent_exc = [domain.state(width=1, reset_value=0, name=f"{prefix}_eex_{i}")
+    ent_exc = [domain.signal(width=1, reset_value=0, name=f"{prefix}_eex_{i}")
                for i in range(rob_size)]
 
     # ── Constants ────────────────────────────────────────────────
@@ -121,9 +122,9 @@ def build_rob(
     ONE_1 = cas(domain, m.const(1, width=1), cycle=0)
 
     # ── Cycle 0: Occupancy ───────────────────────────────────────
-    num_valid = cas(domain, (tail_ptr.wire - head_ptr.wire)[0:cnt_w], cycle=0)
+    num_valid = cas(domain, (wire_of(tail_ptr) - wire_of(head_ptr))[0:cnt_w], cycle=0)
     num_free = cas(domain,
-                   (m.const(rob_size, width=cnt_w) - num_valid.wire)[0:cnt_w],
+                   (m.const(rob_size, width=cnt_w) - wire_of(num_valid))[0:cnt_w],
                    cycle=0)
 
     # ── Cycle 0: Enqueue count ───────────────────────────────────
@@ -134,14 +135,14 @@ def build_rob(
     for i in range(rename_width):
         enq_off.append(enq_run)
         enq_run = cas(domain,
-                      (enq_run.wire + mux(enq_valid[i], ONE_EN, ZERO_EN).wire
+                      (wire_of(enq_run) + wire_of(mux(enq_valid[i], ONE_EN, ZERO_EN))
                        )[0:rn_cnt_w],
                       cycle=0)
     total_enq = enq_run
 
-    enq_wide = cas(domain, (total_enq.wire + u(cnt_w, 0))[0:cnt_w], cycle=0)
+    enq_wide = cas(domain, (wire_of(total_enq) + u(cnt_w, 0))[0:cnt_w], cycle=0)
     can_enq = ~(num_free < enq_wide) & (~flush) & (~redirect_valid)
-    m.output(f"{prefix}_can_enq", can_enq.wire)
+    m.output(f"{prefix}_can_enq", wire_of(can_enq))
     _out["can_enq"] = can_enq
 
     # ── Cycle 0: Helper — read entry field by index ──────────────
@@ -158,7 +159,7 @@ def build_rob(
 
     for i in range(commit_width):
         slot_ptr = cas(domain,
-                       (head_ptr.wire + m.const(i, width=ptr_w))[0:ptr_w],
+                       (wire_of(head_ptr) + m.const(i, width=ptr_w))[0:ptr_w],
                        cycle=0)
         slot_idx = slot_ptr[0:idx_w]
 
@@ -173,17 +174,23 @@ def build_rob(
         can_cm = slot_ok
 
         commit_valids.append(slot_ok)
-        m.output(f"{prefix}_commit_valid_{i}", slot_ok.wire)
-        m.output(f"{prefix}_commit_rd_{i}", erd.wire)
-        m.output(f"{prefix}_commit_pdest_{i}", epd.wire)
-        m.output(f"{prefix}_commit_old_pdest_{i}", eopd.wire)
+        m.output(f"{prefix}_commit_valid_{i}", wire_of(slot_ok))
+        _out[f"commit_valid_{i}"] = slot_ok
+        m.output(f"{prefix}_commit_rd_{i}", wire_of(erd))
+        _out[f"commit_rd_{i}"] = erd
+        m.output(f"{prefix}_commit_pdest_{i}", wire_of(epd))
+        _out[f"commit_pdest_{i}"] = epd
+        m.output(f"{prefix}_commit_old_pdest_{i}", wire_of(eopd))
+        _out[f"commit_old_pdest_{i}"] = eopd
 
     # Exception at head
     head_idx = head_ptr[0:idx_w]
     h_valid = read_field(ent_valid, head_idx, 1)
     h_wb = read_field(ent_wb, head_idx, 1)
     h_exc = read_field(ent_exc, head_idx, 1)
-    m.output(f"{prefix}_exception_valid", (h_valid & h_wb & h_exc & (~flush)).wire)
+    exception_valid = h_valid & h_wb & h_exc & (~flush)
+    m.output(f"{prefix}_exception_valid", wire_of(exception_valid))
+    _out["exception_valid"] = exception_valid
 
     # Count commits
     num_cm = cas(domain, m.const(0, width=cm_cnt_w), cycle=0)
@@ -195,13 +202,15 @@ def build_rob(
     # Enqueued ROB indices (for dispatch to record)
     for i in range(rename_width):
         rob_idx_out = cas(domain,
-                          (tail_ptr.wire + enq_off[i].wire + u(ptr_w, 0))[0:ptr_w],
+                          (wire_of(tail_ptr) + wire_of(enq_off[i]) + u(ptr_w, 0))[0:ptr_w],
                           cycle=0)
-        m.output(f"{prefix}_enq_rob_idx_{i}", rob_idx_out[0:idx_w].wire)
+        enq_rob_idx_i = rob_idx_out[0:idx_w]
+        m.output(f"{prefix}_enq_rob_idx_{i}", wire_of(enq_rob_idx_i))
+        _out[f"enq_rob_idx_{i}"] = enq_rob_idx_i
 
-    m.output(f"{prefix}_head_ptr_out", head_ptr.wire)
+    m.output(f"{prefix}_head_ptr_out", wire_of(head_ptr))
     _out["head_ptr_out"] = head_ptr
-    m.output(f"{prefix}_tail_ptr_out", tail_ptr.wire)
+    m.output(f"{prefix}_tail_ptr_out", wire_of(tail_ptr))
     _out["tail_ptr_out"] = tail_ptr
 
     # ── domain.next() → Cycle 1: State updates ──────────────────
@@ -210,66 +219,66 @@ def build_rob(
     # ── Enqueue: write new entries at tail ────────────────────────
     for i in range(rename_width):
         wr_ptr = cas(domain,
-                     (tail_ptr.wire + enq_off[i].wire + u(ptr_w, 0))[0:ptr_w],
+                     (wire_of(tail_ptr) + wire_of(enq_off[i]) + u(ptr_w, 0))[0:ptr_w],
                      cycle=0)
         wr_idx = wr_ptr[0:idx_w]
         do_enq = can_enq & enq_valid[i]
         for j in range(rob_size):
             hit = wr_idx == cas(domain, m.const(j, width=idx_w), cycle=0)
             we = do_enq & hit
-            ent_valid[j].set(ONE_1, when=we)
-            ent_wb[j].set(ZERO_1, when=we)
-            ent_pc[j].set(enq_pc[i], when=we)
-            ent_rd[j].set(enq_rd[i], when=we)
-            ent_pdest[j].set(enq_pdest[i], when=we)
-            ent_old_pdest[j].set(enq_old_pdest[i], when=we)
-            ent_exc[j].set(ZERO_1, when=we)
+            ent_valid[j].assign(ONE_1, when=we)
+            ent_wb[j].assign(ZERO_1, when=we)
+            ent_pc[j].assign(enq_pc[i], when=we)
+            ent_rd[j].assign(enq_rd[i], when=we)
+            ent_pdest[j].assign(enq_pdest[i], when=we)
+            ent_old_pdest[j].assign(enq_old_pdest[i], when=we)
+            ent_exc[j].assign(ZERO_1, when=we)
 
     # ── Writeback: set completed + exception flags ────────────────
     for w in range(wb_ports):
         for j in range(rob_size):
             hit = wb_rob_idx[w] == cas(domain, m.const(j, width=idx_w), cycle=0)
             we = wb_valid[w] & hit
-            ent_wb[j].set(ONE_1, when=we)
-            ent_exc[j].set(mux(wb_exception[w], ONE_1, ent_exc[j]), when=we)
+            ent_wb[j].assign(ONE_1, when=we)
+            ent_exc[j].assign(mux(wb_exception[w], ONE_1, ent_exc[j]), when=we)
 
     # ── Commit: invalidate retired entries ────────────────────────
     for i in range(commit_width):
         clr_ptr = cas(domain,
-                      (head_ptr.wire + m.const(i, width=ptr_w))[0:ptr_w],
+                      (wire_of(head_ptr) + m.const(i, width=ptr_w))[0:ptr_w],
                       cycle=0)
         clr_idx = clr_ptr[0:idx_w]
         for j in range(rob_size):
             hit = clr_idx == cas(domain, m.const(j, width=idx_w), cycle=0)
             ce = commit_valids[i] & hit
-            ent_valid[j].set(ZERO_1, when=ce)
+            ent_valid[j].assign(ZERO_1, when=ce)
 
     # ── Pointer updates ──────────────────────────────────────────
     new_head = cas(domain,
-                   (head_ptr.wire + num_cm.wire + u(ptr_w, 0))[0:ptr_w],
+                   (wire_of(head_ptr) + wire_of(num_cm) + u(ptr_w, 0))[0:ptr_w],
                    cycle=0)
     new_tail = cas(domain,
-                   (tail_ptr.wire + total_enq.wire + u(ptr_w, 0))[0:ptr_w],
+                   (wire_of(tail_ptr) + wire_of(total_enq) + u(ptr_w, 0))[0:ptr_w],
                    cycle=0)
     tail_nxt = mux(can_enq, new_tail, tail_ptr)
     tail_nxt = mux(redirect_valid & (~flush), redirect_rob_ptr, tail_nxt)
 
     ZERO_PTR = cas(domain, m.const(0, width=ptr_w), cycle=0)
-    head_ptr.set(mux(flush, ZERO_PTR, new_head))
-    tail_ptr.set(mux(flush, ZERO_PTR, tail_nxt))
+    head_ptr <<= mux(flush, ZERO_PTR, new_head)
+    tail_ptr <<= mux(flush, ZERO_PTR, tail_nxt)
 
     # ── Flush: clear all valid bits ──────────────────────────────
     for j in range(rob_size):
-        ent_valid[j].set(ZERO_1, when=flush)
+        ent_valid[j].assign(ZERO_1, when=flush)
     return _out
 
 
-build_rob.__pycircuit_name__ = "rob"
+rob.__pycircuit_name__ = "rob"
 
 
 if __name__ == "__main__":
     print(compile_cycle_aware(
-        build_rob, name="rob", eager=True,
+        rob, name="rob", eager=True,
         rob_size=16, rename_width=2, commit_width=2,
         wb_ports=2, ptag_w=4, lreg_w=3, pc_width=16,
     ).emit_mlir())

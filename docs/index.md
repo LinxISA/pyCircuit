@@ -41,7 +41,7 @@ def build(m: Circuit) -> None:
 - `docs/FRONTEND_API.md`
 - `docs/TESTBENCH.md`
 - `docs/IR_SPEC.md`
-- **V5 cycle-aware**: `docs/PyCurcit V5_CYCLE_AWARE_API.md`, `docs/PyCircuit V5 Programming Tutorial.md`
+- **V5 cycle-aware**: `docs/PyCircuit_V5_Spec.md`
 - **Implementation workflow (10-step)**: `docs/pycircuit_implementation_method.md`
 - `docs/tutorial/index.md` (tutorial hub)
 - `docs/development/index.md`

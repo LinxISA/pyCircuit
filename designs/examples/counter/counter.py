@@ -6,17 +6,18 @@ from pycircuit import (
     cas,
     compile_cycle_aware,
     mux,
+    wire_of,
 )
 
 
 def build(m: CycleAwareCircuit, domain: CycleAwareDomain, width: int = 8) -> None:
     enable = cas(domain, m.input("enable", width=1), cycle=0)
-    count = domain.state(width=width, reset_value=0, name="count")
+    count = domain.signal(width=width, reset_value=0, name="count")
 
-    m.output("count", count.wire)
+    m.output("count", wire_of(count))
 
     domain.next()
-    count.set(count + 1, when=enable)
+    count.assign(count + 1, when=enable)
 
 
 build.__pycircuit_name__ = "counter"

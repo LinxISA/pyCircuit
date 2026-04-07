@@ -37,11 +37,12 @@ from pycircuit import (
     compile_cycle_aware,
     mux,
     u,
+    wire_of,
 )
 from top.parameters import *
 
 
-def build_tlb(
+def tlb(
     m: CycleAwareCircuit,
     domain: CycleAwareDomain,
     *,
@@ -94,30 +95,30 @@ def build_tlb(
     # ── Entry storage (fully-associative CAM) ─────────────────────
 
     entry_valid = [
-        domain.state(width=1, reset_value=0, name=f"{prefix}_e{i}_v")
+        domain.signal(width=1, reset_value=0, name=f"{prefix}_e{i}_v")
         for i in range(n_ways)
     ]
     entry_vpn = [
-        domain.state(width=vpn_width, reset_value=0, name=f"{prefix}_e{i}_vpn")
+        domain.signal(width=vpn_width, reset_value=0, name=f"{prefix}_e{i}_vpn")
         for i in range(n_ways)
     ]
     entry_ppn = [
-        domain.state(width=ppn_width, reset_value=0, name=f"{prefix}_e{i}_ppn")
+        domain.signal(width=ppn_width, reset_value=0, name=f"{prefix}_e{i}_ppn")
         for i in range(n_ways)
     ]
     entry_asid = [
-        domain.state(width=asid_width, reset_value=0, name=f"{prefix}_e{i}_asid")
+        domain.signal(width=asid_width, reset_value=0, name=f"{prefix}_e{i}_asid")
         for i in range(n_ways)
     ]
 
-    replace_ptr = domain.state(width=way_bits, reset_value=0, name=f"{prefix}_repl_ptr")
+    replace_ptr = domain.signal(width=way_bits, reset_value=0, name=f"{prefix}_repl_ptr")
 
     # ── Read entries as CAS signals at cycle 0 ────────────────────
 
-    ev = [cas(domain, entry_valid[i].wire, cycle=0) for i in range(n_ways)]
-    evpn = [cas(domain, entry_vpn[i].wire, cycle=0) for i in range(n_ways)]
-    eppn = [cas(domain, entry_ppn[i].wire, cycle=0) for i in range(n_ways)]
-    easid = [cas(domain, entry_asid[i].wire, cycle=0) for i in range(n_ways)]
+    ev = [entry_valid[i] for i in range(n_ways)]
+    evpn = [entry_vpn[i] for i in range(n_ways)]
+    eppn = [entry_ppn[i] for i in range(n_ways)]
+    easid = [entry_asid[i] for i in range(n_ways)]
 
     # ── Per-entry CAM match ───────────────────────────────────────
 
@@ -141,11 +142,11 @@ def build_tlb(
 
     # ── Pipeline registers c0 → c1 ───────────────────────────────
 
-    s1_valid_w = domain.cycle(lookup_valid.wire, name=f"{prefix}_s1_v")
-    s1_hit_w = domain.cycle(any_hit.wire, name=f"{prefix}_s1_hit")
-    s1_miss_w = domain.cycle(miss.wire, name=f"{prefix}_s1_miss")
-    s1_ppn_w = domain.cycle(hit_ppn.wire, name=f"{prefix}_s1_ppn")
-    s1_vpn_w = domain.cycle(lookup_vpn.wire, name=f"{prefix}_s1_vpn")
+    s1_valid_w = domain.cycle(wire_of(lookup_valid), name=f"{prefix}_s1_v")
+    s1_hit_w = domain.cycle(wire_of(any_hit), name=f"{prefix}_s1_hit")
+    s1_miss_w = domain.cycle(wire_of(miss), name=f"{prefix}_s1_miss")
+    s1_ppn_w = domain.cycle(wire_of(hit_ppn), name=f"{prefix}_s1_ppn")
+    s1_vpn_w = domain.cycle(wire_of(lookup_vpn), name=f"{prefix}_s1_vpn")
 
     domain.next()  # ─────────────── c0 → c1 boundary ──────────────
 
@@ -159,26 +160,26 @@ def build_tlb(
     # State Updates
     # ================================================================
 
-    rptr = replace_ptr.wire
+    rptr = wire_of(replace_ptr)
     zero1 = m.const(0, width=1)
     one1 = m.const(1, width=1)
 
     for i in range(n_ways):
         i_const = m.const(i, width=way_bits)
         is_victim = (rptr == i_const)
-        do_write = refill_valid.wire & is_victim
+        do_write = wire_of(refill_valid) & is_victim
 
-        asid_match = (entry_asid[i].wire == flush_asid.wire)
-        selective_flush = flush_asid_valid.wire & asid_match
-        invalidate = flush.wire | selective_flush
+        asid_match = (wire_of(entry_asid[i]) == wire_of(flush_asid))
+        selective_flush = wire_of(flush_asid_valid) & asid_match
+        invalidate = wire_of(flush) | selective_flush
 
-        new_valid = do_write.select(one1, entry_valid[i].wire)
+        new_valid = do_write.select(one1, wire_of(entry_valid[i]))
         new_valid = invalidate.select(zero1, new_valid)
-        entry_valid[i].set(new_valid)
+        entry_valid[i] <<= new_valid
 
-        entry_vpn[i].set(do_write.select(refill_vpn.wire, entry_vpn[i].wire))
-        entry_ppn[i].set(do_write.select(refill_ppn.wire, entry_ppn[i].wire))
-        entry_asid[i].set(do_write.select(refill_asid.wire, entry_asid[i].wire))
+        entry_vpn[i] <<= do_write.select(wire_of(refill_vpn), wire_of(entry_vpn[i]))
+        entry_ppn[i] <<= do_write.select(wire_of(refill_ppn), wire_of(entry_ppn[i]))
+        entry_asid[i] <<= do_write.select(wire_of(refill_asid), wire_of(entry_asid[i]))
 
     # Advance replace pointer on refill (wrap at n_ways)
     at_limit = (rptr == m.const(n_ways - 1, width=way_bits))
@@ -186,7 +187,7 @@ def build_tlb(
         m.const(0, width=way_bits),
         (rptr + m.const(1, width=way_bits))[0:way_bits],
     )
-    replace_ptr.set(refill_valid.wire.select(next_ptr, rptr))
+    replace_ptr <<= wire_of(refill_valid).select(next_ptr, rptr)
 
     # ================================================================
     # Output ports
@@ -208,12 +209,12 @@ def build_tlb(
     return _out
 
 
-build_tlb.__pycircuit_name__ = "tlb"
+tlb.__pycircuit_name__ = "tlb"
 
 
 if __name__ == "__main__":
     print(compile_cycle_aware(
-        build_tlb, name="tlb", eager=True,
+        tlb, name="tlb", eager=True,
         n_ways=ITLB_WAYS, vpn_width=27, ppn_width=24,
         asid_width=ASID_LENGTH,
     ).emit_mlir())

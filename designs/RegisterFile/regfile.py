@@ -7,7 +7,7 @@ from pycircuit import (
     cas,
     compile_cycle_aware,
     mux,
-    u,
+    wire_of,
 )
 
 
@@ -46,10 +46,10 @@ def build(m: CycleAwareCircuit, domain: CycleAwareDomain, *,
     wdata_hi = [wd[32:64] for wd in wdata]
 
     # ══════════════════════════════════════════════════════════════
-    # Cycle 0 — Storage state (feedback registers via domain.state)
+    # Cycle 0 — Storage state (feedback registers via domain.signal)
     # ══════════════════════════════════════════════════════════════
-    bank0 = [domain.state(width=32, reset_value=0, name=f"rf_bank0_{i}") for i in range(storage_depth)]
-    bank1 = [domain.state(width=32, reset_value=0, name=f"rf_bank1_{i}") for i in range(storage_depth)]
+    bank0 = [domain.signal(width=32, reset_value=0, name=f"rf_bank0_{i}") for i in range(storage_depth)]
+    bank1 = [domain.signal(width=32, reset_value=0, name=f"rf_bank1_{i}") for i in range(storage_depth)]
 
     # ══════════════════════════════════════════════════════════════
     # Cycle 0 — Combinational read logic
@@ -59,15 +59,19 @@ def build(m: CycleAwareCircuit, domain: CycleAwareDomain, *,
 
     for i in range(nr_n):
         ra = raddr[i]
-        ra_ext = cas(domain, ra.wire + u(cmp_w, 0), cycle=0)
+        ra_ext = ra.zext(cmp_w)
         is_valid = ra_ext < cas(domain, m.const(ptag_n, width=cmp_w), cycle=0)
         is_const = ra_ext < cas(domain, m.const(const_n, width=cmp_w), cycle=0)
 
-        if ra.wire.width > 32:
-            const32 = cas(domain, ra.wire[0:32], cycle=0)
+        if ptag_w > 32:
+            const32 = ra[0:32]
         else:
-            const32 = cas(domain, ra.wire + u(32, 0), cycle=0)
-        const64 = cas(domain, m.cat(const32.wire, const32.wire), cycle=0)
+            const32 = ra.zext(32)
+        const64 = cas(
+            domain,
+            m.cat(wire_of(const32), wire_of(const32)),
+            cycle=const32.cycle,
+        )
 
         store_lo: CycleAwareSignal = zero32
         store_hi: CycleAwareSignal = zero32
@@ -76,11 +80,15 @@ def build(m: CycleAwareCircuit, domain: CycleAwareDomain, *,
             hit = ra == cas(domain, m.const(ptag, width=ptag_w), cycle=0)
             store_lo = mux(hit, bank0[sidx], store_lo)
             store_hi = mux(hit, bank1[sidx], store_hi)
-        store64 = cas(domain, m.cat(store_hi.wire, store_lo.wire), cycle=0)
+        store64 = cas(
+            domain,
+            m.cat(wire_of(store_hi), wire_of(store_lo)),
+            cycle=store_hi.cycle,
+        )
 
         lane_data = mux(is_const, const64, store64)
         lane_data = mux(is_valid, lane_data, zero64)
-        m.output(f"rdata{i}", lane_data.wire)
+        m.output(f"rdata{i}", wire_of(lane_data))
 
     # ══════════════════════════════════════════════════════════════
     # domain.next() → Cycle 1 — Synchronous write (close feedback)
@@ -97,8 +105,8 @@ def build(m: CycleAwareCircuit, domain: CycleAwareDomain, *,
             we_any = we_any | hit
             next_lo = mux(hit, wdata_lo[lane], next_lo)
             next_hi = mux(hit, wdata_hi[lane], next_hi)
-        bank0[sidx].set(next_lo, when=we_any)
-        bank1[sidx].set(next_hi, when=we_any)
+        bank0[sidx].assign(next_lo, when=we_any)
+        bank1[sidx].assign(next_hi, when=we_any)
 
 
 build.__pycircuit_name__ = "regfile"

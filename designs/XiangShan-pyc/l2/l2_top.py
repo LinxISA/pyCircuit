@@ -43,6 +43,7 @@ from pycircuit import (
     compile_cycle_aware,
     mux,
     u,
+    wire_of,
 )
 
 from top.parameters import (
@@ -59,7 +60,7 @@ TAG_WIDTH = 20
 IDX_WIDTH = max(1, (L2_SETS - 1).bit_length())  # 10 bits
 
 
-def build_l2_top(
+def l2_top(
     m: CycleAwareCircuit,
     domain: CycleAwareDomain,
     *,
@@ -113,20 +114,20 @@ def build_l2_top(
     # Request queue state
     # ================================================================
 
-    enq_ptr = domain.state(width=ptr_w, reset_value=0, name=f"{prefix}_l2_enq_ptr")
-    deq_ptr = domain.state(width=ptr_w, reset_value=0, name=f"{prefix}_l2_deq_ptr")
+    enq_ptr = domain.signal(width=ptr_w, reset_value=0, name=f"{prefix}_l2_enq_ptr")
+    deq_ptr = domain.signal(width=ptr_w, reset_value=0, name=f"{prefix}_l2_deq_ptr")
 
-    q_addr = [domain.state(width=addr_width, reset_value=0, name=f"{prefix}_l2_q_addr_{i}")
+    q_addr = [domain.signal(width=addr_width, reset_value=0, name=f"{prefix}_l2_q_addr_{i}")
               for i in range(queue_size)]
-    q_source = [domain.state(width=1, reset_value=0, name=f"{prefix}_l2_q_src_{i}")
+    q_source = [domain.signal(width=1, reset_value=0, name=f"{prefix}_l2_q_src_{i}")
                 for i in range(queue_size)]
-    q_valid = [domain.state(width=1, reset_value=0, name=f"{prefix}_l2_q_v_{i}")
+    q_valid = [domain.signal(width=1, reset_value=0, name=f"{prefix}_l2_q_v_{i}")
                for i in range(queue_size)]
 
     enq_idx = enq_ptr[0:q_idx_w]
     deq_idx = deq_ptr[0:q_idx_w]
 
-    num_used = cas(domain, (enq_ptr.wire - deq_ptr.wire)[0:cnt_w], cycle=0)
+    num_used = cas(domain, (wire_of(enq_ptr) - wire_of(deq_ptr))[0:cnt_w], cycle=0)
     size_c = cas(domain, m.const(queue_size, width=cnt_w), cycle=0)
     not_full = num_used < size_c
     has_entry = cas(domain, m.const(0, width=1), cycle=0)
@@ -140,17 +141,17 @@ def build_l2_top(
     sel_source = mux(sel_ic, ZERO_1, ONE_1)  # 0=IC, 1=DC
 
     enq_fire = any_req & not_full
-    m.output(f"{prefix}_ic_req_ready", (not_full & ic_req_valid).wire)
-    m.output(f"{prefix}_dc_req_ready", (not_full & dc_req_valid & (~ic_req_valid)).wire)
+    m.output(f"{prefix}_ic_req_ready", wire_of(not_full & ic_req_valid))
+    m.output(f"{prefix}_dc_req_ready", wire_of(not_full & dc_req_valid & (~ic_req_valid)))
 
     # ================================================================
     # Simplified tag-based hit/miss
     # ================================================================
 
     # Tag RAM state: one tag per way for the set addressed by head-of-queue
-    tag_ram = [domain.state(width=tag_w, reset_value=0, name=f"{prefix}_l2_tag_{w}")
+    tag_ram = [domain.signal(width=tag_w, reset_value=0, name=f"{prefix}_l2_tag_{w}")
                for w in range(num_ways)]
-    tag_valid = [domain.state(width=1, reset_value=0, name=f"{prefix}_l2_tv_{w}")
+    tag_valid = [domain.signal(width=1, reset_value=0, name=f"{prefix}_l2_tv_{w}")
                  for w in range(num_ways)]
 
     # Read head entry for tag comparison
@@ -178,10 +179,10 @@ def build_l2_top(
     l2_hit_fire = head_is_pending & l2_hit
 
     # ── Pipeline registers: cycle 0 → 1 ──────────────────────────
-    s1_miss_w = domain.cycle(l2_miss.wire, name=f"{prefix}_l2_s1_miss")
-    s1_addr_w = domain.cycle(head_addr.wire, name=f"{prefix}_l2_s1_addr")
-    s1_src_w = domain.cycle(head_source.wire, name=f"{prefix}_l2_s1_src")
-    s1_hit_w = domain.cycle(l2_hit_fire.wire, name=f"{prefix}_l2_s1_hit")
+    s1_miss_w = domain.cycle(wire_of(l2_miss), name=f"{prefix}_l2_s1_miss")
+    s1_addr_w = domain.cycle(wire_of(head_addr), name=f"{prefix}_l2_s1_addr")
+    s1_src_w = domain.cycle(wire_of(head_source), name=f"{prefix}_l2_s1_src")
+    s1_hit_w = domain.cycle(wire_of(l2_hit_fire), name=f"{prefix}_l2_s1_hit")
 
     domain.next()
 
@@ -198,28 +199,28 @@ def build_l2_top(
     _out["ds_req_source"] = cas(domain, s1_src_w, cycle=domain.cycle_index)
 
     # Downstream refill arrives → respond upstream
-    ic_grant_valid = ds_resp_valid.wire & (~ds_resp_source.wire)
-    dc_grant_valid = ds_resp_valid.wire & ds_resp_source.wire
+    ic_grant_valid = wire_of(ds_resp_valid) & (~wire_of(ds_resp_source))
+    dc_grant_valid = wire_of(ds_resp_valid) & wire_of(ds_resp_source)
 
     m.output(f"{prefix}_ic_grant_valid", ic_grant_valid)
     _out["ic_grant_valid"] = cas(domain, ic_grant_valid, cycle=domain.cycle_index)
-    m.output(f"{prefix}_ic_grant_data", ds_resp_data.wire)
+    m.output(f"{prefix}_ic_grant_data", wire_of(ds_resp_data))
     _out["ic_grant_data"] = ds_resp_data
     m.output(f"{prefix}_dc_grant_valid", dc_grant_valid)
     _out["dc_grant_valid"] = cas(domain, dc_grant_valid, cycle=domain.cycle_index)
-    m.output(f"{prefix}_dc_grant_data", ds_resp_data.wire)
+    m.output(f"{prefix}_dc_grant_data", wire_of(ds_resp_data))
     _out["dc_grant_data"] = ds_resp_data
 
     # Dequeue fires on hit or when refill arrives for the pending miss
-    deq_fire = s1_hit_w | ds_resp_valid.wire
+    deq_fire = s1_hit_w | wire_of(ds_resp_valid)
 
     # ── Pipeline registers: cycle 1 → 2 ──────────────────────────
-    s2_resp_w = domain.cycle(ds_resp_valid.wire, name=f"{prefix}_l2_s2_resp")
+    s2_resp_w = domain.cycle(wire_of(ds_resp_valid), name=f"{prefix}_l2_s2_resp")
 
     domain.next()
 
     # ================================================================
-    # Cycle 2 — State updates (use .wire on CAS signals for consistency)
+    # Cycle 2 — State updates (use wire_of() on CAS signals for consistency)
     # ================================================================
 
     one_ptr = cas(domain, m.const(1, width=ptr_w), cycle=0)
@@ -229,40 +230,40 @@ def build_l2_top(
         j_c = cas(domain, m.const(j, width=q_idx_w), cycle=0)
         hit = enq_idx == j_c
         we = enq_fire & hit
-        q_addr[j].set(mux(we, sel_addr, q_addr[j]), when=we)
-        q_source[j].set(mux(we, sel_source, q_source[j]), when=we)
-        q_valid[j].set(mux(we, ONE_1, q_valid[j]), when=we)
+        q_addr[j].assign(mux(we, sel_addr, q_addr[j]), when=we)
+        q_source[j].assign(mux(we, sel_source, q_source[j]), when=we)
+        q_valid[j].assign(mux(we, ONE_1, q_valid[j]), when=we)
 
-    # Dequeue completed request — deq_fire is a wire, so use .wire on CAS
+    # Dequeue completed request — deq_fire is a wire, so use wire_of() on CAS
     deq_fire_cas = cas(domain, deq_fire, cycle=0)
     for j in range(queue_size):
         j_c = cas(domain, m.const(j, width=q_idx_w), cycle=0)
         hit = deq_idx == j_c
         ce = deq_fire_cas & hit
-        q_valid[j].set(ZERO_1, when=ce)
+        q_valid[j].assign(ZERO_1, when=ce)
 
     # Update tag RAM on refill (simplified: write to way 0)
     refill_tag = head_addr[addr_width - tag_w:addr_width]
-    tag_ram[0].set(mux(ds_resp_valid, refill_tag, tag_ram[0]))
-    tag_valid[0].set(mux(ds_resp_valid, ONE_1, tag_valid[0]))
+    tag_ram[0] <<= mux(ds_resp_valid, refill_tag, tag_ram[0])
+    tag_valid[0] <<= mux(ds_resp_valid, ONE_1, tag_valid[0])
 
     # Pointer updates
-    next_enq = cas(domain, (enq_ptr.wire + one_ptr.wire)[0:ptr_w], cycle=0)
-    next_deq = cas(domain, (deq_ptr.wire + one_ptr.wire)[0:ptr_w], cycle=0)
-    enq_ptr.set(mux(enq_fire, next_enq, enq_ptr))
-    deq_ptr.set(mux(deq_fire_cas, next_deq, deq_ptr))
+    next_enq = cas(domain, (wire_of(enq_ptr) + wire_of(one_ptr))[0:ptr_w], cycle=0)
+    next_deq = cas(domain, (wire_of(deq_ptr) + wire_of(one_ptr))[0:ptr_w], cycle=0)
+    enq_ptr <<= mux(enq_fire, next_enq, enq_ptr)
+    deq_ptr <<= mux(deq_fire_cas, next_deq, deq_ptr)
 
-    m.output(f"{prefix}_l2_busy", has_entry.wire)
+    m.output(f"{prefix}_l2_busy", wire_of(has_entry))
     _out["l2_busy"] = has_entry
     return _out
 
 
-build_l2_top.__pycircuit_name__ = "l2_top"
+l2_top.__pycircuit_name__ = "l2_top"
 
 
 if __name__ == "__main__":
     print(compile_cycle_aware(
-        build_l2_top, name="l2_top", eager=True,
+        l2_top, name="l2_top", eager=True,
         addr_width=16, data_width=16,
         block_bits=128, queue_size=4,
         tag_w=8, idx_w=4, num_ways=2,

@@ -59,5 +59,5 @@ m.assign(w, raw)
 m.assign(w, raw, dst_cycle=1, src_cycle=0)
 ```
 
-See `docs/cycle_balance_improvement.md` and (for V5 logical cycles) `docs/PyCircuit V5 Programming Tutorial.md` / `docs/PyCurcit V5_CYCLE_AWARE_API.md`.
+See `docs/cycle_balance_improvement.md` and (for V5 logical cycles) `docs/PyCircuit_V5_Spec.md`.
 

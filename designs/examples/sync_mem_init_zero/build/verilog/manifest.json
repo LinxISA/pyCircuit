@@ -1,0 +1,8 @@
+{
+  "cpp_modules": [],
+  "top": "sync_mem_init_zero",
+  "verilog_modules": [
+    "pyc_primitives.v",
+    "sync_mem_init_zero.v"
+  ]
+}

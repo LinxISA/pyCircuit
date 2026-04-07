@@ -45,6 +45,15 @@ class _ModuleCtx:
 class CycleAwareCircuit(Circuit):
     """V5 top-level builder; extends Circuit so m.out / m.cat / emit_mlir work unchanged."""
 
+    def __init__(self, name: str, design_ctx: Any | None = None) -> None:
+        super().__init__(name, design_ctx=design_ctx)
+        self._v5_design: Any | None = None
+
+    def emit_mlir(self) -> str:
+        if self._v5_design is not None:
+            return self._v5_design.emit_mlir()
+        return super().emit_mlir()
+
     def create_domain(
         self, name: str, *, frequency_desc: str = "", reset_active_high: bool = False
     ) -> "CycleAwareDomain":
@@ -69,6 +78,10 @@ class CycleAwareDomain:
         self._stack: list[int] = []
         self._delay_serial = 0
         self._reg_serial = 0
+        # Hierarchical compilation state (set by compile_cycle_aware)
+        self._hierarchical: bool = False
+        self._design: Any | None = None
+        self._sub_cache: dict[tuple[Any, ...], Any] = {}
 
     @property
     def clock_domain(self) -> ClockDomain:
@@ -126,29 +139,14 @@ class CycleAwareDomain:
         r.set(w)
         return r.q
 
-    def state(
+    def _state(
         self,
         *,
         width: int,
         reset_value: int = 0,
         name: str = "",
     ) -> "StateSignal":
-        """Declare a feedback state variable (register whose D depends on Q).
-
-        Returns a :class:`StateSignal` that behaves like a ``CycleAwareSignal``
-        (read its current value, use in expressions) and also supports
-        ``.set(next_val)`` to close the feedback loop.
-
-        Typical pattern::
-
-            # Cycle 0: declare state and read current value
-            counter = domain.state(width=8, reset_value=0, name="cnt")
-
-            domain.next()  # → Cycle 1
-
-            # Cycle 1: conditionally update
-            counter.set(mux(enable, counter + 1, counter))
-        """
+        """Internal: create a feedback register. Use ``domain.signal()`` instead."""
         reg_name = str(name).strip() or f"_v5_reg_{self._reg_serial}"
         self._reg_serial += 1
         full = self._m.scoped_name(reg_name)
@@ -156,6 +154,131 @@ class CycleAwareDomain:
             full, domain=self._cd, width=int(width), init=int(reset_value)
         )
         return StateSignal(self, reg, self._occurrence)
+
+    def signal(
+        self,
+        *,
+        width: int,
+        reset_value: int = 0,
+        name: str = "",
+    ) -> "ForwardSignal":
+        """Declare a forward-declared register with ``<<=`` / ``.assign()`` syntax.
+
+        Returns a :class:`ForwardSignal` whose Q output is immediately usable
+        in expressions.  The D input is connected later via::
+
+            sig <<= next_val          # unconditional
+            sig.assign(next_val, when=cond)  # conditional
+
+        This is sugar over :meth:`state` with a more ergonomic write syntax.
+        """
+        st = self._state(width=width, reset_value=reset_value, name=name)
+        return ForwardSignal(st)
+
+    def call(
+        self,
+        fn: Callable[..., Any],
+        *,
+        inputs: dict[str, Any] | None = None,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        """Call a sub-module function with cycle isolation.
+
+        In normal (flat) mode: saves/restores the cycle counter and inlines
+        the sub-module logic into the parent circuit.
+
+        In hierarchical mode (``self._hierarchical is True``): compiles the
+        sub-module as a separate MLIR ``func.func``, emits a ``pyc.instance``
+        op in the parent, and returns output signals wired from the instance.
+
+        The returned dict preserves each signal's ``cycle`` attribute.
+        """
+        if self._hierarchical:
+            return self._call_hierarchical(fn, inputs=inputs, **kwargs)
+        self.push()
+        try:
+            result = fn(self._m, self, inputs=inputs, **kwargs)
+        finally:
+            self.pop()
+        return result
+
+    def _call_hierarchical(
+        self,
+        fn: Callable[..., Any],
+        *,
+        inputs: dict[str, Any] | None,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        """Compile *fn* as a standalone sub-module, then instantiate it."""
+        sub_name = getattr(fn, "__pycircuit_name__", getattr(fn, "__name__", "sub"))
+        prefix = kwargs.get("prefix", sub_name)
+
+        cache_key = _hierarchical_cache_key(fn, kwargs)
+        if cache_key not in self._sub_cache:
+            canonical_kwargs = dict(kwargs)
+            canonical_kwargs["prefix"] = sub_name
+
+            sub_m = CycleAwareCircuit(sub_name)
+            sub_dom = sub_m.create_domain(self._name)
+            sub_dom._hierarchical = True
+            sub_dom._design = self._design
+            sub_dom._sub_cache = self._sub_cache
+
+            outs_dict = fn(sub_m, sub_dom, inputs=None, **canonical_kwargs)
+
+            out_entries = _record_output_structure(outs_dict, circuit=sub_m)
+
+            cm = _make_compiled_module(fn, sub_m, sub_name)
+            self._design.add(cm)
+            self._sub_cache[cache_key] = (sub_m, out_entries)
+
+        sub_m, out_entries = self._sub_cache[cache_key]
+
+        canonical_prefix = sub_name
+        input_map: dict[str, Any] = {}
+        if inputs:
+            for k, v in inputs.items():
+                input_map[f"{canonical_prefix}_{k}"] = v
+
+        input_sigs: list[Signal] = []
+        for port_name, port_sig in sub_m._args:
+            if port_sig.ty == "!pyc.clock":
+                input_sigs.append(self._cd.clk)
+            elif port_sig.ty == "!pyc.reset":
+                input_sigs.append(self._cd.rst)
+            elif port_name in input_map:
+                w = _to_wire(input_map[port_name])
+                if w.sig.ty != port_sig.ty and w.sig.ty.startswith("i") and port_sig.ty.startswith("i"):
+                    actual_w = int(w.sig.ty[1:])
+                    expect_w = int(port_sig.ty[1:])
+                    if actual_w < expect_w:
+                        w = w._zext(width=expect_w)
+                    else:
+                        w = w._trunc(width=expect_w)
+                input_sigs.append(w.sig)
+            else:
+                if port_sig.ty.startswith("i"):
+                    width = int(port_sig.ty[1:])
+                else:
+                    width = 1
+                if port_name.startswith(canonical_prefix + "_"):
+                    suffix = port_name[len(canonical_prefix) + 1:]
+                    parent_port_name = f"{prefix}_{suffix}"
+                else:
+                    parent_port_name = f"{prefix}_{port_name}"
+                parent_wire = self._m.input(parent_port_name, width=width)
+                input_sigs.append(parent_wire.sig)
+
+        result_types = [sig.ty for _, sig in sub_m._results]
+        out_sigs = self._m.instance_op(
+            sub_name,
+            *input_sigs,
+            result_types=result_types,
+            name=prefix,
+        )
+
+        out_wires = [Wire(self._m, s) for s in out_sigs]
+        return _reconstruct_output_dict(out_entries, out_wires, self)
 
     def delay_to(self, w: Wire, *, from_cycle: int, to_cycle: int, width: int) -> Wire:
         """Insert (to_cycle - from_cycle) register stages for automatic cycle balancing."""
@@ -174,15 +297,150 @@ class CycleAwareDomain:
         return cur
 
 
+# ── Hierarchical compilation helpers ──────────────────────────────────────
+
+def _hierarchical_cache_key(fn: Callable[..., Any], kwargs: dict[str, Any]) -> tuple[Any, ...]:
+    """Build a cache key from function identity + compile-time kwargs.
+
+    ``prefix`` is excluded because it only affects port naming, not the
+    module's structural identity."""
+    import json as _json
+    kw_str = _json.dumps(
+        {k: repr(v) for k, v in sorted(kwargs.items()) if k != "prefix"},
+        sort_keys=True, separators=(",", ":"),
+    )
+    return (id(fn), kw_str)
+
+
+def _record_output_structure(
+    outs_dict: dict[str, Any] | Any,
+    circuit: "CycleAwareCircuit | None" = None,
+) -> list[tuple[str, str, int, list[int], list[int]]]:
+    """Walk *outs_dict* and record ``(key, kind, count, cycles, result_indices)``
+    for each entry.
+
+    When *circuit* is provided, each signal's Wire is matched against
+    ``circuit._results`` to record the actual result port indices instead of
+    assuming positional matching (which fails when ``m.output()`` calls are
+    interleaved across dict entries).
+
+    Returns a list consumed by :func:`_reconstruct_output_dict`.
+    """
+    if not isinstance(outs_dict, dict):
+        return []
+
+    ref_to_idx: dict[str, int] = {}
+    if circuit is not None:
+        for i, (_name, sig) in enumerate(circuit._results):
+            ref_to_idx[sig.ref] = i
+
+    entries: list[tuple[str, str, int, list[int], list[int]]] = []
+    for key, val in outs_dict.items():
+        if isinstance(val, list):
+            cycles: list[int] = []
+            indices: list[int] = []
+            for v in val:
+                if isinstance(v, (CycleAwareSignal, ForwardSignal, StateSignal)):
+                    cycles.append(v.cycle)
+                    w = wire_of(v)
+                    indices.append(ref_to_idx.get(w.sig.ref, -1) if ref_to_idx else -1)
+                else:
+                    cycles.append(0)
+                    indices.append(-1)
+            entries.append((key, "list", len(val), cycles, indices))
+        elif isinstance(val, (CycleAwareSignal, ForwardSignal, StateSignal)):
+            w = wire_of(val)
+            idx = ref_to_idx.get(w.sig.ref, -1) if ref_to_idx else -1
+            entries.append((key, "scalar", 1, [val.cycle], [idx]))
+    return entries
+
+
+def _reconstruct_output_dict(
+    entries: list[tuple[str, str, int, list[int], list[int]]],
+    out_wires: list[Wire],
+    domain: CycleAwareDomain,
+) -> dict[str, Any]:
+    """Rebuild an output dict from ``pyc.instance`` result wires.
+
+    Uses recorded result indices when available (>= 0); falls back to
+    sequential positional matching otherwise.
+    """
+    outs: dict[str, Any] = {}
+    seq_idx = 0
+    for key, kind, count, cycles, indices in entries:
+        if kind == "scalar":
+            ri = indices[0] if indices and indices[0] >= 0 else seq_idx
+            outs[key] = CycleAwareSignal(domain, out_wires[ri], cycles[0])
+            seq_idx += 1
+        else:
+            items: list[CycleAwareSignal] = []
+            for i in range(count):
+                ri = indices[i] if indices and indices[i] >= 0 else seq_idx
+                items.append(CycleAwareSignal(domain, out_wires[ri], cycles[i]))
+                seq_idx += 1
+            outs[key] = items
+    return outs
+
+
+def _make_compiled_module(fn: Any, circuit: CycleAwareCircuit, sym_name: str) -> Any:
+    """Create a :class:`~pycircuit.design.CompiledModule` from an eagerly-compiled circuit."""
+    from .design import CompiledModule, _kind_of, _inline_of, _base_name
+    import json as _json
+
+    arg_names = tuple(n for n, _ in circuit._args)
+    arg_types = tuple(sig.ty for _, sig in circuit._args)
+    res_names = tuple(n for n, _ in circuit._results)
+    res_types = tuple(sig.ty for _, sig in circuit._results)
+
+    kind = _kind_of(fn)
+    inline = "true" if _inline_of(fn) else "false"
+    base = _base_name(fn)
+    struct_metrics = _json.dumps({
+        "source_loc": 0, "ast_node_count": 0, "hardware_call_count": 0,
+        "loop_count": 0, "module_call_count": 0, "state_call_count": 0,
+        "estimated_inline_cost": 0, "instance_count": 0,
+        "state_alloc_count": 0, "collection_count": 0,
+        "collection_instance_count": 0, "module_family_collection_count": 0,
+        "repeat_pressure": 0, "repeated_body_clusters": [],
+    }, sort_keys=True, separators=(",", ":"))
+    struct_collections = "[]"
+
+    circuit.set_func_attr("pyc.kind", kind)
+    circuit.set_func_attr("pyc.inline", inline)
+    circuit.set_func_attr("pyc.params", "{}")
+    circuit.set_func_attr("pyc.base", base)
+    circuit.set_func_attr("pyc.struct.metrics", struct_metrics)
+    circuit.set_func_attr("pyc.struct.collections", struct_collections)
+    circuit.set_func_attr_json("pyc.value_params", [])
+    circuit.set_func_attr_json("pyc.value_param_types", [])
+
+    return CompiledModule(
+        fn=fn,
+        params_json="{}",
+        sym_name=str(sym_name),
+        mod=circuit,
+        arg_names=arg_names,
+        arg_types=arg_types,
+        result_names=res_names,
+        result_types=res_types,
+        value_param_names=(),
+        value_param_types=(),
+        struct_metrics_json=struct_metrics,
+        struct_collections_json=struct_collections,
+    )
+
+
 def _clock_domain_ports(m: Circuit, name: str) -> ClockDomain:
     if name == "clk":
         return ClockDomain(clk=m.clock("clk"), rst=m.reset("rst"))
     return m.domain(name)
 
 
-def _as_wire(m: Circuit, sig: Union[Wire, Reg, "CycleAwareSignal", Signal]) -> Wire:
+def _as_wire(m: Circuit, sig: Union[Wire, Reg, "CycleAwareSignal", "ForwardSignal", Signal]) -> Wire:
+    if isinstance(sig, ForwardSignal):
+        return sig._state._cas._w
     if isinstance(sig, CycleAwareSignal):
-        return sig.wire
+        return sig._w
     if isinstance(sig, Reg):
         return sig.q
     if isinstance(sig, Wire):
@@ -190,15 +448,14 @@ def _as_wire(m: Circuit, sig: Union[Wire, Reg, "CycleAwareSignal", Signal]) -> W
     if isinstance(sig, Signal):
         return Wire(m, sig)
     raise TypeError(
-        f"expected Wire/Reg/CycleAwareSignal/Signal, got {type(sig).__name__}"
+        f"expected Wire/Reg/CycleAwareSignal/ForwardSignal/Signal, got {type(sig).__name__}"
     )
 
 
 class StateSignal:
-    """Feedback register exposed as a cycle-aware value with deferred ``.set()``.
+    """Internal feedback register. Created by ``domain._state()`` (private).
 
-    Created by ``domain.state()``.  Read it like any ``CycleAwareSignal``;
-    after ``domain.next()``, call ``.set(next_val)`` to close the feedback loop.
+    Users should use ``domain.signal()`` which returns a ``ForwardSignal`` instead.
     """
 
     __slots__ = ("_domain", "_reg", "_cas")
@@ -226,18 +483,6 @@ class StateSignal:
             self._reg.set(w, when=wh)
         else:
             self._reg.set(w)
-
-    @property
-    def wire(self) -> Wire:
-        return self._cas.wire
-
-    @property
-    def w(self) -> Wire:
-        return self._cas.wire
-
-    @property
-    def sig(self) -> Signal:
-        return self._cas.sig
 
     @property
     def cycle(self) -> int:
@@ -301,21 +546,217 @@ class StateSignal:
         return self._current_view().__getitem__(idx)
 
     def __repr__(self) -> str:
-        return f"StateSignal({self._cas.wire}, cycle={self._cas.cycle})"
+        return f"StateSignal({self._cas._w}, cycle={self._cas.cycle})"
 
 
-def _to_wire(v: "Wire | Reg | CycleAwareSignal | StateSignal") -> Wire:
+class ForwardSignal:
+    """Forward-declared register signal with ``<<=`` and ``.assign()`` syntax.
+
+    Created by ``domain.signal()``.  The underlying hardware is identical to
+    :class:`StateSignal` — a D flip-flop whose Q output is available at the
+    declaration cycle and whose D input is connected later.
+
+    **Usage**::
+
+        # Cycle 0: declare and read
+        counter = domain.signal(width=8, reset_value=0, name="cnt")
+        m.output("cnt_out", counter)
+
+        domain.next()  # → Cycle 1
+
+        # Unconditional update
+        counter <<= counter + 1
+
+        # — or conditional —
+        counter.assign(counter + 1, when=enable)
+
+    ``ForwardSignal`` delegates all arithmetic / comparison / slicing operators
+    to the inner ``CycleAwareSignal`` so it can be used directly in expressions
+    without wrapping in ``cas()``.
+    """
+
+    __slots__ = ("_state",)
+
+    def __init__(self, state: "StateSignal") -> None:
+        self._state = state
+
+    # ── assignment operators ──────────────────────────────────────────
+
+    def __ilshift__(self, next_val: object) -> "ForwardSignal":
+        """``signal <<= expr`` → unconditional register drive."""
+        self._state.set(next_val)
+        return self
+
+    def assign(
+        self,
+        next_val: "Wire | Reg | CycleAwareSignal | StateSignal | ForwardSignal",
+        *,
+        when: "Wire | Reg | CycleAwareSignal | StateSignal | ForwardSignal | None" = None,
+    ) -> None:
+        """Conditional register drive: ``signal.assign(expr, when=cond)``."""
+        self._state.set(next_val, when=when)
+
+    # ── read-side properties (delegate to inner CAS) ─────────────────
+
+    @property
+    def cycle(self) -> int:
+        return self._state.cycle
+
+    @property
+    def domain(self) -> "CycleAwareDomain":
+        return self._state.domain
+
+    @property
+    def name(self) -> str:
+        return str(self._state._cas._w)
+
+    # ── arithmetic / logic operators (forward to inner CAS) ──────────
+
+    def __add__(self, other: object) -> "CycleAwareSignal":
+        return self._state._cas.__add__(other)
+
+    def __radd__(self, other: object) -> "CycleAwareSignal":
+        return self._state._cas.__radd__(other)
+
+    def __sub__(self, other: object) -> "CycleAwareSignal":
+        return self._state._cas.__sub__(other)
+
+    def __mul__(self, other: object) -> "CycleAwareSignal":
+        return self._state._cas.__mul__(other)
+
+    def __and__(self, other: object) -> "CycleAwareSignal":
+        return self._state._cas.__and__(other)
+
+    def __or__(self, other: object) -> "CycleAwareSignal":
+        if isinstance(other, str):
+            return self._state._cas
+        return self._state._cas.__or__(other)
+
+    def __xor__(self, other: object) -> "CycleAwareSignal":
+        return self._state._cas.__xor__(other)
+
+    def __invert__(self) -> "CycleAwareSignal":
+        return self._state._cas.__invert__()
+
+    def __eq__(self, other: object) -> "CycleAwareSignal":  # type: ignore[override]
+        return self._state._cas.__eq__(other)
+
+    def __ne__(self, other: object) -> "CycleAwareSignal":  # type: ignore[override]
+        return self._state._cas.__ne__(other)
+
+    def __lt__(self, other: object) -> "CycleAwareSignal":
+        return self._state._cas.__lt__(other)
+
+    def __gt__(self, other: object) -> "CycleAwareSignal":
+        return self._state._cas.__gt__(other)
+
+    def __le__(self, other: object) -> "CycleAwareSignal":
+        return self._state._cas.__le__(other)
+
+    def __ge__(self, other: object) -> "CycleAwareSignal":
+        return self._state._cas.__ge__(other)
+
+    def __getitem__(self, idx: int | slice) -> "CycleAwareSignal":
+        return self._state._cas.__getitem__(idx)
+
+    def __getattr__(self, name: str) -> object:
+        return getattr(self._state._cas, name)
+
+    def __repr__(self) -> str:
+        return f"ForwardSignal({self._state._cas._w}, cycle={self._state.cycle})"
+
+
+def _to_wire(v: "Wire | Reg | CycleAwareSignal | StateSignal | ForwardSignal") -> Wire:
+    if isinstance(v, ForwardSignal):
+        return v._state._cas._w
     if isinstance(v, StateSignal):
-        return v.wire
+        return v._cas._w
     if isinstance(v, CycleAwareSignal):
-        return v.wire
+        return v._w
     if isinstance(v, Reg):
         return v.q
     if isinstance(v, Wire):
         return v
     raise TypeError(
-        f"expected Wire/Reg/CycleAwareSignal/StateSignal, got {type(v).__name__}"
+        f"expected Wire/Reg/CycleAwareSignal/StateSignal/ForwardSignal, got {type(v).__name__}"
     )
+
+
+# ── Hierarchical-composition helpers ──────────────────────────────────────
+
+def submodule_input(
+    io: dict[str, Any] | None,
+    key: str,
+    m: Circuit,
+    domain: CycleAwareDomain,
+    *,
+    prefix: str,
+    width: int,
+    cycle: int = 0,
+) -> "CycleAwareSignal":
+    """Resolve an input signal in dual-mode: composed or standalone.
+
+    When *io* is provided and contains *key*, the caller's
+    ``CycleAwareSignal`` is returned unchanged (preserving its cycle
+    provenance).  Otherwise a fresh top-level ``m.input()`` is created so the
+    module can still compile independently::
+
+        pc = submodule_input(inputs, "pc", m, domain, prefix="fe", width=32)
+
+    Parameters
+    ----------
+    io : dict or None
+        The ``inputs`` dict forwarded by the parent.  ``None`` means
+        standalone compilation.
+    key : str
+        Signal name inside the dict / port suffix.
+    m : Circuit
+        The circuit object.
+    domain : CycleAwareDomain
+        Active clock domain.
+    prefix : str
+        Port-name prefix for standalone mode (creates ``{prefix}_{key}``).
+    width : int
+        Bit width of the signal.
+    cycle : int
+        Cycle tag used only when creating a standalone ``m.input()`` port.
+
+    Returns
+    -------
+    CycleAwareSignal
+    """
+    if io is not None and key in io:
+        sig = io[key]
+        if isinstance(sig, (CycleAwareSignal, ForwardSignal, StateSignal)):
+            return sig  # type: ignore[return-value]
+        if isinstance(sig, Wire):
+            return CycleAwareSignal(domain, sig, cycle)
+        raise TypeError(f"submodule_input: unexpected type for key '{key}': {type(sig).__name__}")
+    return CycleAwareSignal(domain, m.input(f"{prefix}_{key}", width=width), cycle)
+
+
+def wire_of(
+    sig: "CycleAwareSignal | ForwardSignal | StateSignal | Wire | Reg",
+) -> Wire:
+    """Extract the raw ``Wire`` from any signal wrapper (for ``m.output()``)::
+
+        m.output("result", wire_of(outs["result"]))
+
+    This is the **only** sanctioned way to obtain a bare ``Wire`` from a
+    ``CycleAwareSignal`` / ``ForwardSignal`` / ``StateSignal``.
+    Direct ``.wire`` access is removed from the public API.
+    """
+    if isinstance(sig, ForwardSignal):
+        return sig._state._cas._w
+    if isinstance(sig, StateSignal):
+        return sig._cas._w
+    if isinstance(sig, CycleAwareSignal):
+        return sig._w
+    if isinstance(sig, Reg):
+        return sig.q
+    if isinstance(sig, Wire):
+        return sig
+    raise TypeError(f"wire_of: unsupported type {type(sig).__name__}")
 
 
 class CycleAwareSignal:
@@ -331,24 +772,12 @@ class CycleAwareSignal:
         self._cycle = int(cycle)
 
     @property
-    def wire(self) -> Wire:
-        return self._w
-
-    @property
-    def w(self) -> Wire:
-        return self._w
-
-    @property
     def cycle(self) -> int:
         return self._cycle
 
     @property
     def domain(self) -> CycleAwareDomain:
         return self._domain
-
-    @property
-    def sig(self) -> Signal:
-        return self._w.sig
 
     @property
     def name(self) -> str:
@@ -364,8 +793,10 @@ class CycleAwareSignal:
 
     def _align(
         self,
-        other: "CycleAwareSignal | StateSignal | Wire | Reg | int | LiteralValue",
+        other: "CycleAwareSignal | StateSignal | ForwardSignal | Wire | Reg | int | LiteralValue",
     ) -> tuple[Wire, Wire, int]:
+        if isinstance(other, ForwardSignal):
+            return self._align(other._state._cas)
         if isinstance(other, StateSignal):
             return self._align(other._current_view())
         if isinstance(other, CycleAwareSignal):
@@ -524,19 +955,22 @@ def _promote_pair(m: Circuit, a: Wire, b: Wire) -> tuple[Wire, Wire]:
 
 
 def _is_cas(v: object) -> bool:
-    return isinstance(v, (CycleAwareSignal, StateSignal))
+    return isinstance(v, (CycleAwareSignal, StateSignal, ForwardSignal))
 
 
 def mux(
-    cond: Union[Wire, Reg, CycleAwareSignal, StateSignal],
-    a: Union[Wire, Reg, CycleAwareSignal, StateSignal, int, LiteralValue],
-    b: Union[Wire, Reg, CycleAwareSignal, StateSignal, int, LiteralValue],
+    cond: Union[Wire, Reg, CycleAwareSignal, StateSignal, ForwardSignal],
+    a: Union[Wire, Reg, CycleAwareSignal, StateSignal, ForwardSignal, int, LiteralValue],
+    b: Union[Wire, Reg, CycleAwareSignal, StateSignal, ForwardSignal, int, LiteralValue],
 ) -> Union[Wire, CycleAwareSignal]:
     if _is_cas(cond) or _is_cas(a) or _is_cas(b):
-        c2 = cond._cas if isinstance(cond, StateSignal) else cond
-        a2 = a._cas if isinstance(a, StateSignal) else a
-        b2 = b._cas if isinstance(b, StateSignal) else b
-        return _mux_cycle_aware(c2, a2, b2)
+        def _unwrap(v: object) -> object:
+            if isinstance(v, ForwardSignal):
+                return v._state._cas
+            if isinstance(v, StateSignal):
+                return v._cas
+            return v
+        return _mux_cycle_aware(_unwrap(cond), _unwrap(a), _unwrap(b))
     return _mux_wire(cond, a, b)
 
 
@@ -626,8 +1060,8 @@ def _mux_cycle_aware(
     cw = c_cas._w
     mx = max(cc, ca._cycle, cb._cycle)
     cw2 = dom.delay_to(cw, from_cycle=cc, to_cycle=mx, width=cw.width)
-    aw = dom.delay_to(ca.wire, from_cycle=ca._cycle, to_cycle=mx, width=ca.wire.width)
-    bw = dom.delay_to(cb.wire, from_cycle=cb._cycle, to_cycle=mx, width=cb.wire.width)
+    aw = dom.delay_to(ca._w, from_cycle=ca._cycle, to_cycle=mx, width=ca._w.width)
+    bw = dom.delay_to(cb._w, from_cycle=cb._cycle, to_cycle=mx, width=cb._w.width)
     aw, bw = _promote_pair(m, aw, bw)
     if cw2.ty != "i1":
         raise TypeError("mux condition must be i1")
@@ -711,6 +1145,7 @@ def compile_cycle_aware(
     name: str | None = None,
     domain_name: str = "clk",
     eager: bool = False,
+    hierarchical: bool = False,
     structural: bool | None = None,
     value_params: Mapping[str, str] | dict[str, str] | None = None,
     design_ctx: Any | None = None,
@@ -723,9 +1158,10 @@ def compile_cycle_aware(
     Pass ``eager=True`` to run ``fn`` directly in Python and get a
     :class:`CycleAwareCircuit` (no JIT; no ``if Wire`` / JIT control flow).
 
-    If *design_ctx* is provided in eager mode, it is forwarded to the
-    :class:`CycleAwareCircuit` constructor, enabling ``m.instance()`` for
-    hierarchical module composition.
+    When ``hierarchical=True`` (requires ``eager=True``), each ``domain.call()``
+    boundary is preserved: sub-modules are compiled as separate ``func.func``
+    MLIR ops and instantiated via ``pyc.instance``.  The returned circuit's
+    ``emit_mlir()`` emits a multi-module ``Design``.
     """
     if eager:
         circuit_name = (
@@ -735,9 +1171,23 @@ def compile_cycle_aware(
         )
         m = CycleAwareCircuit(str(circuit_name), design_ctx=design_ctx)
         dom = m.create_domain(str(domain_name))
+
+        if hierarchical:
+            from .design import Design
+            design = Design(top=str(circuit_name))
+            dom._hierarchical = True
+            dom._design = design
+            dom._sub_cache = {}
+
         out = fn(m, dom, **jit_params)
         if out is not None:
             _register_implicit_outputs(m, out)
+
+        if hierarchical:
+            cm = _make_compiled_module(fn, m, str(circuit_name))
+            design.add(cm)
+            m._v5_design = design
+
         return m
 
     from .jit import compile as jit_compile
@@ -782,7 +1232,7 @@ def compile_cycle_aware(
 
 def _register_implicit_outputs(m: Circuit, out: Any) -> None:
     if isinstance(out, CycleAwareSignal):
-        m.output("result", out.wire)
+        m.output("result", out._w)
         return
     if isinstance(out, Wire):
         m.output("result", out)
@@ -799,7 +1249,7 @@ def _register_implicit_outputs(m: Circuit, out: Any) -> None:
 
 def _register_implicit_outputs_single(m: Circuit, port: str, x: Any) -> None:
     if isinstance(x, CycleAwareSignal):
-        m.output(port, x.wire)
+        m.output(port, x._w)
     elif isinstance(x, Wire):
         m.output(port, x)
     elif isinstance(x, Reg):

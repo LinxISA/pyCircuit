@@ -191,6 +191,16 @@ static llvm::cl::opt<std::string> emitStructuralMode(
     llvm::cl::desc("Structural emission policy for comb fusion: auto|on|off"),
     llvm::cl::init("auto"));
 
+static llvm::cl::opt<bool> clFlatten(
+    "flatten",
+    llvm::cl::desc("Flatten all module hierarchy: inline all pyc.instance ops into a single module"),
+    llvm::cl::init(false));
+
+static llvm::cl::opt<bool> clHierarchical(
+    "hierarchical",
+    llvm::cl::desc("Preserve module hierarchy: keep pyc.instance boundaries as separate Verilog modules"),
+    llvm::cl::init(false));
+
 static std::string topSymbol(ModuleOp module) {
   if (auto topAttr = module->getAttrOfType<FlatSymbolRefAttr>("pyc.top"))
     return topAttr.getValue().str();
@@ -2106,6 +2116,30 @@ int main(int argc, char **argv) {
     }
   }
 
+  // --flatten / --hierarchical high-level mode flags.
+  const bool wantFlatten = clFlatten;
+  const bool wantHierarchical = clHierarchical;
+  if (wantFlatten && wantHierarchical) {
+    llvm::errs() << "error: --flatten and --hierarchical are mutually exclusive\n";
+    return 1;
+  }
+
+  // Override low-level flags when high-level mode is set.
+  if (wantHierarchical) {
+    if (hierarchyPolicy.getNumOccurrences() == 0)
+      hierarchyPolicy = "strict";
+    if (inlinePolicy.getNumOccurrences() == 0)
+      inlinePolicy = "off";
+    if (noInline.getNumOccurrences() == 0)
+      noInline = true;
+  }
+  if (wantFlatten) {
+    if (hierarchyPolicy.getNumOccurrences() == 0)
+      hierarchyPolicy = "instantiate";
+    if (inlinePolicy.getNumOccurrences() == 0)
+      inlinePolicy = "off";
+  }
+
   bool strictHierarchy = false;
   bool instantiateHierarchy = false;
   if (hierarchyPolicy == "strict") {
@@ -2159,8 +2193,8 @@ int main(int argc, char **argv) {
   }
 
   // Both strict and instantiate hierarchy prevent the MLIR inliner from
-  // collapsing module boundaries.
-  if ((strictHierarchy || instantiateHierarchy) && inlineDecision.enableInline) {
+  // collapsing module boundaries (unless --flatten overrides).
+  if (!wantFlatten && (strictHierarchy || instantiateHierarchy) && inlineDecision.enableInline) {
     llvm::errs() << "error: " << hierarchyPolicy.getValue()
                  << " hierarchy requires non-inline module compilation\n";
     llvm::errs() << "  inline_policy=" << inlineDecision.mode
@@ -2193,6 +2227,8 @@ int main(int argc, char **argv) {
   }
   pm.addPass(pyc::createCheckFrontendContractPass());
   pm.addPass(pyc::createInlineFunctionsPass());
+  if (wantFlatten)
+    pm.addPass(pyc::createFlattenInstancesPass());
   pm.addPass(pyc::createCheckHierarchyDisciplinePass());
   pm.addPass(createSymbolDCEPass());
   if (inlineDecision.enableInline)
@@ -2233,7 +2269,7 @@ int main(int argc, char **argv) {
 
   const std::set<std::string> moduleSymbolsAfter = collectFrontendModuleSymbols(*module);
   const bool hierarchyPreserved = (moduleSymbolsBefore == moduleSymbolsAfter);
-  if (strictHierarchy && !hierarchyPreserved) {
+  if (strictHierarchy && !wantFlatten && !hierarchyPreserved) {
     llvm::errs() << "error: strict hierarchy policy violation: frontend module symbol set changed after passes\n";
     llvm::errs() << "  before_count=" << moduleSymbolsBefore.size()
                  << " after_count=" << moduleSymbolsAfter.size() << "\n";
@@ -2248,7 +2284,8 @@ int main(int argc, char **argv) {
     return 1;
   }
   // instantiate mode: warn (but don't fail) if modules were removed
-  if (instantiateHierarchy && !hierarchyPreserved) {
+  // (suppress warning in explicit flatten mode since removal is expected)
+  if (instantiateHierarchy && !wantFlatten && !hierarchyPreserved) {
     llvm::errs() << "warning: instantiate hierarchy: some module symbols changed after passes\n";
     for (const auto &sym : moduleSymbolsBefore) {
       if (!moduleSymbolsAfter.count(sym))

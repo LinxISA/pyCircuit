@@ -36,7 +36,7 @@ evidence corpus remains:
 ## Related references
 
 - `docs/FRONTEND_API.md`
-- `docs/PyCurcit V5_CYCLE_AWARE_API.md` / `docs/PyCircuit V5 Programming Tutorial.md`
+- `docs/PyCircuit_V5_Spec.md`
 - `docs/TESTBENCH.md`
 - `docs/IR_SPEC.md`
 - `docs/DIAGNOSTICS.md`

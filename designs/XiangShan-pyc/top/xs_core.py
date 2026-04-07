@@ -42,6 +42,7 @@ from pycircuit import (
     compile_cycle_aware,
     mux,
     u,
+    wire_of,
 )
 
 from top.parameters import (
@@ -58,16 +59,16 @@ from top.parameters import (
     XLEN,
 )
 
-from frontend.frontend import build_frontend
-from backend.backend import build_backend
-from mem.memblock import build_memblock
+from frontend.frontend import frontend
+from backend.backend import backend
+from mem.memblock import memblock
 
 FU_TYPE_WIDTH = 3
 NUM_WB_PORTS = 4
 BLOCK_BITS = CACHE_LINE_SIZE  # 512 bits
 
 
-def build_xs_core(
+def xs_core(
     m: CycleAwareCircuit,
     domain: CycleAwareDomain,
     *,
@@ -128,21 +129,15 @@ def build_xs_core(
     # ================================================================
 
     # Frontend state: fetch PC
-    fetch_pc_r = domain.state(width=pc_width, reset_value=0, name=f"{prefix}_xc_fetch_pc")
-    bpu_valid_r = domain.state(width=1, reset_value=0, name=f"{prefix}_xc_bpu_valid")
+    fetch_pc = domain.signal(width=pc_width, reset_value=0, name=f"{prefix}_xc_fetch_pc")
+    bpu_valid = domain.signal(width=1, reset_value=0, name=f"{prefix}_xc_bpu_valid")
 
-    fetch_pc = cas(domain, fetch_pc_r.wire, cycle=0)
-    bpu_valid = cas(domain, bpu_valid_r.wire, cycle=0)
+    # Backend redirect (computed below, forward-declared via signal)
+    redirect_valid = domain.signal(width=1, reset_value=0, name=f"{prefix}_xc_redir_v")
+    redirect_target = domain.signal(width=pc_width, reset_value=0, name=f"{prefix}_xc_redir_t")
 
-    # Backend redirect (computed below, forward-declared via state)
-    redirect_valid_r = domain.state(width=1, reset_value=0, name=f"{prefix}_xc_redir_v")
-    redirect_target_r = domain.state(width=pc_width, reset_value=0, name=f"{prefix}_xc_redir_t")
-    redirect_valid = cas(domain, redirect_valid_r.wire, cycle=0)
-    redirect_target = cas(domain, redirect_target_r.wire, cycle=0)
-
-    # Backend stall (forward-declared via state)
-    be_stall_r = domain.state(width=1, reset_value=0, name=f"{prefix}_xc_be_stall")
-    be_stall = cas(domain, be_stall_r.wire, cycle=0)
+    # Backend stall (forward-declared via signal)
+    be_stall = domain.signal(width=1, reset_value=0, name=f"{prefix}_xc_be_stall")
 
     # Frontend ibuf ready = ~stall
     ibuf_ready = ~be_stall
@@ -150,7 +145,7 @@ def build_xs_core(
     # BPU simplified: fallthrough prediction
     fallthrough_c = cas(domain, m.const(64, width=pc_width), cycle=0)
     bpu_pred_target = cas(
-        domain, (fetch_pc.wire + fallthrough_c.wire)[0:pc_width], cycle=0
+        domain, (wire_of(fetch_pc) + wire_of(fallthrough_c))[0:pc_width], cycle=0
     )
 
     flush = redirect_valid
@@ -161,38 +156,29 @@ def build_xs_core(
     next_pc = mux(redirect_valid, redirect_target, next_pc)
 
     # ── Sub-module calls ──
-    domain.push()
-    fe_out = build_frontend(m, domain, prefix=f"{prefix}_s_fe",
-                            decode_width=decode_width, pc_width=pc_width,
-                            inputs={})
-    domain.pop()
+    fe_out = domain.call(frontend, inputs={}, prefix=f"{prefix}_s_fe",
+                         decode_width=decode_width, pc_width=pc_width)
 
-    domain.push()
-    be_out = build_backend(m, domain, prefix=f"{prefix}_s_be",
-                           decode_width=decode_width, commit_width=commit_width,
-                           num_wb=num_wb, data_width=data_width, pc_width=pc_width,
-                           ptag_w=ptag_w, rob_idx_w=rob_idx_w,
-                           inputs={})
-    domain.pop()
+    be_out = domain.call(backend, inputs={}, prefix=f"{prefix}_s_be",
+                         decode_width=decode_width, commit_width=commit_width,
+                         num_wb=num_wb, data_width=data_width, pc_width=pc_width,
+                         ptag_w=ptag_w, rob_idx_w=rob_idx_w)
 
-    domain.push()
-    mem_out = build_memblock(m, domain, prefix=f"{prefix}_s_mem",
-                             num_load=num_load, num_store=num_store,
-                             data_width=data_width, addr_width=pc_width,
-                             rob_idx_width=rob_idx_w,
-                             inputs={})
-    domain.pop()
+    mem_out = domain.call(memblock, inputs={}, prefix=f"{prefix}_s_mem",
+                          num_load=num_load, num_store=num_store,
+                          data_width=data_width, addr_width=pc_width,
+                          rob_idx_width=rob_idx_w)
 
     # ── Frontend pipeline: cycle 0 → 1 (ICache) ──────────────────
-    s1_valid_w = domain.cycle(s0_fire.wire, name=f"{prefix}_xc_s1_v")
-    s1_pc_w = domain.cycle(fetch_pc.wire, name=f"{prefix}_xc_s1_pc")
+    s1_valid_w = domain.cycle(wire_of(s0_fire), name=f"{prefix}_xc_s1_v")
+    s1_pc_w = domain.cycle(wire_of(fetch_pc), name=f"{prefix}_xc_s1_pc")
 
     domain.next()
 
     # Cycle 1: ICache fetch (simplified hit model using L2 refill)
-    s1_valid = s1_valid_w & (~redirect_valid.wire)
-    s1_resp_valid = s1_valid & l2_refill_valid.wire
-    s1_miss = s1_valid & (~l2_refill_valid.wire)
+    s1_valid = s1_valid_w & (~wire_of(redirect_valid))
+    s1_resp_valid = s1_valid & wire_of(l2_refill_valid)
+    s1_miss = s1_valid & (~wire_of(l2_refill_valid))
 
     m.output(f"{prefix}_l2_icache_miss_valid", s1_miss)
     _out["l2_icache_miss_valid"] = cas(domain, s1_miss, cycle=domain.cycle_index)
@@ -201,12 +187,12 @@ def build_xs_core(
 
     s2_valid_w = domain.cycle(s1_resp_valid, name=f"{prefix}_xc_s2_v")
     s2_pc_w = domain.cycle(s1_pc_w, name=f"{prefix}_xc_s2_pc")
-    s2_data_w = domain.cycle(l2_refill_data.wire, name=f"{prefix}_xc_s2_data")
+    s2_data_w = domain.cycle(wire_of(l2_refill_data), name=f"{prefix}_xc_s2_data")
 
     domain.next()
 
     # Cycle 2: IFU instruction extraction
-    s2_valid = s2_valid_w & (~redirect_valid.wire)
+    s2_valid = s2_valid_w & (~wire_of(redirect_valid))
 
     INST_WIDTH = 32
     ifu_insts = []
@@ -226,7 +212,7 @@ def build_xs_core(
     domain.next()
 
     # Cycle 3: Decode → Backend dispatch
-    s3_valid = s3_valid_w & (~redirect_valid.wire)
+    s3_valid = s3_valid_w & (~wire_of(redirect_valid))
 
     # ================================================================
     # Backend: dispatch classification + redirect
@@ -266,7 +252,7 @@ def build_xs_core(
 
     # Interrupt aggregation → treat as exception
     any_interrupt = meip | seip | mtip | msip | debug_intr
-    m.output(f"{prefix}_interrupt_pending", any_interrupt.wire)
+    m.output(f"{prefix}_interrupt_pending", wire_of(any_interrupt))
     _out["interrupt_pending"] = any_interrupt
 
     # FU type classification
@@ -281,19 +267,19 @@ def build_xs_core(
     dec_fu_type = [cas(domain, m.const(0, width=fu_type_w), cycle=0)
                    for _ in range(decode_width)]
 
-    # Dispatch stall check — use .wire on cycle-0 signals in cycle-3 context
-    any_blocked = ZERO_1.wire
+    # Dispatch stall check — use wire_of() on cycle-0 signals in cycle-3 context
+    any_blocked = wire_of(ZERO_1)
     for i in range(decode_width):
-        is_fp = dec_fu_type[i].wire == FU_FPU_C.wire
-        is_mem = (dec_fu_type[i].wire == FU_LDU_C.wire) | (dec_fu_type[i].wire == FU_STU_C.wire)
+        is_fp = wire_of(dec_fu_type[i]) == wire_of(FU_FPU_C)
+        is_mem = (wire_of(dec_fu_type[i]) == wire_of(FU_LDU_C)) | (wire_of(dec_fu_type[i]) == wire_of(FU_STU_C))
         is_int = (~is_fp) & (~is_mem)
-        slot_ready = is_int.select(iq_int_ready.wire, ZERO_1.wire)
-        slot_ready = is_fp.select(iq_fp_ready.wire, slot_ready)
-        slot_ready = is_mem.select(iq_mem_ready.wire, slot_ready)
+        slot_ready = is_int.select(wire_of(iq_int_ready), wire_of(ZERO_1))
+        slot_ready = is_fp.select(wire_of(iq_fp_ready), slot_ready)
+        slot_ready = is_mem.select(wire_of(iq_mem_ready), slot_ready)
         blocked = s3_valid & (~slot_ready)
         any_blocked = any_blocked | blocked
 
-    pipeline_stall = any_blocked | new_redir_valid.wire
+    pipeline_stall = any_blocked | wire_of(new_redir_valid)
 
     # ================================================================
     # Decoded uop outputs (Frontend → Backend path)
@@ -312,10 +298,10 @@ def build_xs_core(
     # ================================================================
 
     for i in range(decode_width):
-        is_mem = (dec_fu_type[i].wire == FU_LDU_C.wire) | (dec_fu_type[i].wire == FU_STU_C.wire)
+        is_mem = (wire_of(dec_fu_type[i]) == wire_of(FU_LDU_C)) | (wire_of(dec_fu_type[i]) == wire_of(FU_STU_C))
         slot_valid = s3_valid & (~pipeline_stall) & is_mem
         m.output(f"{prefix}_mem_dp_valid_{i}", slot_valid)
-        m.output(f"{prefix}_mem_dp_fu_type_{i}", dec_fu_type[i].wire)
+        m.output(f"{prefix}_mem_dp_fu_type_{i}", wire_of(dec_fu_type[i]))
 
     # ================================================================
     # MemBlock → Backend: load/store writeback
@@ -326,16 +312,16 @@ def build_xs_core(
         ld_wb_v = cas(domain, m.input(f"{prefix}_ld{i}_wb_valid", width=1), cycle=0)
         ld_wb_d = cas(domain, m.input(f"{prefix}_ld{i}_wb_data", width=data_width), cycle=0)
         ld_wb_r = cas(domain, m.input(f"{prefix}_ld{i}_wb_rob_idx", width=rob_idx_w), cycle=0)
-        m.output(f"{prefix}_ld{i}_wb_valid_out", ld_wb_v.wire)
-        m.output(f"{prefix}_ld{i}_wb_data_out", ld_wb_d.wire)
-        m.output(f"{prefix}_ld{i}_wb_rob_idx_out", ld_wb_r.wire)
+        m.output(f"{prefix}_ld{i}_wb_valid_out", wire_of(ld_wb_v))
+        m.output(f"{prefix}_ld{i}_wb_data_out", wire_of(ld_wb_d))
+        m.output(f"{prefix}_ld{i}_wb_rob_idx_out", wire_of(ld_wb_r))
 
     # Store completion from MemBlock
     for i in range(num_store):
         st_wb_v = cas(domain, m.input(f"{prefix}_st{i}_wb_valid", width=1), cycle=0)
         st_wb_r = cas(domain, m.input(f"{prefix}_st{i}_wb_rob_idx", width=rob_idx_w), cycle=0)
-        m.output(f"{prefix}_st{i}_wb_valid_out", st_wb_v.wire)
-        m.output(f"{prefix}_st{i}_wb_rob_idx_out", st_wb_r.wire)
+        m.output(f"{prefix}_st{i}_wb_valid_out", wire_of(st_wb_v))
+        m.output(f"{prefix}_st{i}_wb_rob_idx_out", wire_of(st_wb_r))
 
     # ================================================================
     # L2 cache interface: DCache miss path
@@ -347,22 +333,22 @@ def build_xs_core(
     dcache_miss_addr = (_in["dcache_miss_addr"] if "dcache_miss_addr" in _in else
         cas(domain, m.input(f"{prefix}_dcache_miss_addr", width=pc_width), cycle=0))
 
-    m.output(f"{prefix}_l2_dcache_miss_valid", dcache_miss_valid.wire)
+    m.output(f"{prefix}_l2_dcache_miss_valid", wire_of(dcache_miss_valid))
     _out["l2_dcache_miss_valid"] = dcache_miss_valid
-    m.output(f"{prefix}_l2_dcache_miss_addr", dcache_miss_addr.wire)
+    m.output(f"{prefix}_l2_dcache_miss_addr", wire_of(dcache_miss_addr))
     _out["l2_dcache_miss_addr"] = dcache_miss_addr
-    m.output(f"{prefix}_l2_data_resp_valid_out", l2_data_resp_valid.wire)
+    m.output(f"{prefix}_l2_data_resp_valid_out", wire_of(l2_data_resp_valid))
     _out["l2_data_resp_valid_out"] = l2_data_resp_valid
-    m.output(f"{prefix}_l2_data_resp_data_out", l2_data_resp_data.wire)
+    m.output(f"{prefix}_l2_data_resp_data_out", wire_of(l2_data_resp_data))
     _out["l2_data_resp_data_out"] = l2_data_resp_data
 
     # ================================================================
     # Redirect / stall outputs
     # ================================================================
 
-    m.output(f"{prefix}_redirect_valid", new_redir_valid.wire)
+    m.output(f"{prefix}_redirect_valid", wire_of(new_redir_valid))
     _out["redirect_valid"] = new_redir_valid
-    m.output(f"{prefix}_redirect_target", new_redir_target.wire)
+    m.output(f"{prefix}_redirect_target", wire_of(new_redir_target))
     _out["redirect_target"] = new_redir_target
     m.output(f"{prefix}_stall_to_frontend", pipeline_stall)
     _out["stall_to_frontend"] = cas(domain, pipeline_stall, cycle=domain.cycle_index)
@@ -370,11 +356,11 @@ def build_xs_core(
     # Writeback forwarding
     wb_cnt_w = max(1, num_wb.bit_length()) if isinstance(num_wb, int) and num_wb > 0 else 3
     for i in range(num_wb):
-        m.output(f"{prefix}_rob_wb_valid_{i}", wb_valid[i].wire)
-        m.output(f"{prefix}_rob_wb_rob_idx_{i}", wb_rob_idx[i].wire)
+        m.output(f"{prefix}_rob_wb_valid_{i}", wire_of(wb_valid[i]))
+        m.output(f"{prefix}_rob_wb_rob_idx_{i}", wire_of(wb_rob_idx[i]))
 
     # Debug port
-    m.output(f"{prefix}_debug_pc", fetch_pc.wire)
+    m.output(f"{prefix}_debug_pc", wire_of(fetch_pc))
     _out["debug_pc"] = fetch_pc
 
     # ================================================================
@@ -383,20 +369,20 @@ def build_xs_core(
 
     domain.next()
 
-    bpu_valid_r.set(ONE_1)
-    fetch_pc_r.set(next_pc)
-    redirect_valid_r.set(new_redir_valid)
-    redirect_target_r.set(new_redir_target)
-    be_stall_r.set(pipeline_stall)
+    bpu_valid <<= ONE_1
+    fetch_pc <<= next_pc
+    redirect_valid <<= new_redir_valid
+    redirect_target <<= new_redir_target
+    be_stall <<= pipeline_stall
     return _out
 
 
-build_xs_core.__pycircuit_name__ = "xs_core"
+xs_core.__pycircuit_name__ = "xs_core"
 
 
 if __name__ == "__main__":
     print(compile_cycle_aware(
-        build_xs_core, name="xs_core", eager=True,
+        xs_core, name="xs_core", eager=True,
         decode_width=2, commit_width=2, num_wb=2,
         num_load=1, num_store=1,
         data_width=16, pc_width=16,

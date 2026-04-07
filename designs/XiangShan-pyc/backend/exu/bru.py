@@ -39,6 +39,7 @@ from pycircuit import (
     compile_cycle_aware,
     mux,
     u,
+    wire_of,
 )
 
 from top.parameters import XLEN, PC_WIDTH
@@ -55,7 +56,7 @@ OP_JAL  = 0b0110
 OP_JALR = 0b0111
 
 
-def build_bru(
+def bru(
     m: CycleAwareCircuit,
     domain: CycleAwareDomain,
     *,
@@ -102,7 +103,7 @@ def build_bru(
     ne = ~eq
 
     # Subtraction for signed/unsigned comparison
-    sub = cas(domain, (src1.wire - src2.wire)[0:data_width], cycle=0)
+    sub = cas(domain, (wire_of(src1) - wire_of(src2))[0:data_width], cycle=0)
     sub_sign = sub[data_width - 1:data_width]
 
     # Signed less-than: check sign bits and subtraction sign
@@ -113,7 +114,7 @@ def build_bru(
 
     # Unsigned less-than: extended subtraction borrow
     ext_sub = cas(domain,
-                  (src1.wire + u(ext_w, 0) - src2.wire - u(ext_w, 0))[0:ext_w],
+                  (wire_of(src1) + u(ext_w, 0) - wire_of(src2) - u(ext_w, 0))[0:ext_w],
                   cycle=0)
     lt_unsigned = ext_sub[data_width:data_width + 1]
 
@@ -133,11 +134,11 @@ def build_bru(
 
     # ── Target address computation ───────────────────────────────
     # Branch/JAL: target = PC + imm
-    pc_ext = cas(domain, (pc.wire + u(data_width, 0))[0:data_width], cycle=0)
-    branch_target = cas(domain, (pc_ext.wire + imm.wire)[0:pc_width], cycle=0)
+    pc_ext = cas(domain, (wire_of(pc) + u(data_width, 0))[0:data_width], cycle=0)
+    branch_target = cas(domain, (wire_of(pc_ext) + wire_of(imm))[0:pc_width], cycle=0)
 
     # JALR: target = (src1 + imm) & ~1
-    jalr_raw = cas(domain, (src1.wire + imm.wire)[0:pc_width], cycle=0)
+    jalr_raw = cas(domain, (wire_of(src1) + wire_of(imm))[0:pc_width], cycle=0)
     mask = cas(domain, m.const((1 << pc_width) - 2, width=pc_width), cycle=0)
     jalr_target = jalr_raw & mask
 
@@ -146,7 +147,7 @@ def build_bru(
 
     # ── Link address (PC + 4 for JAL/JALR) ──────────────────────
     four_pc = cas(domain, m.const(4, width=pc_width), cycle=0)
-    link_addr = cas(domain, (pc.wire + four_pc.wire)[0:pc_width], cycle=0)
+    link_addr = cas(domain, (wire_of(pc) + wire_of(four_pc))[0:pc_width], cycle=0)
 
     is_jal = bru_op == _op(OP_JAL)
     is_link = is_jal | is_jalr
@@ -156,28 +157,28 @@ def build_bru(
     redirect_valid = in_valid & mispredict
 
     # ── Outputs ──────────────────────────────────────────────────
-    m.output(f"{prefix}_taken", taken.wire)
+    m.output(f"{prefix}_taken", wire_of(taken))
     _out["taken"] = taken
-    m.output(f"{prefix}_target", target.wire)
+    m.output(f"{prefix}_target", wire_of(target))
     _out["target"] = target
-    m.output(f"{prefix}_redirect_valid", redirect_valid.wire)
+    m.output(f"{prefix}_redirect_valid", wire_of(redirect_valid))
     _out["redirect_valid"] = redirect_valid
-    m.output(f"{prefix}_redirect_target", target.wire)
+    m.output(f"{prefix}_redirect_target", wire_of(target))
     _out["redirect_target"] = target
-    m.output(f"{prefix}_link_addr", link_addr.wire)
+    m.output(f"{prefix}_link_addr", wire_of(link_addr))
     _out["link_addr"] = link_addr
-    m.output(f"{prefix}_is_link", is_link.wire)
+    m.output(f"{prefix}_is_link", wire_of(is_link))
     _out["is_link"] = is_link
-    m.output(f"{prefix}_mispredict", mispredict.wire)
+    m.output(f"{prefix}_mispredict", wire_of(mispredict))
     _out["mispredict"] = mispredict
     return _out
 
 
-build_bru.__pycircuit_name__ = "bru"
+bru.__pycircuit_name__ = "bru"
 
 
 if __name__ == "__main__":
     print(compile_cycle_aware(
-        build_bru, name="bru", eager=True,
+        bru, name="bru", eager=True,
         data_width=64, pc_width=39,
     ).emit_mlir())

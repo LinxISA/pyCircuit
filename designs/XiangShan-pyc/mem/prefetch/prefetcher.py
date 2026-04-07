@@ -30,6 +30,7 @@ from pycircuit import (
     compile_cycle_aware,
     mux,
     u,
+    wire_of,
 )
 from top.parameters import *
 
@@ -41,7 +42,7 @@ STRIDE_WIDTH = 12
 PREFETCH_PC_TAG_WIDTH = 12
 
 
-def build_prefetcher(
+def prefetcher(
     m: CycleAwareCircuit,
     domain: CycleAwareDomain,
     *,
@@ -77,14 +78,13 @@ def build_prefetcher(
 
     # ── Table storage ─────────────────────────────────────────────────
 
-    e_valid = [domain.state(width=1, reset_value=0, name=f"{prefix}_pf_v_{i}") for i in range(table_size)]
-    e_pc_tag = [domain.state(width=pc_tag_width, reset_value=0, name=f"{prefix}_pf_pc_{i}") for i in range(table_size)]
-    e_last_addr = [domain.state(width=addr_width, reset_value=0, name=f"{prefix}_pf_la_{i}") for i in range(table_size)]
-    e_stride = [domain.state(width=stride_width, reset_value=0, name=f"{prefix}_pf_st_{i}") for i in range(table_size)]
-    e_conf = [domain.state(width=conf_width, reset_value=0, name=f"{prefix}_pf_cf_{i}") for i in range(table_size)]
+    e_valid = [domain.signal(width=1, reset_value=0, name=f"{prefix}_pf_v_{i}") for i in range(table_size)]
+    e_pc_tag = [domain.signal(width=pc_tag_width, reset_value=0, name=f"{prefix}_pf_pc_{i}") for i in range(table_size)]
+    e_last_addr = [domain.signal(width=addr_width, reset_value=0, name=f"{prefix}_pf_la_{i}") for i in range(table_size)]
+    e_stride = [domain.signal(width=stride_width, reset_value=0, name=f"{prefix}_pf_st_{i}") for i in range(table_size)]
+    e_conf = [domain.signal(width=conf_width, reset_value=0, name=f"{prefix}_pf_cf_{i}") for i in range(table_size)]
 
-    repl_ptr_r = domain.state(width=idx_w, reset_value=0, name=f"{prefix}_pf_rptr")
-    repl_ptr = cas(domain, repl_ptr_r.wire, cycle=0)
+    repl_ptr = domain.signal(width=idx_w, reset_value=0, name=f"{prefix}_pf_rptr")
 
     # ── Lookup: find matching PC tag ────────────────────────────────
 
@@ -97,28 +97,28 @@ def build_prefetcher(
     tbl_conf = cas(domain, m.const(0, width=conf_width), cycle=0)
 
     for j in range(table_size):
-        ev = cas(domain, e_valid[j].wire, cycle=0)
-        ept = cas(domain, e_pc_tag[j].wire, cycle=0)
+        ev = e_valid[j]
+        ept = e_pc_tag[j]
         tag_eq = ept == lookup_tag
         hit = train_valid & ev & tag_eq
         tbl_hit = mux(hit, one1, tbl_hit)
         tbl_idx = mux(hit, cas(domain, m.const(j, width=idx_w), cycle=0), tbl_idx)
-        tbl_last_addr = mux(hit, cas(domain, e_last_addr[j].wire, cycle=0), tbl_last_addr)
-        tbl_stride = mux(hit, cas(domain, e_stride[j].wire, cycle=0), tbl_stride)
-        tbl_conf = mux(hit, cas(domain, e_conf[j].wire, cycle=0), tbl_conf)
+        tbl_last_addr = mux(hit, e_last_addr[j], tbl_last_addr)
+        tbl_stride = mux(hit, e_stride[j], tbl_stride)
+        tbl_conf = mux(hit, e_conf[j], tbl_conf)
 
     # Compute new stride from address difference
-    new_stride = cas(domain, (train_addr.wire - tbl_last_addr.wire)[0:stride_width], cycle=0)
+    new_stride = cas(domain, (wire_of(train_addr) - wire_of(tbl_last_addr))[0:stride_width], cycle=0)
     stride_match = new_stride == tbl_stride
 
     # Prefetch output: if confidence above threshold, issue prefetch
     conf_above = tbl_conf == cas(domain, m.const(conf_max, width=conf_width), cycle=0)
-    pf_addr = cas(domain, (train_addr.wire + tbl_stride.wire)[0:addr_width], cycle=0)
+    pf_addr = cas(domain, (wire_of(train_addr) + wire_of(tbl_stride))[0:addr_width], cycle=0)
     pf_valid = train_valid & tbl_hit & conf_above
 
-    m.output(f"{prefix}_pf_valid", pf_valid.wire)
+    m.output(f"{prefix}_pf_valid", wire_of(pf_valid))
     _out["pf_valid"] = pf_valid
-    m.output(f"{prefix}_pf_addr", pf_addr.wire)
+    m.output(f"{prefix}_pf_addr", wire_of(pf_addr))
     _out["pf_addr"] = pf_addr
 
     # ── domain.next() → Cycle 1: table update ───────────────────────
@@ -126,10 +126,10 @@ def build_prefetcher(
 
     for j in range(table_size):
         j_const = cas(domain, m.const(j, width=idx_w), cycle=0)
-        old_v = cas(domain, e_valid[j].wire, cycle=0)
-        old_la = cas(domain, e_last_addr[j].wire, cycle=0)
-        old_st = cas(domain, e_stride[j].wire, cycle=0)
-        old_cf = cas(domain, e_conf[j].wire, cycle=0)
+        old_v = e_valid[j]
+        old_la = e_last_addr[j]
+        old_st = e_stride[j]
+        old_cf = e_conf[j]
 
         is_hit_entry = tbl_hit & (tbl_idx == j_const)
         we_hit = train_valid & is_hit_entry
@@ -137,37 +137,37 @@ def build_prefetcher(
         # Stride match → increment confidence; mismatch → reset
         cf_inc = mux(old_cf == cas(domain, m.const(conf_max, width=conf_width), cycle=0),
                       old_cf,
-                      cas(domain, (old_cf.wire + u(conf_width, 1))[0:conf_width], cycle=0))
+                      cas(domain, (wire_of(old_cf) + u(conf_width, 1))[0:conf_width], cycle=0))
         new_cf = mux(stride_match, cf_inc, cas(domain, m.const(0, width=conf_width), cycle=0))
         new_st_val = mux(stride_match, old_st, new_stride)
 
-        e_last_addr[j].set(mux(we_hit, train_addr, old_la), when=we_hit)
-        e_stride[j].set(mux(we_hit, new_st_val, old_st), when=we_hit)
-        e_conf[j].set(mux(we_hit, new_cf, old_cf), when=we_hit)
+        e_last_addr[j].assign(mux(we_hit, train_addr, old_la), when=we_hit)
+        e_stride[j].assign(mux(we_hit, new_st_val, old_st), when=we_hit)
+        e_conf[j].assign(mux(we_hit, new_cf, old_cf), when=we_hit)
 
         # Allocation on miss: use round-robin pointer
         is_victim = (~tbl_hit) & (repl_ptr == j_const)
         we_alloc = train_valid & is_victim
-        e_valid[j].set(mux(we_alloc, one1, old_v), when=we_alloc)
-        e_pc_tag[j].set(mux(we_alloc, lookup_tag, cas(domain, e_pc_tag[j].wire, cycle=0)), when=we_alloc)
-        e_last_addr[j].set(mux(we_alloc, train_addr, old_la), when=we_alloc)
-        e_stride[j].set(mux(we_alloc, cas(domain, m.const(0, width=stride_width), cycle=0), old_st), when=we_alloc)
-        e_conf[j].set(mux(we_alloc, cas(domain, m.const(0, width=conf_width), cycle=0), old_cf), when=we_alloc)
+        e_valid[j].assign(mux(we_alloc, one1, old_v), when=we_alloc)
+        e_pc_tag[j].assign(mux(we_alloc, lookup_tag, e_pc_tag[j]), when=we_alloc)
+        e_last_addr[j].assign(mux(we_alloc, train_addr, old_la), when=we_alloc)
+        e_stride[j].assign(mux(we_alloc, cas(domain, m.const(0, width=stride_width), cycle=0), old_st), when=we_alloc)
+        e_conf[j].assign(mux(we_alloc, cas(domain, m.const(0, width=conf_width), cycle=0), old_cf), when=we_alloc)
 
     # Advance replacement pointer on miss
     at_limit = repl_ptr == cas(domain, m.const(table_size - 1, width=idx_w), cycle=0)
     next_ptr = mux(at_limit,
                    cas(domain, m.const(0, width=idx_w), cycle=0),
-                   cas(domain, (repl_ptr.wire + u(idx_w, 1))[0:idx_w], cycle=0))
-    repl_ptr_r.set(mux(train_valid & (~tbl_hit), next_ptr, repl_ptr))
+                   cas(domain, (wire_of(repl_ptr) + u(idx_w, 1))[0:idx_w], cycle=0))
+    repl_ptr <<= mux(train_valid & (~tbl_hit), next_ptr, repl_ptr)
     return _out
 
 
-build_prefetcher.__pycircuit_name__ = "prefetcher"
+prefetcher.__pycircuit_name__ = "prefetcher"
 
 
 if __name__ == "__main__":
     print(compile_cycle_aware(
-        build_prefetcher, name="prefetcher", eager=True,
+        prefetcher, name="prefetcher", eager=True,
         table_size=4, addr_width=36,
     ).emit_mlir())

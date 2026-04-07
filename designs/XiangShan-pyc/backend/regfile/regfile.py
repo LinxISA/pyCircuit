@@ -30,6 +30,7 @@ from pycircuit import (
     compile_cycle_aware,
     mux,
     u,
+    wire_of,
 )
 
 from top.parameters import (
@@ -42,7 +43,7 @@ NUM_READ_PORTS = 14
 NUM_WRITE_PORTS = 8
 
 
-def build_regfile(
+def regfile(
     m: CycleAwareCircuit,
     domain: CycleAwareDomain,
     *,
@@ -73,7 +74,7 @@ def build_regfile(
                for i in range(num_write)]
 
     # ── State: register entries ──────────────────────────────────
-    regs = [domain.state(width=data_width, reset_value=0, name=f"{prefix}_r{i}")
+    regs = [domain.signal(width=data_width, reset_value=0, name=f"{prefix}_r{i}")
             for i in range(num_entries)]
 
     # ── Cycle 0: Combinational read ──────────────────────────────
@@ -85,7 +86,8 @@ def build_regfile(
         # r0 always reads zero
         is_r0 = rd_addr[p] == cas(domain, m.const(0, width=addr_width), cycle=0)
         rd_val = mux(is_r0, ZERO_DATA, rd_val)
-        m.output(f"{prefix}_rd_data_{p}", rd_val.wire)
+        m.output(f"{prefix}_rd_data_{p}", wire_of(rd_val))
+        _out[f"rd_data_{p}"] = rd_val
 
     # ── Cycle 1: Synchronous write ───────────────────────────────
     domain.next()
@@ -99,16 +101,16 @@ def build_regfile(
         for j in range(num_entries):
             hit = wr_addr[w] == cas(domain, m.const(j, width=addr_width), cycle=0)
             we = do_write & hit
-            regs[j].set(wr_data[w], when=we)
+            regs[j].assign(wr_data[w], when=we)
     return _out
 
 
-build_regfile.__pycircuit_name__ = "regfile"
+regfile.__pycircuit_name__ = "regfile"
 
 
 if __name__ == "__main__":
     print(compile_cycle_aware(
-        build_regfile, name="regfile", eager=True,
+        regfile, name="regfile", eager=True,
         num_entries=8, num_read=2, num_write=2,
         data_width=16, addr_width=3,
     ).emit_mlir())

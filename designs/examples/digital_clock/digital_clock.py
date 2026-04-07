@@ -1,6 +1,13 @@
 from __future__ import annotations
 
-from pycircuit import Circuit, cat, compile_cycle_aware, CycleAwareCircuit, CycleAwareDomain, function, module, u
+from pycircuit import (
+    CycleAwareCircuit,
+    CycleAwareDomain,
+    cas,
+    compile_cycle_aware,
+    mux,
+    wire_of,
+)
 
 MODE_RUN = 0
 MODE_SET_HOUR = 1
@@ -8,81 +15,93 @@ MODE_SET_MIN = 2
 MODE_SET_SEC = 3
 
 
-@function
-def _to_bcd8(m: Circuit, v):
-    ones = v % u(v.width, 10)
-    tens = v // u(v.width, 10)
-    return cat(tens[0:4], ones[0:4])
+def _to_bcd8(m: CycleAwareCircuit, domain: CycleAwareDomain, v, width: int):
+    vw = wire_of(v)
+    ten = m.const(10, width=width)
+    ones_w = vw % ten
+    tens_w = vw // ten
+    return cas(domain, m.cat(tens_w[0:4], ones_w[0:4]), cycle=v.cycle)
 
 
 def build(m: CycleAwareCircuit, domain: CycleAwareDomain, clk_freq: int = 50_000_000) -> None:
-    cd = domain.clock_domain
-    clk = cd.clk
-    rst = cd.rst
-    btn_set = m.input("btn_set", width=1)
-    btn_plus = m.input("btn_plus", width=1)
-    btn_minus = m.input("btn_minus", width=1)
-
     prescaler_w = max((int(clk_freq) - 1).bit_length(), 1)
-    prescaler = m.out("prescaler", domain=cd, width=prescaler_w, init=u(prescaler_w, 0))
-    sec = m.out("sec", domain=cd, width=6, init=u(6, 0))
-    minute = m.out("minute", domain=cd, width=6, init=u(6, 0))
-    hour = m.out("hour", domain=cd, width=5, init=u(5, 0))
-    mode = m.out("mode", domain=cd, width=2, init=u(2, MODE_RUN))
-    blink = m.out("blink", domain=cd, width=1, init=u(1, 0))
 
-    tick_1hz = prescaler == u(prescaler_w, clk_freq - 1)
+    prescaler = domain.signal(width=prescaler_w, reset_value=0, name="prescaler")
+    sec = domain.signal(width=6, reset_value=0, name="sec")
+    minute = domain.signal(width=6, reset_value=0, name="minute")
+    hour = domain.signal(width=5, reset_value=0, name="hour")
+    mode = domain.signal(width=2, reset_value=MODE_RUN, name="mode")
+    blink = domain.signal(width=1, reset_value=0, name="blink")
 
-    prescaler_n = u(prescaler_w, 0) if tick_1hz else prescaler + 1
-    sec_n = sec.out()
-    min_n = minute.out()
-    hour_n = hour.out()
+    btn_set = cas(domain, m.input("btn_set", width=1), cycle=0)
+    btn_plus = cas(domain, m.input("btn_plus", width=1), cycle=0)
+    btn_minus = cas(domain, m.input("btn_minus", width=1), cycle=0)
 
-    is_run = mode == u(2, MODE_RUN)
-    is_set_hour = mode == u(2, MODE_SET_HOUR)
-    is_set_min = mode == u(2, MODE_SET_MIN)
-    is_set_sec = mode == u(2, MODE_SET_SEC)
+    clk_max = cas(domain, m.const(clk_freq - 1, width=prescaler_w), cycle=0)
+    zero_p = cas(domain, m.const(0, width=prescaler_w), cycle=0)
+    one_p = cas(domain, m.const(1, width=prescaler_w), cycle=0)
+    zero6 = cas(domain, m.const(0, width=6), cycle=0)
+    one6 = cas(domain, m.const(1, width=6), cycle=0)
+    fifty_nine6 = cas(domain, m.const(59, width=6), cycle=0)
+    zero5 = cas(domain, m.const(0, width=5), cycle=0)
+    one5 = cas(domain, m.const(1, width=5), cycle=0)
+    twenty_three5 = cas(domain, m.const(23, width=5), cycle=0)
 
-    if tick_1hz & is_run:
-        sec_n = sec + 1
-        if sec == u(6, 59):
-            sec_n = u(6, 0)
-            min_n = minute + 1
-            if minute == u(6, 59):
-                min_n = u(6, 0)
-                hour_n = hour + 1
-                if hour == u(5, 23):
-                    hour_n = u(5, 0)
+    mode_run_2 = cas(domain, m.const(MODE_RUN, width=2), cycle=0)
+    mode_set_hour_2 = cas(domain, m.const(MODE_SET_HOUR, width=2), cycle=0)
+    mode_set_min_2 = cas(domain, m.const(MODE_SET_MIN, width=2), cycle=0)
+    mode_set_sec_2 = cas(domain, m.const(MODE_SET_SEC, width=2), cycle=0)
+    one2 = cas(domain, m.const(1, width=2), cycle=0)
 
-    mode_n = mode + 1
-    mode_n = u(2, MODE_RUN) if mode == u(2, MODE_SET_SEC) else mode_n
-    mode.set(mode_n, when=btn_set)
+    tick_1hz = prescaler == clk_max
+    prescaler_n = mux(tick_1hz, zero_p, prescaler + one_p)
 
-    if btn_plus:
-        hour_n = u(5, 0) if (is_set_hour & (hour == u(5, 23))) else (hour + 1 if is_set_hour else hour_n)
-        min_n = u(6, 0) if (is_set_min & (minute == u(6, 59))) else (minute + 1 if is_set_min else min_n)
-        sec_n = u(6, 0) if (is_set_sec & (sec == u(6, 59))) else (sec + 1 if is_set_sec else sec_n)
+    is_run = mode == mode_run_2
+    is_set_hour = mode == mode_set_hour_2
+    is_set_min = mode == mode_set_min_2
+    is_set_sec = mode == mode_set_sec_2
 
-    if btn_minus:
-        hour_n = u(5, 23) if (is_set_hour & (hour == u(5, 0))) else (hour - 1 if is_set_hour else hour_n)
-        min_n = u(6, 59) if (is_set_min & (minute == u(6, 0))) else (minute - 1 if is_set_min else min_n)
-        sec_n = u(6, 59) if (is_set_sec & (sec == u(6, 0))) else (sec - 1 if is_set_sec else sec_n)
+    sec_wrap = sec == fifty_nine6
+    min_wrap = minute == fifty_nine6
+    hr_wrap = hour == twenty_three5
 
-    prescaler.set(prescaler_n)
-    sec.set(sec_n)
-    minute.set(min_n)
-    hour.set(hour_n)
-    blink.set(~blink, when=tick_1hz)
+    sec_next_run = mux(sec_wrap, zero6, sec + one6)
+    min_next_run = mux(sec_wrap, mux(min_wrap, zero6, minute + one6), minute)
+    hr_next_run = mux(sec_wrap & min_wrap, mux(hr_wrap, zero5, hour + one5), hour)
 
-    m.output("hours_bcd", _to_bcd8(m, hour.out()))
-    m.output("minutes_bcd", _to_bcd8(m, minute.out()))
-    m.output("seconds_bcd", _to_bcd8(m, sec.out()))
-    m.output("setting_mode", mode)
-    m.output("colon_blink", blink)
+    tick_run = tick_1hz & is_run
+    sec_n_tick = mux(tick_run, sec_next_run, sec)
+    min_n_tick = mux(tick_run, min_next_run, minute)
+    hr_n_tick = mux(tick_run, hr_next_run, hour)
+
+    mode_next = mux(mode == mode_set_sec_2, mode_run_2, mode + one2)
+
+    hour_p = mux(btn_plus & is_set_hour, mux(hour == twenty_three5, zero5, hour + one5), hr_n_tick)
+    min_p = mux(btn_plus & is_set_min, mux(minute == fifty_nine6, zero6, minute + one6), min_n_tick)
+    sec_p = mux(btn_plus & is_set_sec, mux(sec == fifty_nine6, zero6, sec + one6), sec_n_tick)
+
+    hour_n = mux(btn_minus & is_set_hour, mux(hour == zero5, twenty_three5, hour - one5), hour_p)
+    min_n = mux(btn_minus & is_set_min, mux(minute == zero6, fifty_nine6, minute - one6), min_p)
+    sec_n = mux(btn_minus & is_set_sec, mux(sec == zero6, fifty_nine6, sec - one6), sec_p)
+
+    m.output("hours_bcd", wire_of(_to_bcd8(m, domain, hour, 5)))
+    m.output("minutes_bcd", wire_of(_to_bcd8(m, domain, minute, 6)))
+    m.output("seconds_bcd", wire_of(_to_bcd8(m, domain, sec, 6)))
+    m.output("setting_mode", wire_of(mode))
+    m.output("colon_blink", wire_of(blink))
+
+    domain.next()
+
+    prescaler <<= prescaler_n
+    sec <<= sec_n
+    minute <<= min_n
+    hour <<= hour_n
+    mode.assign(mode_next, when=btn_set)
+    blink.assign(~blink, when=tick_1hz)
 
 
 build.__pycircuit_name__ = "digital_clock"
 
 
 if __name__ == "__main__":
-    print(compile_cycle_aware(build, name="digital_clock", clk_freq=50_000_000).emit_mlir())
+    print(compile_cycle_aware(build, name="digital_clock", clk_freq=50_000_000, eager=True).emit_mlir())

@@ -34,6 +34,7 @@ from pycircuit import (
     compile_cycle_aware,
     mux,
     u,
+    wire_of,
 )
 
 from top.parameters import XLEN
@@ -46,7 +47,7 @@ OP_MULHU  = 0b10
 OP_MULHSU = 0b11
 
 
-def build_mul(
+def mul(
     m: CycleAwareCircuit,
     domain: CycleAwareDomain,
     *,
@@ -82,9 +83,9 @@ def build_mul(
     # For MUL (lower half), signed and unsigned produce identical lower bits.
     # For MULH/MULHU/MULHSU we use the unsigned product as a simplified model;
     # a full implementation would add sign-correction terms.
-    src1_wide = cas(domain, (src1.wire + u(double_w, 0))[0:double_w], cycle=0)
-    src2_wide = cas(domain, (src2.wire + u(double_w, 0))[0:double_w], cycle=0)
-    prod_uu = cas(domain, (src1_wide.wire * src2_wide.wire)[0:double_w], cycle=0)
+    src1_wide = cas(domain, (wire_of(src1) + u(double_w, 0))[0:double_w], cycle=0)
+    src2_wide = cas(domain, (wire_of(src2) + u(double_w, 0))[0:double_w], cycle=0)
+    prod_uu = cas(domain, (wire_of(src1_wide) * wire_of(src2_wide))[0:double_w], cycle=0)
 
     prod_lo = prod_uu[0:data_width]
     prod_hi = prod_uu[data_width:double_w]
@@ -96,8 +97,8 @@ def build_mul(
     result_c0 = mux(mul_op == _op(OP_MULHSU), prod_hi, result_c0)
 
     # ── Pipeline register: cycle 0 → cycle 1 ────────────────────
-    out_valid_w = domain.cycle(in_valid.wire, name=f"{prefix}_mul_out_v")
-    out_result_w = domain.cycle(result_c0.wire, name=f"{prefix}_mul_out_r")
+    out_valid_w = domain.cycle(wire_of(in_valid), name=f"{prefix}_mul_out_v")
+    out_result_w = domain.cycle(wire_of(result_c0), name=f"{prefix}_mul_out_r")
 
     domain.next()
 
@@ -109,11 +110,11 @@ def build_mul(
     return _out
 
 
-build_mul.__pycircuit_name__ = "mul"
+mul.__pycircuit_name__ = "mul"
 
 
 if __name__ == "__main__":
     print(compile_cycle_aware(
-        build_mul, name="mul", eager=True,
+        mul, name="mul", eager=True,
         data_width=16,
     ).emit_mlir())

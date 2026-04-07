@@ -33,6 +33,7 @@ from pycircuit import (
     compile_cycle_aware,
     mux,
     u,
+    wire_of,
 )
 
 from top.parameters import (
@@ -49,12 +50,7 @@ from top.parameters import (
 ATTR_WIDTH = BRANCH_TYPE_WIDTH + RAS_ACTION_WIDTH
 
 
-def _r(domain, state_reg):
-    """Read a state register as a CAS signal at the current cycle."""
-    return cas(domain, state_reg.wire, cycle=0)
-
-
-def build_ubtb(
+def ubtb(
     m: CycleAwareCircuit,
     domain: CycleAwareDomain,
     *,
@@ -111,20 +107,12 @@ def build_ubtb(
     s0_tag = s0_pc[1 : 1 + tag_width]
 
     # ── Entry storage ─────────────────────────────────────────────────
-    ent_valid_r = [domain.state(width=1, reset_value=0, name=f"{prefix}_ev_{i}") for i in range(entries)]
-    ent_tag_r = [domain.state(width=tag_width, reset_value=0, name=f"{prefix}_et_{i}") for i in range(entries)]
-    ent_target_r = [domain.state(width=target_width, reset_value=0, name=f"{prefix}_etar_{i}") for i in range(entries)]
-    ent_cfi_pos_r = [domain.state(width=cfi_pos_width, reset_value=0, name=f"{prefix}_epos_{i}") for i in range(entries)]
-    ent_attr_r = [domain.state(width=attr_width, reset_value=0, name=f"{prefix}_eattr_{i}") for i in range(entries)]
-    ent_useful_r = [domain.state(width=useful_cnt_width, reset_value=0, name=f"{prefix}_eu_{i}") for i in range(entries)]
-
-    # Read all entries as combinational signals
-    ev = [_r(domain, ent_valid_r[i]) for i in range(entries)]
-    et = [_r(domain, ent_tag_r[i]) for i in range(entries)]
-    etar = [_r(domain, ent_target_r[i]) for i in range(entries)]
-    epos = [_r(domain, ent_cfi_pos_r[i]) for i in range(entries)]
-    eattr = [_r(domain, ent_attr_r[i]) for i in range(entries)]
-    eu = [_r(domain, ent_useful_r[i]) for i in range(entries)]
+    ev = [domain.signal(width=1, reset_value=0, name=f"{prefix}_ev_{i}") for i in range(entries)]
+    et = [domain.signal(width=tag_width, reset_value=0, name=f"{prefix}_et_{i}") for i in range(entries)]
+    etar = [domain.signal(width=target_width, reset_value=0, name=f"{prefix}_etar_{i}") for i in range(entries)]
+    epos = [domain.signal(width=cfi_pos_width, reset_value=0, name=f"{prefix}_epos_{i}") for i in range(entries)]
+    eattr = [domain.signal(width=attr_width, reset_value=0, name=f"{prefix}_eattr_{i}") for i in range(entries)]
+    eu = [domain.signal(width=useful_cnt_width, reset_value=0, name=f"{prefix}_eu_{i}") for i in range(entries)]
 
     # ── s0: Full-associative tag comparison ───────────────────────────
     hit_vec = []
@@ -154,21 +142,21 @@ def build_ubtb(
     pc_upper = s0_pc[target_width : pc_width]
     s0_full_target = cas(
         domain,
-        (pc_upper.wire << target_width) | (s0_hit_target.wire + u(pc_width, 0)),
+        (wire_of(pc_upper) << target_width) | (wire_of(s0_hit_target) + u(pc_width, 0)),
         cycle=0,
     )[0:pc_width]
 
     # ── Prediction outputs ────────────────────────────────────────────
     pred_valid = s0_hit & s0_fire & enable
-    m.output(f"{prefix}_pred_valid", pred_valid.wire)
+    m.output(f"{prefix}_pred_valid", wire_of(pred_valid))
     _out["pred_valid"] = pred_valid
-    m.output(f"{prefix}_pred_taken", pred_valid.wire)
+    m.output(f"{prefix}_pred_taken", wire_of(pred_valid))
     _out["pred_taken"] = pred_valid
-    m.output(f"{prefix}_pred_target", s0_full_target.wire)
+    m.output(f"{prefix}_pred_target", wire_of(s0_full_target))
     _out["pred_target"] = s0_full_target
-    m.output(f"{prefix}_pred_cfi_pos", s0_hit_cfi.wire)
+    m.output(f"{prefix}_pred_cfi_pos", wire_of(s0_hit_cfi))
     _out["pred_cfi_pos"] = s0_hit_cfi
-    m.output(f"{prefix}_pred_attr", s0_hit_attr.wire)
+    m.output(f"{prefix}_pred_attr", wire_of(s0_hit_attr))
     _out["pred_attr"] = s0_hit_attr
 
     # ── Training: tag / target extraction ─────────────────────────────
@@ -219,9 +207,9 @@ def build_ubtb(
     is_zero = t0_old_useful == zero_useful
 
     useful_inc = mux(is_max, useful_max_c,
-                     cas(domain, (t0_old_useful.wire + useful_one.wire)[0:useful_cnt_width], cycle=0))
+                     cas(domain, (wire_of(t0_old_useful) + wire_of(useful_one))[0:useful_cnt_width], cycle=0))
     useful_dec = mux(is_zero, zero_useful,
-                     cas(domain, (t0_old_useful.wire - useful_one.wire)[0:useful_cnt_width], cycle=0))
+                     cas(domain, (wire_of(t0_old_useful) - wire_of(useful_one))[0:useful_cnt_width], cycle=0))
 
     target_same = t0_old_target == t0_target_lower
 
@@ -231,20 +219,20 @@ def build_ubtb(
 
     for i in range(entries):
         we = t0_do_write & (t0_write_idx == cas(domain, m.const(i, width=idx_w), cycle=0))
-        ent_valid_r[i].set(mux(we, one1, ev[i]), when=we)
-        ent_tag_r[i].set(mux(we, t0_tag, et[i]), when=we)
-        ent_target_r[i].set(mux(we, t0_target_lower, etar[i]), when=we)
-        ent_cfi_pos_r[i].set(mux(we, train_cfi_pos, epos[i]), when=we)
-        ent_attr_r[i].set(mux(we, train_attr, eattr[i]), when=we)
-        ent_useful_r[i].set(mux(we, new_useful, eu[i]), when=we)
+        ev[i].assign(mux(we, one1, ev[i]), when=we)
+        et[i].assign(mux(we, t0_tag, et[i]), when=we)
+        etar[i].assign(mux(we, t0_target_lower, etar[i]), when=we)
+        epos[i].assign(mux(we, train_cfi_pos, epos[i]), when=we)
+        eattr[i].assign(mux(we, train_attr, eattr[i]), when=we)
+        eu[i].assign(mux(we, new_useful, eu[i]), when=we)
     return _out
 
 
-build_ubtb.__pycircuit_name__ = "ubtb"
+ubtb.__pycircuit_name__ = "ubtb"
 
 
 if __name__ == "__main__":
     print(compile_cycle_aware(
-        build_ubtb, name="ubtb", eager=True,
+        ubtb, name="ubtb", eager=True,
         entries=UBTB_NUM_ENTRIES,
     ).emit_mlir())

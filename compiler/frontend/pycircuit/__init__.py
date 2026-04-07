@@ -21,6 +21,7 @@ from .v5 import (
     CycleAwareDomain,
     CycleAwareSignal,
     CycleAwareTb,
+    ForwardSignal,
     StateSignal,
     cas,
     compile_cycle_aware,
@@ -31,6 +32,8 @@ from .v5 import (
     pyc_ClockDomain,
     pyc_Signal,
     signal,
+    submodule_input,
+    wire_of,
 )
 from . import lib
 from .probe import ProbeBuilder, ProbeError, ProbeRef, ProbeView, TbProbeHandle, TbProbes
@@ -45,6 +48,7 @@ __all__ = [
     "CycleAwareDomain",
     "CycleAwareSignal",
     "CycleAwareTb",
+    "ForwardSignal",
     "cas",
     "compile_cycle_aware",
     "log",
@@ -54,6 +58,8 @@ __all__ = [
     "pyc_ClockDomain",
     "pyc_Signal",
     "signal",
+    "submodule_input",
+    "wire_of",
     "Connector",
     "ConnectorBundle",
     "ConnectorStruct",

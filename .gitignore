@@ -16,8 +16,8 @@ __pycache__/
 
 # Distribution / packaging
 .Python
-build/
-build-*/
+/build/
+/build-*/
 compiler/mlir/build*/
 develop-eggs/
 dist/

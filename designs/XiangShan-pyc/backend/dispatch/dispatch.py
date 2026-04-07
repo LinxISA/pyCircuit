@@ -34,6 +34,7 @@ from pycircuit import (
     compile_cycle_aware,
     mux,
     u,
+    wire_of,
 )
 
 from top.parameters import (
@@ -61,7 +62,7 @@ IQ_FP = 1
 IQ_MEM = 2
 
 
-def build_dispatch(
+def dispatch(
     m: CycleAwareCircuit,
     domain: CycleAwareDomain,
     *,
@@ -155,7 +156,7 @@ def build_dispatch(
 
     dispatch_fire = (~any_blocked) & (~flush)
 
-    m.output(f"{prefix}_stall", any_blocked.wire)
+    m.output(f"{prefix}_stall", wire_of(any_blocked))
     _out["stall"] = any_blocked
 
     # ── Per-slot dispatch outputs ────────────────────────────────
@@ -166,24 +167,37 @@ def build_dispatch(
         fp_fire = slot_fire & is_fp[i]
         mem_fire = slot_fire & is_mem[i]
 
-        m.output(f"{prefix}_iq_int_valid_{i}", int_fire.wire)
-        m.output(f"{prefix}_iq_fp_valid_{i}", fp_fire.wire)
-        m.output(f"{prefix}_iq_mem_valid_{i}", mem_fire.wire)
+        m.output(f"{prefix}_iq_int_valid_{i}", wire_of(int_fire))
+        _out[f"iq_int_valid_{i}"] = int_fire
+        m.output(f"{prefix}_iq_fp_valid_{i}", wire_of(fp_fire))
+        _out[f"iq_fp_valid_{i}"] = fp_fire
+        m.output(f"{prefix}_iq_mem_valid_{i}", wire_of(mem_fire))
+        _out[f"iq_mem_valid_{i}"] = mem_fire
 
-        m.output(f"{prefix}_out_pdest_{i}", in_pdest[i].wire)
-        m.output(f"{prefix}_out_psrc1_{i}", in_psrc1[i].wire)
-        m.output(f"{prefix}_out_psrc2_{i}", in_psrc2[i].wire)
-        m.output(f"{prefix}_out_fu_type_{i}", in_fu_type[i].wire)
-        m.output(f"{prefix}_out_rob_idx_{i}", in_rob_idx[i].wire)
-        m.output(f"{prefix}_out_pc_{i}", in_pc[i].wire)
+        m.output(f"{prefix}_out_pdest_{i}", wire_of(in_pdest[i]))
+        _out[f"out_pdest_{i}"] = in_pdest[i]
+        m.output(f"{prefix}_out_psrc1_{i}", wire_of(in_psrc1[i]))
+        _out[f"out_psrc1_{i}"] = in_psrc1[i]
+        m.output(f"{prefix}_out_psrc2_{i}", wire_of(in_psrc2[i]))
+        _out[f"out_psrc2_{i}"] = in_psrc2[i]
+        m.output(f"{prefix}_out_fu_type_{i}", wire_of(in_fu_type[i]))
+        _out[f"out_fu_type_{i}"] = in_fu_type[i]
+        m.output(f"{prefix}_out_rob_idx_{i}", wire_of(in_rob_idx[i]))
+        _out[f"out_rob_idx_{i}"] = in_rob_idx[i]
+        m.output(f"{prefix}_out_pc_{i}", wire_of(in_pc[i]))
+        _out[f"out_pc_{i}"] = in_pc[i]
 
     # ── ROB enqueue outputs (matching rename interface) ──────────
     for i in range(dispatch_width):
         slot_fire = in_valid[i] & dispatch_fire
-        m.output(f"{prefix}_rob_enq_valid_{i}", slot_fire.wire)
-        m.output(f"{prefix}_rob_enq_pdest_{i}", in_pdest[i].wire)
-        m.output(f"{prefix}_rob_enq_old_pdest_{i}", in_old_pdest[i].wire)
-        m.output(f"{prefix}_rob_enq_pc_{i}", in_pc[i].wire)
+        m.output(f"{prefix}_rob_enq_valid_{i}", wire_of(slot_fire))
+        _out[f"rob_enq_valid_{i}"] = slot_fire
+        m.output(f"{prefix}_rob_enq_pdest_{i}", wire_of(in_pdest[i]))
+        _out[f"rob_enq_pdest_{i}"] = in_pdest[i]
+        m.output(f"{prefix}_rob_enq_old_pdest_{i}", wire_of(in_old_pdest[i]))
+        _out[f"rob_enq_old_pdest_{i}"] = in_old_pdest[i]
+        m.output(f"{prefix}_rob_enq_pc_{i}", wire_of(in_pc[i]))
+        _out[f"rob_enq_pc_{i}"] = in_pc[i]
 
     # ── Count dispatched uops per IQ class ───────────────────────
     int_cnt = cas(domain, m.const(0, width=dp_cnt_w), cycle=0)
@@ -194,20 +208,20 @@ def build_dispatch(
     for i in range(dispatch_width):
         slot_fire = in_valid[i] & dispatch_fire
         int_cnt = mux(slot_fire & is_int[i],
-                      cas(domain, (int_cnt.wire + ONE_DP.wire)[0:dp_cnt_w], cycle=0),
+                      cas(domain, (wire_of(int_cnt) + wire_of(ONE_DP))[0:dp_cnt_w], cycle=0),
                       int_cnt)
         fp_cnt = mux(slot_fire & is_fp[i],
-                     cas(domain, (fp_cnt.wire + ONE_DP.wire)[0:dp_cnt_w], cycle=0),
+                     cas(domain, (wire_of(fp_cnt) + wire_of(ONE_DP))[0:dp_cnt_w], cycle=0),
                      fp_cnt)
         mem_cnt = mux(slot_fire & is_mem[i],
-                      cas(domain, (mem_cnt.wire + ONE_DP.wire)[0:dp_cnt_w], cycle=0),
+                      cas(domain, (wire_of(mem_cnt) + wire_of(ONE_DP))[0:dp_cnt_w], cycle=0),
                       mem_cnt)
 
-    m.output(f"{prefix}_int_dispatch_count", int_cnt.wire)
+    m.output(f"{prefix}_int_dispatch_count", wire_of(int_cnt))
     _out["int_dispatch_count"] = int_cnt
-    m.output(f"{prefix}_fp_dispatch_count", fp_cnt.wire)
+    m.output(f"{prefix}_fp_dispatch_count", wire_of(fp_cnt))
     _out["fp_dispatch_count"] = fp_cnt
-    m.output(f"{prefix}_mem_dispatch_count", mem_cnt.wire)
+    m.output(f"{prefix}_mem_dispatch_count", wire_of(mem_cnt))
     _out["mem_dispatch_count"] = mem_cnt
 
     # ── Cycle 1: pipeline register for downstream latching ───────
@@ -216,21 +230,21 @@ def build_dispatch(
     # Pipeline registers capturing dispatched uops for IQ write stage
     for i in range(dispatch_width):
         slot_fire = in_valid[i] & dispatch_fire
-        domain.cycle(slot_fire.wire, name=f"{prefix}_dp1_v_{i}")
-        domain.cycle(in_pdest[i].wire, name=f"{prefix}_dp1_pdest_{i}")
-        domain.cycle(in_psrc1[i].wire, name=f"{prefix}_dp1_psrc1_{i}")
-        domain.cycle(in_psrc2[i].wire, name=f"{prefix}_dp1_psrc2_{i}")
-        domain.cycle(in_fu_type[i].wire, name=f"{prefix}_dp1_fu_{i}")
-        domain.cycle(in_rob_idx[i].wire, name=f"{prefix}_dp1_rob_{i}")
+        domain.cycle(wire_of(slot_fire), name=f"{prefix}_dp1_v_{i}")
+        domain.cycle(wire_of(in_pdest[i]), name=f"{prefix}_dp1_pdest_{i}")
+        domain.cycle(wire_of(in_psrc1[i]), name=f"{prefix}_dp1_psrc1_{i}")
+        domain.cycle(wire_of(in_psrc2[i]), name=f"{prefix}_dp1_psrc2_{i}")
+        domain.cycle(wire_of(in_fu_type[i]), name=f"{prefix}_dp1_fu_{i}")
+        domain.cycle(wire_of(in_rob_idx[i]), name=f"{prefix}_dp1_rob_{i}")
     return _out
 
 
-build_dispatch.__pycircuit_name__ = "dispatch"
+dispatch.__pycircuit_name__ = "dispatch"
 
 
 if __name__ == "__main__":
     print(compile_cycle_aware(
-        build_dispatch, name="dispatch", eager=True,
+        dispatch, name="dispatch", eager=True,
         dispatch_width=2, fu_type_width=3,
         ptag_w=4, pc_width=16, rob_idx_w=4,
     ).emit_mlir())

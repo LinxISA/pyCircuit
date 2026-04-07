@@ -5,7 +5,7 @@ Transforms each build_* to:
   1. Add `inputs: dict[str, CycleAwareSignal] | None = None` parameter
   2. Add `_in = inputs or {}` and `_out = {}` at function body start
   3. Change `m.input(f"{prefix}_NAME", ...)` → dual-mode with `_in["NAME"]`
-  4. After `m.output(f"{prefix}_NAME", VAR.wire)` → add `_out["NAME"] = VAR`
+  4. After `m.output(f"{prefix}_NAME", wire_of(VAR))` → add `_out["NAME"] = VAR`
   5. Change return type to `-> dict[str, CycleAwareSignal]:`
   6. Add `return _out` before function end
 
@@ -238,17 +238,17 @@ def _transform_inputs(body: str) -> tuple[str, int]:
 
 
 def _transform_outputs(body: str) -> tuple[str, int]:
-    """After `m.output(f"{prefix}_NAME", VAR.wire)`, add `_out["NAME"] = VAR`.
-    For raw wire outputs (no .wire), wrap in note."""
+    """After `m.output(f"{prefix}_NAME", wire_of(VAR))`, add `_out["NAME"] = VAR`.
+    For raw wire outputs (no wire_of), wrap in note."""
     count = 0
     lines = body.split("\n")
     new_lines = []
 
-    # Pattern 1: m.output(f"{prefix}_NAME", VAR.wire)
+    # Pattern 1: m.output(f"{prefix}_NAME", wire_of(VAR))
     pat_wire = re.compile(
-        r'^(\s+)m\.output\(f"\{prefix\}_(\w+)",\s*(\w+)\.wire\)'
+        r'^(\s+)m\.output\(f"\{prefix\}_(\w+)",\s*wire_of\((\w+)\)\)'
     )
-    # Pattern 2: m.output(f"{prefix}_NAME", EXPR) where EXPR doesn't end with .wire
+    # Pattern 2: m.output(f"{prefix}_NAME", EXPR) where EXPR doesn't use wire_of
     pat_raw = re.compile(
         r'^(\s+)m\.output\(f"\{prefix\}_(\w+)",\s*(\w+)\)'
     )

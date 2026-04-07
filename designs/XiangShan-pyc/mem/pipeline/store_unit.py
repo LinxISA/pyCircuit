@@ -30,11 +30,12 @@ from pycircuit import (
     compile_cycle_aware,
     mux,
     u,
+    wire_of,
 )
 from top.parameters import *
 
 
-def build_store_unit(
+def store_unit(
     m: CycleAwareCircuit,
     domain: CycleAwareDomain,
     *,
@@ -80,18 +81,18 @@ def build_store_unit(
     s0_fire = issue_valid & (~flush)
     s0_vpn = issue_addr[12:12 + (addr_width - 12)]
 
-    m.output(f"{prefix}_tlb_req_valid", s0_fire.wire)
+    m.output(f"{prefix}_tlb_req_valid", wire_of(s0_fire))
     _out["tlb_req_valid"] = s0_fire
-    m.output(f"{prefix}_tlb_req_vpn", s0_vpn.wire)
+    m.output(f"{prefix}_tlb_req_vpn", wire_of(s0_vpn))
     _out["tlb_req_vpn"] = s0_vpn
 
     # ── Pipeline registers s0 → s1 ───────────────────────────────
 
-    s1_valid_w = domain.cycle(s0_fire.wire, name=f"{prefix}_s1_v")
-    s1_addr_w = domain.cycle(issue_addr.wire, name=f"{prefix}_s1_addr")
-    s1_data_w = domain.cycle(issue_data.wire, name=f"{prefix}_s1_data")
-    s1_rob_idx_w = domain.cycle(issue_rob_idx.wire, name=f"{prefix}_s1_rob")
-    s1_sq_idx_w = domain.cycle(issue_sq_idx.wire, name=f"{prefix}_s1_sq")
+    s1_valid_w = domain.cycle(wire_of(s0_fire), name=f"{prefix}_s1_v")
+    s1_addr_w = domain.cycle(wire_of(issue_addr), name=f"{prefix}_s1_addr")
+    s1_data_w = domain.cycle(wire_of(issue_data), name=f"{prefix}_s1_data")
+    s1_rob_idx_w = domain.cycle(wire_of(issue_rob_idx), name=f"{prefix}_s1_rob")
+    s1_sq_idx_w = domain.cycle(wire_of(issue_sq_idx), name=f"{prefix}_s1_sq")
 
     domain.next()  # ─────────────── s0 → s1 boundary ──────────────
 
@@ -99,14 +100,14 @@ def build_store_unit(
     # s1 — TLB result + Store Queue write
     # ================================================================
 
-    s1_kill = flush.wire
+    s1_kill = wire_of(flush)
     s1_alive = s1_valid_w & (~s1_kill)
-    s1_tlb_miss = s1_alive & (~tlb_resp_hit.wire)
+    s1_tlb_miss = s1_alive & (~wire_of(tlb_resp_hit))
 
     paddr_lo = s1_addr_w[0:12]
-    s1_paddr = m.cat(tlb_resp_ppn.wire, paddr_lo)
+    s1_paddr = m.cat(wire_of(tlb_resp_ppn), paddr_lo)
 
-    s1_sq_fire = s1_alive & tlb_resp_hit.wire
+    s1_sq_fire = s1_alive & wire_of(tlb_resp_hit)
 
     domain.next()  # ─────────────── s1 → output boundary ─────────
 
@@ -133,10 +134,10 @@ def build_store_unit(
     return _out
 
 
-build_store_unit.__pycircuit_name__ = "store_unit"
+store_unit.__pycircuit_name__ = "store_unit"
 
 
 if __name__ == "__main__":
     print(compile_cycle_aware(
-        build_store_unit, name="store_unit", eager=True,
+        store_unit, name="store_unit", eager=True,
     ).emit_mlir())

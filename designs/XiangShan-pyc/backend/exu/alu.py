@@ -33,6 +33,7 @@ from pycircuit import (
     compile_cycle_aware,
     mux,
     u,
+    wire_of,
 )
 
 from top.parameters import XLEN
@@ -51,7 +52,7 @@ OP_SRL  = 0b1011
 OP_SRA  = 0b1100
 
 
-def build_alu(
+def alu(
     m: CycleAwareCircuit,
     domain: CycleAwareDomain,
     *,
@@ -88,8 +89,8 @@ def build_alu(
     # ── Compute each operation ───────────────────────────────────
 
     # ADD / SUB
-    add_result = cas(domain, (src1.wire + src2.wire)[0:data_width], cycle=0)
-    sub_result = cas(domain, (src1.wire - src2.wire)[0:data_width], cycle=0)
+    add_result = cas(domain, (wire_of(src1) + wire_of(src2))[0:data_width], cycle=0)
+    sub_result = cas(domain, (wire_of(src1) - wire_of(src2))[0:data_width], cycle=0)
 
     # Bitwise
     and_result = src1 & src2
@@ -108,16 +109,16 @@ def build_alu(
     # SLTU: unsigned comparison
     # src1 < src2 unsigned: if sub borrows (carry out) — use extended subtraction
     ext_sub = cas(domain,
-                  (src1.wire + u(ext_w, 0) - src2.wire - u(ext_w, 0))[0:ext_w],
+                  (wire_of(src1) + u(ext_w, 0) - wire_of(src2) - u(ext_w, 0))[0:ext_w],
                   cycle=0)
     sltu_bit = ext_sub[data_width:data_width + 1]
     sltu_result = mux(sltu_bit, ONE, ZERO)
 
     # Shifts
     shamt = src2[0:shamt_w]
-    sll_result = cas(domain, src1.wire.shl(amount=shamt.wire)[0:data_width], cycle=0)
-    srl_result = cas(domain, src1.wire.lshr(amount=shamt.wire)[0:data_width], cycle=0)
-    sra_result = cas(domain, src1.wire.ashr(amount=shamt.wire)[0:data_width], cycle=0)
+    sll_result = cas(domain, wire_of(src1).shl(amount=wire_of(shamt))[0:data_width], cycle=0)
+    srl_result = cas(domain, wire_of(src1).lshr(amount=wire_of(shamt))[0:data_width], cycle=0)
+    sra_result = cas(domain, wire_of(src1).ashr(amount=wire_of(shamt))[0:data_width], cycle=0)
 
     # ── Result mux ───────────────────────────────────────────────
     result = add_result  # default: ADD
@@ -132,20 +133,20 @@ def build_alu(
     result = mux(alu_op == _op(OP_SRA),  sra_result,  result)
 
     # ── Outputs ──────────────────────────────────────────────────
-    m.output(f"{prefix}_result", result.wire)
+    m.output(f"{prefix}_result", wire_of(result))
     _out["result"] = result
 
     zero_flag = result == ZERO
-    m.output(f"{prefix}_zero", zero_flag.wire)
+    m.output(f"{prefix}_zero", wire_of(zero_flag))
     _out["zero"] = zero_flag
     return _out
 
 
-build_alu.__pycircuit_name__ = "alu"
+alu.__pycircuit_name__ = "alu"
 
 
 if __name__ == "__main__":
     print(compile_cycle_aware(
-        build_alu, name="alu", eager=True,
+        alu, name="alu", eager=True,
         data_width=XLEN,
     ).emit_mlir())
