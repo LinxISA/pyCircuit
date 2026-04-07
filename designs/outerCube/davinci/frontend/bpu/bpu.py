@@ -14,12 +14,9 @@ from pycircuit import (
     CycleAwareCircuit,
     CycleAwareDomain,
     cas,
-    compile_cycle_aware,
     mux,
     wire_of,
 )
-
-from ...common.parameters import BTB_ENTRIES
 
 
 def _in(io, key, m, domain, prefix, width):
@@ -101,8 +98,4 @@ bpu.__pycircuit_name__ = "bpu"
 
 
 if __name__ == "__main__":
-    print(
-        compile_cycle_aware(
-            bpu, name="bpu", eager=True, n_entries=8, addr_w=32
-        ).emit_mlir()
-    )
+    pass

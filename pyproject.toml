@@ -76,10 +76,13 @@ select = ["E", "F", "W", "I", "N", "UP", "B", "A", "C4", "T20"]
 ignore = ["E501"]
 
 [tool.ruff.lint.per-file-ignores]
+"compiler/frontend/pycircuit/__init__.py" = ["A004"]
 "compiler/frontend/pycircuit/cli.py" = ["A004"]
 "compiler/frontend/pycircuit/jit.py" = ["A001", "B009", "B905", "I001", "N818", "UP035", "UP037", "UP038"]
 "compiler/frontend/pycircuit/v5.py" = ["B010", "I001", "N801", "N816", "UP007", "UP037", "UP038"]
 "designs/examples/digital_filter/digital_filter.py" = ["N803", "N806"]
+"designs/examples/fm16/npu_node.py" = ["N803", "N806"]
+"designs/examples/fm16/sw5809s.py" = ["N803", "N806"]
 
 [tool.mypy]
 python_version = "3.10"

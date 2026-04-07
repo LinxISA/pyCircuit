@@ -28,12 +28,9 @@ from pycircuit import (
     CycleAwareDomain,
     CycleAwareSignal,
     cas,
-    compile_cycle_aware,
     mux,
-    u,
     wire_of,
 )
-
 from top.parameters import (
     INT_PHYS_REGS,
     PTAG_WIDTH_INT,
@@ -102,7 +99,7 @@ def regfile(
     # ── Cycle 1: Synchronous write ───────────────────────────────
     domain.next()
 
-    ZERO_1 = cas(domain, m.const(0, width=1), cycle=0)
+    cas(domain, m.const(0, width=1), cycle=0)
     ZERO_ADDR = cas(domain, m.const(0, width=addr_width), cycle=0)
 
     for w in range(num_write):
@@ -119,15 +116,4 @@ regfile.__pycircuit_name__ = "regfile"
 
 
 if __name__ == "__main__":
-    print(
-        compile_cycle_aware(
-            regfile,
-            name="regfile",
-            eager=True,
-            num_entries=8,
-            num_read=2,
-            num_write=2,
-            data_width=16,
-            addr_width=3,
-        ).emit_mlir()
-    )
+    pass

@@ -4,7 +4,6 @@ from pycircuit import (
     CycleAwareCircuit,
     CycleAwareDomain,
     cas,
-    compile_cycle_aware,
     wire_of,
 )
 
@@ -44,4 +43,4 @@ def build(m: CycleAwareCircuit, domain: CycleAwareDomain, *, width: int = 32):
 build.__pycircuit_name__ = "boundary_value_ports"
 
 if __name__ == "__main__":
-    print(compile_cycle_aware(build, name="boundary_value_ports", width=32).emit_mlir())
+    pass

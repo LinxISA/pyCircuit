@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
-import sys
 import os
+import sys
 
 _root = os.path.join(os.path.dirname(__file__), "..", "..", "..", "..", "..")
 sys.path.insert(0, os.path.join(_root, "compiler", "frontend"))
 sys.path.insert(0, _root)
 
-from pycircuit import compile_cycle_aware, CycleAwareTb
+from pycircuit import CycleAwareTb, compile_cycle_aware
 from pycircuit.tb import Tb
 
 
@@ -29,7 +29,6 @@ def test_scalar_rat_compile():
     assert "func.func @test_scalar_rat" in mlir
     assert "srat_src1_phys0" in mlir
     assert "srat_src1_rdy0" in mlir
-    print(f"PASS: Scalar RAT compile OK ({len(mlir)} chars MLIR)")
 
 
 def test_scalar_rat_tb_initial():
@@ -65,7 +64,6 @@ def test_scalar_rat_tb_initial():
 
     assert t.expects[0].value == 2
     assert t.expects[1].value == 1
-    print("PASS: Scalar RAT initial mapping testbench generated")
 
 
 def test_scalar_rat_tb_bypass():
@@ -102,11 +100,9 @@ def test_scalar_rat_tb_bypass():
 
     assert t.expects[0].value == 10
     assert t.expects[1].value == 0
-    print("PASS: Scalar RAT intra-group bypass testbench generated")
 
 
 if __name__ == "__main__":
     test_scalar_rat_compile()
     test_scalar_rat_tb_initial()
     test_scalar_rat_tb_bypass()
-    print("\nAll Scalar RAT unit tests passed!")

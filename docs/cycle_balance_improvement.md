@@ -22,14 +22,14 @@
 
 典型优化与合法性顺序（节选，见 `compiler/mlir/tools/pycc.cpp`）：
 
-1. 契约与层次：`pyc-check-frontend-contract`、`inline`、规范化、CSE、SCCP  
-2. 结构整理：`pyc-lower-scf-to-pyc-static`  
-3. **周期对齐**：`pyc-cycle-balance`（按 `dst_cycle`/`src_cycle` 插入并 **复用** 共享延迟寄存器）  
-4. 线网：`pyc-eliminate-wires`、`pyc-eliminate-dead-state`、`pyc-comb-canonicalize`、…  
-5. 合法性：`pyc-check-comb-cycles`、`pyc-check-clock-domains`  
-6. 寄存器打包：`pyc-pack-i1-regs`  
-7. 组合融合：`pyc-fuse-comb`（可选）  
-8. 深度统计：`pyc-check-logic-depth`  
+1. 契约与层次：`pyc-check-frontend-contract`、`inline`、规范化、CSE、SCCP
+2. 结构整理：`pyc-lower-scf-to-pyc-static`
+3. **周期对齐**：`pyc-cycle-balance`（按 `dst_cycle`/`src_cycle` 插入并 **复用** 共享延迟寄存器）
+4. 线网：`pyc-eliminate-wires`、`pyc-eliminate-dead-state`、`pyc-comb-canonicalize`、…
+5. 合法性：`pyc-check-comb-cycles`、`pyc-check-clock-domains`
+6. 寄存器打包：`pyc-pack-i1-regs`
+7. 组合融合：`pyc-fuse-comb`（可选）
+8. 深度统计：`pyc-check-logic-depth`
 
 组合环检查依赖 `pyc.reg` 等作为时序割点；`pyc-cycle-balance` 新增的寄存器同样参与该割集。
 
@@ -47,10 +47,10 @@
 
 ## 3. 设计目标（新要求）
 
-1. **正确性**：`dst_cycle` 与 `src_cycle` 给定且 `dst_cycle >= src_cycle` 时，插入 `dst_cycle - src_cycle` 拍延迟，使驱动 `dst` 的数据与左值周期一致（在单时钟域、与既有 `tick/transfer` 语义一致的前提下）。  
-2. **共享延迟**：同一 `(src, clk, rst, d)` 只构建 **一条** `d` 级寄存器链（或等价结构），多 `assign` 复用最后一级 `q`（及中间级若需要）。  
-3. **时钟域**：首版可要求 **单主时钟/复位**（与模块内既有 `pyc.reg` 一致）；多域需显式扩展（绑定到域 ID 或不同 `clk/rst` 对）。  
-4. **可观测性**：插入的寄存器可带 `pyc.name` 前缀（如 `pyc_cyclebal_`）便于波形与调试。  
+1. **正确性**：`dst_cycle` 与 `src_cycle` 给定且 `dst_cycle >= src_cycle` 时，插入 `dst_cycle - src_cycle` 拍延迟，使驱动 `dst` 的数据与左值周期一致（在单时钟域、与既有 `tick/transfer` 语义一致的前提下）。
+2. **共享延迟**：同一 `(src, clk, rst, d)` 只构建 **一条** `d` 级寄存器链（或等价结构），多 `assign` 复用最后一级 `q`（及中间级若需要）。
+3. **时钟域**：首版可要求 **单主时钟/复位**（与模块内既有 `pyc.reg` 一致）；多域需显式扩展（绑定到域 ID 或不同 `clk/rst` 对）。
+4. **可观测性**：插入的寄存器可带 `pyc.name` 前缀（如 `pyc_cyclebal_`）便于波形与调试。
 5. **默认无行为**：未携带周期属性的 `pyc.assign` 与今保持一致，保证现有设计零差异。
 
 ## 4. 实现方案概要
@@ -59,28 +59,28 @@
 
 在 `pyc.assign` 上增加 **可选** 属性：
 
-- `dst_cycle`：`i64`，左值周期索引  
-- `src_cycle`：`i64`，右值周期索引  
+- `dst_cycle`：`i64`，左值周期索引
+- `src_cycle`：`i64`，右值周期索引
 
 约定：二者 **同时出现或同时省略**；若出现，必须 `dst_cycle >= src_cycle`。深度 `d = dst_cycle - src_cycle`；`d == 0` 时不插入寄存器，并可剥离属性。
 
 ### 4.2 新 Pass：`pyc-cycle-balance`
 
-- **作用域**：`func.func` 内（与多数 PYC transform 一致）。  
-- **算法要点**：  
-  - 从函数体中解析 **默认 `clk/rst`**（例如取第一个 `pyc.reg` 的时钟与复位；若存在多组不一致则报错）。  
-  - 对每个带周期属性的 `pyc.assign`，计算 `d`，调用 `getOrCreateDelayed(src, d, clk, rst)`：  
-    - 内部缓存 `map[(src,clk,rst,d)] → q`；  
-    - 递归构造：`delayed(src,0)=src`；`delayed(src,k)` = 一级 `pyc.reg`，`next = delayed(src,k-1)`，`en = 1`，`init = 0`。  
-  - 将 `assign` 的 `src` 操作数替换为延迟链输出；**移除**周期属性，避免重复执行。  
-- **插入位置**：在对应 `pyc.assign` **之前**（保证 `src` 支配新寄存器）。  
+- **作用域**：`func.func` 内（与多数 PYC transform 一致）。
+- **算法要点**：
+  - 从函数体中解析 **默认 `clk/rst`**（例如取第一个 `pyc.reg` 的时钟与复位；若存在多组不一致则报错）。
+  - 对每个带周期属性的 `pyc.assign`，计算 `d`，调用 `getOrCreateDelayed(src, d, clk, rst)`：
+    - 内部缓存 `map[(src,clk,rst,d)] → q`；
+    - 递归构造：`delayed(src,0)=src`；`delayed(src,k)` = 一级 `pyc.reg`，`next = delayed(src,k-1)`，`en = 1`，`init = 0`。
+  - 将 `assign` 的 `src` 操作数替换为延迟链输出；**移除**周期属性，避免重复执行。
+- **插入位置**：在对应 `pyc.assign` **之前**（保证 `src` 支配新寄存器）。
 - **流水线位置**：在 **`pyc-eliminate-wires` 之前** 运行——此时仍保留 `wire`+`assign` 形态，与 `assign` 校验一致。
 
 ### 4.3 后续可选工作
 
-- 前端/Python 生成 `dst_cycle`/`src_cycle`。  
-- 与 `pyc-check-clock-domains` 对齐：显式校验 balance 寄存器与目标 assign 的域一致。  
-- 带 `en` 的流水线寄存（非恒 1）的精确语义与共享策略。  
+- 前端/Python 生成 `dst_cycle`/`src_cycle`。
+- 与 `pyc-check-clock-domains` 对齐：显式校验 balance 寄存器与目标 assign 的域一致。
+- 带 `en` 的流水线寄存（非恒 1）的精确语义与共享策略。
 - 在 `pyc-fuse-comb` 之后是否再跑一遍 CSE 以合并重复别名。
 
 ## 5. 文档索引

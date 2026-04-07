@@ -15,14 +15,13 @@ from pycircuit import (
     CycleAwareCircuit,
     CycleAwareDomain,
     cas,
-    compile_cycle_aware,
     mux,
     wire_of,
 )
 
 from ...common.parameters import (
-    ARCH_GREGS,
     ARCH_GREG_W,
+    ARCH_GREGS,
     PHYS_GREG_W,
     RENAME_WIDTH,
 )
@@ -172,15 +171,4 @@ scalar_rat.__pycircuit_name__ = "scalar_rat"
 
 
 if __name__ == "__main__":
-    print(
-        compile_cycle_aware(
-            scalar_rat,
-            name="scalar_rat",
-            eager=True,
-            n_arch=8,
-            arch_w=3,
-            phys_w=4,
-            width=2,
-            prefix="srat",
-        ).emit_mlir()
-    )
+    pass

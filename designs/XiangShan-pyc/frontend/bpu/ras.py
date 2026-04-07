@@ -32,12 +32,10 @@ from pycircuit import (
     CycleAwareDomain,
     CycleAwareSignal,
     cas,
-    compile_cycle_aware,
     mux,
     u,
     wire_of,
 )
-
 from top.parameters import PC_WIDTH, RAS_COMMIT_STACK_SIZE, RAS_SPEC_QUEUE_SIZE
 
 
@@ -123,8 +121,8 @@ def ras(
         )
     )
 
-    zero1 = cas(domain, m.const(0, width=1), cycle=0)
-    one1 = cas(domain, m.const(1, width=1), cycle=0)
+    cas(domain, m.const(0, width=1), cycle=0)
+    cas(domain, m.const(1, width=1), cycle=0)
     zero_pc = cas(domain, m.const(0, width=pc_width), cycle=0)
 
     # ── Speculative stack storage ────────────────────────────────────
@@ -161,7 +159,7 @@ def ras(
     pop_fire = s0_fire & do_pop & (~do_push)
 
     tos_ctr_is_zero = tos_ctr == cas(domain, m.const(0, width=ctr_width), cycle=0)
-    pop_target = mux(tos_ctr_is_zero, tos_m1_addr, tos_addr)
+    mux(tos_ctr_is_zero, tos_m1_addr, tos_addr)
 
     # Prediction output
     m.output(f"{prefix}_ras_target", wire_of(tos_addr))
@@ -290,12 +288,4 @@ ras.__pycircuit_name__ = "ras"
 
 
 if __name__ == "__main__":
-    print(
-        compile_cycle_aware(
-            ras,
-            name="ras",
-            eager=True,
-            commit_size=16,
-            spec_size=32,
-        ).emit_mlir()
-    )
+    pass

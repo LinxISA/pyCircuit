@@ -4,7 +4,6 @@ from pycircuit import (
     CycleAwareCircuit,
     CycleAwareDomain,
     cas,
-    compile_cycle_aware,
     u,
     wire_of,
 )
@@ -36,4 +35,4 @@ def build(m: CycleAwareCircuit, domain: CycleAwareDomain) -> None:
 build.__pycircuit_name__ = "decode_rules"
 
 if __name__ == "__main__":
-    print(compile_cycle_aware(build, name="decode_rules").emit_mlir())
+    pass

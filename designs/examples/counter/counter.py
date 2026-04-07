@@ -4,8 +4,6 @@ from pycircuit import (
     CycleAwareCircuit,
     CycleAwareDomain,
     cas,
-    compile_cycle_aware,
-    mux,
     wire_of,
 )
 
@@ -24,4 +22,4 @@ build.__pycircuit_name__ = "counter"
 
 
 if __name__ == "__main__":
-    print(compile_cycle_aware(build, name="counter", eager=True, width=8).emit_mlir())
+    pass

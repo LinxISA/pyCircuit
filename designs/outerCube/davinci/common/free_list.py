@@ -10,7 +10,6 @@ from pycircuit import (
     CycleAwareCircuit,
     CycleAwareDomain,
     cas,
-    compile_cycle_aware,
     mux,
     wire_of,
 )
@@ -120,15 +119,4 @@ free_list.__pycircuit_name__ = "free_list"
 
 
 if __name__ == "__main__":
-    print(
-        compile_cycle_aware(
-            free_list,
-            name="free_list",
-            eager=True,
-            depth=96,
-            tag_w=7,
-            deq_width=4,
-            enq_width=4,
-            prefix="fl",
-        ).emit_mlir()
-    )
+    pass

@@ -12,16 +12,14 @@ from pycircuit import (
     CycleAwareCircuit,
     CycleAwareDomain,
     cas,
-    compile_cycle_aware,
     mux,
     wire_of,
 )
 
 from ...common.parameters import (
+    LOAD_LATENCY_L1,
     PHYS_GREG_W,
     SCALAR_DATA_W,
-    LOAD_LATENCY_L1,
-    STORE_BUF_ENTRIES,
 )
 
 
@@ -115,8 +113,4 @@ lsu.__pycircuit_name__ = "lsu"
 
 
 if __name__ == "__main__":
-    print(
-        compile_cycle_aware(
-            lsu, name="lsu", eager=True, data_w=32, addr_w=32
-        ).emit_mlir()
-    )
+    pass

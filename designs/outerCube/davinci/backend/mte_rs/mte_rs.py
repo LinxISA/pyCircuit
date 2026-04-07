@@ -11,21 +11,20 @@ from pycircuit import (
     CycleAwareCircuit,
     CycleAwareDomain,
     cas,
-    compile_cycle_aware,
     mux,
     wire_of,
 )
 
 from ...common.parameters import (
-    MTE_RS_ENTRIES,
-    MTE_ISSUE_WIDTH,
-    DISPATCH_WIDTH,
+    AGE_W,
     CDB_PORTS,
-    TCB_PORTS,
+    DISPATCH_WIDTH,
+    MTE_ISSUE_WIDTH,
+    MTE_RS_ENTRIES,
     PHYS_GREG_W,
     PHYS_TREG_W,
+    TCB_PORTS,
     UOP_W,
-    AGE_W,
 )
 
 
@@ -215,18 +214,4 @@ mte_rs.__pycircuit_name__ = "mte_rs"
 
 
 if __name__ == "__main__":
-    print(
-        compile_cycle_aware(
-            mte_rs,
-            name="mte_rs",
-            eager=True,
-            n_entries=4,
-            n_dispatch=2,
-            n_cdb=2,
-            n_tcb=2,
-            stag_w=3,
-            ttag_w=3,
-            uop_w=4,
-            age_w=3,
-        ).emit_mlir()
-    )
+    pass

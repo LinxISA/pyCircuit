@@ -15,19 +15,18 @@ from pycircuit import (
     CycleAwareCircuit,
     CycleAwareDomain,
     cas,
-    compile_cycle_aware,
     mux,
     wire_of,
 )
 
 from ...common.parameters import (
-    VEC_RS_ENTRIES,
-    DISPATCH_WIDTH,
-    TCB_PORTS,
-    PHYS_TREG_W,
-    PHYS_GREG_W,
-    UOP_W,
     AGE_W,
+    DISPATCH_WIDTH,
+    PHYS_GREG_W,
+    PHYS_TREG_W,
+    TCB_PORTS,
+    UOP_W,
+    VEC_RS_ENTRIES,
 )
 
 
@@ -208,16 +207,4 @@ vec_rs.__pycircuit_name__ = "vec_rs"
 
 
 if __name__ == "__main__":
-    print(
-        compile_cycle_aware(
-            vec_rs,
-            name="vec_rs",
-            eager=True,
-            n_entries=4,
-            n_dispatch=2,
-            n_tcb=2,
-            n_tile_src=2,
-            ttag_w=4,
-            prefix="vrs",
-        ).emit_mlir()
-    )
+    pass

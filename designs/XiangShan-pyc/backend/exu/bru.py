@@ -37,13 +37,11 @@ from pycircuit import (
     CycleAwareDomain,
     CycleAwareSignal,
     cas,
-    compile_cycle_aware,
     mux,
     u,
     wire_of,
 )
-
-from top.parameters import XLEN, PC_WIDTH
+from top.parameters import PC_WIDTH, XLEN
 
 BRU_OP_WIDTH = 4
 
@@ -201,12 +199,4 @@ bru.__pycircuit_name__ = "bru"
 
 
 if __name__ == "__main__":
-    print(
-        compile_cycle_aware(
-            bru,
-            name="bru",
-            eager=True,
-            data_width=64,
-            pc_width=39,
-        ).emit_mlir()
-    )
+    pass

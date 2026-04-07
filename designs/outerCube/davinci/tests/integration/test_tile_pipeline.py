@@ -8,14 +8,14 @@ Also verifies a minimal CycleAwareTb scenario for the tile pipeline.
 
 from __future__ import annotations
 
-import sys
 import os
+import sys
 
 _root = os.path.join(os.path.dirname(__file__), "..", "..", "..", "..", "..")
 sys.path.insert(0, os.path.join(_root, "compiler", "frontend"))
 sys.path.insert(0, _root)
 
-from pycircuit import compile_cycle_aware, CycleAwareTb
+from pycircuit import CycleAwareTb, compile_cycle_aware
 from pycircuit.tb import Tb
 
 TEST_PROGRAM = """
@@ -48,7 +48,6 @@ def test_mte_rs_compile():
     mlir = circ.emit_mlir()
     assert "mrs_issue_valid" in mlir
     assert "mrs_issue_op" in mlir
-    print(f"PASS: mte_rs compile OK ({len(mlir):,} chars)")
 
 
 def test_vec_rs_compile():
@@ -68,7 +67,6 @@ def test_vec_rs_compile():
     )
     mlir = circ.emit_mlir()
     assert "vrs_issue_valid" in mlir
-    print(f"PASS: vec_rs compile OK ({len(mlir):,} chars)")
 
 
 def test_mte_unit_compile():
@@ -86,7 +84,6 @@ def test_mte_unit_compile():
     )
     mlir = circ.emit_mlir()
     assert "mte_tcb_valid" in mlir
-    print(f"PASS: mte_unit compile OK ({len(mlir):,} chars)")
 
 
 def test_vec_unit_compile():
@@ -98,7 +95,6 @@ def test_vec_unit_compile():
     )
     mlir = circ.emit_mlir()
     assert "vu_" in mlir
-    print(f"PASS: vec_unit compile OK ({len(mlir):,} chars)")
 
 
 def test_tile_pipeline_tb():
@@ -143,8 +139,6 @@ def test_tile_pipeline_tb():
     ct.finish()
 
     assert len(t.drives) > 0
-    print("PASS: Tile pipeline testbench generated")
-    print(f"  Specification:\n{TEST_PROGRAM}")
 
 
 if __name__ == "__main__":
@@ -153,4 +147,3 @@ if __name__ == "__main__":
     test_mte_unit_compile()
     test_vec_unit_compile()
     test_tile_pipeline_tb()
-    print("\nAll tile pipeline integration tests passed!")

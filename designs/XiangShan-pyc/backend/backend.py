@@ -40,18 +40,14 @@ from pycircuit import (
     CycleAwareDomain,
     CycleAwareSignal,
     cas,
-    compile_cycle_aware,
     mux,
-    u,
     wire_of,
 )
-
 from top.parameters import (
     COMMIT_WIDTH,
     DECODE_WIDTH,
     PC_WIDTH,
     PTAG_WIDTH_INT,
-    RENAME_WIDTH,
     ROB_IDX_WIDTH,
     XLEN,
 )
@@ -70,13 +66,13 @@ NUM_INT_EXU = 2
 NUM_FP_EXU = 1
 
 from backend.ctrlblock.ctrlblock import ctrlblock
-from backend.issue.issue_queue import issue_queue
-from backend.regfile.regfile import regfile
 from backend.exu.alu import alu
 from backend.exu.bru import bru
-from backend.exu.mul import mul
 from backend.exu.div import div
+from backend.exu.mul import mul
 from backend.fu.fpu import fpu
+from backend.issue.issue_queue import issue_queue
+from backend.regfile.regfile import regfile
 
 
 def backend(
@@ -101,7 +97,7 @@ def backend(
     _out: dict[str, CycleAwareSignal] = {}
 
     # ── Sub-module calls ──
-    ctrl_out = domain.call(
+    domain.call(
         ctrlblock,
         inputs={},
         prefix=f"{prefix}_s_ctrl",
@@ -112,7 +108,7 @@ def backend(
         rob_idx_w=rob_idx_w,
     )
 
-    iq_out = domain.call(
+    domain.call(
         issue_queue,
         inputs={},
         prefix=f"{prefix}_s_iq",
@@ -120,14 +116,14 @@ def backend(
         rob_idx_w=rob_idx_w,
     )
 
-    rf_out = domain.call(
+    domain.call(
         regfile, inputs={}, prefix=f"{prefix}_s_rf", data_width=data_width
     )
 
     for _i in range(num_int_exu):
         domain.call(alu, inputs={}, prefix=f"{prefix}_s_alu{_i}", data_width=data_width)
 
-    bru_out = domain.call(
+    domain.call(
         bru,
         inputs={},
         prefix=f"{prefix}_s_bru",
@@ -135,11 +131,11 @@ def backend(
         pc_width=pc_width,
     )
 
-    mul_out = domain.call(
+    domain.call(
         mul, inputs={}, prefix=f"{prefix}_s_mul", data_width=data_width
     )
 
-    div_out = domain.call(
+    domain.call(
         div, inputs={}, prefix=f"{prefix}_s_div", data_width=data_width
     )
 
@@ -175,7 +171,7 @@ def backend(
         cas(domain, m.input(f"{prefix}_dec_psrc2_{i}", width=ptag_w), cycle=0)
         for i in range(decode_width)
     ]
-    in_old_pdest = [
+    [
         cas(domain, m.input(f"{prefix}_dec_old_pdest_{i}", width=ptag_w), cycle=0)
         for i in range(decode_width)
     ]
@@ -206,7 +202,7 @@ def backend(
         cas(domain, m.input(f"{prefix}_wb_pdest_{i}", width=ptag_w), cycle=0)
         for i in range(num_wb)
     ]
-    wb_data = [
+    [
         cas(domain, m.input(f"{prefix}_wb_data_{i}", width=data_width), cycle=0)
         for i in range(num_wb)
     ]
@@ -243,8 +239,8 @@ def backend(
 
     # ── Constants ────────────────────────────────────────────────
     ZERO_1 = cas(domain, m.const(0, width=1), cycle=0)
-    ONE_1 = cas(domain, m.const(1, width=1), cycle=0)
-    ZERO_PC = cas(domain, m.const(0, width=pc_width), cycle=0)
+    cas(domain, m.const(1, width=1), cycle=0)
+    cas(domain, m.const(0, width=pc_width), cycle=0)
 
     # ================================================================
     # Redirect: priority ROB exception > BRU misprediction
@@ -400,20 +396,4 @@ backend.__pycircuit_name__ = "backend"
 
 
 if __name__ == "__main__":
-    print(
-        compile_cycle_aware(
-            backend,
-            name="backend",
-            eager=True,
-            decode_width=2,
-            commit_width=2,
-            num_wb=2,
-            num_int_exu=1,
-            num_fp_exu=1,
-            ptag_w=4,
-            data_width=16,
-            pc_width=16,
-            rob_idx_w=4,
-            fu_type_w=3,
-        ).emit_mlir()
-    )
+    pass

@@ -95,7 +95,6 @@ def run_pycc(pycc: Path, pyc_path: Path, verilog_dir: Path, *, name: str) -> Pat
         "--inline-policy=off",
         "--logic-depth=128",
     ]
-    print(f"  pycc: {' '.join(cmd)}")
     subprocess.check_call(cmd)
     return verilog_dir / f"{name}.v"
 
@@ -125,9 +124,6 @@ def main() -> int:
         kwargs = {"bank_depth": TEST_BANK_DEPTH, "bank_width": TEST_BANK_WIDTH}
         out_dir = THIS_DIR / "build_out"
 
-    print(
-        f"[tregfile] Compiling ({', '.join(f'{k}={v}' for k, v in kwargs.items())}) ..."
-    )
     t0 = time.time()
 
     params_json = json.dumps(kwargs, sort_keys=True, separators=(",", ":"))
@@ -136,7 +132,7 @@ def main() -> int:
     try:
         _stamp_pycc_metadata(circuit, name, params_json)
     except AttributeError:
-        print("  [warn] set_func_attr not available — skipping pycc metadata stamps")
+        pass
 
     mlir_text = circuit.emit_mlir()
     try:
@@ -148,24 +144,19 @@ def main() -> int:
     mlir_dir.mkdir(parents=True, exist_ok=True)
     pyc_path = mlir_dir / f"{name}.pyc"
     pyc_path.write_text(mlir_text, encoding="utf-8")
-    elapsed = time.time() - t0
-    print(f"  MLIR written to {pyc_path}  ({elapsed:.1f}s)")
+    time.time() - t0
 
     if args.mlir_only:
         return 0
 
     pycc = find_pycc()
     if pycc is None:
-        print(
-            "  [info] pycc not found — MLIR only. Set PYCC=<path> for Verilog output."
-        )
         return 0
 
     verilog_dir = out_dir / "verilog" / name
     t1 = time.time()
-    vpath = run_pycc(pycc, pyc_path, verilog_dir, name=name)
-    elapsed_v = time.time() - t1
-    print(f"  Verilog written to {vpath}  ({elapsed_v:.1f}s)")
+    run_pycc(pycc, pyc_path, verilog_dir, name=name)
+    time.time() - t1
     return 0
 
 

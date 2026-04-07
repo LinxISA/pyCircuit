@@ -34,14 +34,13 @@ _XS_ROOT = Path(__file__).resolve().parent.parent
 if str(_XS_ROOT) not in sys.path:
     sys.path.insert(0, str(_XS_ROOT))
 
+from l2.l2_top import l2_top
 from pycircuit import (
     CycleAwareCircuit,
     CycleAwareDomain,
     CycleAwareSignal,
     cas,
-    compile_cycle_aware,
     mux,
-    u,
     wire_of,
 )
 
@@ -56,9 +55,7 @@ from top.parameters import (
     ROB_IDX_WIDTH,
     XLEN,
 )
-
 from top.xs_core import xs_core
-from l2.l2_top import l2_top
 
 BLOCK_BITS = CACHE_LINE_SIZE
 FU_TYPE_WIDTH = 3
@@ -148,15 +145,15 @@ def xs_tile(
     )
 
     # Writeback ports (from execution units, pass-through to core)
-    wb_valid = [
+    [
         cas(domain, m.input(f"{prefix}_wb_valid_{i}", width=1), cycle=0)
         for i in range(num_wb)
     ]
-    wb_data = [
+    [
         cas(domain, m.input(f"{prefix}_wb_data_{i}", width=data_width), cycle=0)
         for i in range(num_wb)
     ]
-    wb_rob_idx = [
+    [
         cas(domain, m.input(f"{prefix}_wb_rob_idx_{i}", width=rob_idx_w), cycle=0)
         for i in range(num_wb)
     ]
@@ -186,17 +183,17 @@ def xs_tile(
     )
 
     # Issue queue backpressure
-    iq_int_ready = (
+    (
         _in["iq_int_ready"]
         if "iq_int_ready" in _in
         else cas(domain, m.input(f"{prefix}_iq_int_ready", width=1), cycle=0)
     )
-    iq_fp_ready = (
+    (
         _in["iq_fp_ready"]
         if "iq_fp_ready" in _in
         else cas(domain, m.input(f"{prefix}_iq_fp_ready", width=1), cycle=0)
     )
-    iq_mem_ready = (
+    (
         _in["iq_mem_ready"]
         if "iq_mem_ready" in _in
         else cas(domain, m.input(f"{prefix}_iq_mem_ready", width=1), cycle=0)
@@ -237,7 +234,7 @@ def xs_tile(
     )
 
     # ── Sub-module calls ──
-    core_out = domain.call(
+    domain.call(
         xs_core,
         inputs={},
         prefix=f"{prefix}_s_core",
@@ -254,7 +251,7 @@ def xs_tile(
 
     _l2_idx_w = max(1, 6)
     _l2_tag_w = max(1, pc_width - _l2_idx_w - 6)
-    l2_out = domain.call(
+    domain.call(
         l2_top,
         inputs={},
         prefix=f"{prefix}_s_l2",
@@ -416,22 +413,4 @@ xs_tile.__pycircuit_name__ = "xs_tile"
 
 
 if __name__ == "__main__":
-    print(
-        compile_cycle_aware(
-            xs_tile,
-            name="xs_tile",
-            eager=True,
-            decode_width=2,
-            commit_width=2,
-            num_wb=2,
-            num_load=1,
-            num_store=1,
-            data_width=16,
-            pc_width=16,
-            ptag_w=4,
-            rob_idx_w=4,
-            fu_type_w=3,
-            block_bits=128,
-            hart_id_w=4,
-        ).emit_mlir()
-    )
+    pass

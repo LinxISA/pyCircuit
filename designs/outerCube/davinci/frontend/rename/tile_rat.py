@@ -16,14 +16,13 @@ from pycircuit import (
     CycleAwareCircuit,
     CycleAwareDomain,
     cas,
-    compile_cycle_aware,
     mux,
     wire_of,
 )
 
 from ...common.parameters import (
-    ARCH_TREGS,
     ARCH_TREG_W,
+    ARCH_TREGS,
     PHYS_TREG_W,
     RENAME_WIDTH,
     TCB_PORTS,
@@ -188,16 +187,4 @@ tile_rat.__pycircuit_name__ = "tile_rat"
 
 
 if __name__ == "__main__":
-    print(
-        compile_cycle_aware(
-            tile_rat,
-            name="tile_rat",
-            eager=True,
-            n_arch=8,
-            arch_w=3,
-            phys_w=4,
-            width=2,
-            n_tile_src=2,
-            prefix="trat",
-        ).emit_mlir()
-    )
+    pass

@@ -5,14 +5,14 @@ Verifies that mispredict redirect restores RAT state and flushes RS.
 
 from __future__ import annotations
 
-import sys
 import os
+import sys
 
 _root = os.path.join(os.path.dirname(__file__), "..", "..", "..", "..", "..")
 sys.path.insert(0, os.path.join(_root, "compiler", "frontend"))
 sys.path.insert(0, _root)
 
-from pycircuit import compile_cycle_aware, CycleAwareTb
+from pycircuit import CycleAwareTb
 from pycircuit.tb import Tb
 
 
@@ -91,9 +91,7 @@ def test_branch_recovery_tb():
     ct.finish()
 
     assert any(e.value == 0x100 for e in t.expects)
-    print("PASS: Branch recovery testbench generated")
 
 
 if __name__ == "__main__":
     test_branch_recovery_tb()
-    print("\nAll branch recovery integration tests passed!")

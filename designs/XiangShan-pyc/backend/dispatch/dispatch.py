@@ -32,12 +32,9 @@ from pycircuit import (
     CycleAwareDomain,
     CycleAwareSignal,
     cas,
-    compile_cycle_aware,
     mux,
-    u,
     wire_of,
 )
-
 from top.parameters import (
     PC_WIDTH,
     PTAG_WIDTH_INT,
@@ -79,7 +76,6 @@ def dispatch(
     _in = inputs or {}
     _out: dict[str, CycleAwareSignal] = {}
 
-    iq_class_w = IQ_CLASS_WIDTH
     dp_cnt_w = max(1, dispatch_width.bit_length())
 
     # ================================================================
@@ -145,7 +141,7 @@ def dispatch(
 
     # ── Constants ────────────────────────────────────────────────
     ZERO_1 = cas(domain, m.const(0, width=1), cycle=0)
-    ONE_1 = cas(domain, m.const(1, width=1), cycle=0)
+    cas(domain, m.const(1, width=1), cycle=0)
 
     FU_FPU_C = cas(domain, m.const(FU_FPU, width=fu_type_width), cycle=0)
     FU_FMISC_C = cas(domain, m.const(FU_FMISC, width=fu_type_width), cycle=0)
@@ -156,7 +152,6 @@ def dispatch(
     is_fp = []
     is_mem = []
     is_int = []
-    iq_class = []
 
     for i in range(dispatch_width):
         fp = (in_fu_type[i] == FU_FPU_C) | (in_fu_type[i] == FU_FMISC_C)
@@ -276,15 +271,4 @@ dispatch.__pycircuit_name__ = "dispatch"
 
 
 if __name__ == "__main__":
-    print(
-        compile_cycle_aware(
-            dispatch,
-            name="dispatch",
-            eager=True,
-            dispatch_width=2,
-            fu_type_width=3,
-            ptag_w=4,
-            pc_width=16,
-            rob_idx_w=4,
-        ).emit_mlir()
-    )
+    pass

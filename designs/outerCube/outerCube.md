@@ -236,7 +236,7 @@ In Mode A, 8 banks each produce a partial product for the same C[i][j] position.
 **Combined adder tree width (intra-MAC + inter-bank, Mode A):**
 
 | Format | Intra-MAC products | Inter-bank | Total reductions | Final tree mantissa | Final tree total |
-|--------|-------------------|-----------|-----------------|--------------------|-----------------| 
+|--------|-------------------|-----------|-----------------|--------------------|-----------------|
 | FP16 | 1 | 8 | 8 | 22+3 = 25 | **31 bits** |
 | FP8 | 2 | 8 | 16 | 9+4 = 13 | **18 bits** |
 | MXFP4 | 8 | 8 | 64 | 7+6 = 13 | **25 bits** |
@@ -382,11 +382,11 @@ Mode B is **not suited for small M**: ⌈M/64⌉ ceiling wastes M-rows (e.g., M=
 
 ```
   Adder Tree Bypass:   512 MUXes (select tree output vs bank output)
-  
+
   Accumulator SRAM:    Mode A needs 2 KB, Mode B needs 16 KB
                        Physical: 16 KB × 2 (ping-pong) = 32 KB
                        Mode A uses only 4 KB (rest power-gated)
-  
+
   B path (R1–R4):    Same bandwidth as Mode A (no broadcast MUX)
                        Each bank reads B independently via ganged TRegFile ports
 ```

@@ -31,16 +31,11 @@ from pycircuit import (
     CycleAwareDomain,
     CycleAwareSignal,
     cas,
-    compile_cycle_aware,
-    mux,
-    u,
     wire_of,
 )
-
 from top.parameters import (
     CACHE_LINE_SIZE,
     FETCH_BLOCK_INST_NUM,
-    FTQ_IDX_WIDTH,
     PC_WIDTH,
 )
 
@@ -149,7 +144,7 @@ def ifu(
     # Pipeline registers s1 → s2
     s2_v_r = domain.cycle(s1_fire, name=f"{prefix}_s2_v")
     s2_pc_r = domain.cycle(s1_pc_r, name=f"{prefix}_s2_pc")
-    s2_tgt_r = domain.cycle(s1_tgt_r, name=f"{prefix}_s2_tgt")
+    domain.cycle(s1_tgt_r, name=f"{prefix}_s2_tgt")
     s2_data_r = domain.cycle(wire_of(icache_resp_data), name=f"{prefix}_s2_data")
 
     domain.next()  # ──────────────── s1 → s2 ────────────────
@@ -212,13 +207,4 @@ ifu.__pycircuit_name__ = "ifu"
 
 
 if __name__ == "__main__":
-    print(
-        compile_cycle_aware(
-            ifu,
-            name="ifu",
-            eager=True,
-            fetch_width=4,
-            pc_width=PC_WIDTH,
-            cache_data_width=64,
-        ).emit_mlir()
-    )
+    pass

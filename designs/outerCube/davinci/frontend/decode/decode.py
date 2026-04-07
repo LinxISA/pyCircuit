@@ -13,17 +13,12 @@ from pycircuit import (
     CycleAwareCircuit,
     CycleAwareDomain,
     cas,
-    compile_cycle_aware,
-    mux,
     wire_of,
 )
 
 from ...common.parameters import (
     DECODE_WIDTH,
     INSTR_WIDTH,
-    ARCH_GREG_W,
-    ARCH_TREG_W,
-    UOP_W,
 )
 
 DOMAIN_W = 2  # 2-bit domain code
@@ -164,4 +159,4 @@ decoder.__pycircuit_name__ = "decoder"
 
 
 if __name__ == "__main__":
-    print(compile_cycle_aware(decoder, name="decoder", eager=True).emit_mlir())
+    pass

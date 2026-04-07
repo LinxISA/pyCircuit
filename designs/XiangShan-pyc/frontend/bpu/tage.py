@@ -35,12 +35,10 @@ from pycircuit import (
     CycleAwareDomain,
     CycleAwareSignal,
     cas,
-    compile_cycle_aware,
     mux,
     u,
     wire_of,
 )
-
 from top.parameters import PC_WIDTH
 
 SMALL_TAGE_TABLE_INFOS = [
@@ -121,7 +119,7 @@ def tage(
         if "train_taken_0" in _in
         else cas(domain, m.input(f"{prefix}_train_taken_0", width=1), cycle=0)
     )
-    train_taken_1 = (
+    (
         _in["train_taken_1"]
         if "train_taken_1" in _in
         else cas(domain, m.input(f"{prefix}_train_taken_1", width=1), cycle=0)
@@ -131,7 +129,7 @@ def tage(
         if "train_mispred_0" in _in
         else cas(domain, m.input(f"{prefix}_train_mispred_0", width=1), cycle=0)
     )
-    train_mispred_1 = (
+    (
         _in["train_mispred_1"]
         if "train_mispred_1" in _in
         else cas(domain, m.input(f"{prefix}_train_mispred_1", width=1), cycle=0)
@@ -215,7 +213,7 @@ def tage(
     tbl_ctr_val = []
     tbl_pred = []
 
-    for t_idx, (tbl_size, hist_len) in enumerate(table_infos):
+    for t_idx, (tbl_size, _hist_len) in enumerate(table_infos):
         idx_w = max(1, math.ceil(math.log2(tbl_size)))
         folded_hist = global_hist[0:idx_w]
         pc_bits = s0_pc[1 : 1 + idx_w]
@@ -327,7 +325,7 @@ def tage(
         base_ctr[j].assign(mux(we, new_ctr, old_ctr), when=we)
 
     # Tagged table counter + useful update
-    for t_idx, (tbl_size, hist_len) in enumerate(table_infos):
+    for t_idx, (tbl_size, _hist_len) in enumerate(table_infos):
         idx_w = max(1, math.ceil(math.log2(tbl_size)))
         t_folded = train_hist[0:idx_w]
         t_pc_bits = train_pc[1 : 1 + idx_w]
@@ -475,12 +473,4 @@ tage.__pycircuit_name__ = "tage"
 
 
 if __name__ == "__main__":
-    print(
-        compile_cycle_aware(
-            tage,
-            name="tage",
-            eager=True,
-            table_infos=SMALL_TAGE_TABLE_INFOS,
-            base_size=BASE_TABLE_SIZE,
-        ).emit_mlir()
-    )
+    pass

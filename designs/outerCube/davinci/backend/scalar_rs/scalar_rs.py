@@ -13,21 +13,20 @@ from pycircuit import (
     CycleAwareCircuit,
     CycleAwareDomain,
     cas,
-    compile_cycle_aware,
     mux,
     wire_of,
 )
 
 from ...common.parameters import (
-    SCALAR_RS_ENTRIES,
-    SCALAR_ISSUE_WIDTH,
-    DISPATCH_WIDTH,
+    AGE_W,
     CDB_PORTS,
+    CHECKPOINT_W,
+    DISPATCH_WIDTH,
     PHYS_GREG_W,
     SCALAR_DATA_W,
+    SCALAR_ISSUE_WIDTH,
+    SCALAR_RS_ENTRIES,
     UOP_W,
-    AGE_W,
-    CHECKPOINT_W,
 )
 
 
@@ -295,16 +294,4 @@ scalar_rs.__pycircuit_name__ = "scalar_rs"
 
 
 if __name__ == "__main__":
-    print(
-        compile_cycle_aware(
-            scalar_rs,
-            name="scalar_rs",
-            eager=True,
-            n_entries=4,
-            n_dispatch=2,
-            n_issue=1,
-            n_cdb=2,
-            data_w=8,
-            prefix="srs",
-        ).emit_mlir()
-    )
+    pass

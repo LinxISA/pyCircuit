@@ -20,7 +20,7 @@ Usage from parent module (V5 two-phase pattern):
 
 from __future__ import annotations
 
-from typing import Callable
+from collections.abc import Callable
 
 from pycircuit import (
     CycleAwareCircuit,
@@ -127,4 +127,3 @@ if __name__ == "__main__":
         depth=8,
         width=8,
     )
-    print(circuit.emit_mlir())

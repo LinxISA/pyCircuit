@@ -32,12 +32,10 @@ from pycircuit import (
     CycleAwareDomain,
     CycleAwareSignal,
     cas,
-    compile_cycle_aware,
     mux,
     u,
     wire_of,
 )
-
 from top.parameters import XLEN
 
 MUL_OP_WIDTH = 2
@@ -128,11 +126,4 @@ mul.__pycircuit_name__ = "mul"
 
 
 if __name__ == "__main__":
-    print(
-        compile_cycle_aware(
-            mul,
-            name="mul",
-            eager=True,
-            data_width=16,
-        ).emit_mlir()
-    )
+    pass

@@ -10,12 +10,11 @@ from pycircuit import (
     CycleAwareCircuit,
     CycleAwareDomain,
     cas,
-    compile_cycle_aware,
     mux,
     wire_of,
 )
 
-from ...common.parameters import PHYS_GREG_W, SCALAR_DATA_W, UOP_W
+from ...common.parameters import PHYS_GREG_W, SCALAR_DATA_W
 
 ALU_ADD = 0
 ALU_SUB = 1
@@ -118,4 +117,4 @@ def alu(
 alu.__pycircuit_name__ = "alu"
 
 if __name__ == "__main__":
-    print(compile_cycle_aware(alu, name="alu", eager=True, data_w=64).emit_mlir())
+    pass

@@ -17,16 +17,16 @@ if str(_THIS_DIR) not in sys.path:
     sys.path.insert(0, str(_THIS_DIR))
 
 from .parameters import (  # noqa: E402
-    NUM_BANKS,
     BANKS_PER_GROUP,
+    CALENDAR_LEN,
+    NUM_BANKS,
     NUM_GROUPS,
     NUM_READ_PORTS,
     NUM_WRITE_PORTS,
-    CALENDAR_LEN,
     TEST_BANK_DEPTH,
     TEST_BANK_WIDTH,
-    tile_idx_width,
     port_data_width,
+    tile_idx_width,
 )
 from .tregfile import tregfile  # noqa: E402
 
@@ -341,4 +341,3 @@ if __name__ == "__main__":
         bank_depth=BANK_DEPTH,
         bank_width=BANK_WIDTH,
     )
-    print(circuit.emit_mlir())

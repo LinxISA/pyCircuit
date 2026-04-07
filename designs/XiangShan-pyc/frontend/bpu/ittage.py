@@ -31,13 +31,11 @@ from pycircuit import (
     CycleAwareDomain,
     CycleAwareSignal,
     cas,
-    compile_cycle_aware,
     mux,
     u,
     wire_of,
 )
-
-from top.parameters import PC_WIDTH, ITTAGE_TAG_WIDTH
+from top.parameters import ITTAGE_TAG_WIDTH, PC_WIDTH
 
 SMALL_ITTAGE_TABLE_INFOS = [
     (32, 4),
@@ -167,7 +165,7 @@ def ittage(
     tbl_hit = []
     tbl_target = []
 
-    for t_idx, (tbl_size, hist_len) in enumerate(table_infos):
+    for t_idx, (tbl_size, _hist_len) in enumerate(table_infos):
         idx_w = max(1, math.ceil(math.log2(tbl_size)))
         folded = global_hist[0:idx_w]
         pc_bits = s0_pc[1 : 1 + idx_w]
@@ -230,7 +228,7 @@ def ittage(
     # ── domain.next() → Cycle 1: Training ────────────────────────────
     domain.next()
 
-    for t_idx, (tbl_size, hist_len) in enumerate(table_infos):
+    for t_idx, (tbl_size, _hist_len) in enumerate(table_infos):
         idx_w = max(1, math.ceil(math.log2(tbl_size)))
         t_folded = train_hist[0:idx_w]
         t_pc_bits = train_pc[1 : 1 + idx_w]
@@ -331,11 +329,4 @@ ittage.__pycircuit_name__ = "ittage"
 
 
 if __name__ == "__main__":
-    print(
-        compile_cycle_aware(
-            ittage,
-            name="ittage",
-            eager=True,
-            table_infos=SMALL_ITTAGE_TABLE_INFOS,
-        ).emit_mlir()
-    )
+    pass

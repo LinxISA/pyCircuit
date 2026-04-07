@@ -8,14 +8,14 @@ Also verifies MTE-to-Cube dataflow testbench generation.
 
 from __future__ import annotations
 
-import sys
 import os
+import sys
 
 _root = os.path.join(os.path.dirname(__file__), "..", "..", "..", "..", "..")
 sys.path.insert(0, os.path.join(_root, "compiler", "frontend"))
 sys.path.insert(0, _root)
 
-from pycircuit import compile_cycle_aware, CycleAwareTb
+from pycircuit import CycleAwareTb, compile_cycle_aware
 from pycircuit.tb import Tb
 
 TEST_PROGRAM = """
@@ -48,7 +48,6 @@ def test_cube_rs_compile():
     mlir = circ.emit_mlir()
     assert "crs_issue_valid" in mlir
     assert "crs_issue_op" in mlir
-    print(f"PASS: cube_rs compile OK ({len(mlir):,} chars)")
 
 
 def test_cube_unit_compile():
@@ -61,7 +60,6 @@ def test_cube_unit_compile():
     mlir = circ.emit_mlir()
     assert "cu_busy" in mlir
     assert "cu_complete_valid" in mlir
-    print(f"PASS: cube_unit compile OK ({len(mlir):,} chars)")
 
 
 def test_cube_gemm_tb():
@@ -95,12 +93,9 @@ def test_cube_gemm_tb():
     ct.finish()
 
     assert len(t.drives) > 0
-    print("PASS: Cube GEMM testbench generated")
-    print(f"  Specification:\n{TEST_PROGRAM}")
 
 
 if __name__ == "__main__":
     test_cube_rs_compile()
     test_cube_unit_compile()
     test_cube_gemm_tb()
-    print("\nAll cube GEMM integration tests passed!")

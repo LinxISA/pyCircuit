@@ -10,12 +10,11 @@ from pycircuit import (
     CycleAwareCircuit,
     CycleAwareDomain,
     cas,
-    compile_cycle_aware,
     mux,
     wire_of,
 )
 
-from ...common.parameters import PHYS_GREG_W, SCALAR_DATA_W, MUL_LATENCY
+from ...common.parameters import MUL_LATENCY, PHYS_GREG_W, SCALAR_DATA_W
 
 
 def _in(io, key, m, domain, prefix, width):
@@ -137,8 +136,4 @@ muldiv.__pycircuit_name__ = "muldiv"
 
 
 if __name__ == "__main__":
-    print(
-        compile_cycle_aware(
-            muldiv, name="muldiv", eager=True, data_w=16, pipe_depth=4
-        ).emit_mlir()
-    )
+    pass

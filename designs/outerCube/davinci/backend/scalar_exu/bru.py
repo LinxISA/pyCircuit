@@ -12,12 +12,11 @@ from pycircuit import (
     CycleAwareCircuit,
     CycleAwareDomain,
     cas,
-    compile_cycle_aware,
     mux,
     wire_of,
 )
 
-from ...common.parameters import PHYS_GREG_W, SCALAR_DATA_W, CHECKPOINT_W
+from ...common.parameters import CHECKPOINT_W, PHYS_GREG_W, SCALAR_DATA_W
 
 BR_BEQ = 0
 BR_BNE = 1
@@ -132,4 +131,4 @@ bru.__pycircuit_name__ = "bru"
 
 
 if __name__ == "__main__":
-    print(compile_cycle_aware(bru, name="bru", eager=True).emit_mlir())
+    pass

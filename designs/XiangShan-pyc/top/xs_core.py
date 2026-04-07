@@ -35,14 +35,15 @@ _XS_ROOT = Path(__file__).resolve().parent.parent
 if str(_XS_ROOT) not in sys.path:
     sys.path.insert(0, str(_XS_ROOT))
 
+from backend.backend import backend
+from frontend.frontend import frontend
+from mem.memblock import memblock
 from pycircuit import (
     CycleAwareCircuit,
     CycleAwareDomain,
     CycleAwareSignal,
     cas,
-    compile_cycle_aware,
     mux,
-    u,
     wire_of,
 )
 
@@ -50,19 +51,13 @@ from top.parameters import (
     CACHE_LINE_SIZE,
     COMMIT_WIDTH,
     DECODE_WIDTH,
-    LOAD_PIPELINE_WIDTH,
     NUM_LDU,
     NUM_STA,
     PC_WIDTH,
     PTAG_WIDTH_INT,
     ROB_IDX_WIDTH,
-    STORE_PIPELINE_WIDTH,
     XLEN,
 )
-
-from frontend.frontend import frontend
-from backend.backend import backend
-from mem.memblock import memblock
 
 FU_TYPE_WIDTH = 3
 NUM_WB_PORTS = 4
@@ -93,7 +88,7 @@ def xs_core(
 
     ZERO_1 = cas(domain, m.const(0, width=1), cycle=0)
     ONE_1 = cas(domain, m.const(1, width=1), cycle=0)
-    ZERO_PC = cas(domain, m.const(0, width=pc_width), cycle=0)
+    cas(domain, m.const(0, width=pc_width), cycle=0)
 
     # ================================================================
     # External inputs
@@ -189,7 +184,7 @@ def xs_core(
     next_pc = mux(redirect_valid, redirect_target, next_pc)
 
     # ── Sub-module calls ──
-    fe_out = domain.call(
+    domain.call(
         frontend,
         inputs={},
         prefix=f"{prefix}_s_fe",
@@ -197,7 +192,7 @@ def xs_core(
         pc_width=pc_width,
     )
 
-    be_out = domain.call(
+    domain.call(
         backend,
         inputs={},
         prefix=f"{prefix}_s_be",
@@ -210,7 +205,7 @@ def xs_core(
         rob_idx_w=rob_idx_w,
     )
 
-    mem_out = domain.call(
+    domain.call(
         memblock,
         inputs={},
         prefix=f"{prefix}_s_mem",
@@ -277,7 +272,7 @@ def xs_core(
         cas(domain, m.input(f"{prefix}_wb_valid_{i}", width=1), cycle=0)
         for i in range(num_wb)
     ]
-    wb_data = [
+    [
         cas(domain, m.input(f"{prefix}_wb_data_{i}", width=data_width), cycle=0)
         for i in range(num_wb)
     ]
@@ -453,7 +448,7 @@ def xs_core(
     _out["stall_to_frontend"] = cas(domain, pipeline_stall, cycle=domain.cycle_index)
 
     # Writeback forwarding
-    wb_cnt_w = (
+    (
         max(1, num_wb.bit_length()) if isinstance(num_wb, int) and num_wb > 0 else 3
     )
     for i in range(num_wb):
@@ -482,21 +477,4 @@ xs_core.__pycircuit_name__ = "xs_core"
 
 
 if __name__ == "__main__":
-    print(
-        compile_cycle_aware(
-            xs_core,
-            name="xs_core",
-            eager=True,
-            decode_width=2,
-            commit_width=2,
-            num_wb=2,
-            num_load=1,
-            num_store=1,
-            data_width=16,
-            pc_width=16,
-            ptag_w=4,
-            rob_idx_w=4,
-            fu_type_w=3,
-            block_bits=128,
-        ).emit_mlir()
-    )
+    pass

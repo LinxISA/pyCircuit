@@ -29,18 +29,16 @@ from pycircuit import (
     CycleAwareDomain,
     CycleAwareSignal,
     cas,
-    compile_cycle_aware,
     mux,
     u,
     wire_of,
 )
-
 from top.parameters import (
     DECODE_WIDTH,
+    FETCH_BLOCK_SIZE,
     FTQ_IDX_WIDTH,
     IBUFFER_SIZE,
     INST_BYTES,
-    FETCH_BLOCK_SIZE,
     PC_WIDTH,
 )
 
@@ -77,7 +75,7 @@ def ibuffer(
     deq_cnt_w = max(1, deq_width.bit_length())
 
     cd = domain.clock_domain
-    rst = m.reset_active(cd.rst)
+    m.reset_active(cd.rst)
 
     # ── Cycle 0: Inputs ──────────────────────────────────────────────
     flush = (
@@ -143,17 +141,17 @@ def ibuffer(
     # ── Cycle 0: Combinational logic ─────────────────────────────────
 
     # Current pointer values (idx = ptr mod size)
-    zero = cas(domain, m.const(0, width=ptr_w), cycle=0)
+    cas(domain, m.const(0, width=ptr_w), cycle=0)
     size_const = cas(domain, m.const(size, width=cnt_w), cycle=0)
 
-    enq_idx = enq_ptr[0:idx_w]
-    deq_idx = deq_ptr[0:idx_w]
+    enq_ptr[0:idx_w]
+    deq_ptr[0:idx_w]
 
     # Number of valid entries = (enq_ptr - deq_ptr) mod (2*size), but since
     # ptr_w has the wrap bit, we can compute:
     num_valid = cas(domain, (wire_of(enq_ptr) - wire_of(deq_ptr))[0:cnt_w], cycle=0)
 
-    num_free = cas(
+    cas(
         domain, (m.const(size, width=cnt_w) - wire_of(num_valid))[0:cnt_w], cycle=0
     )
 
@@ -289,13 +287,4 @@ ibuffer.__pycircuit_name__ = "ibuffer"
 
 
 if __name__ == "__main__":
-    print(
-        compile_cycle_aware(
-            ibuffer,
-            name="ibuffer",
-            eager=True,
-            size=IBUFFER_SIZE,
-            enq_width=ENQ_WIDTH,
-            deq_width=DEQ_WIDTH,
-        ).emit_mlir()
-    )
+    pass

@@ -4,7 +4,6 @@ from pycircuit import (
     CycleAwareCircuit,
     CycleAwareDomain,
     cas,
-    compile_cycle_aware,
     wire_of,
 )
 
@@ -31,4 +30,4 @@ build.__pycircuit_name__ = "jit_pipeline_vec"
 
 
 if __name__ == "__main__":
-    print(compile_cycle_aware(build, name="jit_pipeline_vec", stages=3).emit_mlir())
+    pass

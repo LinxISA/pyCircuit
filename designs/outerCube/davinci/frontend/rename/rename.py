@@ -16,23 +16,22 @@ from pycircuit import (
     CycleAwareCircuit,
     CycleAwareDomain,
     cas,
-    compile_cycle_aware,
     mux,
     wire_of,
 )
 
 from ...common.parameters import (
-    RENAME_WIDTH,
-    ARCH_GREGS,
     ARCH_GREG_W,
-    ARCH_TREGS,
+    ARCH_GREGS,
     ARCH_TREG_W,
-    PHYS_GREG_W,
-    PHYS_TREG_W,
+    ARCH_TREGS,
     CDB_PORTS,
-    TCB_PORTS,
     CHECKPOINT_SLOTS,
     CHECKPOINT_W,
+    PHYS_GREG_W,
+    PHYS_TREG_W,
+    RENAME_WIDTH,
+    TCB_PORTS,
 )
 
 
@@ -330,21 +329,4 @@ rename.__pycircuit_name__ = "rename"
 
 
 if __name__ == "__main__":
-    print(
-        compile_cycle_aware(
-            rename,
-            name="rename",
-            eager=True,
-            width=2,
-            n_sarch=4,
-            sarch_w=2,
-            sphys_w=3,
-            n_tarch=4,
-            tarch_w=2,
-            tphys_w=3,
-            n_cdb=2,
-            n_tcb=2,
-            n_ckpt=2,
-            ckpt_w=1,
-        ).emit_mlir()
-    )
+    pass

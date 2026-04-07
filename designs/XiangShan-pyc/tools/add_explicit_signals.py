@@ -73,20 +73,12 @@ def transform_file(filepath: Path, func_name: str, *, dry_run: bool = False) -> 
     text = _transform_function(text, func_name, stats)
 
     if text == original:
-        print(f"  SKIP {filepath.relative_to(XS_ROOT)}/{func_name}: no changes")
         return stats
 
     if dry_run:
-        print(
-            f"  DRY  {filepath.relative_to(XS_ROOT)}/{func_name}: {sum(stats.values())} changes"
-        )
+        pass
     else:
         filepath.write_text(text)
-        print(
-            f"  WRITE {filepath.relative_to(XS_ROOT)}/{func_name}: "
-            f"sig={stats['sig']} init={stats['init']} in={stats['input']} "
-            f"out={stats['output']} ret={stats['ret']}"
-        )
 
     return stats
 
@@ -293,7 +285,6 @@ def main():
     if args.file:
         modules = [(f, fn) for f, fn in ALL_MODULES if f == args.file]
         if not modules:
-            print(f"ERROR: {args.file} not in list", file=sys.stderr)
             return 1
     else:
         modules = ALL_MODULES
@@ -302,20 +293,16 @@ def main():
     for rel_path, func_name in modules:
         fp = XS_ROOT / rel_path
         if not fp.exists():
-            print(f"  MISSING {rel_path}")
             continue
         s = transform_file(fp, func_name, dry_run=args.dry_run)
         for k in total:
             total[k] += s[k]
         processed += 1
 
-    print(f"\n{'=' * 60}")
-    print(f"Processed {processed} entries")
-    for k, v in total.items():
-        print(f"  {k:>10}: {v}")
-    print(f"  {'total':>10}: {sum(total.values())}")
+    for k, _v in total.items():
+        pass
     if args.dry_run:
-        print("  (DRY RUN)")
+        pass
     return 0
 
 

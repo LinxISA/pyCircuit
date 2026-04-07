@@ -13,7 +13,6 @@ from pycircuit import (
     CycleAwareCircuit,
     CycleAwareDomain,
     cas,
-    compile_cycle_aware,
     mux,
     wire_of,
 )
@@ -131,16 +130,4 @@ ref_counter.__pycircuit_name__ = "ref_counter"
 
 
 if __name__ == "__main__":
-    print(
-        compile_cycle_aware(
-            ref_counter,
-            name="ref_counter",
-            eager=True,
-            entries=16,
-            refcnt_w=4,
-            inc_ports=4,
-            dec_ports=4,
-            orphan_ports=4,
-            prefix="rc",
-        ).emit_mlir()
-    )
+    pass

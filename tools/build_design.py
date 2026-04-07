@@ -105,13 +105,12 @@ def compile_and_build(
     circuit = compile_cycle_aware(build_fn, name=design_name, eager=True, **kwargs)
     stamp_metadata(circuit, design_name, params_json)
     mlir = wrap_module_attrs(circuit.emit_mlir(), design_name)
-    dt_mlir = time.time() - t0
+    time.time() - t0
 
     mlir_dir = out_dir / "mlir"
     mlir_dir.mkdir(parents=True, exist_ok=True)
     mlir_path = mlir_dir / f"{design_name}.pyc"
     mlir_path.write_text(mlir, encoding="utf-8")
-    print(f"  MLIR: {mlir_path} ({len(mlir):,} chars, {dt_mlir:.1f}s)")
 
     pycc = find_pycc()
     verilog_dir = out_dir / "verilog"
@@ -129,19 +128,15 @@ def compile_and_build(
 
     t0 = time.time()
     result = subprocess.run(cmd, capture_output=True, text=True)
-    dt_pycc = time.time() - t0
+    time.time() - t0
 
     if result.returncode != 0:
-        print(f"  FAIL: pycc returned {result.returncode} ({dt_pycc:.1f}s)")
-        print(f"  stderr: {result.stderr.strip()[:500]}")
         return False
 
     v_files = list(verilog_dir.glob("*.v"))
-    total_lines = sum(1 for f in v_files for _ in f.open())
-    print(f"  Verilog: {len(v_files)} files, {total_lines:,} lines ({dt_pycc:.1f}s)")
-    print(f"  Output: {verilog_dir}")
+    sum(1 for f in v_files for _ in f.open())
     if result.stdout.strip():
-        print(f"  {result.stdout.strip()}")
+        pass
     return True
 
 
@@ -172,7 +167,6 @@ def main() -> int:
                 kwargs[k] = v
 
     out_dir = Path(args.out_dir)
-    print(f"Building {args.name} from {args.module_path}::{args.fn_name}")
     ok = compile_and_build(
         args.module_path,
         args.fn_name,

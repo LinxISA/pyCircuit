@@ -11,7 +11,6 @@ from pycircuit import (
     CycleAwareDomain,
     CycleAwareSignal,
     cas,
-    compile_cycle_aware,
     mux,
     u,
     wire_of,
@@ -50,7 +49,7 @@ def mux1h(
     """
     assert len(sels) == len(vals), "sels and vals must have the same length"
     result = _zero(m, domain, width)
-    for sel, val in zip(sels, vals):
+    for sel, val in zip(sels, vals, strict=False):
         result = mux(sel, val, result)
     return result
 
@@ -270,12 +269,10 @@ leading_zeros.__pycircuit_name__ = "leading_zeros"
 
 
 if __name__ == "__main__":
-    for builder, name in [
+    for _builder, _name in [
         (mux1h, "mux1h"),
         (popcount, "popcount"),
         (priority_enc, "priority_enc"),
         (leading_zeros, "leading_zeros"),
     ]:
-        print(f"// === {name} ===")
-        print(compile_cycle_aware(builder, name=name, eager=True).emit_mlir())
-        print()
+        pass

@@ -15,7 +15,6 @@ Key features:
 
 from __future__ import annotations
 
-import math
 import sys
 from pathlib import Path
 
@@ -28,9 +27,6 @@ from pycircuit import (
     CycleAwareDomain,
     CycleAwareSignal,
     cas,
-    compile_cycle_aware,
-    mux,
-    u,
     wire_of,
 )
 from top.parameters import *
@@ -162,10 +158,4 @@ store_unit.__pycircuit_name__ = "store_unit"
 
 
 if __name__ == "__main__":
-    print(
-        compile_cycle_aware(
-            store_unit,
-            name="store_unit",
-            eager=True,
-        ).emit_mlir()
-    )
+    pass

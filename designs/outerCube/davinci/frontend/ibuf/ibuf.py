@@ -12,7 +12,6 @@ from pycircuit import (
     CycleAwareCircuit,
     CycleAwareDomain,
     cas,
-    compile_cycle_aware,
     mux,
     wire_of,
 )
@@ -170,8 +169,4 @@ ibuf.__pycircuit_name__ = "ibuf"
 
 
 if __name__ == "__main__":
-    print(
-        compile_cycle_aware(
-            ibuf, name="ibuf", eager=True, depth=4, width=2, addr_w=32
-        ).emit_mlir()
-    )
+    pass

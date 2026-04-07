@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
-import sys
 import os
+import sys
 
 _root = os.path.join(os.path.dirname(__file__), "..", "..", "..", "..", "..")
 sys.path.insert(0, os.path.join(_root, "compiler", "frontend"))
 sys.path.insert(0, _root)
 
-from pycircuit import compile_cycle_aware, CycleAwareTb
+from pycircuit import CycleAwareTb, compile_cycle_aware
 from pycircuit.tb import Tb
 
 
@@ -29,7 +29,6 @@ def test_free_list_compile():
     assert "func.func @test_free_list" in mlir
     assert "fl_stall" in mlir
     assert "fl_count" in mlir
-    print(f"PASS: Free list compile OK ({len(mlir)} chars MLIR)")
 
 
 def test_free_list_tb_initial():
@@ -56,7 +55,6 @@ def test_free_list_tb_initial():
 
     assert len(t.drives) == 8
     assert len(t.expects) == 2
-    print("PASS: Free list initial state testbench generated")
 
 
 def test_free_list_tb_alloc():
@@ -95,11 +93,9 @@ def test_free_list_tb_alloc():
     ct.finish()
 
     assert any(e.value == 6 for e in t.expects)
-    print("PASS: Free list alloc testbench generated")
 
 
 if __name__ == "__main__":
     test_free_list_compile()
     test_free_list_tb_initial()
     test_free_list_tb_alloc()
-    print("\nAll Free List unit tests passed!")

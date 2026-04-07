@@ -5,7 +5,6 @@ from pycircuit import (
     CycleAwareDomain,
     CycleAwareSignal,
     cas,
-    compile_cycle_aware,
     mux,
     wire_of,
 )
@@ -130,4 +129,4 @@ build.__pycircuit_name__ = "regfile"
 
 
 if __name__ == "__main__":
-    print(compile_cycle_aware(build, name="regfile", eager=True).emit_mlir())
+    pass

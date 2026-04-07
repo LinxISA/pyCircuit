@@ -20,16 +20,15 @@ from pycircuit import (
     CycleAwareCircuit,
     CycleAwareDomain,
     cas,
-    compile_cycle_aware,
     mux,
     wire_of,
 )
 
 from ...common.parameters import (
-    CHECKPOINT_SLOTS,
-    CHECKPOINT_W,
     ARCH_GREGS,
     ARCH_TREGS,
+    CHECKPOINT_SLOTS,
+    CHECKPOINT_W,
     PHYS_GREG_W,
     PHYS_TREG_W,
 )
@@ -85,7 +84,7 @@ def checkpoint(
     dealloc_id = _in(inputs, "dealloc_id", m, domain, prefix, slot_w)
 
     # Restore (mispredict)
-    restore_valid = _in(inputs, "restore_valid", m, domain, prefix, 1)
+    _in(inputs, "restore_valid", m, domain, prefix, 1)
     restore_id = _in(inputs, "restore_id", m, domain, prefix, slot_w)
 
     # ── State ────────────────────────────────────────────────────────
@@ -235,17 +234,4 @@ checkpoint.__pycircuit_name__ = "checkpoint"
 
 
 if __name__ == "__main__":
-    print(
-        compile_cycle_aware(
-            checkpoint,
-            name="checkpoint",
-            eager=True,
-            n_slots=4,
-            slot_w=2,
-            n_sarch=4,
-            n_tarch=4,
-            sphys_w=3,
-            tphys_w=3,
-            prefix="ckpt",
-        ).emit_mlir()
-    )
+    pass

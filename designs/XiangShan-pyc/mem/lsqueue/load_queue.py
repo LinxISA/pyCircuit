@@ -30,7 +30,6 @@ from pycircuit import (
     CycleAwareDomain,
     CycleAwareSignal,
     cas,
-    compile_cycle_aware,
     mux,
     u,
     wire_of,
@@ -115,7 +114,7 @@ def load_queue(
         if "redirect_valid" in _in
         else cas(domain, m.input(f"{prefix}_redirect_valid", width=1), cycle=0)
     )
-    redirect_rob_idx = (
+    (
         _in["redirect_rob_idx"]
         if "redirect_rob_idx" in _in
         else cas(
@@ -168,7 +167,7 @@ def load_queue(
 
     line_bits = int(math.log2(CACHE_LINE_BYTES))
     lookup_tag = lookup_addr[line_bits:addr_width]
-    tag_w = addr_width - line_bits
+    addr_width - line_bits
 
     violation_found = zero1
     for j in range(size):
@@ -244,12 +243,4 @@ load_queue.__pycircuit_name__ = "load_queue"
 
 
 if __name__ == "__main__":
-    print(
-        compile_cycle_aware(
-            load_queue,
-            name="load_queue",
-            eager=True,
-            size=8,
-            addr_width=36,
-        ).emit_mlir()
-    )
+    pass

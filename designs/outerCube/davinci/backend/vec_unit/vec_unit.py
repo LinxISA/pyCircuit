@@ -16,15 +16,14 @@ from pycircuit import (
     CycleAwareCircuit,
     CycleAwareDomain,
     cas,
-    compile_cycle_aware,
     mux,
     wire_of,
 )
 
 from ...common.parameters import (
     PHYS_TREG_W,
-    UOP_W,
     TREGFILE_EPOCH_CY,
+    UOP_W,
     VEC_LATENCY,
 )
 
@@ -53,7 +52,7 @@ def vec_unit(
     issue_op = _in(inputs, "issue_op", m, domain, prefix, uop_w)
     issue_ptsrc0 = _in(inputs, "ptsrc0", m, domain, prefix, ttag_w)
     issue_ptsrc1 = _in(inputs, "ptsrc1", m, domain, prefix, ttag_w)
-    issue_ptsrc2 = _in(inputs, "ptsrc2", m, domain, prefix, ttag_w)
+    _in(inputs, "ptsrc2", m, domain, prefix, ttag_w)
     issue_ptdst = _in(inputs, "ptdst", m, domain, prefix, ttag_w)
 
     # Pipeline state: tracks current instruction through 2 epochs (16 cycles)
@@ -136,4 +135,4 @@ vec_unit.__pycircuit_name__ = "vec_unit"
 
 
 if __name__ == "__main__":
-    print(compile_cycle_aware(vec_unit, name="vec_unit", eager=True).emit_mlir())
+    pass

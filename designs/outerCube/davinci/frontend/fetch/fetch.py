@@ -15,7 +15,6 @@ from pycircuit import (
     CycleAwareCircuit,
     CycleAwareDomain,
     cas,
-    compile_cycle_aware,
     mux,
     wire_of,
 )
@@ -93,4 +92,4 @@ fetch.__pycircuit_name__ = "fetch"
 
 
 if __name__ == "__main__":
-    print(compile_cycle_aware(fetch, name="fetch", eager=True, addr_w=32).emit_mlir())
+    pass

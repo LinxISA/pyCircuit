@@ -85,28 +85,17 @@ def transform_file(
     else:
         func_match = re.search(r"def (build_\w+)\(", text)
         if not func_match:
-            print(f"  SKIP {filepath}: no build_* function found")
             return stats
         func_name = func_match.group(1)
         text = _transform_function_in_text(text, func_name, default_prefix, stats)
 
     if text == original:
-        print(f"  SKIP {filepath.relative_to(XS_ROOT)}: no changes needed")
         return stats
 
     if dry_run:
-        print(
-            f"  DRY-RUN {filepath.relative_to(XS_ROOT)}: "
-            f"{sum(stats.values())} replacements"
-        )
+        pass
     else:
         filepath.write_text(text)
-        print(
-            f"  WRITE {filepath.relative_to(XS_ROOT)}: "
-            f"{sum(stats.values())} replacements "
-            f"(in={stats['input']}, out={stats['output']}, "
-            f"state={stats['state']}, cycle={stats['cycle']})"
-        )
 
     return stats
 
@@ -222,7 +211,6 @@ def main():
     if args.file:
         modules = [(m, p) for m, p in ALL_MODULES if m == args.file]
         if not modules:
-            print(f"ERROR: {args.file} not in module list", file=sys.stderr)
             return 1
     else:
         modules = ALL_MODULES
@@ -231,23 +219,14 @@ def main():
     for rel_path, default_prefix in modules:
         filepath = XS_ROOT / rel_path
         if not filepath.exists():
-            print(f"  MISSING {rel_path}")
             continue
         s = transform_file(filepath, default_prefix, dry_run=args.dry_run)
         for k in total_stats:
             total_stats[k] += s[k]
         processed += 1
 
-    print(f"\n{'=' * 60}")
-    print(f"Processed {processed} files")
-    print(f"  Signatures added: {total_stats['sig']}")
-    print(f"  m.input:          {total_stats['input']}")
-    print(f"  m.output:         {total_stats['output']}")
-    print(f"  domain.signal:    {total_stats['state']}")
-    print(f"  domain.cycle:     {total_stats['cycle']}")
-    print(f"  Total:            {sum(total_stats.values())}")
     if args.dry_run:
-        print("  (DRY RUN — no files modified)")
+        pass
     return 0
 
 

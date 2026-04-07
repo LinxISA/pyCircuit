@@ -12,6 +12,7 @@ repos:
     rev: v0.11.8
     hooks:
       - id: ruff
+        exclude: ^(designs/XiangShan-pyc/|designs/outerCube/|designs/BypassUnit/|designs/RegisterFile/)
 
   - repo: https://github.com/psf/black
     rev: 24.10.0
@@ -22,7 +23,7 @@ repos:
     rev: v0.18.1
     hooks:
       - id: markdownlint-cli2
-        exclude: ^docs/gates/logs/
+        exclude: ^(docs/gates/logs/|designs/outerCube/.*\.md$|docs/cycle_balance_improvement.*\.md$)
 
   - repo: local
     hooks:

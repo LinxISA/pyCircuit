@@ -36,22 +36,15 @@ from pycircuit import (
     CycleAwareDomain,
     CycleAwareSignal,
     cas,
-    compile_cycle_aware,
     mux,
-    u,
     wire_of,
 )
-
 from top.parameters import (
-    CACHE_LINE_SIZE,
     DECODE_WIDTH,
     FETCH_BLOCK_SIZE,
     ICACHE_BLOCK_BYTES,
     INST_BYTES,
     PC_WIDTH,
-    PREDICT_WIDTH,
-    PTAG_WIDTH_INT,
-    ROB_IDX_WIDTH,
 )
 
 INST_WIDTH = 32
@@ -59,11 +52,11 @@ FETCH_WIDTH = FETCH_BLOCK_SIZE // INST_BYTES
 BLOCK_BITS = ICACHE_BLOCK_BYTES * 8
 
 from frontend.bpu.bpu import bpu
+from frontend.decode.decode import decode
 from frontend.ftq.ftq import ftq
+from frontend.ibuffer.ibuffer import ibuffer
 from frontend.icache.icache import icache
 from frontend.ifu.ifu import ifu
-from frontend.ibuffer.ibuffer import ibuffer
-from frontend.decode.decode import decode
 
 
 def frontend(
@@ -83,19 +76,19 @@ def frontend(
     _out: dict[str, CycleAwareSignal] = {}
 
     # ── Sub-module calls ──
-    bpu_out = domain.call(bpu, inputs={}, prefix=f"{prefix}_s_bpu", pc_width=pc_width)
+    domain.call(bpu, inputs={}, prefix=f"{prefix}_s_bpu", pc_width=pc_width)
 
-    ftq_out = domain.call(ftq, inputs={}, prefix=f"{prefix}_s_ftq", pc_width=pc_width)
+    domain.call(ftq, inputs={}, prefix=f"{prefix}_s_ftq", pc_width=pc_width)
 
-    ic_out = domain.call(icache, inputs={}, prefix=f"{prefix}_s_ic", pc_width=pc_width)
+    domain.call(icache, inputs={}, prefix=f"{prefix}_s_ic", pc_width=pc_width)
 
-    ifu_out = domain.call(ifu, inputs={}, prefix=f"{prefix}_s_ifu", pc_width=pc_width)
+    domain.call(ifu, inputs={}, prefix=f"{prefix}_s_ifu", pc_width=pc_width)
 
-    ibuf_out = domain.call(
+    domain.call(
         ibuffer, inputs={}, prefix=f"{prefix}_s_ibuf", deq_width=decode_width
     )
 
-    dec_out = domain.call(
+    domain.call(
         decode,
         inputs={},
         prefix=f"{prefix}_s_dec",
@@ -140,9 +133,9 @@ def frontend(
         else cas(domain, m.input(f"{prefix}_refill_data", width=block_bits), cycle=0)
     )
 
-    ZERO_1 = cas(domain, m.const(0, width=1), cycle=0)
+    cas(domain, m.const(0, width=1), cycle=0)
     ONE_1 = cas(domain, m.const(1, width=1), cycle=0)
-    ZERO_PC = cas(domain, m.const(0, width=pc_width), cycle=0)
+    cas(domain, m.const(0, width=pc_width), cycle=0)
     FALLTHROUGH = cas(domain, m.const(pred_block_bytes, width=pc_width), cycle=0)
 
     # BPU state: fetch PC register
@@ -255,15 +248,4 @@ frontend.__pycircuit_name__ = "frontend"
 
 
 if __name__ == "__main__":
-    print(
-        compile_cycle_aware(
-            frontend,
-            name="frontend",
-            eager=True,
-            decode_width=2,
-            pc_width=16,
-            fetch_width=4,
-            inst_width=32,
-            block_bits=128,
-        ).emit_mlir()
-    )
+    pass

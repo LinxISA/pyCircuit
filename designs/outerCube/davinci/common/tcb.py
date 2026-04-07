@@ -16,12 +16,10 @@ from pycircuit import (
     CycleAwareCircuit,
     CycleAwareDomain,
     cas,
-    compile_cycle_aware,
-    mux,
     wire_of,
 )
 
-from .parameters import TCB_PORTS, PHYS_TREG_W
+from .parameters import PHYS_TREG_W, TCB_PORTS
 
 
 def _in(io, key, m, domain, prefix, width):
@@ -72,4 +70,4 @@ tcb.__pycircuit_name__ = "tcb"
 
 
 if __name__ == "__main__":
-    print(compile_cycle_aware(tcb, name="tcb", eager=True).emit_mlir())
+    pass

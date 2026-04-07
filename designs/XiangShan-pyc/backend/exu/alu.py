@@ -31,12 +31,10 @@ from pycircuit import (
     CycleAwareDomain,
     CycleAwareSignal,
     cas,
-    compile_cycle_aware,
     mux,
     u,
     wire_of,
 )
-
 from top.parameters import XLEN
 
 ALU_OP_WIDTH = 4
@@ -163,11 +161,4 @@ alu.__pycircuit_name__ = "alu"
 
 
 if __name__ == "__main__":
-    print(
-        compile_cycle_aware(
-            alu,
-            name="alu",
-            eager=True,
-            data_width=XLEN,
-        ).emit_mlir()
-    )
+    pass

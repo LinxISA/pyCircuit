@@ -30,7 +30,6 @@ from pycircuit import (
     CycleAwareDomain,
     CycleAwareSignal,
     cas,
-    compile_cycle_aware,
     mux,
     u,
     wire_of,
@@ -243,13 +242,4 @@ sbuffer.__pycircuit_name__ = "sbuffer"
 
 
 if __name__ == "__main__":
-    print(
-        compile_cycle_aware(
-            sbuffer,
-            name="sbuffer",
-            eager=True,
-            size=4,
-            threshold=2,
-            addr_width=36,
-        ).emit_mlir()
-    )
+    pass

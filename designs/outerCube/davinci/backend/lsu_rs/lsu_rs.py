@@ -12,20 +12,19 @@ from pycircuit import (
     CycleAwareCircuit,
     CycleAwareDomain,
     cas,
-    compile_cycle_aware,
     mux,
     wire_of,
 )
 
 from ...common.parameters import (
-    LSU_RS_ENTRIES,
-    LSU_ISSUE_WIDTH,
-    DISPATCH_WIDTH,
+    AGE_W,
     CDB_PORTS,
+    DISPATCH_WIDTH,
+    LSU_ISSUE_WIDTH,
+    LSU_RS_ENTRIES,
     PHYS_GREG_W,
     SCALAR_DATA_W,
     UOP_W,
-    AGE_W,
 )
 
 
@@ -183,7 +182,7 @@ def lsu_rs(
     age_ctr <<= (age_ctr + cas(domain, m.const(1, width=age_w), cycle=0)).trunc(age_w)
 
     for e in range(n_entries):
-        etag = cas(domain, m.const(e, width=eidx_w), cycle=0)
+        cas(domain, m.const(e, width=eidx_w), cycle=0)
         rdy1[e].assign(eff_rdy1[e], when=valid[e])
         rdy2[e].assign(eff_rdy2[e], when=valid[e])
         valid[e].assign(cas(domain, m.const(0, width=1), cycle=0), when=flush)
@@ -208,17 +207,4 @@ lsu_rs.__pycircuit_name__ = "lsu_rs"
 
 
 if __name__ == "__main__":
-    print(
-        compile_cycle_aware(
-            lsu_rs,
-            name="lsu_rs",
-            eager=True,
-            n_entries=4,
-            n_dispatch=2,
-            n_cdb=2,
-            tag_w=3,
-            data_w=16,
-            uop_w=4,
-            age_w=3,
-        ).emit_mlir()
-    )
+    pass

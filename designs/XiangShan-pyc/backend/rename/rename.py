@@ -28,17 +28,14 @@ from pycircuit import (
     CycleAwareDomain,
     CycleAwareSignal,
     cas,
-    compile_cycle_aware,
     mux,
     u,
     wire_of,
 )
-
 from top.parameters import (
     COMMIT_WIDTH,
     INT_LOGIC_REGS,
     INT_PHYS_REGS,
-    PTAG_WIDTH_INT,
     RENAME_SNAPSHOT_NUM,
     RENAME_WIDTH,
 )
@@ -81,7 +78,7 @@ def rename(
     snap_id_w = max(1, max(1, snapshot_num - 1).bit_length())
 
     cd = domain.clock_domain
-    rst = m.reset_active(cd.rst)
+    m.reset_active(cd.rst)
 
     # ── Cycle 0: Inputs ──────────────────────────────────────────
     flush = (
@@ -396,15 +393,4 @@ rename.__pycircuit_name__ = "rename"
 
 
 if __name__ == "__main__":
-    print(
-        compile_cycle_aware(
-            rename,
-            name="rename",
-            eager=True,
-            rename_width=2,
-            int_phys_regs=16,
-            int_logic_regs=8,
-            commit_width=2,
-            snapshot_num=2,
-        ).emit_mlir()
-    )
+    pass

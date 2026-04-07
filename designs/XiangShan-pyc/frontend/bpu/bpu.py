@@ -32,19 +32,14 @@ from pycircuit import (
     CycleAwareDomain,
     CycleAwareSignal,
     cas,
-    compile_cycle_aware,
     mux,
-    u,
     wire_of,
 )
-
 from top.parameters import (
+    BRANCH_TYPE_WIDTH,
     CFI_POSITION_WIDTH,
     FETCH_BLOCK_SIZE,
-    INST_BYTES,
     PC_WIDTH,
-    PREDICT_WIDTH,
-    BRANCH_TYPE_WIDTH,
     RAS_ACTION_WIDTH,
     RAS_SPEC_QUEUE_SIZE,
 )
@@ -52,11 +47,11 @@ from top.parameters import (
 PRED_BLOCK_BYTES = FETCH_BLOCK_SIZE
 ATTR_WIDTH = BRANCH_TYPE_WIDTH + RAS_ACTION_WIDTH
 
-from frontend.bpu.ubtb import ubtb
-from frontend.bpu.tage import tage, SMALL_TAGE_TABLE_INFOS
-from frontend.bpu.sc import sc, SC_TABLE_INFOS
-from frontend.bpu.ittage import ittage, SMALL_ITTAGE_TABLE_INFOS
+from frontend.bpu.ittage import SMALL_ITTAGE_TABLE_INFOS, ittage
 from frontend.bpu.ras import ras
+from frontend.bpu.sc import SC_TABLE_INFOS, sc
+from frontend.bpu.tage import SMALL_TAGE_TABLE_INFOS, tage
+from frontend.bpu.ubtb import ubtb
 
 
 def bpu(
@@ -75,7 +70,6 @@ def bpu(
     _out: dict[str, CycleAwareSignal] = {}
 
     target_w = pc_width
-    c = domain.cycle_index
 
     # ── Cycle 0 (s0): PC generation & sub-predictor launch ────────────
     redirect_valid = (
@@ -355,7 +349,7 @@ def bpu(
     )
 
     zero1 = cas(domain, m.const(0, width=1), cycle=0)
-    zero_pc = cas(domain, m.const(0, width=pc_width), cycle=0)
+    cas(domain, m.const(0, width=pc_width), cycle=0)
     zero_pos = cas(domain, m.const(0, width=cfi_pos_width), cycle=0)
     zero_attr = cas(domain, m.const(0, width=attr_width), cycle=0)
     one1 = cas(domain, m.const(1, width=1), cycle=0)
@@ -409,7 +403,7 @@ def bpu(
     target_differs = cas(
         domain, (wire_of(s3_target) ^ wire_of(s3_s1_target))[0:1], cycle=0
     )
-    target_nonzero = cas(domain, wire_of(s3_target) | wire_of(s3_s1_target), cycle=0)[
+    cas(domain, wire_of(s3_target) | wire_of(s3_s1_target), cycle=0)[
         0:1
     ]
     taken_differs = cas(
@@ -488,7 +482,7 @@ def bpu(
         pc_width=pc_width,
     )
 
-    sc_out = domain.call(
+    domain.call(
         sc,
         inputs={
             "s0_fire": s0_fire,
@@ -525,7 +519,7 @@ def bpu(
         pc_width=pc_width,
     )
 
-    ras_out = domain.call(
+    domain.call(
         ras,
         inputs={
             "s0_fire": s0_fire,
@@ -663,10 +657,4 @@ bpu.__pycircuit_name__ = "bpu"
 
 
 if __name__ == "__main__":
-    print(
-        compile_cycle_aware(
-            bpu,
-            name="bpu",
-            eager=True,
-        ).emit_mlir()
-    )
+    pass

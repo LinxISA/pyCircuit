@@ -33,12 +33,10 @@ from pycircuit import (
     CycleAwareDomain,
     CycleAwareSignal,
     cas,
-    compile_cycle_aware,
     mux,
     u,
     wire_of,
 )
-
 from top.parameters import XLEN
 
 FPU_OP_WIDTH = 2
@@ -113,8 +111,8 @@ def fpu(
     def _op(val):
         return cas(domain, m.const(val, width=op_w), cycle=0)
 
-    ZERO_1 = cas(domain, m.const(0, width=1), cycle=0)
-    ONE_1 = cas(domain, m.const(1, width=1), cycle=0)
+    cas(domain, m.const(0, width=1), cycle=0)
+    cas(domain, m.const(1, width=1), cycle=0)
 
     is_fdiv = fpu_op == _op(OP_FDIV)
     is_pipe = ~is_fdiv
@@ -228,13 +226,4 @@ fpu.__pycircuit_name__ = "fpu"
 
 
 if __name__ == "__main__":
-    print(
-        compile_cycle_aware(
-            fpu,
-            name="fpu",
-            eager=True,
-            data_width=16,
-            pipe_latency=2,
-            fdiv_latency=4,
-        ).emit_mlir()
-    )
+    pass

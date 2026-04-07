@@ -10,14 +10,13 @@ from pycircuit import (
     CycleAwareCircuit,
     CycleAwareDomain,
     cas,
-    compile_cycle_aware,
     mux,
     wire_of,
 )
 
 from ..common.parameters import (
-    PHYS_GREGS,
     PHYS_GREG_W,
+    PHYS_GREGS,
     SCALAR_DATA_W,
     SCALAR_RF_RPORTS,
     SCALAR_RF_WPORTS,
@@ -93,14 +92,4 @@ scalar_prf.__pycircuit_name__ = "scalar_prf"
 
 
 if __name__ == "__main__":
-    print(
-        compile_cycle_aware(
-            scalar_prf,
-            name="scalar_prf",
-            eager=True,
-            entries=16,
-            n_rd=4,
-            n_wr=2,
-            prefix="prf",
-        ).emit_mlir()
-    )
+    pass

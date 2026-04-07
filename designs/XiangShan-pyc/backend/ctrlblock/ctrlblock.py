@@ -33,23 +33,19 @@ from pycircuit import (
     CycleAwareDomain,
     CycleAwareSignal,
     cas,
-    compile_cycle_aware,
     mux,
-    u,
     wire_of,
 )
-
 from top.parameters import (
     COMMIT_WIDTH,
     DECODE_WIDTH,
     PC_WIDTH,
     PTAG_WIDTH_INT,
-    RENAME_WIDTH,
     ROB_IDX_WIDTH,
 )
 
-from backend.rename.rename import rename
 from backend.dispatch.dispatch import dispatch
+from backend.rename.rename import rename
 from backend.rob.rob import rob
 
 
@@ -70,7 +66,7 @@ def ctrlblock(
     _out: dict[str, CycleAwareSignal] = {}
 
     # ── Sub-module calls ──
-    ren_out = domain.call(
+    domain.call(
         rename,
         inputs={
             "flush": (
@@ -84,7 +80,7 @@ def ctrlblock(
         commit_width=commit_width,
     )
 
-    dp_out = domain.call(
+    domain.call(
         dispatch,
         inputs={},
         prefix=f"{prefix}_s_dp",
@@ -94,7 +90,7 @@ def ctrlblock(
         rob_idx_w=rob_idx_w,
     )
 
-    rob_out = domain.call(
+    domain.call(
         rob,
         inputs={},
         prefix=f"{prefix}_s_rob",
@@ -163,7 +159,7 @@ def ctrlblock(
             domain, m.input(f"{prefix}_bru_redirect_target", width=pc_width), cycle=0
         )
     )
-    bru_redirect_rob_idx = (
+    (
         _in["bru_redirect_rob_idx"]
         if "bru_redirect_rob_idx" in _in
         else cas(
@@ -210,9 +206,9 @@ def ctrlblock(
     ]
 
     # ── Constants ────────────────────────────────────────────────
-    ZERO_1 = cas(domain, m.const(0, width=1), cycle=0)
-    ONE_1 = cas(domain, m.const(1, width=1), cycle=0)
-    ZERO_PC = cas(domain, m.const(0, width=pc_width), cycle=0)
+    cas(domain, m.const(0, width=1), cycle=0)
+    cas(domain, m.const(1, width=1), cycle=0)
+    cas(domain, m.const(0, width=pc_width), cycle=0)
 
     # ================================================================
     # Redirect generation
@@ -315,15 +311,4 @@ ctrlblock.__pycircuit_name__ = "ctrlblock"
 
 
 if __name__ == "__main__":
-    print(
-        compile_cycle_aware(
-            ctrlblock,
-            name="ctrlblock",
-            eager=True,
-            decode_width=2,
-            commit_width=2,
-            ptag_w=4,
-            pc_width=16,
-            rob_idx_w=4,
-        ).emit_mlir()
-    )
+    pass

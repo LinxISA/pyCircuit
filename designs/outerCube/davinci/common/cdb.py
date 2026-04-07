@@ -15,7 +15,6 @@ from pycircuit import (
     CycleAwareCircuit,
     CycleAwareDomain,
     cas,
-    compile_cycle_aware,
     mux,
     wire_of,
 )
@@ -84,4 +83,4 @@ cdb.__pycircuit_name__ = "cdb"
 
 
 if __name__ == "__main__":
-    print(compile_cycle_aware(cdb, name="cdb", eager=True).emit_mlir())
+    pass

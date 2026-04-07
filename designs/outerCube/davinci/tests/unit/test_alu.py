@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
-import sys
 import os
+import sys
 
 _root = os.path.join(os.path.dirname(__file__), "..", "..", "..", "..", "..")
 sys.path.insert(0, os.path.join(_root, "compiler", "frontend"))
 sys.path.insert(0, _root)
 
-from pycircuit import compile_cycle_aware, CycleAwareTb
+from pycircuit import CycleAwareTb, compile_cycle_aware
 from pycircuit.tb import Tb
 
 
@@ -29,12 +29,11 @@ def test_alu_compile():
     assert "func.func @test_alu" in mlir
     assert "alu0_result_data" in mlir
     assert "alu0_result_valid" in mlir
-    print(f"PASS: ALU compile OK ({len(mlir)} chars MLIR)")
 
 
 def test_alu_tb_add():
     """Generate ALU ADD testbench (5 + 3 = 8)."""
-    circuit = compile_cycle_aware(alu_test, name="test_alu", eager=True)
+    compile_cycle_aware(alu_test, name="test_alu", eager=True)
     t = Tb()
     ct = CycleAwareTb(t)
     ct.clock("clk")
@@ -54,12 +53,11 @@ def test_alu_tb_add():
     assert len(t.drives) == 5
     assert len(t.expects) == 2
     assert t.expects[0].value == 8
-    print("PASS: ALU ADD testbench generated")
 
 
 def test_alu_tb_sub():
     """Generate ALU SUB testbench (10 - 3 = 7)."""
-    circuit = compile_cycle_aware(alu_test, name="test_alu", eager=True)
+    compile_cycle_aware(alu_test, name="test_alu", eager=True)
     t = Tb()
     ct = CycleAwareTb(t)
     ct.clock("clk")
@@ -76,12 +74,11 @@ def test_alu_tb_sub():
     ct.finish()
 
     assert t.expects[0].value == 7
-    print("PASS: ALU SUB testbench generated")
 
 
 def test_alu_tb_and():
     """Generate ALU AND testbench."""
-    circuit = compile_cycle_aware(alu_test, name="test_alu", eager=True)
+    compile_cycle_aware(alu_test, name="test_alu", eager=True)
     t = Tb()
     ct = CycleAwareTb(t)
     ct.clock("clk")
@@ -98,7 +95,6 @@ def test_alu_tb_and():
     ct.finish()
 
     assert t.expects[0].value == 0x0F00
-    print("PASS: ALU AND testbench generated")
 
 
 if __name__ == "__main__":
@@ -106,4 +102,3 @@ if __name__ == "__main__":
     test_alu_tb_add()
     test_alu_tb_sub()
     test_alu_tb_and()
-    print("\nAll ALU unit tests passed!")

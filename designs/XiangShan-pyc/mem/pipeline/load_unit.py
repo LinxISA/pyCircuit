@@ -30,9 +30,6 @@ from pycircuit import (
     CycleAwareDomain,
     CycleAwareSignal,
     cas,
-    compile_cycle_aware,
-    mux,
-    u,
     wire_of,
 )
 from top.parameters import *
@@ -54,7 +51,7 @@ def load_unit(
     _in = inputs or {}
     _out: dict[str, CycleAwareSignal] = {}
 
-    offset_bits = int(math.log2(CACHE_LINE_BYTES))
+    int(math.log2(CACHE_LINE_BYTES))
 
     # ================================================================
     # s0 — Address Generation + TLB request
@@ -155,7 +152,7 @@ def load_unit(
 
     paddr_lo = s1_addr_w[0:12]
     s1_paddr = m.cat(wire_of(tlb_resp_ppn), paddr_lo)
-    paddr_width = ppn_width + 12
+    ppn_width + 12
 
     s1_dcache_fire = s1_alive & wire_of(tlb_resp_hit)
 
@@ -177,7 +174,7 @@ def load_unit(
     s2_valid_w = domain.cycle(s1_dcache_fire, name=f"{prefix}_s2_v")
     s2_rob_idx_w = domain.cycle(s1_rob_idx_w, name=f"{prefix}_s2_rob")
     s2_lq_idx_w = domain.cycle(s1_lq_idx_w, name=f"{prefix}_s2_lq")
-    s2_paddr_w = domain.cycle(s1_paddr, name=f"{prefix}_s2_pa")
+    domain.cycle(s1_paddr, name=f"{prefix}_s2_pa")
 
     domain.next()  # ─────────────── s1 → s2 boundary ──────────────
 
@@ -218,10 +215,4 @@ load_unit.__pycircuit_name__ = "load_unit"
 
 
 if __name__ == "__main__":
-    print(
-        compile_cycle_aware(
-            load_unit,
-            name="load_unit",
-            eager=True,
-        ).emit_mlir()
-    )
+    pass

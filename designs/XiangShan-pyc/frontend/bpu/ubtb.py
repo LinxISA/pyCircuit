@@ -31,12 +31,10 @@ from pycircuit import (
     CycleAwareDomain,
     CycleAwareSignal,
     cas,
-    compile_cycle_aware,
     mux,
     u,
     wire_of,
 )
-
 from top.parameters import (
     BRANCH_TYPE_WIDTH,
     CFI_POSITION_WIDTH,
@@ -301,11 +299,4 @@ ubtb.__pycircuit_name__ = "ubtb"
 
 
 if __name__ == "__main__":
-    print(
-        compile_cycle_aware(
-            ubtb,
-            name="ubtb",
-            eager=True,
-            entries=UBTB_NUM_ENTRIES,
-        ).emit_mlir()
-    )
+    pass

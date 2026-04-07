@@ -28,7 +28,6 @@ from pycircuit import (
     CycleAwareDomain,
     CycleAwareSignal,
     cas,
-    compile_cycle_aware,
     mux,
     u,
     wire_of,
@@ -205,12 +204,4 @@ prefetcher.__pycircuit_name__ = "prefetcher"
 
 
 if __name__ == "__main__":
-    print(
-        compile_cycle_aware(
-            prefetcher,
-            name="prefetcher",
-            eager=True,
-            table_size=4,
-            addr_width=36,
-        ).emit_mlir()
-    )
+    pass

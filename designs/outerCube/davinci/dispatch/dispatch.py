@@ -14,17 +14,15 @@ from pycircuit import (
     CycleAwareCircuit,
     CycleAwareDomain,
     cas,
-    compile_cycle_aware,
     mux,
     wire_of,
 )
 
 from ..common.parameters import (
     DISPATCH_WIDTH,
-    UOP_W,
     PHYS_GREG_W,
     PHYS_TREG_W,
-    ARCH_GREG_W,
+    UOP_W,
 )
 
 DOMAIN_W = 2
@@ -244,8 +242,4 @@ dispatch.__pycircuit_name__ = "dispatch"
 
 
 if __name__ == "__main__":
-    print(
-        compile_cycle_aware(
-            dispatch, name="dispatch", eager=True, width=2, uop_w=4, stag_w=3, ttag_w=3
-        ).emit_mlir()
-    )
+    pass

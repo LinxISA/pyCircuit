@@ -10,18 +10,17 @@ from pycircuit import (
     CycleAwareCircuit,
     CycleAwareDomain,
     cas,
-    compile_cycle_aware,
     mux,
     wire_of,
 )
 
 from ...common.parameters import (
+    AGE_W,
     CUBE_RS_ENTRIES,
     DISPATCH_WIDTH,
-    TCB_PORTS,
     PHYS_TREG_W,
+    TCB_PORTS,
     UOP_W,
-    AGE_W,
 )
 
 
@@ -184,17 +183,4 @@ cube_rs.__pycircuit_name__ = "cube_rs"
 
 
 if __name__ == "__main__":
-    print(
-        compile_cycle_aware(
-            cube_rs,
-            name="cube_rs",
-            eager=True,
-            n_entries=4,
-            n_dispatch=2,
-            n_tcb=2,
-            n_tile_src=2,
-            ttag_w=3,
-            uop_w=4,
-            age_w=3,
-        ).emit_mlir()
-    )
+    pass

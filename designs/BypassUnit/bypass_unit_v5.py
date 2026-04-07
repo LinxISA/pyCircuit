@@ -6,7 +6,6 @@ from pycircuit import (
     CycleAwareSignal,
     Tb,
     cas,
-    compile_cycle_aware,
     mux,
     testbench,
     wire_of,
@@ -102,14 +101,14 @@ def _resolve_src(
       w3 result @ 0  →  DFF  →  w2 mux @ 1  →  DFF  →  w1 mux @ 2
     Output @ cycle 2.
     """
-    common = dict(
-        src_valid=src_valid,
-        src_ptag=src_ptag,
-        src_ptype=src_ptype,
-        lanes=lanes,
-        lane_w=lane_w,
-        data_w=data_w,
-    )
+    common = {
+        "src_valid": src_valid,
+        "src_ptag": src_ptag,
+        "src_ptype": src_ptype,
+        "lanes": lanes,
+        "lane_w": lane_w,
+        "data_w": data_w,
+    }
 
     # ── Cycle 0: w3 (WB stage) — lowest priority ──
     # src @ cycle 0, w3 lanes @ cycle 0 → match results @ cycle 0
@@ -360,14 +359,4 @@ def tb(t: Tb) -> None:
 
 
 if __name__ == "__main__":
-    print(
-        compile_cycle_aware(
-            bypass_unit,
-            name="bypass_unit",
-            eager=True,
-            lanes=8,
-            data_width=64,
-            ptag_count=256,
-            ptype_count=4,
-        ).emit_mlir()[:500]
-    )
+    pass

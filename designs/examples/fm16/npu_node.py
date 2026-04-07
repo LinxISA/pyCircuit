@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """Simplified NPU node — pyCircuit V5 cycle-aware."""
 
 from __future__ import annotations
@@ -75,5 +74,3 @@ if __name__ == "__main__":
     circuit = compile_cycle_aware(
         build, name="npu_node", N_PORTS=4, FIFO_DEPTH=8, NODE_ID=0
     )
-    print(circuit.emit_mlir()[:500])
-    print(f"... ({len(circuit.emit_mlir())} chars)")

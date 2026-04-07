@@ -33,12 +33,8 @@ from pycircuit import (
     CycleAwareDomain,
     CycleAwareSignal,
     cas,
-    compile_cycle_aware,
-    mux,
-    u,
     wire_of,
 )
-
 from top.parameters import DECODE_WIDTH, PC_WIDTH
 
 INST_WIDTH = 32
@@ -112,7 +108,7 @@ def decode(
             domain, m.input(f"{prefix}_in_inst_{i}", width=INST_WIDTH), cycle=0
         )
         in_pc = cas(domain, m.input(f"{prefix}_in_pc_{i}", width=pc_width), cycle=0)
-        in_is_rvc = cas(domain, m.input(f"{prefix}_in_is_rvc_{i}", width=1), cycle=0)
+        cas(domain, m.input(f"{prefix}_in_is_rvc_{i}", width=1), cycle=0)
 
         inst = wire_of(in_inst)
 
@@ -125,7 +121,8 @@ def decode(
         funct7 = inst[25:32]
 
         # ── Instruction type detection ──
-        _c = lambda v: m.const(v, width=7)
+        def _c(v):
+            return m.const(v, width=7)
 
         is_lui = opcode == _c(OP_LUI)
         is_auipc = opcode == _c(OP_AUIPC)
@@ -138,7 +135,7 @@ def decode(
         is_op = opcode == _c(OP_OP)
         is_op_imm_w = opcode == _c(OP_OP_IMM_W)
         is_op_w = opcode == _c(OP_OP_W)
-        is_system = opcode == _c(OP_SYSTEM)
+        opcode == _c(OP_SYSTEM)
 
         # FP / Vec
         is_fp = (
@@ -264,12 +261,4 @@ decode.__pycircuit_name__ = "decode"
 
 
 if __name__ == "__main__":
-    print(
-        compile_cycle_aware(
-            decode,
-            name="decode",
-            eager=True,
-            decode_width=2,
-            pc_width=PC_WIDTH,
-        ).emit_mlir()
-    )
+    pass

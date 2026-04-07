@@ -31,12 +31,10 @@ from pycircuit import (
     CycleAwareDomain,
     CycleAwareSignal,
     cas,
-    compile_cycle_aware,
     mux,
     u,
     wire_of,
 )
-
 from top.parameters import PC_WIDTH
 
 SC_TABLE_INFOS = [
@@ -69,9 +67,9 @@ def sc(
     _in = inputs or {}
     _out: dict[str, CycleAwareSignal] = {}
 
-    num_tables = len(table_infos)
-    ctr_min_signed = -(1 << (ctr_width - 1))
-    ctr_max_signed = (1 << (ctr_width - 1)) - 1
+    len(table_infos)
+    -(1 << (ctr_width - 1))
+    (1 << (ctr_width - 1)) - 1
     ctr_max_u = (1 << ctr_width) - 1
     thr_max = (1 << threshold_width) - 1
 
@@ -160,7 +158,7 @@ def sc(
     sum_acc = cas(domain, m.const(0, width=sum_width), cycle=0)
     tbl_rd_ctr = []
 
-    for t_idx, (tbl_size, hist_len) in enumerate(table_infos):
+    for t_idx, (tbl_size, _hist_len) in enumerate(table_infos):
         idx_w = max(1, math.ceil(math.log2(tbl_size)))
         folded = global_hist[0:idx_w]
         pc_bits = s0_pc[1 : 1 + idx_w]
@@ -196,7 +194,7 @@ def sc(
 
     # Direction: if sum is "large enough", override TAGE
     thr_ext = cas(domain, wire_of(thr_val) + u(sum_width, 0), cycle=0)[0:sum_width]
-    neg_thr = cas(domain, (u(sum_width, 0) - wire_of(thr_ext))[0:sum_width], cycle=0)
+    cas(domain, (u(sum_width, 0) - wire_of(thr_ext))[0:sum_width], cycle=0)
 
     # sum_abs = abs(sum) approximation via MSB check
     sum_msb = sum_acc[sum_width - 1 : sum_width]
@@ -211,7 +209,7 @@ def sc(
     exceed_thr = sum_abs > thr_ext
 
     sc_override = s0_fire & sc_disagree & exceed_thr
-    sc_override_weak = s0_fire & sc_disagree & exceed_thr & tage_provider_weak
+    s0_fire & sc_disagree & exceed_thr & tage_provider_weak
 
     sc_pred = mux(sc_override, ~tage_taken, tage_taken)
 
@@ -229,7 +227,7 @@ def sc(
         domain, (wire_of(train_taken) ^ wire_of(train_sc_pred))[0:1], cycle=0
     )
 
-    for t_idx, (tbl_size, hist_len) in enumerate(table_infos):
+    for t_idx, (tbl_size, _hist_len) in enumerate(table_infos):
         idx_w = max(1, math.ceil(math.log2(tbl_size)))
         t_folded = train_hist[0:idx_w]
         t_pc_bits = train_pc[1 : 1 + idx_w]
@@ -316,11 +314,4 @@ sc.__pycircuit_name__ = "sc"
 
 
 if __name__ == "__main__":
-    print(
-        compile_cycle_aware(
-            sc,
-            name="sc",
-            eager=True,
-            table_infos=SC_TABLE_INFOS,
-        ).emit_mlir()
-    )
+    pass

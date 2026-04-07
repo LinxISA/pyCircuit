@@ -41,12 +41,9 @@ from pycircuit import (
     CycleAwareDomain,
     CycleAwareSignal,
     cas,
-    compile_cycle_aware,
     mux,
-    u,
     wire_of,
 )
-
 from top.parameters import (
     CACHE_LINE_SIZE,
     L2_SETS,
@@ -248,7 +245,7 @@ def l2_top(
     deq_fire = s1_hit_w | wire_of(ds_resp_valid)
 
     # ── Pipeline registers: cycle 1 → 2 ──────────────────────────
-    s2_resp_w = domain.cycle(wire_of(ds_resp_valid), name=f"{prefix}_l2_s2_resp")
+    domain.cycle(wire_of(ds_resp_valid), name=f"{prefix}_l2_s2_resp")
 
     domain.next()
 
@@ -295,17 +292,4 @@ l2_top.__pycircuit_name__ = "l2_top"
 
 
 if __name__ == "__main__":
-    print(
-        compile_cycle_aware(
-            l2_top,
-            name="l2_top",
-            eager=True,
-            addr_width=16,
-            data_width=16,
-            block_bits=128,
-            queue_size=4,
-            tag_w=8,
-            idx_w=4,
-            num_ways=2,
-        ).emit_mlir()
-    )
+    pass

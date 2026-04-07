@@ -6,14 +6,14 @@ and produces correct MLIR when composed in davinci_top.
 
 from __future__ import annotations
 
-import sys
 import os
+import sys
 
 _root = os.path.join(os.path.dirname(__file__), "..", "..", "..", "..", "..")
 sys.path.insert(0, os.path.join(_root, "compiler", "frontend"))
 sys.path.insert(0, _root)
 
-from pycircuit import compile_cycle_aware, CycleAwareTb
+from pycircuit import CycleAwareTb, compile_cycle_aware
 from pycircuit.tb import Tb
 
 
@@ -28,7 +28,6 @@ def test_davinci_top_compile():
     assert "dv_fetch_valid" in mlir
     assert "dv_ren_psrc1_0" in mlir
     assert "dv_srs_age_0" in mlir
-    print(f"PASS: davinci_top compile OK ({len(mlir):,} chars MLIR)")
 
 
 def test_scalar_pipeline_tb():
@@ -86,10 +85,8 @@ def test_scalar_pipeline_tb():
 
     assert len(t.drives) > 0
     assert len(t.expects) > 0
-    print("PASS: Scalar pipeline testbench generated")
 
 
 if __name__ == "__main__":
     test_davinci_top_compile()
     test_scalar_pipeline_tb()
-    print("\nAll scalar pipeline integration tests passed!")

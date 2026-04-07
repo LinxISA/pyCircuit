@@ -4,7 +4,6 @@ from pycircuit import (
     CycleAwareCircuit,
     CycleAwareDomain,
     cas,
-    compile_cycle_aware,
     wire_of,
 )
 
@@ -22,8 +21,8 @@ def build(m: CycleAwareCircuit, domain: CycleAwareDomain) -> None:
     vals = [domain.signal(width=1, reset_value=0, name=f"val{i}") for i in range(4)]
     data = [domain.signal(width=8, reset_value=0, name=f"data{i}") for i in range(4)]
 
-    v0 = [x for x in vals]
-    d0 = [x for x in data]
+    v0 = list(vals)
+    d0 = list(data)
     out0_valid = v0[0]
     out1_valid = v0[1]
     pop0 = out0_valid & out0_ready
@@ -64,4 +63,4 @@ build.__pycircuit_name__ = "issue_queue_2picker"
 
 
 if __name__ == "__main__":
-    print(compile_cycle_aware(build, name="issue_queue_2picker").emit_mlir())
+    pass

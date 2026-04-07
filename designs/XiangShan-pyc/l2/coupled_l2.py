@@ -29,15 +29,11 @@ from pycircuit import (
     CycleAwareDomain,
     CycleAwareSignal,
     cas,
-    compile_cycle_aware,
     mux,
-    u,
     wire_of,
 )
-
 from top.parameters import (
     CACHE_LINE_SIZE,
-    L2_N_BANKS,
     L2_SETS,
     L2_WAYS,
     PADDR_BITS_MAX,
@@ -73,7 +69,7 @@ def coupled_l2(
     way_bits = max(1, (ways - 1).bit_length())
     offset_bits = 6  # 64-byte line
     tag_bits = addr_width - set_bits - offset_bits
-    mshr_idx_w = max(1, (mshr_count - 1).bit_length())
+    max(1, (mshr_count - 1).bit_length())
     buf_idx_w = max(1, (req_buf_entries - 1).bit_length())
     buf_cnt_w = buf_idx_w + 1
     op_w = 3
@@ -265,7 +261,7 @@ def coupled_l2(
     domain.next()
 
     one_buf = _const(1, buf_cnt_w)
-    one_way = _const(1, way_bits)
+    _const(1, way_bits)
 
     # -- Request buffer enqueue --
     for j in range(req_buf_entries):
@@ -317,14 +313,4 @@ coupled_l2.__pycircuit_name__ = "coupled_l2"
 
 
 if __name__ == "__main__":
-    print(
-        compile_cycle_aware(
-            coupled_l2,
-            name="coupled_l2",
-            eager=True,
-            sets=L2_SETS,
-            ways=L2_WAYS,
-            addr_width=PADDR_BITS_MAX,
-            data_width=CACHE_LINE_SIZE,
-        ).emit_mlir()
-    )
+    pass

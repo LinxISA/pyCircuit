@@ -36,12 +36,9 @@ from pycircuit import (
     CycleAwareDomain,
     CycleAwareSignal,
     cas,
-    compile_cycle_aware,
     mux,
-    u,
     wire_of,
 )
-
 from top.parameters import XLEN
 
 DIV_OP_WIDTH = 2
@@ -112,8 +109,8 @@ def div(
     def _op(val):
         return cas(domain, m.const(val, width=op_w), cycle=0)
 
-    ZERO_1 = cas(domain, m.const(0, width=1), cycle=0)
-    ONE_1 = cas(domain, m.const(1, width=1), cycle=0)
+    cas(domain, m.const(0, width=1), cycle=0)
+    cas(domain, m.const(1, width=1), cycle=0)
 
     # ── State registers ──────────────────────────────────────────
     cur_state = domain.signal(
@@ -212,12 +209,4 @@ div.__pycircuit_name__ = "div"
 
 
 if __name__ == "__main__":
-    print(
-        compile_cycle_aware(
-            div,
-            name="div",
-            eager=True,
-            data_width=16,
-            latency=4,
-        ).emit_mlir()
-    )
+    pass

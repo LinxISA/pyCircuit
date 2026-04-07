@@ -1772,11 +1772,15 @@ class _Compiler:
                 return
             if isinstance(node.op, ast.LShift):
                 try:
-                    from .v5 import ForwardSignal
+                    from . import v5 as _v5
                 except Exception:
-                    ForwardSignal = None  # type: ignore[assignment]
+                    forward_signal_type = None  # type: ignore[assignment]
+                else:
+                    forward_signal_type = getattr(_v5, "ForwardSignal", None)
                 supported_types: tuple[type[Any], ...] = (
-                    (Reg, ForwardSignal) if ForwardSignal is not None else (Reg,)
+                    (Reg, forward_signal_type)
+                    if forward_signal_type is not None
+                    else (Reg,)
                 )
                 if isinstance(cur, supported_types):
                     cur <<= rhs

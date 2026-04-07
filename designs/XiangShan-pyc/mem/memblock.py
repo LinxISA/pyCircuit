@@ -33,26 +33,23 @@ _XS_ROOT = Path(__file__).resolve().parent.parent
 if str(_XS_ROOT) not in sys.path:
     sys.path.insert(0, str(_XS_ROOT))
 
+from cache.dcache.dcache import dcache
+from cache.mmu.tlb import tlb
 from pycircuit import (
     CycleAwareCircuit,
     CycleAwareDomain,
     CycleAwareSignal,
     cas,
-    compile_cycle_aware,
-    mux,
-    u,
     wire_of,
 )
 from top.parameters import *
 
-from mem.pipeline.load_unit import load_unit
-from mem.pipeline.store_unit import store_unit
 from mem.lsqueue.load_queue import load_queue
 from mem.lsqueue.store_queue import store_queue
-from mem.sbuffer.sbuffer import sbuffer
+from mem.pipeline.load_unit import load_unit
+from mem.pipeline.store_unit import store_unit
 from mem.prefetch.prefetcher import prefetcher
-from cache.dcache.dcache import dcache
-from cache.mmu.tlb import tlb
+from mem.sbuffer.sbuffer import sbuffer
 
 
 def memblock(
@@ -106,8 +103,8 @@ def memblock(
         if "flush" in _in
         else cas(domain, m.input(f"{prefix}_flush", width=1), cycle=0)
     )
-    zero1 = cas(domain, m.const(0, width=1), cycle=0)
-    one1 = cas(domain, m.const(1, width=1), cycle=0)
+    cas(domain, m.const(0, width=1), cycle=0)
+    cas(domain, m.const(1, width=1), cycle=0)
 
     # ================================================================
     # Load pipeline interfaces (N load units)
@@ -243,7 +240,7 @@ def memblock(
             domain, m.input(f"{prefix}_dcache_resp_data", width=data_width), cycle=0
         )
     )
-    dcache_ready = (
+    (
         _in["dcache_ready"]
         if "dcache_ready" in _in
         else cas(domain, m.input(f"{prefix}_dcache_ready", width=1), cycle=0)
@@ -586,7 +583,7 @@ def memblock(
     # Sub-module calls (all inputs threaded through)
     # ================================================================
 
-    dtlb_out = domain.call(
+    domain.call(
         tlb,
         inputs={
             "flush": flush,
@@ -603,7 +600,7 @@ def memblock(
         prefix=f"{prefix}_s_dtlb",
     )
 
-    dc_out = domain.call(
+    domain.call(
         dcache,
         inputs={
             "flush": flush,
@@ -665,7 +662,7 @@ def memblock(
             rob_idx_width=rob_idx_width,
         )
 
-    ldq_out = domain.call(
+    domain.call(
         load_queue,
         inputs={
             "flush": flush,
@@ -684,7 +681,7 @@ def memblock(
         addr_width=addr_width,
     )
 
-    stq_out = domain.call(
+    domain.call(
         store_queue,
         inputs={
             "flush": flush,
@@ -704,7 +701,7 @@ def memblock(
         addr_width=addr_width,
     )
 
-    sbuf_out = domain.call(
+    domain.call(
         sbuffer,
         inputs={
             "flush": flush,
@@ -718,7 +715,7 @@ def memblock(
         addr_width=addr_width,
     )
 
-    pf_out = domain.call(
+    domain.call(
         prefetcher,
         inputs={
             "train_valid": pf_train_valid,
@@ -754,9 +751,9 @@ def memblock(
     st0_s0_fire = st_issue_valid[0] & (~flush)
     st0_s1_valid_w = domain.cycle(wire_of(st0_s0_fire), name=f"{prefix}_st0_s1_v")
     st0_s1_rob_w = domain.cycle(wire_of(st_issue_rob_idx[0]), name=f"{prefix}_st0_s1_r")
-    st0_s1_sq_w = domain.cycle(wire_of(st_issue_sq_idx[0]), name=f"{prefix}_st0_s1_sq")
-    st0_s1_addr_w = domain.cycle(wire_of(st_issue_addr[0]), name=f"{prefix}_st0_s1_a")
-    st0_s1_data_w = domain.cycle(wire_of(st_issue_data[0]), name=f"{prefix}_st0_s1_d")
+    domain.cycle(wire_of(st_issue_sq_idx[0]), name=f"{prefix}_st0_s1_sq")
+    domain.cycle(wire_of(st_issue_addr[0]), name=f"{prefix}_st0_s1_a")
+    domain.cycle(wire_of(st_issue_data[0]), name=f"{prefix}_st0_s1_d")
 
     domain.next()  # ── st s0 → s1 ──
 
@@ -809,12 +806,4 @@ memblock.__pycircuit_name__ = "memblock"
 
 
 if __name__ == "__main__":
-    print(
-        compile_cycle_aware(
-            memblock,
-            name="memblock",
-            eager=True,
-            num_load=1,
-            num_store=1,
-        ).emit_mlir()
-    )
+    pass

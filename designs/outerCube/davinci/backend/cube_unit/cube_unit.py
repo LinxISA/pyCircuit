@@ -16,15 +16,12 @@ from pycircuit import (
     CycleAwareCircuit,
     CycleAwareDomain,
     cas,
-    compile_cycle_aware,
     mux,
     wire_of,
 )
 
 from ...common.parameters import (
     PHYS_TREG_W,
-    UOP_W,
-    CUBE_BASE_LATENCY,
     TREGFILE_EPOCH_CY,
 )
 
@@ -58,8 +55,8 @@ def cube_unit(
     # ── Cycle 0: Issue interface ─────────────────────────────────────
     issue_valid = _in(inputs, "issue_valid", m, domain, prefix, 1)
     issue_op = _in(inputs, "issue_op", m, domain, prefix, op_w)
-    issue_pt_a = _in(inputs, "pt_a", m, domain, prefix, ttag_w)
-    issue_pt_b = _in(inputs, "pt_b", m, domain, prefix, ttag_w)
+    _in(inputs, "pt_a", m, domain, prefix, ttag_w)
+    _in(inputs, "pt_b", m, domain, prefix, ttag_w)
     issue_pt_c = _in(inputs, "pt_c", m, domain, prefix, ttag_w)  # drain dest
     issue_nb = _in(inputs, "nb", m, domain, prefix, cnt_w)  # number of B tiles
 
@@ -172,4 +169,4 @@ cube_unit.__pycircuit_name__ = "cube_unit"
 
 
 if __name__ == "__main__":
-    print(compile_cycle_aware(cube_unit, name="cube_unit", eager=True).emit_mlir())
+    pass

@@ -22,44 +22,36 @@ from pycircuit import (
     wire_of,
 )
 
+from .backend.cube_rs.cube_rs import cube_rs
+from .backend.lsu.lsu import lsu
+from .backend.lsu_rs.lsu_rs import lsu_rs
+from .backend.mte_rs.mte_rs import mte_rs
+from .backend.scalar_exu.alu import alu
+from .backend.scalar_exu.bru import bru
+from .backend.scalar_exu.muldiv import muldiv
+from .backend.scalar_rs.scalar_rs import scalar_rs
+from .backend.vec_rs.vec_rs import vec_rs
 from .common.parameters import (
-    FETCH_WIDTH,
-    DECODE_WIDTH,
     ARCH_GREGS,
-    ARCH_GREG_W,
+    CDB_PORTS,
+    CHECKPOINT_W,
+    CUBE_RS_ENTRIES,
+    FETCH_WIDTH,
+    INSTR_WIDTH,
+    LSU_RS_ENTRIES,
+    MTE_RS_ENTRIES,
     PHYS_GREG_W,
     PHYS_TREG_W,
     SCALAR_DATA_W,
-    SCALAR_RS_ENTRIES,
-    LSU_RS_ENTRIES,
-    VEC_RS_ENTRIES,
-    CUBE_RS_ENTRIES,
-    MTE_RS_ENTRIES,
     SCALAR_ISSUE_WIDTH,
-    LSU_ISSUE_WIDTH,
-    CDB_PORTS,
+    SCALAR_RS_ENTRIES,
     TCB_PORTS,
-    CHECKPOINT_W,
-    UOP_W,
-    AGE_W,
-    INSTR_WIDTH,
+    VEC_RS_ENTRIES,
 )
-
-from .frontend.fetch.fetch import fetch
-from .frontend.bpu.bpu import bpu
-from .frontend.ibuf.ibuf import ibuf
-from .frontend.decode.decode import decoder
-from .frontend.rename.rename import rename
 from .dispatch.dispatch import dispatch
-from .backend.scalar_rs.scalar_rs import scalar_rs
-from .backend.lsu_rs.lsu_rs import lsu_rs
-from .backend.vec_rs.vec_rs import vec_rs
-from .backend.cube_rs.cube_rs import cube_rs
-from .backend.mte_rs.mte_rs import mte_rs
-from .backend.scalar_exu.alu import alu
-from .backend.scalar_exu.muldiv import muldiv
-from .backend.scalar_exu.bru import bru
-from .backend.lsu.lsu import lsu
+from .frontend.decode.decode import decoder
+from .frontend.fetch.fetch import fetch
+from .frontend.rename.rename import rename
 
 
 def davinci_top(
@@ -79,10 +71,10 @@ def davinci_top(
     # ═══════════════════════════════════════════════════════════════════
     stall_in = _in(inputs, "stall", m, domain, prefix=prefix, width=1)
     icache_valid = _in(inputs, "icache_valid", m, domain, prefix=prefix, width=1)
-    dmem_rdata = _in(
+    _in(
         inputs, "dmem_rdata", m, domain, prefix=prefix, width=SCALAR_DATA_W
     )
-    dmem_rvalid = _in(inputs, "dmem_rvalid", m, domain, prefix=prefix, width=1)
+    _in(inputs, "dmem_rvalid", m, domain, prefix=prefix, width=1)
     bru_redirect = _in(inputs, "bru_redirect", m, domain, prefix=prefix, width=1)
     bru_target = _in(inputs, "bru_target", m, domain, prefix=prefix, width=ADDR_W)
 
@@ -513,11 +505,6 @@ if __name__ == "__main__":
         hierarchical=hier,
     )
     mlir = circ.emit_mlir()
-    print(
-        f"davinci_top: {len(mlir):,} chars MLIR"
-        f" ({'hierarchical' if hier else 'flat'})"
-    )
     out_file = "davinci_top.mlir"
     with open(out_file, "w") as f:
         f.write(mlir)
-    print(f"Written to {out_file}")

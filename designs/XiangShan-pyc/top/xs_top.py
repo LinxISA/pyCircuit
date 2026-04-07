@@ -39,9 +39,7 @@ from pycircuit import (
     CycleAwareDomain,
     CycleAwareSignal,
     cas,
-    compile_cycle_aware,
     mux,
-    u,
     wire_of,
 )
 
@@ -50,9 +48,8 @@ from top.parameters import (
     PC_WIDTH,
     XLEN,
 )
-
+from top.peripherals import clint, plic
 from top.xs_tile import xs_tile
-from top.peripherals import plic, clint
 
 BLOCK_BITS = CACHE_LINE_SIZE
 HART_ID_WIDTH = 4
@@ -93,9 +90,9 @@ def xs_top(
             pc_width=addr_width,
         )
 
-    plic_out = domain.call(plic, inputs={}, prefix=f"{prefix}_s_plic")
+    domain.call(plic, inputs={}, prefix=f"{prefix}_s_plic")
 
-    clint_out = domain.call(clint, inputs={}, prefix=f"{prefix}_s_clint")
+    domain.call(clint, inputs={}, prefix=f"{prefix}_s_clint")
 
     # ================================================================
     # External inputs
@@ -125,7 +122,7 @@ def xs_top(
         if "debug_req_valid" in _in
         else cas(domain, m.input(f"{prefix}_debug_req_valid", width=1), cycle=0)
     )
-    debug_req_addr = (
+    (
         _in["debug_req_addr"]
         if "debug_req_addr" in _in
         else cas(domain, m.input(f"{prefix}_debug_req_addr", width=addr_width), cycle=0)
@@ -135,7 +132,7 @@ def xs_top(
         if "debug_req_data" in _in
         else cas(domain, m.input(f"{prefix}_debug_req_data", width=data_width), cycle=0)
     )
-    debug_req_op = (
+    (
         _in["debug_req_op"]
         if "debug_req_op" in _in
         else cas(domain, m.input(f"{prefix}_debug_req_op", width=2), cycle=0)
@@ -157,19 +154,19 @@ def xs_top(
         if "axi_r_id" in _in
         else cas(domain, m.input(f"{prefix}_axi_r_id", width=axi_id_w), cycle=0)
     )
-    axi_r_last = (
+    (
         _in["axi_r_last"]
         if "axi_r_last" in _in
         else cas(domain, m.input(f"{prefix}_axi_r_last", width=1), cycle=0)
     )
 
     # AXI4 write response
-    axi_b_valid = (
+    (
         _in["axi_b_valid"]
         if "axi_b_valid" in _in
         else cas(domain, m.input(f"{prefix}_axi_b_valid", width=1), cycle=0)
     )
-    axi_b_id = (
+    (
         _in["axi_b_id"]
         if "axi_b_id" in _in
         else cas(domain, m.input(f"{prefix}_axi_b_id", width=axi_id_w), cycle=0)
@@ -282,8 +279,8 @@ def xs_top(
     # Pipeline register + arbiter state update
     # ================================================================
 
-    s1_bus_valid = domain.cycle(wire_of(bus_req_valid), name=f"{prefix}_xs_s1_bv")
-    s1_bus_core = domain.cycle(wire_of(bus_req_core), name=f"{prefix}_xs_s1_bc")
+    domain.cycle(wire_of(bus_req_valid), name=f"{prefix}_xs_s1_bv")
+    domain.cycle(wire_of(bus_req_core), name=f"{prefix}_xs_s1_bc")
 
     domain.next()
 
@@ -310,16 +307,4 @@ xs_top.__pycircuit_name__ = "xs_top"
 
 
 if __name__ == "__main__":
-    print(
-        compile_cycle_aware(
-            xs_top,
-            name="xs_top",
-            eager=True,
-            num_cores=2,
-            data_width=16,
-            addr_width=16,
-            block_bits=128,
-            hart_id_w=4,
-            axi_id_w=4,
-        ).emit_mlir()
-    )
+    pass

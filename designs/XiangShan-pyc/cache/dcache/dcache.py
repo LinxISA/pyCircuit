@@ -40,9 +40,7 @@ from pycircuit import (
     CycleAwareDomain,
     CycleAwareSignal,
     cas,
-    compile_cycle_aware,
     mux,
-    u,
     wire_of,
 )
 from top.parameters import *
@@ -69,7 +67,6 @@ def dcache(
     tag_bits = paddr_width - index_bits - offset_bits
     way_bits = max(1, int(math.log2(n_ways)))
     tag_strobe_w = (tag_bits + 7) // 8
-    data_strobe_w = block_bytes
 
     cd = domain.clock_domain
 
@@ -320,8 +317,8 @@ def dcache(
 
     # ── Pipeline registers s2 → s3 ───────────────────────────────
 
-    s3_valid_w = domain.cycle(s2_valid_w, name=f"{prefix}_s3_v")
-    s3_hit_w = domain.cycle(s2_resp_hit, name=f"{prefix}_s3_hit")
+    domain.cycle(s2_valid_w, name=f"{prefix}_s3_v")
+    domain.cycle(s2_resp_hit, name=f"{prefix}_s3_hit")
     s3_data_w = domain.cycle(s2_resp_data, name=f"{prefix}_s3_data")
     s3_store_hit_w = domain.cycle(s2_store_hit, name=f"{prefix}_s3_st_hit")
     s3_load_resp_v_w = domain.cycle(s2_load_resp_valid, name=f"{prefix}_s3_lrv")
@@ -415,14 +412,4 @@ dcache.__pycircuit_name__ = "dcache"
 
 
 if __name__ == "__main__":
-    print(
-        compile_cycle_aware(
-            dcache,
-            name="dcache",
-            eager=True,
-            n_sets=DCACHE_SETS,
-            n_ways=DCACHE_WAYS,
-            block_bytes=DCACHE_BLOCK_BYTES,
-            paddr_width=36,
-        ).emit_mlir()
-    )
+    pass

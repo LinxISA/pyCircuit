@@ -29,13 +29,9 @@ from pycircuit import (
     CycleAwareDomain,
     CycleAwareSignal,
     cas,
-    compile_cycle_aware,
     mux,
-    u,
     wire_of,
 )
-
-from top.parameters import XLEN
 
 PLIC_NUM_SOURCES = 64
 PLIC_NUM_TARGETS = 2
@@ -261,24 +257,5 @@ clint.__pycircuit_name__ = "clint"
 # ═══════════════════════════════════════════════════════════════════
 
 if __name__ == "__main__":
-    print("=== PLIC ===")
-    print(
-        compile_cycle_aware(
-            plic,
-            name="plic",
-            eager=True,
-            num_sources=8,
-            num_targets=2,
-            prio_width=PLIC_PRIO_WIDTH,
-        ).emit_mlir()
-    )
 
-    print("\n=== CLINT ===")
-    print(
-        compile_cycle_aware(
-            clint,
-            name="clint",
-            eager=True,
-            timer_width=CLINT_TIMER_WIDTH,
-        ).emit_mlir()
-    )
+    pass

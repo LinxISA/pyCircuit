@@ -37,17 +37,13 @@ from pycircuit import (
     CycleAwareDomain,
     CycleAwareSignal,
     cas,
-    compile_cycle_aware,
-    mux,
-    u,
     wire_of,
 )
 from top.parameters import (
+    ICACHE_BLOCK_BYTES,
     ICACHE_SETS,
     ICACHE_WAYS,
-    ICACHE_BLOCK_BYTES,
     PC_WIDTH,
-    CACHE_LINE_SIZE,
 )
 
 
@@ -185,7 +181,7 @@ def icache(
     s1_valid_w = domain.cycle(wire_of(s0_fire), name=f"{prefix}_s1_v")
     s1_set_idx_w = domain.cycle(wire_of(s0_set_idx), name=f"{prefix}_s1_set")
     s1_ptag_w = domain.cycle(wire_of(fetch_ptag), name=f"{prefix}_s1_ptag")
-    s1_vaddr_w = domain.cycle(wire_of(fetch_vaddr), name=f"{prefix}_s1_va")
+    domain.cycle(wire_of(fetch_vaddr), name=f"{prefix}_s1_va")
 
     domain.next()  # ─────────────── s0 → s1 boundary ───────────────
 
@@ -306,14 +302,4 @@ icache.__pycircuit_name__ = "icache"
 
 
 if __name__ == "__main__":
-    print(
-        compile_cycle_aware(
-            icache,
-            name="icache",
-            eager=True,
-            n_sets=ICACHE_SETS,
-            n_ways=ICACHE_WAYS,
-            block_bytes=ICACHE_BLOCK_BYTES,
-            pc_width=PC_WIDTH,
-        ).emit_mlir()
-    )
+    pass

@@ -22,7 +22,6 @@ Simplified vs full XiangShan:
 
 from __future__ import annotations
 
-import math
 import sys
 from pathlib import Path
 
@@ -35,9 +34,7 @@ from pycircuit import (
     CycleAwareDomain,
     CycleAwareSignal,
     cas,
-    compile_cycle_aware,
     mux,
-    u,
     wire_of,
 )
 from top.parameters import *
@@ -60,7 +57,6 @@ def tlb(
 
     way_bits = max(1, (n_ways - 1).bit_length())
 
-    cd = domain.clock_domain
 
     # ================================================================
     # Cycle 0 — CAM Lookup: compare VPN+ASID against all entries
@@ -242,14 +238,4 @@ tlb.__pycircuit_name__ = "tlb"
 
 
 if __name__ == "__main__":
-    print(
-        compile_cycle_aware(
-            tlb,
-            name="tlb",
-            eager=True,
-            n_ways=ITLB_WAYS,
-            vpn_width=27,
-            ppn_width=24,
-            asid_width=ASID_LENGTH,
-        ).emit_mlir()
-    )
+    pass

@@ -24,16 +24,16 @@ from pycircuit import (
 )
 
 from .parameters import (
-    NUM_BANKS,
     BANKS_PER_GROUP,
+    CALENDAR_LEN,
+    NUM_BANKS,
     NUM_GROUPS,
     NUM_READ_PORTS,
     NUM_WRITE_PORTS,
-    CALENDAR_LEN,
     TEST_BANK_DEPTH,
     TEST_BANK_WIDTH,
-    tile_idx_width,
     port_data_width,
+    tile_idx_width,
 )
 from .sram_bank import sram_bank
 
@@ -239,4 +239,3 @@ if __name__ == "__main__":
         bank_depth=TEST_BANK_DEPTH,
         bank_width=TEST_BANK_WIDTH,
     )
-    print(circuit.emit_mlir())

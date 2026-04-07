@@ -28,12 +28,10 @@ from pycircuit import (
     CycleAwareDomain,
     CycleAwareSignal,
     cas,
-    compile_cycle_aware,
     mux,
     u,
     wire_of,
 )
-
 from top.parameters import (
     COMMIT_WIDTH,
     PC_WIDTH,
@@ -68,7 +66,7 @@ def rob(
     cm_cnt_w = max(1, commit_width.bit_length())
 
     cd = domain.clock_domain
-    rst = m.reset_active(cd.rst)
+    m.reset_active(cd.rst)
 
     # ── Cycle 0: Inputs ──────────────────────────────────────────
     flush = (
@@ -327,17 +325,4 @@ rob.__pycircuit_name__ = "rob"
 
 
 if __name__ == "__main__":
-    print(
-        compile_cycle_aware(
-            rob,
-            name="rob",
-            eager=True,
-            rob_size=16,
-            rename_width=2,
-            commit_width=2,
-            wb_ports=2,
-            ptag_w=4,
-            lreg_w=3,
-            pc_width=16,
-        ).emit_mlir()
-    )
+    pass

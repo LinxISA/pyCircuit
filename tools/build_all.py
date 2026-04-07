@@ -536,42 +536,29 @@ def main() -> int:
         designs = [d for d in designs if args.filter in d["name"]]
 
     if args.list:
-        for d in designs:
-            print(f"  {d['name']:25s} {d['module']}::{d['fn']} -> {d['out_dir']}")
-        print(f"\nTotal: {len(designs)} designs")
+        for _d in designs:
+            pass
         return 0
 
     pycc = find_pycc()
-    print(f"pycc: {pycc}")
-    print(f"Designs: {len(designs)}")
-    print()
 
     succeeded = []
     failed = []
     t0 = time.time()
 
-    for i, spec in enumerate(designs, 1):
+    for _i, spec in enumerate(designs, 1):
         name = spec["name"]
-        print(f"[{i:2d}/{len(designs)}] {name:25s} ... ", end="", flush=True)
         t1 = time.time()
         name, ok, msg = build_one(spec, pycc, args.logic_depth)
-        dt = time.time() - t1
+        time.time() - t1
         if ok:
-            print(f"OK  ({msg}, {dt:.1f}s)")
             succeeded.append(name)
         else:
-            print(f"FAIL ({dt:.1f}s)")
-            print(f"       {msg}")
             failed.append((name, msg))
 
-    total = time.time() - t0
-    print(f"\n{'='*60}")
-    print(f"Results: {len(succeeded)} succeeded, {len(failed)} failed ({total:.0f}s)")
+    time.time() - t0
 
     if failed:
-        print(f"\nFailed designs:")
-        for name, msg in failed:
-            print(f"  {name}: {msg[:200]}")
         return 1
     return 0
 

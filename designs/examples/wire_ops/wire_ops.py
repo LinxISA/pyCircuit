@@ -4,7 +4,6 @@ from pycircuit import (
     CycleAwareCircuit,
     CycleAwareDomain,
     cas,
-    compile_cycle_aware,
 )
 
 
@@ -24,4 +23,4 @@ build.__pycircuit_name__ = "wire_ops"
 
 
 if __name__ == "__main__":
-    print(compile_cycle_aware(build, name="wire_ops").emit_mlir())
+    pass

@@ -36,12 +36,9 @@ from pycircuit import (
     CycleAwareDomain,
     CycleAwareSignal,
     cas,
-    compile_cycle_aware,
     mux,
-    u,
     wire_of,
 )
-
 from top.parameters import (
     ISSUE_QUEUE_SIZE,
     PTAG_WIDTH_INT,
@@ -361,17 +358,4 @@ issue_queue.__pycircuit_name__ = "issue_queue"
 
 
 if __name__ == "__main__":
-    print(
-        compile_cycle_aware(
-            issue_queue,
-            name="issue_queue",
-            eager=True,
-            entries=4,
-            enq_ports=2,
-            issue_ports=1,
-            wb_ports=2,
-            ptag_w=4,
-            rob_idx_w=4,
-            fu_type_width=3,
-        ).emit_mlir()
-    )
+    pass

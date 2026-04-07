@@ -20,22 +20,20 @@ from pycircuit import (
     CycleAwareCircuit,
     CycleAwareDomain,
     cas,
-    compile_cycle_aware,
     mux,
     wire_of,
 )
 
 from ...common.parameters import (
-    PHYS_TREG_W,
-    PHYS_GREG_W,
-    SCALAR_DATA_W,
-    UOP_W,
-    TREGFILE_EPOCH_CY,
-    MTE_TILELOAD_L2,
     MTE_TILECOPY,
-    MTE_TILEZERO,
     MTE_TILEGET,
+    MTE_TILELOAD_L2,
     MTE_TILEPUT,
+    MTE_TILEZERO,
+    PHYS_GREG_W,
+    PHYS_TREG_W,
+    SCALAR_DATA_W,
+    TREGFILE_EPOCH_CY,
 )
 
 MTE_LD = 0
@@ -184,4 +182,4 @@ mte_unit.__pycircuit_name__ = "mte_unit"
 
 
 if __name__ == "__main__":
-    print(compile_cycle_aware(mte_unit, name="mte_unit", eager=True).emit_mlir())
+    pass

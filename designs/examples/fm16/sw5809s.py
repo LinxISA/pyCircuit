@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """Simplified SW5809s switch — pyCircuit V5 cycle-aware."""
 
 from __future__ import annotations
@@ -83,5 +82,3 @@ build.__pycircuit_name__ = "sw5809s"
 
 if __name__ == "__main__":
     circuit = compile_cycle_aware(build, name="sw5809s", N_PORTS=4, VOQ_DEPTH=4)
-    print(circuit.emit_mlir()[:500])
-    print(f"... ({len(circuit.emit_mlir())} chars)")

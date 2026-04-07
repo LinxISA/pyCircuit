@@ -30,15 +30,11 @@ from pycircuit import (
     CycleAwareDomain,
     CycleAwareSignal,
     cas,
-    compile_cycle_aware,
     mux,
-    u,
     wire_of,
 )
-
 from top.parameters import (
     FETCH_BLOCK_INST_NUM,
-    FTQ_IDX_WIDTH,
     FTQ_SIZE,
     PC_WIDTH,
 )
@@ -311,7 +307,7 @@ def ftq(
     )
 
     # S3 override also rolls back ifu/ifu_wb if they went past the override point
-    s3_rollback_ifu = s3_fire & (dist_bpu_ifu == zero_cnt)
+    s3_fire & (dist_bpu_ifu == zero_cnt)
 
     bpu_ptr <<= mux(redirect_valid, redir_new_ptr, next_bpu)
     ifu_ptr <<= mux(redirect_valid, redir_new_ptr, next_ifu)
@@ -324,12 +320,4 @@ ftq.__pycircuit_name__ = "ftq"
 
 
 if __name__ == "__main__":
-    print(
-        compile_cycle_aware(
-            ftq,
-            name="ftq",
-            eager=True,
-            size=FTQ_SIZE,
-            pc_width=PC_WIDTH,
-        ).emit_mlir()
-    )
+    pass

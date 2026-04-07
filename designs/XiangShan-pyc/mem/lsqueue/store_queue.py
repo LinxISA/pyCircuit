@@ -31,7 +31,6 @@ from pycircuit import (
     CycleAwareDomain,
     CycleAwareSignal,
     cas,
-    compile_cycle_aware,
     mux,
     u,
     wire_of,
@@ -169,7 +168,7 @@ def store_queue(
 
     count = cas(domain, (wire_of(enq_ptr) - wire_of(deq_ptr))[0:ptr_w], cycle=0)
     full = count == cas(domain, m.const(size, width=ptr_w), cycle=0)
-    empty = count == cas(domain, m.const(0, width=ptr_w), cycle=0)
+    count == cas(domain, m.const(0, width=ptr_w), cycle=0)
 
     can_enq = enq_valid & (~full) & (~flush)
 
@@ -178,7 +177,7 @@ def store_queue(
 
     line_bits = int(math.log2(CACHE_LINE_BYTES))
     fwd_tag = fwd_addr[line_bits:addr_width]
-    tag_w = addr_width - line_bits
+    addr_width - line_bits
 
     fwd_hit = zero1
     fwd_data_out = zero_data
@@ -194,8 +193,8 @@ def store_queue(
         fwd_data_out = mux(entry_hit, ed, fwd_data_out)
 
     # Drain: head committed entry → SBuffer
-    head_valid = e_valid[0]
-    head_committed = e_committed[0]
+    e_valid[0]
+    e_committed[0]
 
     drain_head_valid = zero1
     drain_head_addr = cas(domain, m.const(0, width=addr_width), cycle=0)
@@ -296,12 +295,4 @@ store_queue.__pycircuit_name__ = "store_queue"
 
 
 if __name__ == "__main__":
-    print(
-        compile_cycle_aware(
-            store_queue,
-            name="store_queue",
-            eager=True,
-            size=8,
-            addr_width=36,
-        ).emit_mlir()
-    )
+    pass
