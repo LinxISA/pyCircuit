@@ -1,0 +1,27 @@
+# Tool-generated outputs
+build/
+obj_dir/
+sim/logs/
+sim/waves/
+
+# Simulation artifacts
+*.vcd
+*.fst
+*.vpd
+*.wdb
+*.log
+*.out
+
+# Python cache / env
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Generated testcase vectors (runtime-loaded)
+tb_rtl/case/generated/*.mem
+tb_rtl/case/generated/*_sizes.vh
+
+# OS/editor noise
+.DS_Store
+Thumbs.db
