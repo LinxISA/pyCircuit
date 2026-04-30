@@ -2,12 +2,14 @@
 """
 NVIDIA warp shuffle schematic (16 B register tile).
 
-One PNG montage (4×4): rows = __shfl_sync (per-lane indexed read; here a fixed permutation),
-__shfl_up_sync,
-__shfl_down_sync, __shfl_xor_sync; columns = FP32 / FP16 / FP8 / FP4 (E = 4/2/1/0.5 B).
+One PNG montage (4×2): rows = __shfl_sync (per-lane indexed read; here a fixed
+permutation), __shfl_up_sync, __shfl_down_sync, __shfl_xor_sync; columns =
+**FP32 / FP16 (BF16)** (E = 4 / 2 B). Smaller-precision formats (FP8, FP4) are
+intentionally excluded — the two remaining columns are the only storage widths
+supported by the current VEC-4K / VEC-512 subset.
 
 Each pane: input lanes (▭ width ∝ E) on top, output lanes on bottom, curved wires
-lane i ← lane src(i). Not cycle-accururate; illustration only.
+lane i ← lane src(i). Not cycle-accurate; illustration only.
 """
 
 from __future__ import annotations
@@ -38,11 +40,11 @@ class FloatForm:
 
 
 def formats() -> List[FloatForm]:
+    # Only FP32 and FP16/BF16 are supported. BF16 shares E = 2 B with FP16, so
+    # one column covers both; the label mentions both for clarity.
     return [
         FloatForm(4.0, "FP32"),
-        FloatForm(2.0, "FP16"),
-        FloatForm(1.0, "FP8"),
-        FloatForm(0.5, "FP4"),
+        FloatForm(2.0, "FP16 / BF16"),
     ]
 
 
@@ -227,7 +229,7 @@ def render_shuffle_pane(
             ax.add_patch(c)
 
 
-def _save_montage_4x4(out_path: str, *, dpi: int = 140) -> None:
+def _save_montage_4x2(out_path: str, *, dpi: int = 140) -> None:
     forms = formats()
     ops: List[Tuple[str, str, str]] = [
         ("shfl", "shfl (per-lane indexed)", "__shfl_sync"),
@@ -236,9 +238,9 @@ def _save_montage_4x4(out_path: str, *, dpi: int = 140) -> None:
         ("shfl_xor", "shfl_xor", "__shfl_xor_sync"),
     ]
 
-    fig, axes = plt.subplots(4, 4, figsize=(22, 22), dpi=dpi)
+    fig, axes = plt.subplots(4, 2, figsize=(14, 22), dpi=dpi)
     fig.suptitle(
-        f"NVIDIA warp shuffle — {TILE_BYTES} B tile, ▭ width ∝ element size (FP32/FP16/FP8/FP4)",
+        f"NVIDIA warp shuffle — {TILE_BYTES} B tile, ▭ width ∝ element size (FP32 / FP16–BF16)",
         fontsize=13,
         y=0.995,
     )
@@ -265,21 +267,22 @@ def _save_montage_4x4(out_path: str, *, dpi: int = 140) -> None:
         0.012,
         (
             "Each column fixes E (bytes/element) with R×C×E = 16 B; rows are shuffle kinds. "
-            "Top row: each Oi uses its own srcLane(i) (here a linear permutation on lanes; "
-            "broadcast is the special case srcLane(i)=const). "
+            "Only FP32 (E=4) and FP16/BF16 (E=2) are shown; smaller-precision formats are "
+            "out of scope. Top row: each Oi uses its own srcLane(i) (here a linear permutation "
+            "on lanes; broadcast is the special case srcLane(i)=const). "
             "Arrows: value at Oi from Lsrc (schematic; mask/warp participation omitted)."
         ),
         ha="center",
         fontsize=8.5,
         color="#222",
     )
-    fig.subplots_adjust(left=0.03, right=0.97, top=0.94, bottom=0.04, hspace=0.42, wspace=0.20)
+    fig.subplots_adjust(left=0.04, right=0.96, top=0.94, bottom=0.04, hspace=0.42, wspace=0.20)
     fig.savefig(out_path, bbox_inches="tight")
     plt.close(fig)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    p = argparse.ArgumentParser(description="Plot NVIDIA warp shuffle 4×4 montage (one PNG).")
+    p = argparse.ArgumentParser(description="Plot NVIDIA warp shuffle 4×2 montage (one PNG).")
     p.add_argument(
         "-o",
         "--out",
@@ -292,7 +295,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     out_dir = os.path.dirname(os.path.abspath(args.out))
     if out_dir:
         os.makedirs(out_dir, exist_ok=True)
-    _save_montage_4x4(args.out, dpi=args.dpi)
+    _save_montage_4x2(args.out, dpi=args.dpi)
     print(f"Wrote {args.out}")
     return 0
 

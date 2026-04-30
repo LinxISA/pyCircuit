@@ -4,6 +4,9 @@ Generate small-tile (16 B) vector datapath illustrations inspired by
 `vector4k.md`: A and B holding registers as contiguous blocks (all A, then all
 B), ▭ width ∝ E, circles = 2-input execution units, crossed wires.
 
+Only **FP32** (E = 4 B/elem) and **FP16 / BF16** (E = 2 B/elem) are supported;
+smaller-precision formats (FP8 / MXFP4 / HiFP4) are intentionally excluded.
+
 Writes 4 PNGs (one montage per operation type: 8 subplots each) to an output
 directory (default: ./tile16_figures next to this script). Types 1–4: elementwise,
 reduce, expand, mergesort (compare–swap levels).
@@ -31,8 +34,15 @@ class TileShape:
     idx: int
     R: int
     C: int
-    E: float  # bytes per logical element (0.5 allowed for packed nibble)
+    E: float  # bytes per logical element — only 4.0 (FP32) or 2.0 (FP16/BF16) supported
     label: str
+
+    def __post_init__(self) -> None:
+        if self.E not in (4.0, 2.0):
+            raise ValueError(
+                f"Unsupported element size E={self.E}; only FP32 (4 B) and "
+                f"FP16/BF16 (2 B) are allowed."
+            )
 
     @property
     def N(self) -> int:
@@ -44,16 +54,18 @@ class TileShape:
 
 
 def canonical_shapes() -> List[TileShape]:
-    # Eight distinct (R, C, E) with R*C*E = 16 B; mix wide/narrow + formats.
+    # Eight distinct (R, C, E) with R*C*E = 16 B; only FP32 (E=4) and FP16/BF16 (E=2).
+    # FP32 has 3 legal shapes, FP16 has 4; one shape appears with both FP16 and BF16
+    # labels to emphasise that BF16 shares E=2 B/elem storage with FP16.
     return [
         TileShape(1, 1, 4, 4.0, "1×4 FP32 (wide row)"),
-        TileShape(2, 4, 1, 4.0, "4×1 FP32 (tall col)"),
-        TileShape(3, 2, 2, 4.0, "2×2 FP32"),
-        TileShape(4, 1, 8, 2.0, "1×8 FP16"),
-        TileShape(5, 8, 1, 2.0, "8×1 FP16"),
-        TileShape(6, 2, 4, 2.0, "2×4 FP16"),
-        TileShape(7, 4, 4, 1.0, "4×4 FP8"),
-        TileShape(8, 4, 8, 0.5, "4×8 MXFP4 (½ B/elem)"),
+        TileShape(2, 2, 2, 4.0, "2×2 FP32"),
+        TileShape(3, 4, 1, 4.0, "4×1 FP32 (tall col)"),
+        TileShape(4, 1, 8, 2.0, "1×8 FP16 (wide row)"),
+        TileShape(5, 2, 4, 2.0, "2×4 FP16"),
+        TileShape(6, 4, 2, 2.0, "4×2 FP16"),
+        TileShape(7, 8, 1, 2.0, "8×1 FP16 (tall col)"),
+        TileShape(8, 2, 4, 2.0, "2×4 BF16 (same E as FP16)"),
     ]
 
 
@@ -93,7 +105,9 @@ def _ab_block_layout(
     Same width w for every element rectangle (w ∝ E). Returns:
     (w, h, gap_inside_block, gap_between_ab, xa_centers, xb_centers).
     """
-    e = max(float(E), 0.5)
+    # E ∈ {2.0, 4.0} post-simplification (FP16/BF16 or FP32). Keep a small floor
+    # for numerical safety if a future caller passes an unexpected E.
+    e = max(float(E), 1.0)
     span = x1 - x0
     gap_block = min(0.032, 0.09 * span)
     g_in = min(0.009, 0.14 * span / max(n_a + n_b, 2))
