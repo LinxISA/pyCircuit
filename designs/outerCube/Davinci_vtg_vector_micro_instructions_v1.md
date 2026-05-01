@@ -1,44 +1,48 @@
-# Davinci-v2 VTG Vector Micro-Instructions — SIMD-Group Execution Model
+# Davinci-v2 VTG Vector Micro-Instructions — Hardware-Consistent Design v1.1
 
 > **Document ID**: DSP-002
-> **Version**: v1.0
+> **Version**: v1.1
 > **Date**: 2026-05-02
-> **Status**: Proposal
+> **Status**: **Draft — hardware inconsistencies v1.0 being resolved**
 > **Target**: `pyCircuit/designs/outerCube/Davinci_superscalar_v2.md`
-> **Change Point**: #2 — Add VTG (Vector Thread Group) vector micro-instructions with SIMD-group execution and pre-allocated micro-instruction buffer in the vector ALU; enable warp-grouped execution across VTGs inside a tile
-> **Related**: [`Davinci_superscalar_v2.md`](Davinci_superscalar_v2.md) · [`Davinci_vector_micro_instructions_v1.md`](../Davinci_vector_micro_instructions_v1.md) · [`vector4k_v2.md`](vector4k_v2.md) · [`tregfile4k_v2.md`](tregfile4k_v2.md) · [`PTOAS/docs/vpto-spec.md`](PTOAS/docs/vpto-spec.md)
+> **Change Point**: #2 — Add VTG (Vector Thread Group) vector micro-instructions with SIMD-group execution; v1.1 revises the integration model to be consistent with VEC-4K-v2 and TRegFile-4K-v2 hardware
+> **Hardware cross-check**: This document was revised against `vector4k_v2.md` §3–§9, `tregfile4k_v2.md` §3–§7, and `Davinci_superscalar_v2.md` §6–§9.
 
 ---
 
-## 1. Motivation
+## Change Log v1.0 → v1.1
+
+v1.0 had **3 fatal and 5 high-severity hardware inconsistencies** identified by cross-check:
+
+| # | Issue | Fix in v1.1 |
+|---|-------|-------------|
+| F1 | TRegFile port conflict: VTG Group Read Adapter claimed independent R0/R4 ports, but VEC-4K-v2 is hard-bound to R0/R4. | VTG **reuses** VEC-4K-v2's port bindings; VTG operands are sub-ranges of the same tiles VEC-4K-v2 stages. No independent ports. |
+| F2 | Micro-instruction format mismatch: `MicroOpEntry` {opcode, elem_type} does not match VEC-4K-v2's 64-bit beat-word format {src_*, s_*, xp_*, alu_op, acc_op, ...}. | Micro-instruction buffer stores **pre-decoded VEC beat-word sequences** rather than V*-level instructions. VTG microassembler generates beat words from V* operands. |
+| F3 | Beat-level control undefined: VTG microcode is V*-level (38 opcodes) but VEC-4K-v2 ALU is driven beat-by-beat. | VTG micro-instructions are expanded into **per-beat word sequences** by the VTG microassembler. Each VTG op = 1–N beat words. |
+| H1 | TRegFile epoch timing: "TRegFile read at I1" implied full tile immediately; ignores 8-cycle epoch. | Revised lifecycle with **prologue model**: VTG submits TRegFile read request; full tile delivered over 8-cycle epoch; sub-range selection happens after prologue. |
+| H2 | VTG latency (9 cycles) ignored prologue (8–15 cy) and writeback RMW (16 cy). | Revised to **T_fetch + 1 + T_writeback** = 9–23 cy minimum, plus prologue penalty for alignment. |
+| H3 | Group Write Adapter partial-write to TRegFile: TRegFile has no partial-write mechanism. | Group Write Adapter performs **full-tile read-modify-write**: read old tile (8 cy), merge VTG sub-range, write merged tile (8 cy) = **16 cy minimum**. |
+| H4 | Port arbitration: "arbitrate via existing issue pipeline" — no mechanism described. | Added **VEC-domain arbitration matrix** covering Vector RS + GVIQ + MTE RS. VEC ALU is 1-wide, single client at a time. |
+| H5 | Staging register sizes: VTG described Group Read Adapter outputting 256/512 B to SA/SB; but SA/SB/SC are 4 KB each. | VTG operates **behind** VEC staging: SA/SB/SC filled by VEC-4K-v2 prologue (unchanged); VTG sub-range selector reads **from** SA/SB at the ALU input mux, not from TRegFile. |
+
+---
+
+## 1. Motivation (unchanged from v1.0)
 
 ### 1.1 Current Davinci-v2 Vector Execution Model
 
-Davinci-v2 currently executes vector instructions as **full-tile operations** on VEC-4K-v2:
+Davinci-v2 currently executes vector instructions as **full-tile operations** on VEC-4K-v2. For AI kernels with strip-mined inner loops, the current model requires the compiler to generate repeated tile ops with different effective addresses. VTG vector micro-instructions enable the same micro-kernel to run across multiple 256 B or 512 B slices inside a tile using a pre-allocated micro-instruction buffer and a warp-like rotation scheduler.
 
-| Dimension | Current Davinci-v2 | Target |
-|-----------|--------------------|--------|
-| Tile operand size | 4 KB (full tile) | 4 KB tile = 16×256 B or 8×512 B VTG |
-| Execution unit | One full-tile VEC op per cycle | One or more SIMD groups per VTG per cycle |
-| Scheduling unit | One tile per VEC issue | Multiple VTGs inside one tile, round-robin |
-| Loop handling | Scalar outer loop + VEC op per strip | Loop counters in GVIQ prefix; hardware rotates across VTGs |
-| Micro-instruction storage | Decoded opcode in Vector RS entry | **Pre-allocated micro-instruction buffer in vector ALU** |
-| Vector ISA surface | Full-tile `T*` ops only | VTG-relative `V*` micro-instructions + full-tile `T*` ops |
-| Issue width | 1 VEC-4K-v2 tile op / cycle | 1 VTG micro-op / VEC beat; paired G256 = 2 VTGs / beat |
+### 1.2 What This Change Adds (v1.1 corrected model)
 
-The current model treats every VEC instruction as a whole-tile strip-walk. For large matrices, this is efficient. For AI kernels with strip-mined inner loops where the same operation is applied across multiple 256 B or 512 B slices of a tile, the current model requires the compiler to manually generate repeated tile ops with different effective addresses.
+This change introduces **VTG (Vector Thread Group) vector micro-instructions**:
 
-### 1.2 What This Change Adds
-
-This change introduces **VTG (Vector Thread Group) vector micro-instructions** — a warp-grouped execution model where:
-
-- One 4 KB tile is partitioned into 16×256 B or 8×512 B **Vector Thread Groups (VTGs)**
+- One 4 KB tile is partitioned into 16×256 B or 8×512 B VTGs
 - Each VTG carries loop/thread counter state in the GVIQ entry prefix
-- A **micro-instruction buffer** is pre-allocated in the vector ALU, shared by all VTGs in the same tile group
-- The vector ALU scheduler rotates through ready VTGs, issuing the same micro-instruction list across each VTG in turn — similar to warp-scheduling in GPU-style SIMD
-- The existing VEC-4K-v2 ALU datapath (SA/SB/SC staging, 128-lane SIMD groups, 512 B/cycle throughput) is reused with minimal changes
-
-This closes the gap between the existing full-tile VEC model and the warp-grouped model described in `Davinci_vector_micro_instructions_v1.md`.
+- A **micro-instruction buffer** in the vector ALU holds pre-decoded VEC beat-word sequences, shared by all VTGs via `block_id`
+- VTG **operates behind VEC-4K-v2's staging registers** (SA/SB/SC are filled by the VEC prologue); VTG sub-range selection happens at the ALU input mux
+- VTG uses the **same TRegFile ports** (R0/R4 for reads, W0 for writeback) as VEC-4K-v2, with VEC-domain arbitration
+- The existing VEC-4K-v2 ALU datapath (128-lane SIMD groups, 512 B/cycle throughput) is reused unchanged
 
 ---
 
@@ -46,596 +50,460 @@ This closes the gap between the existing full-tile VEC model and the warp-groupe
 
 ### 2.1 SIMD Group
 
-A **SIMD group** is the fundamental execution granularity of the VEC-4K-v2 datapath.
-
-The VEC-4K-v2 ALU operates on **128 lane groups** per 512 B VTG beat:
-
-| Element type | Element size | Lanes per 512 B VTG | Lanes per 256 B VTG |
-|-------------|--------------|---------------------|---------------------|
-| FP32 / INT32 | 4 B | **128** | 64 |
-| FP16 / BF16 | 2 B | **256** | 128 |
-| FP8 | 1 B | **512** | 256 |
-| FP4 | 0.5 B | **1024** | 512 |
-
-Each lane computes an independent element. All 128 lanes execute the same micro-instruction in one VEC beat. The SIMD group is the vector ALU's native execution width — it is not a software-visible register, but the hardware's internal lane organization.
-
-The **SIMD group concept** in this document refers to:
-1. The 128-lane execution unit inside VEC-4K-v2
-2. The architectural convention that a VTG (256 B or 512 B) maps to one or two SIMD group beats
+The **SIMD group** is VEC-4K-v2's internal 128-lane execution unit. The hardware is identical to the full-tile VEC-4K-v2 path; no changes to the SIMD group are required. In `G512` mode, one VTG fills one SIMD group beat (512 B). In `G256` mode, one VTG fills half a SIMD group beat.
 
 ### 2.2 Vector Thread Group (VTG)
 
-A **Vector Thread Group (VTG)** is a warp-like scheduling context for vector micro-instructions. It is:
+A **VTG** is a warp-like scheduling context: 256 B (`G256`) or 512 B (`G512`) inside a 4 KB tile. It has its own `group_id`, loop counters, and active-lane state in the GVIQ entry. VTG operands are tile-relative (`T4.g2` = tile T4, group g2).
 
-- A sub-portion of a 4 KB tile register: **256 B** (in `G256` mode) or **512 B** (in `G512` mode)
-- A scheduling unit: the GVIQ entry prefix carries `group_id`, `thread_id`, `iter0..iter3` loop counters, and `active_lanes` — these state fields belong to a specific VTG
-- A rename unit: VTG operands are tile-relative (`T4.g2` means tile T4, group g2), resolved through the Tile RAT at rename time
-- A write domain: VTG writes only affect the selected 256 B or 512 B sub-range; other VTGs in the same tile are preserved
+**Critical (v1.1):** A VTG is not an independent hardware entity with its own TRegFile ports. VTGs **share** the VEC-4K-v2 datapath and TRegFile ports. Multiple VTGs are in flight simultaneously, but they compete for the same VEC ALU through the GVIQ scheduler. There is no parallel VTG execution — VTG is a **scheduling abstraction**, not a parallel execution unit.
 
-VTGs share a **micro-instruction buffer** (see §6) — the same micro-op list is pre-allocated once per tile group and referenced by all VTGs via their GVIQ entry's `block_id` pointer.
+### 2.3 Micro-Instruction Buffer
 
-### 2.3 Relationship Between SIMD Group and VTG
+The **micro-instruction buffer** is a pre-allocated buffer in the vector ALU that holds **pre-decoded VEC beat-word sequences** for VTG blocks. It is shared by all VTGs in the same tile group.
 
-| Dimension | SIMD group | VTG |
-|-----------|-----------|-----|
-| Size | Hardware lane count (128 lanes × 4 B = 512 B) | Software scheduling unit (256 B or 512 B) |
-| Scope | VEC-4K-v2 ALU internal | IQ, rename, TRegFile, scheduler |
-| Content | One beat of elementwise SIMD computation | One warp-like execution context (data + loop counters + predicates) |
-| Mapping | In `G512` mode: 1 VTG = 1 SIMD group beat | In `G256` mode: 1 VTG = 1/2 SIMD group beat (two VTGs share one beat) |
-| State | No software state | `group_id`, `thread_id`, `iter0..iter3`, `active_lanes`, `pc_index` |
+**Critical (v1.1):** The buffer does NOT store V*-level instructions (`VADD.type`, etc.). It stores **VEC beat-word sequences** — each entry is the pre-decoded beat-word sequence that drives VEC-4K-v2's ALU cycle-by-cycle. The VTG microassembler generates these beat-word sequences from V* operands at decode time.
 
-### 2.4 Micro-Instruction Buffer
-
-The **micro-instruction buffer** is a pre-allocated buffer in the vector ALU datapath. It is **shared** by all VTGs executing the same micro block and stores the decoded micro-instruction list.
-
-Key properties:
-- **Pre-allocated**: When a vector micro block enters the GVIQ, the compiler/front-end allocates a micro-instruction buffer entry and writes the decoded micro-op list once
-- **Shared by VTGs**: All VTGs in the same tile group share the buffer via `block_id` pointer in their GVIQ entry prefix
-- **Located in VEC ALU**: The buffer sits at the vector ALU input stage, accessible to the GVIQ issue logic and the VEC microcode controller
-- **Format**: Each micro-instruction entry contains `{opcode, elem_type, pred_mode, src_vtg_refs, dst_vtg_ref, scalar_src, imm}` — all the fields needed to drive the VEC-4K-v2 staging and ALU without re-decoding
-
----
-
-## 3. Architectural Model
-
-### 3.1 VTG Storage Mapping
-
-A 4 KB tile register is partitioned as follows:
-
-**`G256` mode (16 VTGs per tile):**
-
+Buffer organization:
 ```
-byte[0..255]      → g0   (VTG 0, 256 B)
-byte[256..511]    → g1   (VTG 1, 256 B)
-byte[512..767]    → g2   (VTG 2, 256 B)
-...
-byte[3840..4095]  → g15  (VTG 15, 256 B)
-```
-
-**`G512` mode (8 VTGs per tile):**
-
-```
-byte[0..511]      → g0   (VTG 0, 512 B)
-byte[512..1023]   → g1   (VTG 1, 512 B)
-byte[1024..1535]  → g2   (VTG 2, 512 B)
-...
-byte[3584..4095]  → g7   (VTG 7, 512 B)
-```
-
-The group mode is a metadata field on the tile (or per-micro-block), set by the compiler and consulted at rename and issue time.
-
-### 3.2 VTG Metadata
-
-Each VTG carries the following metadata (stored in the **VTG Metadata Table**):
-
-```
-VTGMeta {
-  valid:      1 b,    // VTG contains defined data
-  kind:       3 b,    // VEC | PRED | WIDE_LO | WIDE_HI | ALIGN_LD | SCRATCH | UNDEF
-  group_mode: 1 b,    // G256 = 0, G512 = 1
-  elem_type:  4 b,    // FP32/FP16/FP8/FP4/INT32/...
-  active_bytes: 10 b, // 0..256 (G256) or 0..512 (G512)
-  pred_granule: 2 b,  // predicate grouping: 8/16/32-bit lane granularity
-  pred_mode:   1 b,  // 0 = zeroing, 1 = merging (default)
-  defined:     1 b,
-  dirty:      1 b,
+BufferEntry {
+  valid:      1 b
+  block_id:   12 b  [tag]
+  pc_limit:   8 b   [last beat word index]
+  beat_words: array[64] of VECBeatWord  // pre-decoded VEC beat words
 }
 ```
 
-The VTG Metadata Table has 16 entries per physical tile (one per VTG in `G256` mode). In `G512` mode, entries g0/g2/g4/g6 are used and entries g1/g3/g5/g7 are sub-entries of pairs.
+### 2.4 VTG Microassembler
 
-### 3.3 Top-Level Block Diagram
-
-```
-Scalar/Tile Front-End + D1/D2/D3 Rename
-           |
-           | VTG vector micro-instructions (VADD, VMUL, VLD, ...)
-           v
-+--------------------------------------------------+
-|  Vector Micro Block Builder                        |
-|  - Groups consecutive VTG micro-instructions       |
-|  - Assigns block_id (micro block identifier)      |
-|  - Creates loop/thread counter frames             |
-+------------------------+-------------------------+
-                         |
-                         | block_id + decoded micro-op list
-                         v
-+--------------------------------------------------+
-|  Micro-Instruction Buffer (in vector ALU)          |
-|  - Pre-allocated, shared by all VTGs in block     |
-|  - Contains decoded {opcode, elem_type, pred_mode,|
-|    src/dst VTG refs, scalar_src, imm} per entry   |
-|  - Referenced by GVIQ entries via block_id +      |
-|    pc_index (micro-instruction pointer)            |
-+------------------------+-------------------------+
-                         |
-                         | GVIQ entries with {block_id, pc_index,
-                         | group_id, thread_id, iter0..iter3,
-                         | active_lanes, VTG operands}
-                         v
-+--------------------------------------------------+
-|  Grouped Vector Issue Queue (GVIQ)                |
-|  - 32 entries, 1-wide VTG issue per cycle         |
-|  - Entry prefix: block_id, pc_index, group_id,    |
-|    thread_id, loop/thread counters                 |
-|  - Wakeup: TRegFile tile tag → Ready Table-style  |
-|    VTG ready bits per tile                        |
-+------------------------+-------------------------+
-                         |
-                         | block_id → micro-instruction buffer lookup
-                         | VTG operands → TRegFile Group Read Adapter
-                         v
-+--------------------------------------------------+
-|  TRegFile Group Read Adapter                       |
-|  - Fetches source tile (4 KB)                     |
-|  - Selects 512 B VTG (G512) or 256 B VTG (G256)  |
-|  - Delivers to SA/SB/SC staging registers         |
-+------------------------+-------------------------+
-                         |
-                         | SA/SB/SC staging → VEC-4K-v2 ALU
-                         | block_id + pc_index → micro-instruction buffer
-                         v
-+--------------------------------------------------+
-|  VEC-4K-v2 ALU                                    |
-|  - 128-lane SIMD groups per beat                   |
-|  - Executes VTG micro-instruction from buffer      |
-|  - Predicate merge/zeroing handled per lane         |
-|  - Loop counter broadcast via SX/SY staging       |
-+------------------------+-------------------------+
-                         |
-                         | result VTG → TRegFile Group Write Adapter
-                         v
-+--------------------------------------------------+
-|  TRegFile Group Write Adapter                      |
-|  - Writes 256 B or 512 B result into destination VTG|
-|  - Preserves other VTGs in the tile               |
-|  - Updates VTG metadata                           |
-+------------------------+-------------------------+
-                         |
-                         | pc_index++, advance loop counters
-                         | rotate to next ready VTG
-                         v
-                    [GVIQ or retire]
-```
+The **VTG microassembler** generates VEC beat-word sequences from V* operands at decode time. It consults the VTG Metadata Table and the VTG's element type, predicate mode, and loop counters to produce the correct beat-word sequence for each VTG micro-op.
 
 ---
 
-## 4. Micro-Instruction Buffer
+## 3. Hardware Integration Model
+
+### 3.1 VTG Sits Behind VEC-4K-v2 Staging
+
+The fundamental architectural decision (v1.1) is that **VTG operands are sub-ranges of tiles that VEC-4K-v2 has already staged**:
+
+```
+TRegFile-4K
+  R0 ──────► VEC prologue (8-cycle epoch)
+  R4 ──────► SA (4 KB) ──┐
+                            ├── VTG sub-range selector ──► ALU input mux ──► VEC ALU
+                       SB (4 KB) ──┘
+  W0 ◄────── VTG Group Write Adapter (full-tile RMW)
+```
+
+Key consequences:
+1. **No new TRegFile ports**: VTG reuses R0/R4 (for tile reads) and W0 (for writeback)
+2. **No new staging registers**: VTG reads from SA/SB/SC (4 KB each), which are filled by the VEC prologue
+3. **VEC prologue is shared**: Both VTG and full-tile VEC-4K-v2 use the same prologue to fill SA/SB/SC
+4. **Sub-range selection at ALU input mux**: The VTG sub-range selector reads 256/512 B sub-ranges from SA/SB/SC and presents them to the ALU
+
+### 3.2 TRegFile Epoch Sharing
+
+VEC-4K-v2's operand-fetch prologue (`vector4k_v2.md` §6.1–§6.3) occupies the TRegFile ports for the prologue duration:
+
+| N_val | `is_xpose` mix | Prologue T_fetch |
+|--------|----------------|-----------------|
+| 1 | any | **8–15 cy** |
+| 2 | uniform | **8–15 cy** |
+| 2 | mixed | **16–23 cy** (R2 penalty) |
+
+VTG, operating behind the prologue, is subject to the same latency:
+- VTG submits a tile read request at issue
+- TRegFile delivers 512 B/cycle over 8 cycles (1 epoch)
+- Sub-range selection from SA/SB begins after the relevant strips have arrived
+- VTG compute begins after sub-range selection
+
+### 3.3 VEC-Domain Arbitration Matrix
+
+The VEC-4K-v2 ALU is **1-wide**: only one client can use it per cycle. The three clients are:
+
+| Client | Issue Queue | Throughput | Priority |
+|--------|------------|------------|----------|
+| Full-tile VEC-4K-v2 | Vector RS (24 entries) | 1 tile op / 8–15 cy | Highest (coarser grain) |
+| VTG micro-op | GVIQ (32 entries) | 1 VTG op / 8–16 cy | Medium |
+| MTE | MTE RS (16 entries) | Varies | Lowest |
+
+The VEC-domain arbiter grants the VEC ALU to one client per cycle based on readiness and priority. Full-tile VEC ops have higher priority because they hold the prologue for longer and are coarser-grain.
+
+---
+
+## 4. VTG Micro-Instruction Buffer (Hardware-Correct)
 
 ### 4.1 Buffer Organization
 
-The micro-instruction buffer is a **compile-time / decode-time allocated** structure in the vector ALU. It is not a circular buffer or a typical instruction RAM — it is a **set-associative buffer** keyed by `(block_id, VTG_id)`.
+The buffer stores **pre-decoded VEC beat-word sequences** (not V*-level instructions):
 
 ```
-MicroInstructionBuffer {
-  depth:    16 entries (max concurrent micro blocks)
-  assoc:    2-way set associative
-  block_id: u12  [key field]
+BufferEntry {
+  valid:      1 b
+  block_id:   12 b  [tag]
+  pc_limit:   8 b   [last beat_word_index]
 
-  entry[N] {
-    valid:       1 b
-    block_id:    u12  [tag]
-    pc_limit:    u8   [micro-instruction count - 1]
-    micro_ops:   array[64] of MicroOpEntry  // max 64 micro-ops per block
+  beat_words: array[64] of VECBeatWord
+}
+
+VECBeatWord {          // Same as VEC-4K-v2's SOP beat-word format
+  src_A:      3 b    // SA / SB / ACC / SX / SY / ZERO
+  src_B:      3 b
+  src_C:      3 b    // SC (mask/value)
+  s_A:        3 b    // strip index 0..7
+  s_B:        3 b
+  s_C:        3 b
+  xp_A:       1 b    // transpose for operand A
+  xp_B:       1 b
+  xp_C:       1 b
+  alu_op:     5 b    // ADD/SUB/MUL/FMA/etc.
+  acc_op:     3 b    // NONE/INIT/ACCUM/MERGE/READOUT
+  acc_slot:   1 b    // LO/HI
+  wr_en_D0:   1 b
+  wr_strip_D0: 3 b  // which strip writes to D0
+  wr_en_D1:   1 b
+  wr_strip_D1: 3 b
+}
+```
+
+### 4.2 VTG Microassembler
+
+At decode time, the VTG microassembler generates the beat-word sequence for each VTG micro-op:
+
+```
+VADD.F32 Td.gN, Ts0.gM, Ts1.gP, Tp:
+  // beat 0: SA ← Ts0 sub-range (group M), SB ← Ts1 sub-range (group P)
+  beat_words[0] = {
+    src_A: SA, s_A: group_strip_of(M), xp_A: 0,
+    src_B: SB, s_B: group_strip_of(P), xp_B: 0,
+    src_C: SC, s_C: pred_strip_of(Tp), xp_C: 0,
+    alu_op: ADD, acc_op: NONE, wr_en_D0: 1, wr_strip_D0: group_strip_of(N)
   }
-}
-
-MicroOpEntry {
-  opcode:     u12,    // VADD / VMUL / VCMP / VLD / VST / ...
-  elem_type:  u4,     // FP32 / FP16 / FP8 / FP4 / INT32 / ...
-  pred_mode:  u1,     // 0 = zeroing, 1 = merging
-  src0_ref:   VTGRef, // tile relative (Tg, gN) or scalar
-  src1_ref:   VTGRef | Scalar | Imm | None
-  src2_ref:   VTGRef | Scalar | Imm | None
-  dst_ref:    VTGRef
-  pred_ref:   VTGRef | implicit_all_true
-  addr_mode:  u2,     // strided / indexed / scalar_base / ...
-  imm:        i32,    // immediate offset
-  fault_policy: u1,   // checked / unchecked
-}
+  // For G256 (256 B = 1 strip): group_strip_of(gN) = 0..7 depending on byte offset
+  // For G512 (512 B = full epoch): one strip covers the full VTG
 ```
 
-### 4.2 Buffer Allocation
+The microassembler consults:
+- **VTG Metadata Table**: `group_mode`, `elem_type`, `pred_granule`, `active_bytes`
+- **Tile Metadata RAT**: `shape.x`, `shape.y`, `format` (from `Davinci_superscalar_v2.md` §6.1)
+- **GVIQ entry prefix**: `iter0..iter3`, `active_lanes`
 
-Buffer allocation happens at decode / front-end grouping time:
+### 4.3 Buffer Allocation and Access
 
-1. The **Vector Micro Block Builder** identifies a contiguous sequence of VTG micro-instructions that share the same tile group and loop structure
-2. It assigns a `block_id` (12-bit, up to 4096 concurrent micro blocks in flight)
-3. It decodes the micro-instruction list and writes each `MicroOpEntry` into the buffer at `buffer[block_id % depth][way].micro_ops[pc_index]`
-4. Each GVIQ entry for a VTG in this block carries `{block_id, pc_index=0}` as its micro-instruction pointer
+Buffer allocation: at decode, the Vector Micro Block Builder assigns `block_id` and runs the microassembler to generate the beat-word sequence, writing each `VECBeatWord` into `buffer[block_id % depth][way].beat_words[beat_index]`.
 
-### 4.3 Buffer Access at Issue
-
-At P1/I1 issue time, the GVIQ winner's `{block_id, pc_index}` fields drive a **single-cycle buffer lookup**:
-
+Buffer access at issue:
 ```
-micro_op = micro_inst_buffer.lookup(block_id, pc_index)
+at P1/I1:
+    winner = gviq.pick_oldest_ready()
+    beat_word = buffer.lookup(winner.block_id, winner.pc_index)
+    // beat_word drives VEC ALU for this cycle
+    winner.pc_index++
+    if winner.pc_index > winner.pc_limit:
+        winner.valid = 0  // retire
 ```
-
-The `micro_op` content drives:
-- VEC staging control (SA/SB/SC muxing, transpose flags)
-- ALU opcode and element-type configuration
-- Predicate mode and fault policy
-- Destination VTG writeback routing
-
-No re-decode is needed at issue time — the buffer entry is pre-decoded.
-
-### 4.4 Buffer Sharing Across VTGs
-
-All VTGs in the same tile group share the **same micro-instruction buffer entry** for a given `block_id`. Each VTG has its own `pc_index` in the GVIQ entry prefix, so VTGs can be at different points in the micro-instruction stream (e.g., one VTG is on iteration 3 while another is on iteration 7).
-
-When the GVIQ scheduler rotates to a new VTG:
-1. It reads `{block_id, pc_index, group_id, thread_id, iter0..iter3}` from the winning GVIQ entry
-2. It performs `micro_inst_buffer.lookup(block_id, pc_index)` to get the `MicroOpEntry`
-3. It drives the VEC staging and ALU with the micro-op content + VTG-specific operands
 
 ---
 
-## 5. GVIQ — Grouped Vector Issue Queue
+## 5. Execution Pipeline (Hardware-Correct)
 
-### 5.1 GVIQ Entry Format
-
-```
-GVIQEntry {
-  // ── Micro-instruction pointer ──────────────────────
-  valid:       1 b
-  block_id:    u12,   // index into micro-instruction buffer
-  pc_index:    u8,    // current micro-instruction within block (0..63)
-
-  // ── VTG identity ───────────────────────────────────
-  tile_group:  u5,    // architectural tile T0..T31
-  phys_tile:   u8,    // physical tile PT0..PT255 (after Tile RAT rename)
-  group_id:    u4,    // VTG index: 0..15 (G256) or 0..7 (G512)
-  group_mode:  u1,    // 0 = G256, 1 = G512
-
-  // ── Thread / loop context ───────────────────────────
-  thread_id:   u8,    // scheduler context (usually = group_id)
-  iter0:       u16,   // loop counter 0
-  iter1:       u16,   // loop counter 1
-  iter2:       u16,   // loop counter 2
-  iter3:       u16,   // loop counter 3
-  active_lanes: u16,  // active lane count or mask
-  active_group_mask: u16, // which VTG groups are active in this block
-
-  // ── VTG operand ptags (after rename) ──────────────
-  src0_ptag:   u8,    // physical tile tag for src0 VTG
-  src1_ptag:   u8,    // physical tile tag for src1 VTG
-  src2_ptag:   u8,    // physical tile tag for src2 VTG
-  pred_ptag:   u8,    // physical tile tag for predicate VTG
-  dst_ptag:    u8,    // physical tile tag for destination VTG
-  has_dst:     1 b,
-  src_ready:   (4,),  // VTG-ready bits: src0/1/2/pred ready
-
-  // ── Scheduling ─────────────────────────────────────
-  branch_tag:  u3,    // branch tag for speculation gating
-  vtg_ready:   1 b,   // all source VTGs ready + loop counters ready
-}
-```
-
-### 5.2 VTG Wakeup
-
-Unlike scalar ptag wakeup via the Ready Table, VTG wakeup is simpler because **tile registers are the operand unit**:
+### 5.1 Revised VTG Micro-Op Lifecycle
 
 ```
-vtg_ready = src_ready[0] & src_ready[1] & src_ready[2] & src_ready[3]
-           & loop_counters_ready
+Cycle N+6:  D1/D2   — Decode + Tile RAT rename; microassembler generates beat-word sequence
+Cycle N+11: S1/S2   — GVIQ entry write; micro-instruction buffer populated
+Cycle N+12: P1       — GVIQ pick: select oldest-ready VTG micro-op
+Cycle N+13: I1       — TRegFile read request submitted (pending register)
+Cycle N+13..N+20:    — VEC prologue: SA/SB/SC fill over 8-cycle epoch (512 B/cy × 8)
+Cycle N+21: I2       — Issue confirm; SA/SB/SC staging populated; prologue done
+Cycle N+22: E1       — VTG sub-range selector: read 256/512 B from SA/SB at ALU input mux
+Cycle N+22..N+22+K: — VEC ALU: beat_word drives compute for K beats
+Cycle N+22+K+1: W1   — Group Write Adapter: read old tile (8 cy), merge VTG sub-range, write merged tile (8 cy)
+Cycle N+22+K+17:     — Writeback complete; VTG ready bit set
 ```
 
-`src_ready[i]` is set when `src_i_ptag` receives a writeback from a previous VTG operation. The VTG Ready Table is a **256-entry bitmap** (one bit per physical tile PT0..PT255), similar in structure to the scalar Ready Table.
+**Total VTG latency for a single-beat VTG op (K=1):**
+- Best case (well-aligned epoch): `8 (prologue) + 1 (compute) + 16 (RMW writeback) = 25 cy`
+- Worst case (misaligned epoch): `15 (prologue) + 1 + 16 = 32 cy`
 
-### 5.3 Issue Rules
+This replaces the v1.0 claim of 9 cycles.
 
-| Rule | Description |
-|------|-------------|
-| IQ-1 | `pc_index` must be within the buffer entry's `pc_limit` for the given `block_id` |
-| IQ-2 | All source VTG `src_ready` bits must be set |
-| IQ-3 | Loop counter `iter*` must be non-zero (or the instruction does not consume a loop counter) |
-| IQ-4 | The GVIQ is 1-wide: at most one VTG micro-op issues per cycle |
-| IQ-5 | The VEC-4K-v2 ALU is single-ported per VTG: one VTG micro-op per VEC beat |
-| IQ-6 | Paired `G256` issue (optional v1): two independent 256 B VTGs may share one 512 B SIMD group beat if their `opcode`, `elem_type`, and `pred_mode` all match |
+### 5.2 TRegFile Writeback: Full-Tile Read-Modify-Write
+
+The Group Write Adapter performs a **full-tile read-modify-write** for every VTG writeback:
+
+```
+Group Write Adapter (writeback):
+    // Step 1: Read the full current tile
+    TRegFile.submit_read_request(dst_ptag)          // occupies W0 for 8 cycles
+    wait 8 cycles
+    old_tile = TRegFile.read_data                   // 4 KB
+
+    // Step 2: Merge VTG result into the correct sub-range
+    if group_mode == G256:
+        start = group_id * 256
+        end   = start + 256
+    else:  # G512
+        start = group_id * 512
+        end   = start + 512
+    new_tile = old_tile
+    new_tile[start:end] = vtg_result               // merge sub-range
+
+    // Step 3: Write merged tile back
+    TRegFile.submit_write_request(dst_ptag, new_tile)  // occupies W0 for 8 cycles
+    wait 8 cycles
+    TRegFile.write_complete()
+
+    // Total: 16 cycles for the RMW cycle
+```
+
+**Implication:** VTG writeback ties up W0 for **16 cycles** (8 read + 8 write), which is the same write latency as a full-tile VEC op. VTG does not have a separate write port in v1.1 — it shares W0 with VEC-4K-v2.
+
+### 5.3 VTG Sub-Range Selection at ALU Input Mux
+
+After the prologue completes, SA/SB/SC contain the full 4 KB tile. The VTG sub-range selector reads the appropriate 256/512 B slice:
+
+```
+V TG Sub-Range Selector:
+    input: SA_full[4096 B], group_id, group_mode
+    if group_mode == G256:
+        vtg_A[256 B] = SA_full[group_id * 256 : (group_id+1) * 256]
+    else:  # G512
+        vtg_A[512 B] = SA_full[group_id * 512 : (group_id+1) * 512]
+    output: vtg_A → ALU operand mux (SA input)
+```
+
+This sub-range selection happens **in parallel with** the VEC ALU input muxing — it is a simple byte-range mux, not a separate pipeline stage. It does not add latency to the critical path.
 
 ---
 
-## 6. Vector Micro-Instruction Families
+## 6. VTG Micro-Instruction Families
 
-### 6.1 Instruction Syntax
-
-All VTG vector micro-instructions use the following syntax:
+### 6.1 Instruction Syntax (unchanged from v1.0)
 
 ```
 VINST.type  Td.gN, Ts0.gM, Ts1.gP, Tp.gQ
 ```
 
-Where:
-- `Td.gN` = destination VTG (tile `Td`, group `gN`)
-- `Ts0.gM`, `Ts1.gP` = source VTGs
-- `Tp.gQ` = predicate VTG
-- `.type` = element type: `.F32`, `.F16`, `.BF16`, `.F8`, `.F4`, `.I32`, `.I16`, `.I8`
-
 ### 6.2 ALU Instructions
 
-#### 6.2.1 Elementwise ALU
+| Instruction | Operation | VEC beat words |
+|------------|-----------|---------------|
+| `VADD` | `Td[i] = Tp[i] ? (Ts0[i] + Ts1[i]) : merge(Td[i])` | 1 beat: `alu_op=ADD, src_A=SA, src_B=SB, mask=SC` |
+| `VSUB` | `Td[i] = Tp[i] ? (Ts0[i] - Ts1[i]) : merge(Td[i])` | 1 beat: `alu_op=SUB` |
+| `VMUL` | Multiplication | 1 beat: `alu_op=MUL` |
+| `VMIN` | `min(Ts0, Ts1)` | 1 beat: `alu_op=MIN` |
+| `VMAX` | `max(Ts0, Ts1)` | 1 beat: `alu_op=MAX` |
+| `VABS` | `abs(Ts0)` | 1 beat: `alu_op=PASS_A` + post-processing |
+| `VNEG` | `-Ts0[i]` | 1 beat: `alu_op=PASS_A` + negate |
 
-| Instruction | Syntax | Operation |
-|-------------|--------|-----------|
-| `VADD` | `VADD.type Td, Ts0, Ts1, Tp` | `Td[i] = Tp[i] ? (Ts0[i] + Ts1[i]) : merge(Td[i])` |
-| `VSUB` | `VSUB.type Td, Ts0, Ts1, Tp` | `Td[i] = Tp[i] ? (Ts0[i] - Ts1[i]) : merge(Td[i])` |
-| `VMUL` | `VMUL.type Td, Ts0, Ts1, Tp` | `Td[i] = Tp[i] ? (Ts0[i] * Ts1[i]) : merge(Td[i])` |
-| `VDIV` | `VDIV.type Td, Ts0, Ts1, Tp` | `Td[i] = Tp[i] ? (Ts0[i] / Ts1[i]) : merge(Td[i])` |
-| `VMIN` | `VMIN.type Td, Ts0, Ts1, Tp` | `Td[i] = Tp[i] ? min(Ts0[i], Ts1[i]) : merge(Td[i])` |
-| `VMAX` | `VMAX.type Td, Ts0, Ts1, Tp` | `Td[i] = Tp[i] ? max(Ts0[i], Ts1[i]) : merge(Td[i])` |
-| `VABS` | `VABS.type Td, Ts0, Tp` | `Td[i] = Tp[i] ? abs(Ts0[i]) : merge(Td[i])` |
-| `VNEG` | `VNEG.type Td, Ts0, Tp` | `Td[i] = Tp[i] ? -Ts0[i] : merge(Td[i])` |
+### 6.3 Scalar-Broadcast ALU
 
-#### 6.2.2 Scalar-Broadcast ALU
+| Instruction | Operation | Notes |
+|------------|-----------|-------|
+| `VADDS` | `Td[i] = Ts[i] + scalar` | Scalar from SX/SY broadcast |
+| `VMULS` | `Td[i] = Ts[i] × scalar` | Scalar broadcast via SX/SY |
 
-| Instruction | Syntax | Operation |
-|-------------|--------|-----------|
-| `VADDS` | `VADDS.type Td, Ts, Xs, Tp` | `Td[i] = Tp[i] ? (Ts[i] + Xs) : merge(Td[i])` |
-| `VMULS` | `VMULS.type Td, Ts, Xs, Tp` | `Td[i] = Tp[i] ? (Ts[i] * Xs) : merge(Td[i])` |
-| `VMAXS` | `VMAXS.type Td, Ts, Xs, Tp` | `Td[i] = Tp[i] ? max(Ts[i], Xs) : merge(Td[i])` |
+The scalar operand comes from the scalar register file (via SX/SY staging) and is broadcast to all lanes by VEC's existing broadcast mechanism.
 
-Scalar operands (`Xs`) come from the scalar register file (atag → ptag) and are broadcast to all 128 SIMD lanes via the SX/SY staging registers.
+### 6.4 Compare and Select
 
-#### 6.2.3 Compare and Select
+| Instruction | Operation | VEC beat words |
+|------------|-----------|---------------|
+| `VCMP.{LT/...}` | Predicate result | 1 beat: `alu_op=CMP`, `wr_en_D0=0` |
+| `VSEL` | `Td = Tp ? Ts0 : Ts1` | 1 beat: `alu_op=SELECT, src_A=Ts0, src_B=Ts1` |
+| `VMERGE` | Merging-mode fill | 1 beat: `alu_op=PASS_A` (old dest + pred gate) |
 
-| Instruction | Syntax | Operation |
-|-------------|--------|-----------|
-| `VCMP.{LT/LE/GT/GE/EQ/NE}` | `VCMP.cmp.type Tpd, Ts0, Ts1, Tp` | Predicate VTG `Tpd` receives comparison result; `Tpd[i] = cmp(Ts0[i], Ts1[i])` |
-| `VSEL` | `VSEL.type Td, Ts0, Ts1, Tp` | `Td[i] = Tp[i] ? Ts0[i] : Ts1[i]` (predicate selects between two source VTGs) |
-| `VMERGE` | `VMERGE.type Td, Ts, Tp` | Merging-mode fill: `Td[i] = Tp[i] ? Ts[i] : Td[i]` (reads old destination) |
+### 6.5 Memory Instructions
 
-#### 6.2.4 Conversion
+| Instruction | Operation | VEC beat words |
+|------------|-----------|---------------|
+| `VLD` | Load 256/512 B into VTG | VTG microassembler expands to VEC-style strip-fill sequence |
+| `VST` | Store 256/512 B from VTG | VTG microassembler expands to VEC-style strip-drain sequence |
+| `VLDSTRIDE` | Strided load | Multiple beats with stride address calculation |
+| `VSTSTRIDE` | Strided store | Multiple beats |
+| `PGATHER` | Predicate gather | Multiple beats with gather address |
 
-| Instruction | Syntax | Operation |
-|-------------|--------|-----------|
-| `VCVT` | `VCVT.dtype.stype Td, Ts, Tp` | `Td[i] = cast<Tdtype>(Ts[i])` with saturation and rounding |
-| `VROUND` | `VROUND.type Td, Ts, Tp` | `Td[i] = round(Ts[i])` with configurable rounding mode |
-| `VTRUNC` | `VTRUNC.type Td, Ts, Tp` | `Td[i] = truncate(Ts[i])` |
+**Inactive-lane fault suppression** is handled by the LSU checking the active-lane mask before address generation.
 
-#### 6.2.5 Math
+### 6.6 Predicate Instructions
 
-| Instruction | Syntax | Operation |
-|-------------|--------|-----------|
-| `VSQRT` | `VSQRT.type Td, Ts, Tp` | `Td[i] = Tp[i] ? sqrt(Ts[i]) : merge(Td[i])` |
-| `VEXP` | `VEXP.type Td, Ts, Tp` | `Td[i] = Tp[i] ? exp(Ts[i]) : merge(Td[i])` |
-| `VLOG` | `VLOG.type Td, Ts, Tp` | `Td[i] = Tp[i] ? log(Ts[i]) : merge(Td[i])` |
-| `VRELU` | `VRELU.type Td, Ts, Tp` | `Td[i] = Tp[i] ? (Ts[i] > 0 ? Ts[i] : 0) : merge(Td[i])` |
-
-### 6.3 Predicate Instructions
-
-| Instruction | Syntax | Operation |
-|-------------|--------|-----------|
-| `PLT` | `PLT Tpd, iter0, Tp` | `Tpd[i] = (i < iter0) ? 1 : 0` — loop counter predicate |
-| `PAND` | `PAND Tpd, Tp0, Tp1` | `Tpd[i] = Tp0[i] & Tp1[i]` |
-| `POR` | `POR Tpd, Tp0, Tp1` | `Tpd[i] = Tp0[i] \| Tp1[i]` |
-| `PXOR` | `PXOR Tpd, Tp0, Tp1` | `Tpd[i] = Tp0[i] ^ Tp1[i]` |
-| `PNOT` | `PNOT Tpd, Tp` | `Tpd[i] = ~Tp[i]` |
-
-Predicate VTG kind: predicates are stored as VTGs of kind `PRED`. A predicate VTG for 128 lanes requires 128 bits (16 bytes), stored in the low 16 bytes of a 256 B VTG slot.
-
-### 6.4 Memory Instructions
-
-| Instruction | Syntax | Operation |
-|-------------|--------|-----------|
-| `VLD` | `VLD.type Td.gN, [Xbase + Xoff], Tp` | Load 256/512 B under predicate into `Td.gN` |
-| `VST` | `VST.type Ts.gN, [Xbase + Xoff], Tp` | Store 256/512 B from `Ts.gN` under predicate |
-| `VLDSTRIDE` | `VLDSTRIDE.type Td, Xbase, Xstride, Xcount, Tp` | Strided load: `Td[i] = mem[Xbase + i*Xstride]` |
-| `VSTSTRIDE` | `VSTSTRIDE.type Ts, Xbase, Xstride, Xcount, Tp` | Strided store |
-| `PGATHER` | `PGATHER.type Tpd, [Xbase + Ts*esize], Tp` | Gather predicate: `Tpd[i] = mem[Xbase + Ts[i]*esize]` |
-
-**Inactive-lane fault suppression**: Vector loads/stores MUST NOT fault for inactive lanes (predicate bit = 0). The LSU checks the active-lane mask before performing each lane's address calculation.
-
-### 6.5 Wide / Reduction Instructions
-
-| Instruction | Syntax | Operation |
-|-------------|--------|-----------|
-| `VREDUCE_ADD` | `VREDUCE_ADD.type Xd, Ts, Tp` | `Xd = Σ(Ts[i] * Tp[i])` — scalar reduction output |
-| `VREDUCE_MAX` | `VREDUCE_MAX.type Xd, Ts, Tp` | `Xd = max(Ts[i] * Tp[i])` |
-| `WADD` | `WADD.type Td, Ts0, Ts1, Tp` | Wide add: result spans 2 VTGs for extended precision |
-
-### 6.6 Micro-Instruction Count
-
-| Category | Count |
-|---------|-------|
-| Elementwise ALU | 11 |
-| Scalar-broadcast ALU | 3 |
-| Compare and Select | 4 |
-| Conversion | 3 |
-| Math | 4 |
-| Predicate | 5 |
-| Memory | 5 |
-| Reduction / Wide | 3 |
-| **Total** | **38** |
+| Instruction | Operation |
+|-------------|-----------|
+| `PLT` | `Tpd[i] = (i < iter0)` — loop counter predicate via SX/SY broadcast |
+| `PAND` | Predicate AND |
+| `POR` | Predicate OR |
+| `PXOR` | Predicate XOR |
+| `PNOT` | Predicate NOT |
 
 ---
 
-## 7. Execution Pipeline
+## 7. GVIQ — Grouped Vector Issue Queue
 
-### 7.1 VTG Micro-Op Lifecycle
-
-```
-Cycle N:   FETCH     — F0→F1→F2→F3→IB→F4: instruction fetch
-Cycle N+6: D1        — decode + atag/ptag rename (scalar)
-Cycle N+9: D2/D3     — Tile RAT rename for VTGs; block_id allocated
-Cycle N+11:S1/S2     — GVIQ entry write; micro-instruction buffer populated
-Cycle N+12:P1        — GVIQ pick: select oldest-ready VTG micro-op
-Cycle N+13:I1        — TRegFile read for source tiles; buffer lookup (block_id, pc_index)
-Cycle N+14:I2        — Issue confirm; SA/SB/SC staging populated
-Cycle N+15:E1        — VEC-4K-v2 ALU begins execution (128-lane SIMD group)
-Cycle N+22:W1        — Writeback; VTG ready bits updated; pc_index++, loop counters updated
-```
-
-### 7.2 VTG Rotation Scheduling
-
-When multiple VTGs in the same tile group are active, the GVIQ scheduler rotates across them:
+### 7.1 GVIQ Entry (unchanged from v1.0)
 
 ```
-while any VTG active:
-    # Pick the oldest-ready VTG (age = (entry.rid - head_rid) mod 64)
-    winner = gviq.pick_oldest_ready()
-
-    # Read micro-instruction from buffer
-    micro_op = buffer.lookup(winner.block_id, winner.pc_index)
-
-    # Read VTG operands from TRegFile
-    SA = TRegFile.read(winner.src0_ptag)   # Full 4 KB tile
-    SB = TRegFile.read(winner.src1_ptag)
-
-    # Select VTG sub-range (256 B or 512 B)
-    SA_vtg = select_vtg(SA, winner.group_id, winner.group_mode)
-    SB_vtg = select_vtg(SB, winner.group_id, winner.group_mode)
-
-    # Execute
-    result = vec_alu.execute(micro_op.opcode, SA_vtg, SB_vtg, micro_op.pred_mode)
-
-    # Write back to destination VTG
-    TRegFile.write_vtg(winner.dst_ptag, winner.group_id, result)
-
-    # Advance
-    winner.pc_index++
-    if loop_end(winner):
-        winner.iterN--
-        winner.pc_index = loop_start
-    if all_iters_done(winner):
-        winner.valid = 0   # Retire GVIQ entry
+GVIQEntry {
+  valid:           1 b
+  block_id:       12 b
+  pc_index:        8 b
+  tile_group:      5 b   // architectural tile T0..T31
+  phys_tile:       8 b   // physical tile PT0..PT255
+  group_id:        4 b   // 0..15 (G256) or 0..7 (G512)
+  group_mode:      1 b
+  thread_id:       8 b
+  iter0..iter3:   4×16 b
+  active_lanes:   16 b
+  active_group_mask: 16 b
+  src0_ptag:       8 b
+  src1_ptag:       8 b
+  src2_ptag:       8 b
+  pred_ptag:       8 b
+  dst_ptag:        8 b
+  has_dst:         1 b
+  src_ready:       4 b
+  vtg_ready:       1 b
+  branch_tag:      3 b
+}
 ```
 
-### 7.3 TRegFile Group Read/Write Adapters
+### 7.2 VTG Wakeup
 
-**Group Read Adapter** (TRegFile → VEC staging):
-```
-input:  full_tile_data[4096 B], group_id, group_mode
-G256:   vtg_data[256 B] = full_tile_data[group_id * 256 : (group_id+1) * 256]
-G512:   vtg_data[512 B] = full_tile_data[group_id * 512 : (group_id+1) * 512]
-output: vtg_data → SA or SB staging register
-```
+VTG readiness is tracked by the **VTG Ready Table** (256-bit bitmap, one bit per physical tile). When a VTG micro-op writes back:
+1. Group Write Adapter performs full-tile RMW (16 cy)
+2. On writeback completion, `VTG_Ready_Table[dst_ptag] = 1`
+3. GVIQ entries waiting on this tile set `src_ready`
 
-**Group Write Adapter** (VEC result → TRegFile):
-```
-input:  vtg_result[256/512 B], dst_ptag, group_id, group_mode, other_vtgs_preserve
-G256:   full_tile = merge(vtg_result, existing_tile, group_id)  # preserve other 15 VTGs
-G512:   full_tile = merge(vtg_result, existing_tile, group_id)  # preserve other 7 VTGs
-TRegFile.write(dst_ptag, full_tile)
-update VTG_metadata[dst_ptag][group_id] = {valid=1, defined=1, dirty=1}
-```
+### 7.3 Issue Rules
+
+| Rule | Description |
+|------|-------------|
+| GVIQ-1 | `pc_index <= pc_limit` for the given `block_id` |
+| GVIQ-2 | All source VTG `src_ready` bits set |
+| GVIQ-3 | Active loop counter (`iter*`) non-zero |
+| GVIQ-4 | GVIQ is 1-wide: one VTG micro-op per cycle |
+| GVIQ-5 | VEC-4K-v2 ALU is single-ported: VTG competes with Vector RS for ALU access |
+| GVIQ-6 | VTG competes with Vector RS for TRegFile ports (R0, R4, W0) |
+| GVIQ-7 | Paired `G256` issue (optional): two VTGs with matching beat_word share one VEC beat cycle |
 
 ---
 
-## 8. Interaction with Existing VEC-4K-v2
+## 8. VTG Metadata Table
 
-### 8.1 Staging Register Reuse
+### 8.1 Metadata Structure
 
-The existing VEC-4K-v2 staging registers are reused:
+The VTG Metadata Table overlays the existing **Tile Metadata RAT** (`Davinci_superscalar_v2.md` §6.1). Each physical tile's metadata entry is extended with VTG-specific fields:
 
-| Staging Register | VTG Micro-Op Use |
-|-----------------|-----------------|
-| `SA` | Source VTG 0 (or old destination for merging) |
-| `SB` | Source VTG 1 (or scalar broadcast expansion) |
-| `SC` | Predicate VTG (or third source VTG for wide ops) |
-| `SX / SY` | Scalar operand / loop counter broadcast |
-| `SOP` | Micro-instruction opcode and control from buffer |
+```
+TileMetadataEntry (extended, 32+14 = 46 b per physical tile):
+  // From Tile Metadata RAT:
+  shape.x:    14 b   // columns C
+  shape.y:    14 b   // rows R
+  format:      4 b   // FP32/FP16/FP8/FP4
+  flags:       4 b   // arg_tile, scalar_tile, prefetch_hint
 
-### 8.2 ALU Lane Mapping
+  // VTG additions (overlaid or extending):
+  group_mode:  1 b   // G256=0, G512=1
+  pred_granule: 2 b  // 8/16/32-bit lane grouping
+  // The following are per-VTG (16 entries per tile):
+  vtg_meta[16]: {
+    valid:       1 b
+    defined:     1 b
+    dirty:       1 b
+    kind:        3 b   // VEC | PRED | WIDE_LO | WIDE_HI | SCRATCH | UNDEF
+  }
+```
 
-| VTG Mode | VTG Size | SIMD Group Beats | ALU Throughput |
-|----------|----------|-----------------|---------------|
-| `G256` | 256 B | 1/2 beat (two VTGs share one beat) | 2 VTGs / VEC beat (if paired) |
-| `G512` | 512 B | 1 full beat | 1 VTG / VEC beat |
+**Note (v1.1):** `elem_type` is NOT duplicated — it is the same 4-bit `format` field from the Tile Metadata RAT. `active_bytes` is computed from `shape.x × shape.y × E` and the VTG's position in the tile.
 
-For `G256` with paired issue: the scheduler selects two VTGs with matching `{opcode, elem_type, pred_mode}` and issues them together, filling the full 512 B SIMD group beat.
+### 8.2 VTG Byte Mapping (unchanged)
 
-### 8.3 VEC Microcode Interaction
+`G256` (16 VTGs, 256 B each):
 
-The VEC microcode controller drives the ALU based on the `MicroOpEntry` from the buffer. The microcode program is keyed by `(opcode, elem_type, pred_mode)` and configures:
-- SA/SB/SC muxing and transpose flags
-- ALU opcode and lane configuration
-- Predicate merge/zeroing mode per lane
-- Destination writeback routing
+| VTG | Byte range |
+|-----|-----------|
+| `g0` | `[0, 255]` |
+| `g1` | `[256, 511]` |
+| ... | ... |
+| `g15` | `[3840, 4095]` |
+
+`G512` (8 VTGs, 512 B each):
+
+| VTG | Byte range |
+|-----|-----------|
+| `g0` | `[0, 511]` |
+| `g1` | `[512, 1023]` |
+| ... | ... |
+| `g7` | `[3584, 4095]` |
 
 ---
 
 ## 9. Integration with Davinci_superscalar_v2.md
 
-The following sections of `Davinci_superscalar_v2.md` require updates:
+### 9.1 What Sections Need Updates
 
-| Section | Update |
-|---------|--------|
-| §1 Key Parameters | Add VTG/GVIQ parameters: GVIQ depth, micro-buffer depth, VTG count per tile, G256/G512 mode |
-| §2.2 Vector ISA | Add VTG vector micro-instruction families (V* prefix) alongside existing full-tile T* ops |
-| §3 Block Diagram | Add Vector Micro Block Builder, Micro-Instruction Buffer, GVIQ, VTG Metadata Table, Group Read/Write Adapters |
-| §4 Pipeline | Add VTG micro-op lifecycle stages |
-| §6 Decode & Rename | Add VTG operand decode, Tile RAT interaction, block_id allocation |
-| §7 Dispatch & Issue | Add GVIQ entry format, VTG wakeup, rotation scheduling, micro-buffer lookup |
-| §8.3 Vector Unit | Add VTG execution mode, G256/G512 SIMD group mapping, micro-instruction buffer integration |
-| §9 Register Files | Define VTG as sub-unit of tile register; add VTG Metadata Table |
-| §10 OoO Model | Add VTG dependency tracking, VTG-ready bits |
-| §12 Memory | Add VTG load/store, inactive-lane fault suppression |
+| Section | Update Required |
+|---------|----------------|
+| §1 Key Parameters | Add VTG parameters; note VTG reuses VEC-4K-v2's R0/R4 ports |
+| §2.2.6 VTG Micro-Instr | Update with hardware-correct lifecycle and beat-word format |
+| §3 Block Diagram | VTG sub-range selector shown between SA/SB and ALU input mux |
+| §7.4 GVIQ | Update with prologue model and VEC-domain arbitration |
+| §8.3.10 VTG | Update with staging model, prologue timing, RMW writeback |
+| §9.2.5 VTG | Update metadata to overlay Tile Metadata RAT (not separate table) |
+| §10.5.1 VTG dependency | Update with VTG Ready Table and RMW writeback latency |
+| §12.5.1 VTG memory | Update with prologue timing and RMW writeback |
 
----
+### 9.2 Key Corrections to Apply
 
-## 10. Key Parameters
-
-| Parameter | Value |
-|-----------|-------|
-| VTG modes | `G256` (16 VTGs/tile) · `G512` (8 VTGs/tile) |
-| GVIQ depth | 32 entries |
-| GVIQ issue width | 1 VTG micro-op / cycle |
-| Micro-instruction buffer depth | 16 entries |
-| Micro-instructions per block | max 64 |
-| VTG operand size | 256 B (`G256`) or 512 B (`G512`) |
-| SIMD lanes per VTG beat | 128 (FP32), 256 (FP16/BF16), 512 (FP8), 1024 (FP4) |
-| VTG Metadata Table | 16 entries / physical tile |
-| VTG ready bitmap | 256 bits (one per PT0..PT255) |
-| Predicate VTG size | 16 B (128 bits) stored in low 16 B of 256 B VTG slot |
-| Loop counters per GVIQ entry | 4 × 16-bit |
+1. **VEC staging reuse**: VTG operates **behind** SA/SB/SC, not as a separate path. Show VTG sub-range selector between staging and ALU.
+2. **Prologue model**: VTG latency starts with `T_fetch` (8–15 cy), not cycle I1.
+3. **RMW writeback**: Group Write Adapter = full-tile read (8 cy) + merge + full-tile write (8 cy) = **16 cy minimum**.
+4. **Metadata overlay**: VTG metadata fields (`group_mode`, `pred_granule`, VTG validity) extend the Tile Metadata RAT entry, not a separate table.
+5. **elem_type = format**: Remove duplicate `elem_type` field; use `format` from Tile Metadata RAT.
 
 ---
 
-## 11. Comparison: Full-Tile vs. VTG Micro-Op Execution
+## 10. Key Parameters (v1.1)
 
-| Dimension | Full-tile T* (current) | VTG V* micro-op (this change) |
-|-----------|------------------------|-------------------------------|
-| Operand size | 4 KB (full tile) | 256 B or 512 B VTG |
-| Scheduling unit | One tile per VEC op | One VTG per GVIQ entry |
-| Loop handling | Scalar outer loop + repeated T* ops | Loop counters in GVIQ prefix; hardware rotation |
-| Micro-instruction storage | Decoded opcode in Vector RS | Pre-allocated micro-instruction buffer in vector ALU |
-| TRegFile access | Full 4 KB tile read/write | VTG sub-range read/write via adapters |
-| ISA surface | `TADD`, `TMUL`, `TLOAD`, ... | `VADD`, `VMUL`, `VLD`, ... |
-| Tile RAT rename | Full tile rename | Tile rename + VTG group_id index |
-| Predicate handling | Per-element mask via SC staging | Per-VTG predicate VTG + SC staging |
-| Throughput | 1 tile / 8 cycles (TRegFile epoch) | 1 VTG / VEC beat (paired G256 = 2 VTGs/beat) |
-| Typical use case | Large matrix ops, GEMM | Strip-mined inner loops, elementwise on multiple slices |
+| Parameter | Value | Notes |
+|-----------|-------|-------|
+| VTG modes | `G256` (16×256 B VTGs/tile) · `G512` (8×512 B VTGs/tile) | |
+| GVIQ depth | 32 entries, 1-wide issue | |
+| Micro-instruction buffer | 16 entries, 2-way; stores **VEC beat-word sequences** | Each entry = up to 64 × ~50 b = ~3.2 Kb |
+| VTG beat words per micro-op | 1–N (1 for elementwise, N for strip-strided) | |
+| VTG latency (best case) | **25 cy** (8 prologue + 1 compute + 16 RMW) | |
+| VTG latency (worst case) | **32 cy** (15 prologue + 1 + 16) | |
+| TRegFile ports used | R0 + R4 (reads, shared with VEC-4K-v2 prologue) + W0 (writeback, shared) | |
+| VTG sub-range selection | At ALU input mux, after prologue completes | No extra pipeline stage |
+| VTG Ready Table | 256-bit bitmap | Same as scalar Ready Table |
+| Metadata | Tile Metadata RAT extended with VTG fields | No separate VTG Metadata Table |
 
 ---
 
-## 12. Open Questions
+## 11. Open Questions (remaining after v1.1)
 
 | ID | Question | Priority |
 |----|----------|----------|
-| OQ-1 | Should `G256` paired issue (2 VTGs per beat) be v1 or v2? | High |
-| OQ-2 | How does the GVIQ interact with the existing Vector RS (24 entries)? Are they unified or separate? | High |
-| OQ-3 | Should the micro-instruction buffer be invalidated on a branch mispredict (like MapQ)? | Medium |
-| OQ-4 | How many simultaneous micro blocks (`block_id` space) should be supported in flight? | Medium |
-| OQ-5 | Does the VTG micro-op path share the VEC staging registers with the full-tile path, or are they separate? | Medium |
-| OQ-6 | What is the exact fault reporting format for VTG micro-ops? (block_id, thread_id, group_id, lane) | Medium |
+| OQ-A | Does VTG need a dedicated write port (W6/W7) to avoid blocking VEC-4K-v2's W0 during VTG RMW? | High |
+| OQ-B | What is the arbitration priority between Vector RS and GVIQ for VEC ALU access? | High |
+| OQ-C | How does VTG interact with VEC's accumulator (256×32 b ping-pong)? Can VTG produce accumulator results? | Medium |
+| OQ-D | For VTG memory ops (VLD/VST), does VTG share the LSU pipeline with MTE, or does it have its own LSU path? | Medium |
+| OQ-E | Should paired G256 issue be v1 or deferred? | Medium |
+| OQ-F | What is the exact beat-word encoding for each VTG opcode? Requires enumerating all 38 V* × all format × all predicate_mode combinations. | High |
+| OQ-G | Does VTG support the full VEC beat-word set (including `acc_op`, `shuffle`, `CAS` for TMRGSORT)? | Medium |
+
+---
+
+## Appendix A: VTG Lifecycle Comparison (v1.0 vs v1.1)
+
+| Dimension | v1.0 (incorrect) | v1.1 (hardware-correct) |
+|-----------|---------------------|--------------------------|
+| TRegFile ports | Independent R0/R4 | Shared with VEC-4K-v2 |
+| TRegFile reads | "Immediate" at I1 | 8-cycle epoch prologue |
+| TRegFile writes | Direct `write_vtg(dst_ptag, group_id, result)` | Full-tile RMW (16 cy minimum) |
+| Staging | VTG output to SA/SB (new 256/512 B) | VTG reads from SA/SB (4 KB) at ALU mux |
+| Latency claimed | 9 cycles | 25–32 cycles minimum |
+| Micro-instruction format | `MicroOpEntry {opcode, elem_type, pred_mode}` | Pre-decoded `VECBeatWord` sequence |
+| Beat-level control | Not specified | Each VTG micro-op = 1–N beat words from microassembler |
+| Metadata | Separate VTG Metadata Table (16 entries/tile) | Overlaid on Tile Metadata RAT |
+| Port arbitration | "Arbitrate via existing pipeline" | VEC-domain arbiter: Vector RS > GVIQ > MTE RS |
