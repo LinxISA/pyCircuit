@@ -1,20 +1,32 @@
-### Tile Register File (TRegFile-4K)
+### Tile Register File (TRegFile-4K-v2)
+
+> **Version & Versioning Convention.** This document is the canonical **v2** specification of the TRegFile-4K register file used by the Davinci-v2 core. It supersedes the v1 baseline `tregfile4k.md` (revision 0.1). Each section below carries a clear marker indicating which content is **v1 baseline (unchanged)**, which content is a **v2 增量** (diagonal skew + `is_transpose`), or which sections **mix v1 baseline with v2 增量 inline**. v1 software and v1 datapath connectivity are preserved unchanged: `tregfile4k_v2.md` is a superset of `tregfile4k.md` (rev. 0.1) and a structural equivalent of `tregfile4k.md` (rev. 0.2 — the working file), with explicit version annotations added so that a reader of v2 alone obtains the complete and current specification.
+>
+> **Capability summary (v1 → v2):**
+> - **v1 (rev. 0.1):** rectangular bank decode (`bank = 8·g + l`), row-mode reads only, 8R+8W ports, 8-cycle synchronized calendar, 4 KB tiles × 256 phys-tiles = 1 MB.
+> - **v2 (rev. 0.2):** **diagonal (skewed) bank decode** (`bank = 8·g + (l+g) mod 8`) + per-port **`is_transpose` bit** on reads (double-registered with `reg_idx`); col-mode reads at full **512 B/cy** with **zero extra storage, latency, or port count**. Same SRAM count, same calendar, same address acceptance cadence. One new scheduling rule (§6 R2: uniform transpose mode per epoch).
 
 The TRegFile-4K is an **8-read / 8-write tile register file** built from **64 physical 1R1W SRAM banks** at **1× core clock**. Storage is organized into **4 KB tiles**, each striped across all 64 banks (64 B per bank) using a **diagonal (skewed) bank map** so that *both* a row-wise sweep and a column-wise sweep of the tile's logical 8×8 chunk grid are bank-conflict-free. Each read port carries an **`is_transpose` bit** that selects between the two delivery orders at run time (§3, §4.2, §7). An **8-cycle synchronized calendar** rotates port-to-group assignments so that every bank sees exactly **1R + 1W per cycle**. Each port accepts one `reg_idx` (plus `is_transpose` on reads) which is latched and drives the next **8-cycle epoch**; a new address is accepted every **8 cycles** (one per epoch boundary), enabling zero-bubble back-to-back tile accesses.
 
 #### 1. Core Parameters
 
-| Parameter | Value |
-|-----------|-------|
-| SRAM instance | **256 × 512 bits** (64 B wide, depth 256, 1R1W) |
-| Banks | **64** (1 SRAM per bank), 8 groups × 8 banks |
-| Total size | 64 × 16 KB = **1 MB** |
-| Tile size / count | **4 KB** (4096 B) / **256** tiles (tile\_idx 0..255) |
-| Read ports | **8** (R0–R7) — 512 B/cy each |
-| Write ports | **8** (W0–W7) — 512 B/cy each |
-| Calendar | **8 cycles**, synchronized; 1 new `reg_idx` / port / 8 cycles (epoch-aligned) |
+> **(v1 → v2: 表中所有数值参数继承自 v1 baseline,完全未变更。Read-ports 行的 `is_transpose` 字段是 v2 增量,在 v1 中不存在 — 见 §3 / §7。)**
+
+| Parameter | Value | Status |
+|-----------|-------|--------|
+| SRAM instance | **256 × 512 bits** (64 B wide, depth 256, 1R1W) | v1 baseline |
+| Banks | **64** (1 SRAM per bank), 8 groups × 8 banks | v1 baseline |
+| Total size | 64 × 16 KB = **1 MB** | v1 baseline |
+| Tile size / count | **4 KB** (4096 B) / **256** tiles (tile\_idx 0..255) | v1 baseline |
+| Read ports | **8** (R0–R7) — 512 B/cy each, **+ `is_transpose` (v2)** | v1 baseline + v2 增量 |
+| Write ports | **8** (W0–W7) — 512 B/cy each | v1 baseline (always row-mode) |
+| Calendar | **8 cycles**, synchronized; 1 new `reg_idx` / port / 8 cycles (epoch-aligned) | v1 baseline |
+| Bank decode | **diagonal skew** `bank_id = 8·g + ((l+g) mod 8)` | **v2 增量** (v1 used `bank_id = 8·g + l`) |
+| Col-mode read throughput | **512 B/cy** (same as row-mode) | **v2 增量** (no analog in v1) |
 
 #### 2. Tile Layout & Physical Organization
+
+> **(v1 → v2: 整节为 v2 重写。)** v1 (rev. 0.1) 使用 *矩形* 解码 `bank_id = 8·g + l`,所有 64 chunks 与 8 个 banks-of-group 一一对应,但只能支持 row-mode。v2 (rev. 0.2) 使用本节描述的 *对角线偏置 (diagonal skew)* 解码 `bank_id = 8·g + (l+g) mod 8`,使 row-sweep 和 col-sweep 都 bank-conflict-free。SRAM 总数、bank 总数、tile 总数、tile 大小均与 v1 完全相同 — 仅 chunk-to-bank 的映射函数不同。物理 layout 图(下方 1 MB / 64 banks / 8 groups)与 v1 相同。
 
 Each 4 KB tile is striped across all 64 banks via a **diagonal (skewed) bank map**. Viewing the 4 KB tile as an **8 × 8 chunk grid** of 64 B chunks, let:
 
@@ -122,6 +134,8 @@ Every logical row (chunk-grid row) and every logical column (chunk-grid col) the
 ```
 
 #### 3. Port Interface
+
+> **(v1 → v2: 端口数 / 数据宽度 / 地址接受率均保持 v1 baseline。**v2 增量** 集中在两处:`is_transpose` 输入 + col-mode 数据交付路径。)** v1 read 端口仅接受 `reg_idx[7:0]`,只有 row-mode;v2 增加 1-bit `is_transpose` 与 `reg_idx` 一同 double-register,在 epoch 边界一并 latch。端口微架构图(下方"Port microarchitecture"部分)中的 *Bank-Select Calendar* 与 *Output Rotator* 是 v2 增量,但其上游(pending/active 双寄存器)与下游(`data out → VEC`)接口与 v1 完全兼容。
 
 Each port presents **512 B per cycle** (8 banks × 64 B; in row-mode these are the 8 banks of one group, in col-mode these are one bank per group, §4.2). A port accepts one `reg_idx[7:0]` (read ports additionally accept **`is_transpose[0]`**) which is **latched** internally at the epoch boundary. The latched address then drives data delivery (read) or acceptance (write) for the addressed tile over the next **8 consecutive cycles** — one bank-group per cycle per the calendar rotation. Since a 4 KB tile requires 8 × 512 B reads, the port is occupied for the full epoch and can only accept a **new `reg_idx` every 8 cycles**.
 
@@ -234,9 +248,11 @@ Both modes deliver the full 4 KB tile in exactly **8 cycles**; the only differen
 
 #### 4. 8-Cycle Synchronized Calendar
 
+> **(v1 → v2: 全局 epoch 计数器 + 端口-相位旋转表(§4.1 row-mode 表)完整继承自 v1。§4.2 col-mode calendar 是 **v2 增量**。conflict-free 证明 §4.1 部分(row-mode 部分)继承自 v1;§4.2 部分(col-mode bijection 论证)是 v2 增量。)**
+
 All 16 ports share a global 3-bit **epoch counter** (`cy[2:0]`). Read and write ports follow the **same** base rotation pattern — port *p* (phase offset *p*) is associated with group `(p + cy) % 8` every cycle. Within an epoch a read port then applies one of two bank-select patterns depending on its latched `is_transpose` bit (writes always use the row-mode pattern).
 
-##### 4.1 Row-mode calendar (`is_transpose = 0`, and all writes)
+##### 4.1 Row-mode calendar (`is_transpose = 0`, and all writes) — **(v1 baseline, 内容未变更)**
 
 Port *p* at cycle `cy` accesses all 8 banks of group `G_{(p + cy) % 8}`:
 
@@ -253,7 +269,7 @@ Port *p* at cycle `cy` accesses all 8 banks of group `G_{(p + cy) % 8}`:
 
 Over 8 cycles each port visits all 8 groups exactly once → reads/writes one complete 4 KB tile in chunk-grid row order.
 
-##### 4.2 Col-mode calendar (`is_transpose = 1`, reads only)
+##### 4.2 Col-mode calendar (`is_transpose = 1`, reads only) — **(v2 增量,v1 中无对应)**
 
 Port *p* at cycle `cy` delivers **chunk-grid column** `l_active = (p + cy) % 8`. The 8 banks accessed are *one per group*, with
 
@@ -320,19 +336,23 @@ Over 8 cycles each col-mode port visits all 8 columns of the chunk grid exactly 
 
 #### 5. Throughput
 
-| Metric | Value |
-|--------|-------|
-| Per port data BW | 8 banks × 64 B = **512 B/cy** (row-mode and col-mode) |
-| Per port per epoch (8 cy) | 8 chunk-grid rows **or** 8 chunk-grid cols × 512 B = **4 KB** (1 tile) |
-| Addr acceptance rate | **1 `reg_idx` (+ `is_transpose` on reads) / port / 8 cycles** (epoch-aligned) |
-| Addr-to-data latency | 0–7 cy (depends on when within epoch the pending addr/mode is written) |
-| Sustained tile rate | 1 tile / 8 cy / port (zero-bubble epoch chaining) |
-| Aggregate read BW | 8 ports × 512 B/cy = **4 KB/cy** (either all row-mode or all col-mode, §6) |
-| Aggregate write BW | 8 ports × 512 B/cy = **4 KB/cy** |
-| Total per epoch | **16 tile ops** (8R + 8W), zero bank conflicts |
-| Transpose cost | **0 cycles** — a col-mode read delivers the chunk-grid transpose at full 512 B/cy without any extra latency, storage, or copy |
+> **(v1 → v2: 行 1–7 完整继承自 v1 baseline,内容未变更。"Transpose cost" 行是 **v2 增量**(v1 中 col-mode 不存在,transpose 必须由外部 MTE buffer 通过 16 cy 单独完成)。"Aggregate read BW"行带 col-mode 限定语 "(either all row-mode or all col-mode, §6)" 是 v2 增量(v1 全部为 row-mode,无此限定)。)**
+
+| Metric | Value | Status |
+|--------|-------|--------|
+| Per port data BW | 8 banks × 64 B = **512 B/cy** (row-mode and col-mode) | v1 baseline (col-mode 限定语为 v2 增量) |
+| Per port per epoch (8 cy) | 8 chunk-grid rows **or** 8 chunk-grid cols × 512 B = **4 KB** (1 tile) | v1 baseline (col-mode 选项为 v2) |
+| Addr acceptance rate | **1 `reg_idx` (+ `is_transpose` on reads) / port / 8 cycles** (epoch-aligned) | v1 baseline (`is_transpose` 字段为 v2) |
+| Addr-to-data latency | 0–7 cy (depends on when within epoch the pending addr/mode is written) | v1 baseline |
+| Sustained tile rate | 1 tile / 8 cy / port (zero-bubble epoch chaining) | v1 baseline |
+| Aggregate read BW | 8 ports × 512 B/cy = **4 KB/cy** (either all row-mode or all col-mode, §6) | v1 baseline (uniform-mode 限定为 v2) |
+| Aggregate write BW | 8 ports × 512 B/cy = **4 KB/cy** | v1 baseline |
+| Total per epoch | **16 tile ops** (8R + 8W), zero bank conflicts | v1 baseline |
+| Transpose cost | **0 cycles** — a col-mode read delivers the chunk-grid transpose at full 512 B/cy without any extra latency, storage, or copy | **v2 增量** (v1: TRegFile 没有 transpose 能力, 必须通过 MTE 4 KB 缓冲完成 16 cy 转置) |
 
 #### 6. Write-to-Read Bypass & Scheduling Constraint
+
+> **(v1 → v2: Same-phase bypass(零延迟硬件)与 cross-phase RAW hazard 分析(包括下方表格)完整继承自 v1。Scheduling rule **(R1)** 完整继承自 v1。Scheduling rule **(R2) Uniform transpose mode per epoch** 是 **v2 增量**,在 v1 中不存在(v1 全部是 row-mode,从未需要此约束)。"Why mixed-mode is disallowed" 段是 v2 增量。)**
 
 **Same-phase bypass (hardware, zero-latency):**
 
@@ -359,15 +379,17 @@ Example — R0 (phase 0) and W1 (phase 1) on the same tile:
 
 **Scheduling rules (enforced by upstream scheduler):**
 
-> **(R1)** Within the same 8-cycle epoch, no two different-phase read/write ports shall operate on the same `tile_idx`. Same-phase pairs (R0/W0, R1/W1, ..., R7/W7) are always safe and fully bypassed. Cross-phase pairs on the same tile must be separated by at least one full epoch (8 cycles).
+> **(R1) — (v1 baseline, 内容未变更)** Within the same 8-cycle epoch, no two different-phase read/write ports shall operate on the same `tile_idx`. Same-phase pairs (R0/W0, R1/W1, ..., R7/W7) are always safe and fully bypassed. Cross-phase pairs on the same tile must be separated by at least one full epoch (8 cycles).
 >
-> **(R2) Uniform transpose mode per epoch.** Within the same 8-cycle epoch, **all 8 active read ports must share the same `is_transpose` value**. Row-mode and col-mode reads cannot coexist in the same epoch because a row-mode reader occupies all 8 banks of its group G_a while every col-mode reader simultaneously wants exactly one bank inside G_a — the two patterns collide on the 1R SRAM port of that bank.
+> **(R2) — (v2 增量) Uniform transpose mode per epoch.** Within the same 8-cycle epoch, **all 8 active read ports must share the same `is_transpose` value**. Row-mode and col-mode reads cannot coexist in the same epoch because a row-mode reader occupies all 8 banks of its group G_a while every col-mode reader simultaneously wants exactly one bank inside G_a — the two patterns collide on the 1R SRAM port of that bank.
 >
 > Because `is_transpose` is double-registered on a per-port basis, each port *can* switch between row and col across successive epochs, but the scheduler must ensure the 8 active reads of any given epoch agree. Writes are always row-mode and impose no new constraint.
 
 **Why mixed-mode is disallowed (sketch).** At cycle `cy`, a row-mode port R_p occupies *all* 8 banks of group `G_{(p+cy) mod 8}`. A col-mode port R_q at the same cycle needs the bank at `(G_i, local = (q + cy + i) mod 8)` for every `i`, including `i = (p + cy) mod 8`, which collides with the group R_p has fully claimed. Since each SRAM bank has only 1R port, the collision is unresolvable by rotation or reorder. The uniform-mode rule sidesteps this cleanly. For row-mode + row-mode or col-mode + col-mode, the bijection arguments in the §4 proofs guarantee zero overlap.
 
 #### 7. Transposed Read — Diagonal Skew, Datapath, and Semantics
+
+> **(v1 → v2: 整节为 **v2 增量**,在 v1 中完全不存在。本节是 TRegFile-4K v2 的核心新功能 — bank-conflict-free 转置读出的完整规格。)**
 
 This section consolidates the **transposed-read enhancement**: how the bank-skew of §2 together with the `is_transpose` bit on the read port (§3) turns the TRegFile into a bank-conflict-free *row-or-column* tile fetcher, at a small fixed datapath cost and without any extra SRAM storage, redundancy, or latency.
 
@@ -574,6 +596,23 @@ i.e. the **transpose of the 8 × 8 chunk grid**, still 4 KB in 8 cycles, still c
 
 | Version | Notes |
 |---------|-------|
-| 0.1 | Initial design: rectangular bank decode, row-mode only |
-| **0.2** | **Diagonal skew + `is_transpose` read input: bank-conflict-free row-*or*-col tile delivery at full 512 B/cy. Added §7 detailing storage map, read/write datapath, scheduling rule (R2), cost, and worked examples.** |
+| 0.1 (= **TRegFile-4K v1**) | Initial design: rectangular bank decode (`bank_id = 8·g + l`), row-mode reads only, 8R+8W ports, 8-cycle synchronized calendar, 4 KB tiles × 256 phys-tiles = 1 MB. Single scheduling rule (R1: cross-phase same-tile RAW hazard). |
+| **0.2 (= TRegFile-4K v2, this document)** | **Diagonal skew + `is_transpose` read input**: bank-conflict-free row-*or*-col tile delivery at full **512 B/cy**. Added §7 detailing storage map, read/write datapath, scheduling rule (R2 uniform transpose mode per epoch), cost, and worked examples. Storage size, port count, calendar cadence, address-acceptance rate **all unchanged from v1**. |
+| 0.3 (planned, not in this document) | Per-port quality-of-service throttling for cube-bound traffic (out of scope). |
+
+#### 9. v1 → v2 Migration Quick Reference
+
+> **For implementors and clients of TRegFile-4K:** the v1 → v2 transition is intentionally a **drop-in replacement**. v1 clients that never assert `is_transpose=1` see the v2 register file as functionally and timing-identical to v1.
+
+| Concern | v1 (rev. 0.1) | v2 (rev. 0.2) | Migration |
+|---------|---------------|---------------|-----------|
+| Bank decode formula | `bank_id = 8·g + l` (rectangular) | `bank_id = 8·g + ((l+g) mod 8)` (diagonal skew) | Internal to TRegFile; client-invisible. The on-chip 3-bit write-rotator (§7.3) handles the placement. |
+| Read port input | `reg_idx[7:0]` only | `reg_idx[7:0]` + `is_transpose[0]` | Tie `is_transpose` to 0 → identical to v1 behaviour. |
+| Read traversal modes | row-mode only | row-mode (`is_transpose=0`) **OR** col-mode (`is_transpose=1`) | New capability; v1 clients ignore. |
+| Write port | row-mode only (no `is_transpose` input) | identical to v1 | None. |
+| Output rotator (read) | none required (rectangular decode aligns naturally) | `rotate-left by g` for row-mode, identity for col-mode (§7.4) | Client-invisible. |
+| Scheduling rule R1 (cross-phase RAW) | enforced | enforced (same as v1) | None. |
+| Scheduling rule R2 (uniform transpose mode per epoch) | not applicable | **enforced** | New constraint; only matters if `is_transpose=1` is ever used. v1 schedulers automatically satisfy R2 (all `is_transpose=0`). |
+| Storage / latency / port count | baseline | **unchanged** | None. |
+| Software model | TRegFile read = "tile contents in row-major order" | TRegFile read = "tile contents in row-major order **OR** transpose of 8 × 8 chunk grid" | New software-visible mode bit. v1 software ignores. |
 
