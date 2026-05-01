@@ -2150,7 +2150,246 @@ VEC-4K-v2 binding: **R0 (Port A, with `is_xpose_A`)**, **R4 (Port B, with `is_xp
 
 ---
 
-#### 9.2.5 VTG Sub-Unit and VTG Metadata Table (v2.2)
+#### 8.3.11 Worked Examples: TSOFTMAX (Full-Tile ROM) and TSOFTMAX_VTG (VTG Variant)
+
+This section walks through two concrete instantiations of the same algorithm: (A) as a **full-tile VEC-4K-v2 instruction** driven by the microcode ROM, and (B) as a **VTG micro-instruction** driven by the micro-instruction buffer. Both execute the same five-pass TSOFTMAX algorithm; the difference is the scheduling context and where the beat-word sequence comes from.
+
+##### 8.3.11.1 Algorithm: TSOFTMAX Along the Row Axis
+
+For a tile shaped **8 x 128 FP32** (W = 512 B, R = 8), softmax along each row is:
+
+```
+Pass 1 -- row_max[i] = max(input[i][*])                              [col-reduce]
+Pass 2 -- diff[i][j]  = exp(input[i][j] - row_max[i])              [elementwise SUB + EXP]
+Pass 3 -- row_sum[i]  = SIGMA_j diff[i][j]                              [col-reduce]
+Pass 4 -- inv_sum[i]   = 1.0 / row_sum[i]                           [scalar RECIP]
+Pass 5 -- output[i][j] = diff[i][j] * inv_sum[i]                   [elementwise MUL]
+```
+
+##### 8.3.11.2 ROM Entry for Full-Tile TSOFTMAX
+
+The VEC-4K-v2 microcode ROM is keyed by `(opcode, format, W-regime, R-regime)`. The TSOFTMAX ROM entry for FP32, W = 512 B (one strip), R = 8 is:
+
+```
+ROM[TSOFTMAX, FP32, W=512B, R=8] --> {
+  ucode_base:  <addr>
+  ucode_len:   42    <-- 9+8+9+1+8+7 = 42 beats
+  shape:       (R=8, C=128, E=4, format=FP32)
+  N_strips:    8
+  elem_per_strip: 128  (512 B / 4 B)
+}
+```
+
+**VECBeatWord format** (from `vector4k_v2.md` SS5.4):
+
+```
+VECBeatWord {
+  src_A, src_B, src_Z : 3x3 b   <-- {SA, SB, SX, SY, ACC_LO, ACC_HI, IMM_ZERO, --}
+  s_A, s_B              : 2x3 b   <-- strip index 0..7
+  xp_A, xp_B            : 2x1 b   <-- 0 (row-mode; TSOFTMAX is purely row-axis)
+  mask_src               : 2 b     <-- {SC_mask, IMM_ALL_ONES, IMM_FROM_SOP}
+  mask_strip             : 3 b
+  alu_op                 : 5 b     <-- {ADD, SUB, MUL, MAX, PASS_A, RECIP, ...}
+  acc_op                 : 3 b     <-- {NONE, INIT, ACCUM, MERGE_STAGE, READOUT}
+  acc_slot               : 4 b     <-- 0..15
+  wr_en_D0, wr_en_D1    : 1 b each
+  wr_strip_D0, wr_strip_D1 : 3 b each
+}
+```
+
+##### 8.3.11.3 Beat-Word Sequence (Full-Tile TSOFTMAX, 42 Beats)
+
+```
+-- === PASS 1: row_max = max(input[i][*]) ===
+-- Beats 0-8: col-reduce via MAX on accumulator slot 0
+
+beat  0: INIT   src_A=SA, s_A=strip0,
+              src_B=ACC_LO, alu_op=PASS_A,
+              acc_op=INIT, acc_slot=0
+              -- acc[0] <-- SA[strip0] (128 FP32 elements)
+
+beats 1-7: ACCUM src_A=SA, s_A=strip[1..7],
+              src_B=ACC_LO, alu_op=MAX,
+              acc_op=ACCUM, acc_slot=0
+              -- acc[0] <-- MAX(acc[0], SA[strip_j]) pairwise
+
+beat  8: READOUT src_A=ACC_LO, alu_op=PASS_A,
+              acc_op=READOUT, acc_slot=0
+              -- broadcast row_max to all 128 lanes via SX
+
+-- === PASS 2: diff = exp(input - row_max) ===
+-- Beats 9-16: elementwise SUB, write to scratch tile T_scratch
+
+beats 9-16: src_A=SA, s_A=strip[0..7],
+              src_B=SX, alu_op=SUB,
+              mask_src=IMM_ALL_ONES,
+              acc_op=NONE,
+              wr_en_D0=1, wr_strip_D0=strip[0..7]
+              -- diff_strip[j] = SA[strip_j] - SX(row_max)
+              -- written to T_scratch via D0, one strip per beat
+              -- actual ROM folds SUB+EXP into a single EXP beat
+              -- with a preceding subtract (two beats per strip)
+
+-- === PASS 3: row_sum = SIGMA_j diff[i][j] ===
+-- Beats 17-25: col-reduce via ADD on accumulator slot 1
+
+beat 17: INIT   src_A=T_scratch, s_A=strip0,
+              src_B=ACC_LO, alu_op=PASS_A,
+              acc_op=INIT, acc_slot=1
+              -- acc[1] <-- T_scratch[strip0]
+
+beats 18-24: ACCUM src_A=T_scratch, s_A=strip[1..7],
+              src_B=ACC_LO, alu_op=ADD,
+              acc_op=ACCUM, acc_slot=1
+              -- acc[1] <-- ADD(acc[1], T_scratch[strip_j]) pairwise
+
+beat 25: READOUT src_A=ACC_LO, alu_op=PASS_A,
+              acc_op=READOUT, acc_slot=1
+              -- broadcast row_sum to all 128 lanes via SX
+
+-- === PASS 4: inv_sum = 1.0 / row_sum ===
+-- Beat 26: RECIP
+
+beat 26: src_A=SX, alu_op=RECIP,
+          acc_op=READOUT, acc_slot=1
+          -- inv_sum = RECIP(row_sum), broadcast via SY
+
+-- === PASS 5: output = diff * inv_sum ===
+-- Beats 27-34: elementwise MUL, retire to D0
+
+beats 27-34: src_A=T_scratch, s_A=strip[0..7],
+              src_B=SY, alu_op=MUL,
+              mask_src=IMM_ALL_ONES,
+              acc_op=NONE,
+              wr_en_D0=1, wr_strip_D0=strip[0..7]
+              -- out[strip_j] = T_scratch[strip_j] x SY(inv_sum)
+              -- retired to D0, one strip per beat
+
+-- === Finalize ===
+-- Beats 35-41: flush pending retire
+beats 35-41: wr_en_D0=1, wr_strip_D0=strip[0..7]
+
+Pipeline timing (full-tile TSOFTMAX):
+  Fetch prologue:     8 cycles  (TRegFile R0 + R4, 1 epoch)
+  Compute:           42 cycles  (5 passes)
+  Retire:             8 cycles  (W0, 1 epoch)
+  End-to-end:        ~58 cycles
+```
+
+##### 8.3.11.4 VTG Variant: TSOFTMAX_VTG
+
+The VTG variant operates on **one VTG at a time** (one 256 B sub-range of the tile in G256 mode). It **reuses the same ROM entry** -- the microassembler parameterizes the beat-word template for the VTG's group context at decode time and caches it in the micro-instruction buffer.
+
+**VTG GVIQ entry at dispatch (D1/D2):**
+
+```
+TSOFTMAX_F32 Td.gN, Ts.gM
+  gviq.push({
+    block_id:    allocate_micro_block(),   -- 12 b
+    pc_index:   0,
+    tile_group:  Td,           -- architectural tile
+    phys_tile:   PTd,           -- renamed via Tile RAT
+    group_id:    N,            -- VTG index gN
+    group_mode:   G256,         -- 256 B per VTG, 16 VTGs per tile
+    thread_id:   0,
+    iter0..iter3: loop counters,
+    active_lanes: 2048,        -- 256 B / 4 B per FP32
+    src0_ptag:   PTs,          -- source tile renamed via Tile RAT
+    src1_ptag:   PTs_scratch,  -- scratch tile renamed
+    dst_ptag:    PTd,          -- destination tile renamed
+    vtg_ready:   0,
+    branch_tag:  current_btag
+  })
+```
+
+**Microassembler at decode (D1/D2):**
+
+```
+-- Consult Tile Metadata RAT for source tile Ts --
+shape   = TileMetadataRAT[PTs].shape      -- (R=8, C=128)
+format  = TileMetadataRAT[PTs].format     -- = FP32
+W       = shape.C x E(format)              -- = 512 B
+R       = shape.R                          -- = 8
+
+-- Parameterize ROM entry for this VTG --
+-- G256 mode: tile split into 16 VTGs x 256 B each
+-- W=256B means: only 4 strips active (256 B / 512 B per strip)
+-- R=4 means:    4 rows, 4 strips
+-- Result: 26 beats instead of 42
+rom_key = (TSOFTMAX, format=FP32, W-regime=256B, R-regime=4)
+rom_entry = ROM.lookup(rom_key)
+
+for i in 0..25:
+    bw = rom_entry.beat_words[i]
+    bw.group_id       = N
+    bw.group_mode     = G256
+    bw.dst_ptag       = PTd
+    bw.src0_ptag      = PTs
+    bw.src1_ptag      = PTs_scratch
+    bw.output_range   = (N x 256, (N+1) x 256)
+    buffer.write(block_id=allocate_micro_block(), pc_index=i, beat_word=bw)
+```
+
+**GVIQ issue and execution (P1/I1):**
+
+```
+-- VTG rotation scheduler (one VTG at a time) --
+winner = gviq.pick_oldest_ready()     -- age = (rid - head_rid) mod 64
+bw     = buffer.lookup(winner.block_id, winner.pc_index)
+
+-- Wait for VEC prologue to fill SA/SB with full 4 KB tile --
+-- (VEC-4K-v2 operand-fetch prologue: 8 cycles)
+-- VTG sub-range selector: byte-mux from SA/SB (4 KB) to 256 B --
+SA_full  = TRegFile.read(winner.src0_ptag)    -- 8 cy epoch
+SB_full  = TRegFile.read(winner.src1_ptag)  -- 8 cy epoch (scratch tile)
+
+-- At I2 (after prologue): select VTG sub-range at ALU input mux --
+vtg_A = SA_full[winner.group_id x 256 : (winner.group_id+1) x 256]
+vtg_B = SB_full[winner.group_id x 256 : (winner.group_id+1) x 256]
+
+-- Drive VEC ALU with this beat word (1 cycle) --
+result = VEC_alu.execute(bw, vtg_A, vtg_B)
+
+-- Group Write Adapter: full-tile RMW --
+--   Step 1: read old tile (8 cy)
+--   Step 2: merge VTG sub-range (combinational)
+--   Step 3: write merged tile (8 cy)
+--   Total: 16 cy minimum
+submit_group_write(winner.dst_ptag, winner.group_id, result, 256)
+
+winner.pc_index++
+if winner.pc_index > 25:
+    winner.valid = 0       -- retire after beat 25
+```
+
+**Comparison: Full-Tile vs. VTG TSOFTMAX:**
+
+| Aspect | Full-Tile TSOFTMAX | VTG TSOFTMAX_VTG |
+|--------|---------------------|-------------------|
+| Input size | 4 KB (1024 FP32) | 256 B (64 FP32) per VTG |
+| ROM key | `(TSOFTMAX, FP32, W=512B, R=8)` | `(TSOFTMAX, FP32, W=256B, R=4)` |
+| Beat count | 42 | 26 |
+| VTG count | 1 (single tile) | 16 (loop over all VTGs via GVIQ) |
+| Prologue | 8 cy (full epoch) | 8 cy (shared with VEC) |
+| Writeback | 8 cy (full tile write) | 16 cy (full-tile RMW) |
+| Total per op | ~58 cy | ~50 cy + 16 cy RMW = ~66 cy per VTG |
+| Throughput | 1 tile / 58 cy | 1 VTG / 66 cy; 16 VTGs sequentially via GVIQ |
+
+**Key architectural points illustrated by this example:**
+
+1. **ROM is the source of truth.** Both full-tile and VTG TSOFTMAX execute beat-word sequences that originate from the same ROM entry. VTG microassembler parameterizes the template at decode time and caches it in the micro-instruction buffer; full-tile does a ROM lookup at issue time. No separate VTG microcode path is needed.
+
+2. **Prologue is shared.** VTG does not introduce a new operand-fetch path. It submits a tile read request through the same R0/R4 ports as VEC-4K-v2, and the 8-cycle prologue fills SA/SB. VTG then reads from the already-staged data at the ALU input mux.
+
+3. **Group Write Adapter RMW is the writeback tax.** Every VTG write must perform a full-tile read-modify-write: 8 cy to read the old tile, merge the VTG sub-range, 8 cy to write the merged tile. This 16-cycle overhead is amortized across all 16 VTGs.
+
+4. **GVIQ rotation schedules one VTG at a time.** After TSOFTMAX_VTG finishes one VTG (beat 25), the GVIQ scheduler picks the next ready VTG (or the same VTG's next iteration if iterN > 1). Loop counters in the GVIQ entry prefix drive strip-mined iterations without re-entering the GVIQ.
+
+5. **`format` from ROM = `format` from Tile Metadata RAT.** The microassembler reads `format` from the Tile Metadata RAT at decode time to select the correct ROM entry. No separate VTG `elem_type` field is needed -- confirming the metadata overlay design (SS9.2.5).
+
+---
+
+#### 9.2.5 VTG Sub-Unit and VTG Metadata Table (v2.2) VTG Sub-Unit and VTG Metadata Table (v2.2)
 
 > **(Change Point #2 -- hardware-revised)**
 
