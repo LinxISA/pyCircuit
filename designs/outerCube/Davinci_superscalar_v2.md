@@ -17,7 +17,7 @@ The Davinci-v2 core is a **single-threaded, 4-wide, out-of-order, speculatively-
    - **Three new PTO instructions** natively enabled by the v2 datapath: `TINV` (matrix inverse up to 128×128 FP32 / 16-tile range), `TROWRANGE_MUL` (column-wise product over a dynamic row sub-range), `TMRGSORT` (full-tile mergesort over any `N = 2^p` up to 8192 via a reconfigurable 256-lane shuffle + compare-swap primitive).
 3. **Speculative out-of-order execution** with a **ROB-less recovery scheme** that nonetheless guarantees architectural state is never corrupted by a misspeculated path (§11). The mechanism extends the v1 RAT-checkpoint + reference-counting infrastructure with a **branch-tagged speculative store buffer** for scalar memory and a **speculative tile-store queue** for MTE memory writes — both of which gate visible side effects until the producing branch tag becomes non-speculative. Section 11 walks through why this is sufficient without a Reorder Buffer, what it costs in area / latency, and which workloads it can and cannot serve correctly.
 
-> **Design discipline:** The v2 core continues to assume **run-to-completion kernel execution** with **no precise architectural exceptions and no OS-level interrupts** — the same envelope as v1. The new speculation-recovery mechanism handles **branch mispredictions** only; it does **not** turn the core into a precise-exception machine. Section 11.7 enumerates the remaining "non-recoverable" classes (asynchronous page faults, signaling NaNs, ECC errors observed mid-kernel) and the kernel-level conventions that bound them.
+> **Design discipline:** The v2 core assumes **run-to-completion kernel execution** with **no OS-level interrupts** — the same envelope as v1. The new v2.3 **Block-ROB (BROB)** adds **block-granularity precise exception support**, enabling the core to identify the faulting instruction block and recover precisely when an exception (trap, page fault, illegal instruction) does occur. The new speculation-recovery mechanism handles **branch mispredictions** and **variable-latency tile ops**; Section 11.7 enumerates the remaining "non-recoverable" classes (asynchronous page faults, signaling NaNs, ECC errors observed mid-kernel) and the kernel-level conventions that bound them.
 
 ### 1.1 Key Parameters (v2 deltas in **bold**)
 
@@ -60,6 +60,10 @@ The Davinci-v2 core is a **single-threaded, 4-wide, out-of-order, speculatively-
 | Peak FP16 throughput (cube) | **12.3 TFLOPS** |
 | Peak FP8 throughput (cube) | **24.6 TOPS** |
 | Peak MXFP4 throughput (cube) | **98.3 TOPS** |
+| **BROB entries** | **128** (Block Reorder Buffer; tracks instruction block lifetimes for precise exceptions; SS11.11) |
+| **Block SSB entries** | **32** (in-block scalar store buffer; SS11.11) |
+| **Block STQ entries** | **16** (in-block tile-store buffer; SS11.11) |
+| **BID width** | **8 b** slot index + 56 b sequence (64 b total); SS11.11 |
 
 ### BCC-Style Scalar Pipeline Deltas (v2 BCC overlay)
 
@@ -684,6 +688,17 @@ F0 → F1 → F2 → F3 → IB → F4 → D1 → D2 → D3 → S1 → S2 → P1 
                                      ├── Rename ──┤           ├── Issue ──┤           ├── Execute ──┤
 ```
 
+**v2.3 Block-ROB addition:**
+
+```
+  +--------------------------------------------------------------------------------------+
+  |  BROB -- Block Reorder Buffer (v2.3 新增)                                               |
+  |  128-entry; tracks block lifetimes; scalar_done && engine_done gates retire              |
+  |  Block SSB (32) + Block STQ (16) for in-block store commit                            |
+  |  Provides block-granularity precise exception identification                            |
+  +--------------------------------------------------------------------------------------+
+```
+
 ### 4.1 Complete Stage List (BCC Scalar Pipeline)
 
 | Stage | Name | Function |
@@ -704,6 +719,7 @@ F0 → F1 → F2 → F3 → IB → F4 → D1 → D2 → D3 → S1 → S2 → P1 
 | **I2** | **Issue Confirm** | IQ entry deallocation, RF read-port occupancy confirm |
 | E1–EX_n | Execute | Functional unit execution (variable latency) |
 | W1 | Writeback | CDB/TCB broadcast, Ready Table update, wakeup |
+| **16. BROB Retire** | *(v2.3 Block-ROB only)* Block completion check. If : advance BROB head (commit Block SSB/STQ to SSB/STQ). If exception: deliver and squash. If incomplete: stall. Off the critical execution path. |
 
 **Total pipeline depth**: Fetch-to-WB = **17+ cycles** (~5 cycles longer than the 12-stage v1/v2 baseline, due to D1/D2/D3 rename split and P1/I1/I2 issue separation).
 
@@ -2472,7 +2488,9 @@ The Davinci-v2 core implements a **ROB-less out-of-order** execution model. Beca
 4. **Branch recovery via MapQ reverse replay.** On mispredict, the SMAP is restored to CMAP state by replaying MapQ entries in reverse order from the flush_rid. All younger instructions are flushed from physical IQs via branch_tag CAM-clear.
 5. **Physical registers freed by reference counting.** No ROB means no retirement-based freeing; instead, a ptag is freed when it is both *orphaned* (no longer mapped by SMAP) and its refcount reaches zero.
 6. **Ready Table provides O(1) ptag readiness.** The 128-bit Ready Table bitmap replaces the 384-entry CDB comparator array for scalar wakeup. Each ptag's readiness is a single bit-test.
-7. **Speculative memory side effects gated by branch tag.** Speculative scalar stores live in the SSB and speculative bulk tile stores live in the STQ until their `branch_tag` resolves to non-speculative. See Section 11.### 10.2 Instruction Lifecycle (BCC Scalar Pipeline)
+7. **Speculative memory side effects gated by branch tag.** Speculative scalar stores live in the SSB and speculative bulk tile stores live in the STQ until their `branch_tag` resolves to non-speculative. See Section 11.
+8. **(v2.3 Block-ROB 增量) Block-granularity precise exceptions via BROB.** The Block Reorder Buffer (BROB) tracks instruction blocks (BSTART to BSTOP) and provides precise exception identification: when a fault is detected, the faulting block is identified, younger blocks are squashed, and register state is recovered via MapQ reverse replay from the faulting RID. See SS11.11.
+8. **(v2.3 Block-ROB 增量) Block-granularity precise exceptions via BROB.** The Block Reorder Buffer (BROB) tracks instruction blocks (BSTART to BSTOP) and provides precise exception identification: when a fault is detected, the faulting block is identified, younger blocks are squashed, and register state is recovered via MapQ reverse replay from the faulting RID. See SS11.11.### 10.2 Instruction Lifecycle (BCC Scalar Pipeline)
 
 ```
   ┌─────┐   ┌─────┐   ┌─────┐   ┌─────┐   ┌─────┐   ┌─────┐   ┌─────┐
@@ -2480,10 +2498,11 @@ The Davinci-v2 core implements a **ROB-less out-of-order** execution model. Beca
   │F0-F4│   │  D1  │   │D2  D3│   │ S1 S2│   │P1I1I2│  │E1-n│   │
   └─────┘   └─────┘   └─────┘   └─────┘   └─────┘   └─────┘   └─────┘
                          │                                         │
-                    D1: RID/atag                            W1: Ready Table
-                    D2: SMAP read + ptag alloc              update + CDB
-                    D3: SMAP write + RT init                  broadcast
-                    + MapQ push
+                    D1: RID/atag + BROB entry alloc (BSTART)      W1: Ready Table
+                    D2: SMAP read + ptag alloc + MapQ push      update + CDB / TCB
+                    D3: SMAP write + RT init + BID stamp          broadcast
+                                                              + Block SSB/STQ transfer
+                                                              BROB Retire (off critical path)
 ```
 
 Detailed per-stage actions:
@@ -2700,7 +2719,9 @@ On a branch mispredict, the BCC scalar pipeline recovers via **MapQ reverse repl
   └────────────────────────────────────────────────────────────┘
 ```
 
-The MapQ replay is O(depth) = 12 iterations maximum. All recovery actions run in parallel within the single recovery cycle.## 11. Speculative Execution Recovery Without a Reorder Buffer
+The MapQ replay is O(depth) = 12 iterations maximum. All recovery actions run in parallel within the single recovery cycle.
+
+## 11. Speculative Execution Recovery Without a Reorder Buffer
 
 > **Question:** The v1 design eliminates the Reorder Buffer (ROB) by leveraging the no-precise-exception envelope, using the Reservation Station + reference-counting + RAT-checkpoint trio for OoO execution. v2 adds branch-prediction-driven **speculative execution** to extend the OoO window past unresolved branches. Can we do this safely — i.e., guarantee that a misspeculated path **never** corrupts architectural state — **without** introducing a ROB?
 >
@@ -2946,12 +2967,18 @@ These limitations are consistent with the v1 design envelope (run-to-completion 
 | Storage overhead | ROB ≈ 256 entries × ~150 b = ~5 KB + retirement logic | Branch-tag tracker (5 K gate) + SSB/STQ (~2.5 KB) + MapQ (144 B) + Ready Table (16 B) ≈ **~3 KB total** |
 | Wakeup logic | RS does dependency tracking; ROB independent | **Ready Table (128-bit bitmap) replaces CDB comparators**: 0 comparators vs. 384 for scalar RS; O(1) ptag lookup |
 | Mispredict penalty | ROB walk-back + flush ≈ 5–10 cy | **MapQ replay + Ready Table reset + IQ CAM-clear + SSB/STQ flush**: all parallel in 1 cy + 6-cy refill = 7 cy |
-| Precise exceptions | yes (free) | no (out of envelope) |
+| Precise exceptions | yes (free) | block-granularity via BROB (SS11.11) |
 | Single-thread TSO memory ordering | yes | yes (FIFO drain through SSB) |
 
 **The key insight:** in environments where precise exceptions are not required (the AI-kernel envelope), the ROB's three bundled services unbundle naturally. Service (1) is free if you don't need it. Service (3) is replaced by reference counting. Service (2) — **the only remaining service** — is implemented by the SSB + STQ + branch-tag tracker at a fraction of a ROB's cost.
 
+**v2.3 extends this:** by lifting exception handling to block granularity via BROB, the design achieves the ROB's service (1) for kernel-entry traps without a full flat ROB. The block boundary is the commit point; the faulting block is identified; younger blocks are squashed; MapQ reverse replay recovers register state to the faulting instruction.
+
+**v2.3 extends this:** by lifting exception handling to block granularity via BROB, the design achieves the ROB's service (1) for kernel-entry traps without a full flat ROB. The block boundary is the commit point; the faulting block is identified; younger blocks are squashed; MapQ reverse replay recovers register state to the faulting instruction.
+
 ### 11.9 Cycle-by-cycle example: speculative store followed by mispredict (BCC Scalar Pipeline)
+
+> **Block-ROB note:** This example uses the pre-BROB model. For cycle-by-cycle examples with BROB and block-level commit, see SS11.11.
 
 ```
   Cycle  Action
@@ -3004,9 +3031,313 @@ The mispredict is recovered in 7 total cycles. The MapQ replay runs in parallel 
 | Tile Metadata RAT (256 × 32 b SRAM) | unchanged | ~10 K |
 | **Total v2 BCC speculation hardware** | | **~113 K gate** |
 
+**v2.3 Block-ROB new hardware (added on top of v2 BCC):**
+
+| Block | Change | Gate count |
+|-------|--------|------------|
+| BROB (128 entries x ~120 b) | **new** | ~150 K |
+| Block SSB (32 entries x ~200 b) | **new** | ~60 K |
+| Block STQ (16 entries x ~100 b) | **new** | ~20 K |
+| BID tagging in iROB / GVIQ / IQ / SSB / STQ | **new** | ~8 K |
+| BROB allocate FSM + complete check | **new** | ~20 K |
+| Exception delivery logic | **new** | ~10 K |
+| **Total v2.3 Block-ROB hardware** | | **~268 K gate** |
+| **Total v2.3 with Block-ROB** | | **~381 K gate** |
+
+**v2.3 Block-ROB new hardware (added on top of v2 BCC):**
+
+| Block | Change | Gate count |
+|-------|--------|------------|
+| BROB (128 entries x ~120 b) | **new** | ~150 K |
+| Block SSB (32 entries x ~200 b) | **new** | ~60 K |
+| Block STQ (16 entries x ~100 b) | **new** | ~20 K |
+| BID tagging in iROB / GVIQ / IQ / SSB / STQ | **new** | ~8 K |
+| BROB allocate FSM + complete check | **new** | ~20 K |
+| Exception delivery logic | **new** | ~10 K |
+| **Total v2.3 Block-ROB hardware** | | **~268 K gate** |
+| **Total v2.3 with Block-ROB** | | **~381 K gate** |
+
 The v2 BCC speculation hardware is **~3.5%** of the ~3.26 mm² total core area — the same as v2 with RAT checkpoints. The Ready Table (~1 K gate) and MapQ (~1.5 K gate) add negligible area. The key win is the **CDB comparator elimination** (~50 K gate saved) and the **IQ split** (simpler, more scalable). The net gate count for the scalar wakeup/issue path is approximately equal or slightly lower than v1.
 
 ---
+
+## 11.11 Block-ROB -- Block-Granularity Precise Exception Support (v2.3 新增)
+
+### 11.11.1 Motivation
+
+The pre-BROB Davinci-v2 model explicitly excludes precise exception support, treating all faults as fatal. Block-ROB relaxes this to **block-granularity precise exceptions**:
+
+- The faulting instruction block is identified.
+- All younger blocks are squashed (BID-order flush).
+- Register state is recovered via MapQ reverse replay from the faulting RID.
+- Memory side effects within squashed blocks are discarded (SSB/STQ invalidation).
+- After OS/kernel handler restores context, the faulting block is re-executed.
+
+The block boundary (BSTART to BSTOP) is the commit point. This matches the design principle from LinxCore: block structure enables natural ROB-bounded commit without a flat instruction-level ROB.
+
+### 11.11.2 Instruction Block Definition
+
+An **instruction block** is a contiguous sequence of decoded micro-operations bounded by:
+
+- **BSTART** (inclusive start): first uop in the block; triggers BROB entry allocation.
+- **BSTOP** (inclusive end): last uop in the block; gates retirement.
+
+Block boundaries are compiler-generated at natural control-flow join points. Block size: 4-64 uops (typical AI kernel: 16-32 uops).
+
+**Block types:**
+
+| Block Type | Scalar-only | Engine-backed | Notes |
+|------------|-------------|---------------|-------|
+| `STD` | Yes | No | Pure scalar execution |
+| `VTG` | Yes | VTG micro-instructions | GVIQ sub-schedule within block |
+| `VEC` | No | Full-tile VEC-4K-v2 | `T*` tile operations |
+| `CUBE` | No | outerCube MXU | CUBE.OPA, CUBE.DRAIN |
+| `MTE` | Yes | Memory Tile Engine | TILE.LD, TILE.ST |
+
+### 11.11.3 Block ID (BID)
+
+Each block receives a **64-bit BID** at BSTART:
+
+```
+BID[7:0]  -- BROB slot index (0..127)
+BID[63:8] -- Monotonically increasing sequence number
+```
+
+The 8-bit slot index directly maps to the BROB entry. Full-width BID enables flush by ordering: **keep `bid <= flush_bid`, kill `bid > flush_bid`**.
+
+### 11.11.4 BROB Structure
+
+| Parameter | Value |
+|-----------|-------|
+| `BROB_ENTRIES` | 128 |
+| `BROB_ALLOC_PER_CYCLE` | 1 |
+| `BROB_COMPLETE_PER_CYCLE` | 1 |
+| `BROB_RETIRE_PER_CYCLE` | 1 |
+| `BID_W` | 8 b (slot) + 56 b (sequence) |
+
+**Per-BROB-entry state:**
+
+```
+BROBEntry {
+  valid:          1 b     -- entry is allocated
+  state:          2 b     -- ALLOC | ISSUED | COMPLETE
+  bid:            64 b    -- full-width Block ID
+  block_type:     4 b     -- STD | VTG | VEC | CUBE | MTE
+  head_rid:       7 b     -- RID of first uop (BSTART's iROB slot)
+  tail_rid:       7 b     -- RID of last uop (BSTOP's iROB slot)
+  n_uops:         6 b     -- number of uops in block (1..64)
+  checkpoint_id:   4 b     -- RAT checkpoint active for this block
+  needs_scalar:   1 b     -- block has scalar uops (BSTOP must retire)
+  needs_engine:   1 b     -- block has engine ops (GVIQ/Vector/Cube RS)
+  engine_done:     1 b     -- engine completion signal received
+  scalar_done:    1 b     -- BSTOP retired from iROB
+  has_exception:   1 b     -- exception detected within this block
+  exception_cause: 16 b    -- trap / exception cause code
+  fault_rid:       7 b     -- RID of faulting uop (if has_exception)
+  n_stores:        5 b     -- number of scalar stores in this block
+  n_vtg_ops:       5 b     -- number of VTG micro-instructions
+  block_ssb_base:  5 b     -- index into Block SSB RAM for first store
+  block_stq_base:  4 b     -- index into Block STQ RAM for first tile store
+}
+```
+
+**State machine:**
+
+```
+FREE --[allocate]--> ALLOC --[dispatched]--> ISSUED --[complete]--> COMPLETE
+                                                                   |
+                                                            [retire: advance head]
+                                                                   |
+                                                                  FREE
+```
+
+**Completion rule:**
+
+```
+complete = scalar_done && (needs_engine ? engine_done : 1)
+```
+
+### 11.11.5 Instruction Block Lifecycle
+
+**BSTART at D2:**
+1. Allocate BROB entry `k` from free pool (tail pointer).
+2. Set `bid = {seq_num++, k[7:0]}`.
+3. Set `block_type` from BSTART metadata.
+4. Set `checkpoint_id` = current RAT checkpoint snapshot.
+5. Set `head_rid` = current iROB head.
+6. Set `needs_scalar = 1`, `needs_engine = 0`, `scalar_done = 0`, `engine_done = 0`, `has_exception = 0`.
+7. Stamp all uops in block with `bid` (stored alongside `branch_tag` in IQ/GVIQ/iROB entries).
+8. BSTART retires immediately (bypasses IQ, EX, WB).
+
+**Subsequent uops (D3):**
+1. Allocate iROB entry; stamp `bid`.
+2. Set `iROB[rid].brob_slot = k`.
+3. Increment `n_uops`.
+4. If `is_store`: allocate Block SSB slot, increment `n_stores`.
+5. If `is_vtg_op`: increment `n_vtg_ops`; set `needs_engine = 1`.
+6. Execute normally through BCC pipeline.
+
+**BSTOP at D2:**
+1. Set `tail_rid` = current iROB entry index.
+2. Set `needs_engine = (n_vtg_ops > 0) || (block_type == VEC) || (block_type == CUBE)`.
+3. BSTOP enters iROB but **retirement is gated** (see below).
+
+### 11.11.6 BSTOP Retire Gate and Block Completion
+
+The iROB commit logic is extended with a **BSTOP retire gate**:
+
+```
+BSTOP can retire when ALL of:
+  1. BROB[bid_slot].state == COMPLETE
+  2. !BROB[bid_slot].has_exception
+
+On BSTOP retire:
+  1. Set scalar_done = 1 in BROB[bid_slot]
+  2. If complete && !has_exception: advance BROB head to k+1
+  3. If complete && has_exception: trigger exception delivery
+```
+
+**Engine completion:** Engines (VEC-4K-v2, Cube, MTE LSU, GVIQ) signal `engine_done` to the BROB via the existing TCB (Tile Completion Bus) with `bid` in the response. On match: `BROB[bid_slot].engine_done = 1`.
+
+### 11.11.7 Block Retire
+
+Only the **oldest block** (BROB head) retires per cycle:
+
+```
+1. If head.has_exception:
+     Report exception (see SS11.11.9)
+     Do NOT commit side effects
+     Squash all younger blocks (bid > head.bid)
+2. Else if head.state == COMPLETE:
+     Commit side effects:
+       a. Transfer Block SSB entries to SSB (drain_rdy = 1, btag = 0xFF)
+       b. Transfer Block STQ entries to STQ (drain_rdy = 1, btag = 0xFF)
+       c. Advance head pointer
+       d. Free BROB entry
+3. Else: stall (wait for completion)
+```
+
+### 11.11.8 Precise Exception Mechanism
+
+**Exception detection:**
+- **Scalar exception**: EX1 stage sets `iROB[rid].trap_valid = 1`.
+- **Engine exception**: TCB response arrives with `trap_valid=1`; BROB marks `has_exception=1`, `fault_rid=faulting_rid`.
+
+**Exception reporting flow:**
+
+```
+Step 1: Detection
+  Scalar: EX1 sets iROB[rid].trap_valid = 1
+  Engine: TCB arrives with trap_valid=1
+
+Step 2: Blocking
+  BROB does NOT retire the block
+  BSTOP retire is blocked (has_exception == TRUE)
+
+Step 3: Squash of Younger Blocks
+  flush_bid = BROB[head].bid
+  In parallel (1 cycle):
+    a. iROB: invalidate entries with bid > flush_bid
+    b. BROB: set valid = 0 for entries with bid > flush_bid
+    c. GVIQ: invalidate entries with bid > flush_bid
+    d. IQ: invalidate entries with bid > flush_bid
+    e. SSB: valid = 0 for entries with bid > flush_bid
+    f. STQ: valid = 0 for entries with bid > flush_bid
+    g. Block SSB: invalidate entries with bid > flush_bid
+    h. Block STQ: invalidate entries with bid > flush_bid
+
+Step 4: Register State Recovery
+  MapQ reverse replay from faulting RID backward:
+    for each MapQ entry from tail down to faulting RID:
+      undo SMAP write, restore orphan ptag, pop MapQ
+  Tile RAT: restore from BROB[head].checkpoint_id
+
+Step 5: Exception Delivery
+  EPC   = BSTART_PC (of faulting block)
+  Cause = BROB[head].exception_cause
+  Fault RID = BROB[head].fault_rid
+  OS/kernel handler restores context and re-executes the block.
+```
+
+**Within-block instruction precision:** MapQ already provides instruction-precise P-reg recovery. On exception, MapQ is replayed in reverse from `fault_rid` (captured at detection), not from the block boundary. The faulting uop is precisely identified and all younger uops in the same block are undone.
+
+### 11.11.9 Worked Example: Page Fault in Block
+
+```
+Block B: BSTART, u0 (ADD r1, r2, r3), u1 (TILE.LD), u2 (MUL r6, r4, r7), BSTOP
+
+u1 executes: TILE.LD triggers page fault.
+  LSU sets iROB[rid1].trap_valid = 1
+  LSU sets BROB[5].has_exception = 1
+  LSU sets BROB[5].fault_rid = rid1
+  LSU sets BROB[5].exception_cause = PAGE_FAULT
+
+BSTOP cannot retire (blocked on has_exception).
+Block B is at BROB head, blocked.
+
+Next cycle:
+  flush_bid = B.bid  (no younger blocks)
+  MapQ replay from rid1 backward:
+    undo SMAP writes from u1, u0
+    restore ptags for r4, r1
+  Tile RAT restore from checkpoint_id = 3
+  Deliver: EPC = BSTART_PC, Cause = PAGE_FAULT
+  OS handler restores context.
+  Block B is re-fetched and re-executed after handler returns.
+```
+
+### 11.11.10 Store Commit Within Blocks
+
+**Block SSB:** 32-entry structure shared across BROB entries. Each entry tracks a scalar store within a block.
+
+**Block SSB entry:**
+
+```
+valid:    1 b   -- entry is valid
+addr:    40 b   -- cache-line address (filled at EX1)
+data:    128 b -- store data (filled at EX2)
+size:     3 b   -- 1/2/4/8 B
+bid:      8 b   -- which block this store belongs to
+ssb_idx:  5 b   -- mapped SSB slot index
+```
+
+**Load forwarding within block:** Loads forward from Block SSB entries in the same block without BID ordering checks (Block SSB only contains stores from this block, which are already program-ordered).
+
+**Store commit at block retire:** All Block SSB entries for the retiring block are transferred to the SSB with `btag=0xFF` and `drain_rdy=1`. They drain to L1-D in program order via the existing SSB drain pump.
+
+**Block STQ:** Analogous to Block SSB for tile stores (TILE.ST, TILE.SCATTER). Tile data stays in TRegFile-4K; Block STQ holds the intent (address, source phys-tile, bid).
+
+### 11.11.11 Integration with Existing Infrastructure
+
+**MapQ:** Fully reused. Each renamed destination pushes a MapQ entry with `{arch_reg, old_ptag, new_ptag, RID, checkpoint_id}`. On exception, MapQ reverse replay from `fault_rid` recovers P-reg state. Unchanged.
+
+**Branch-tag tracker:** Fully reused. Each block receives a branch tag at BSTART. Branch-tag CAM-clear is extended to flush by `bid > flush_bid`. Unchanged.
+
+**RAT checkpoints:** Extended with `checkpoint_id` per BROB entry. On exception: Tile RAT restored from `BROB[head].checkpoint_id`. Scalar RAT recovered via MapQ reverse replay (already instruction-precise).
+
+**SSB/STQ:** Extended with `bid` field (8 b per entry). At D2: `SSB[idx].bid = current_bid`. At block retire: `SSB[idx].btag = 0xFF`, `drain_rdy = 1`. At flush: entries with `bid > flush_bid` are invalidated.
+
+**VTG / GVIQ:** GVIQ entries are stamped with `bid`. GVIQ issue is gated by `block_complete = (BROB[bid_slot].engine_done || !BROB[bid_slot].needs_engine)`. Unchanged GVIQ rotation scheduler.
+
+### 11.11.12 Flush Protocol Summary
+
+```
+flush_bid = BROB[head].bid
+
+In parallel (1 cycle):
+  a) iROB: invalidate entries with bid > flush_bid
+  b) BROB: valid = 0 for entries with bid > flush_bid; tail advances
+  c) GVIQ: invalidate entries with bid > flush_bid
+  d) IQ: invalidate entries with bid > flush_bid
+  e) SSB: valid = 0 for entries with bid > flush_bid
+  f) STQ: valid = 0 for entries with bid > flush_bid
+  g) Block SSB: invalidate entries with bid > flush_bid
+  h) Block STQ: invalidate entries with bid > flush_bid
+  i) MapQ: pop entries from flush_rid+1 backward (undo SMAP writes)
+  j) Tile RAT: restore from BROB[flush_bid_slot].checkpoint_id
+  k) Scalar RAT: flash-restore from checkpoint (unchanged)
+  l) Branch-tag tracker: free tags for flushed blocks
+```
 
 ## 12. Memory Subsystem
 
