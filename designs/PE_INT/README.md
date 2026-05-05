@@ -1,75 +1,68 @@
 # PE_INT
 
-Fixed-point / integer vector MAC unit.
+定點／整數向量 MAC 單元。實作流程固定為：
 
-Implementation flow:
-
-`docs/spec.md` -> `python/pe_int_pycircuit.py` -> `pycircuit.cli build` -> `rtl/build/` + `tb/`
+`spec.md` -> `python/pe_int_pycircuit.py` -> `pycircuit.cli build` -> `rtl/` + `tb/`
 
 ## Baseline
 
-- Spec source: `docs/spec.md`
-- Current baseline: `v2.0.5` (see the header in `docs/spec.md`)
+- 規格來源：`docs/spec.md`
+- 當前 baseline：`v2.0.5`（以 `docs/spec.md` 檔首標註為準）
 
-## Directory Overview
+## 目錄
 
-- `docs/`: formal specifications
-- `python/`: PyCircuit design sources and build scripts
-- `model/`: golden models and model regressions
-- `tb/`: PyCircuit testbench flow (not RTL simulator flow)
-- `tb_rtl/`: dedicated RTL test environment (Verilog testbench + cases)
-- `sim/`: one-command simulation entrypoints (iverilog / verilator + wave options)
-- `rtl/build/`: generated RTL deliverables only
+- `docs/`: 正式規格
+- `python/`: PyCircuit 設計與建構腳本
+- `model/`: golden 模型與模型回歸測試
+- `tb/`: pyCircuit 測試（非 RTL 模擬）
+- `tb_rtl/`: 專用 RTL 測試環境（Verilog testbench + cases）
+- `sim/`: 互動式一鍵仿真入口（可選 iverilog / verilator + 波形）
+- `rtl/`: 僅放「由 build 產生」之 RTL 產物說明
 
-## Key Files
+## 主要檔案
 
-- `model/ref_model.py`: reference math and pack/unpack model for all four modes
-- `model/pe_int_pycircuit_eval.py`: cycle-accurate pipeline golden model (`L=4`)
-- `model/test_pe_int.py`: model-level random regressions
-- `model/gen_rtl_case_vectors.py`: regenerates expected vectors for `tb_rtl/case`
-- `python/pe_int_pycircuit.py`: PyCircuit frontend top entry (RTL source of truth)
-- `python/build.py`: unified build entry (`python -m pycircuit.cli build`)
-- `tb/tb_pe_int_pycircuit.py`: native PyCircuit testbench for `pycc`/sim flow
-- `tb_rtl/case/*.v`: RTL testcases (single-mode sanity + mode-switch random)
-- `sim/run_all_wsl.sh`: one-command RTL regression (`iverilog` + `verilator`)
-- `sim/run_sim.sh`: interactive one-command simulation (seed + simulator + wave)
-- `filelist/pe_int.f`: RTL filelist (prefixed with absolute `$PE_INT`)
-- `tb_rtl/tb.f`: testbench/case filelist (prefixed with absolute `$PE_INT`)
-- `model/model.f`: model filelist (prefixed with absolute `$PE_INT`)
+- `model/ref_model.py`: 四模式數學與打包/解包參考模型
+- `model/pe_int_pycircuit_eval.py`: cycle-accurate golden pipeline model（L=3）
+- `model/test_pe_int.py`: 模型層隨機回歸（功能與時序對齊）
+- `model/gen_rtl_case_vectors.py`: 自動重生 `tb_rtl/case` 的 expected 向量
+- `python/pe_int_pycircuit.py`: pyCircuit frontend 設計入口（source of RTL）
+- `python/build.py`: 統一 build 指令（呼叫 `python -m pycircuit.cli build`）
+- `tb/tb_pe_int_pycircuit.py`: pyCircuit 原生 testbench（給 `pycc`/sim flow）
+- `tb_rtl/case/*.v`: RTL 專用測試案例（單模式 sanity + mode switch random）
+- `sim/run_all_wsl.sh`: 一鍵跑 `iverilog` + `verilator` RTL 回歸
+- `sim/run_sim.sh`: 互動式一鍵仿真（每題 5 秒 timeout，含 seed 輸入）
+- `filelist/pe_int.f`: RTL filelist（以 `$PE_INT` 絕對路徑為開頭）
+- `tb_rtl/tb.f`: 驗證環境/用例 filelist（以 `$PE_INT` 絕對路徑為開頭）
+- `model/model.f`: model filelist（以 `$PE_INT` 絕對路徑為開頭）
 
-## Quick Start
+## 快速使用
 
-1) Run golden model tests:
+1) 先跑 golden model 測試：
 
 ```bash
 python model/test_pe_int.py
 ```
 
-2) Build RTL/simulation artifacts (requires a ready PyCircuit environment):
+2) 產生 RTL / sim 產物（需先具備 pyCircuit 環境）：
 
 ```bash
 python python/build.py --target both --out-dir build/pe_int
 ```
 
-After each build, sync deliverable RTL artifacts from the build output tree into
-`rtl/build/`, then refresh `filelist/pe_int.f` so simulation always resolves the
-latest deliverable set.
-
-3) Run dedicated RTL regressions (WSL):
+3) 執行 RTL 專用回歸（WSL）：
 
 ```bash
 bash sim/run_all_wsl.sh
 ```
 
-Or use interactive one-command simulation (WSL):
+或使用互動式一鍵仿真入口（WSL）：
 
 ```bash
 bash sim/run_sim.sh
 ```
 
-## Process Constraints
+## 流程約束
 
-- Do not handwrite `rtl/build/*.v`.
-- After each build, sync deliverable artifacts into `rtl/build/` and refresh `filelist/pe_int.f`.
-- `vld_out` must align with `out0`/`out1`; under mode `2a`, `out1` uses hold policy to avoid unnecessary toggles.
-- On a new machine without existing profiles, bootstrap the environment from `LinxISA/pyCircuit` first.
+- 不手寫 `rtl/*.v`。
+- `vld_out` 與 `out0`/`out1` 對齊，`2a` 下 `out1` 採 hold 策略以避免無謂切換。
+- 任何新機器若沒有既有 profile，先依 `LinxISA/pyCircuit` repo 完成環境再執行本流程。

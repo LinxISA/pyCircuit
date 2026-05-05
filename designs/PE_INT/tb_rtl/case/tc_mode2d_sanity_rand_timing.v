@@ -38,7 +38,7 @@ module tc_mode2d_sanity_rand_timing;
     localparam [1:0] MODE_FIXED = 2'b11;
     localparam string CASE_NAME = "2d_rand";
 
-    pe_int_l3 dut (
+    PE_INT dut (
         .clk(clk), .rst_n(rst_n), .vld(vld), .mode(mode), .a(a), .b(b), .b1(b1),
         .e1_a(e1_a), .e1_b0(e1_b0), .e1_b1(e1_b1), .out0(out0), .out1(out1), .vld_out(vld_out)
     );

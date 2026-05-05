@@ -1,39 +1,39 @@
-# RTL Testcases (`case`)
+# RTL 測試案例（case）
 
-Each `.v` file in this directory is an independent testcase and can be compiled/simulated alone.
+本目錄每個 `.v` 檔是獨立 testcase（可單獨編譯/仿真）。
 
-## Case List and Purpose
+## 案例清單與目的
 
 - `tc_mode2a_sanity.v`
-  - Verifies mode 2a (`S8xS8`) math correctness.
-  - Verifies `out1` is not unnecessarily updated in 2a mode (holds previous dual-path value).
+  - 驗證 mode 2a（S8xS8）數學結果正確。
+  - 驗證 2a 下 `out1` 不應被更新（保持前一個雙路模式值）。
 
 - `tc_mode2b_sanity.v`
-  - Verifies mode 2b (`S8xS4`) dual outputs `out0/out1`.
+  - 驗證 mode 2b（S8xS4）雙路輸出 `out0/out1` 正確。
 
 - `tc_mode2c_sanity.v`
-  - Verifies mode 2c (`S5xS5 + E1`) dual outputs.
+  - 驗證 mode 2c（S5xS5 + E1）雙路輸出正確。
 
 - `tc_mode2d_sanity.v`
-  - Verifies mode 2d (`S8xS5`) dual outputs.
+  - 驗證 mode 2d（S8xS5）雙路輸出正確。
 
 - `tc_mode_switch_random.v`
-  - Verifies `vld -> vld_out` alignment/order under back-to-back mode switching.
-  - Verifies output values under mixed traffic (including `vld=0` gaps).
-  - Expected data must be traceable to reference models in `model/`.
+  - 驗證 back-to-back 切 mode 時，`vld -> vld_out` 對齊與順序正確。
+  - 驗證 mixed traffic（含 `vld=0` 空檔）下，輸出值與預期一致。
+  - 預期值來源需可追溯到 `model/` 下的參考模型。
 
-## Naming Convention
+## 命名規範
 
-- `tc_*`: directly usable as simulator top module names.
-- Each case includes PASS/FAIL messages and `$fatal` for CI-friendly checks.
+- `tc_*`：可直接做 simulator top module 使用。
+- 每個 case 內建 PASS/FAIL 訊息與 `$fatal`，方便 CI 直接判斷。
 
-## Automatic Expected Generation
+## expected 自動生成
 
-- Generator: `gen_rtl_case_vectors.py` resolved from `model/model.f`
-- Output: `tb_rtl/case/generated/*.vh`
-- Testcases use these generated files via `` `include ``; do not handwrite expected values.
+- 產生工具：`model/model.f` 內的 `gen_rtl_case_vectors.py`
+- 產生輸出：`tb_rtl/case/generated/*.vh`
+- testcase 透過 `` `include `` 使用這些自動檔案，不手抄 expected。
 
-Manual regenerate (resolved through filelist):
+手動重生（透過 filelist 解析）：
 
 ```bash
 export PE_INT="$(pwd)"

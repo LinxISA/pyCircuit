@@ -1,3 +1,3 @@
 # Memory
 
-- Test result wording preference: use only `pass/fail` (avoid phrases like "all green").
+- 測試結果回報格式偏好：僅使用 `pass/fail`（避免使用「全綠」等說法）。

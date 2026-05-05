@@ -23,7 +23,7 @@ if str(_MODEL_DIR) not in sys.path:
 from pe_int_pycircuit import build  # noqa: E402
 from ref_model import MODE_2A, MODE_2B, compute_transaction, pack_s4x8_to_40, pack_s8x8_to_laneword  # noqa: E402
 
-DEFAULT_PARAMS = {"latency": 3}
+DEFAULT_PARAMS = {"latency": 4, "hierarchical": True}
 
 
 def _to_u(value: int, bits: int) -> int:

@@ -1,49 +1,49 @@
-# sim (One-Command Simulation)
+# sim（一鍵仿真入口）
 
-This directory provides an interactive one-command script:
+本目錄提供互動式一鍵腳本：
 
 - `run_sim.sh`
 
-## Features
+## 功能
 
-Before execution, the script prompts for options (5-second timeout per prompt, then default is used):
+執行前會詢問（每題等待 5 秒，逾時套用預設值）：
 
-1. testcase vector seed (default: current timestamp)
-2. simulator: `iverilog` / `verilator` (default: `iverilog`)
-3. generate waveform or not (default: `No`)
-4. waveform format: `vcd` / `fst` (default: `vcd`)
+1. testcase 向量 seed（預設：當下時間戳）
+2. 使用哪個 simulator：`iverilog` / `verilator`（預設 `iverilog`）
+3. 是否產生波形（預設 `No`）
+4. 波形格式：`vcd` / `fst`（預設 `vcd`）
 
-The script first resolves and runs the model vector generator from `model/model.f`:
+腳本會先透過 `model/model.f` 解析並執行：
 
 ```bash
 python3 <resolved from model/model.f> --seed <seed>
 ```
 
-Then it runs all testcases in `tb_rtl/case` via filelists (`filelist/pe_int.f` + `tb_rtl/tb.f`).
+再以 filelist（`filelist/pe_int.f` + `tb_rtl/tb.f`）跑 `tb_rtl/case` 下全部 testcase。
 
-## Reproducibility
+## 可重現性
 
-- The same seed always generates identical `tc_mode_switch_random` vectors and expected values.
-- The same seed also generates identical sanity vectors (`tc_mode2a/2b/2c/2d_sanity`); different seeds produce different vectors.
-- Both `iverilog` and `verilator` use the same seed generation flow, so seed behavior is consistent across simulators.
-- Each testcase has an independent log, and the seed is recorded at the beginning for replay.
-- Log path:
+- 同一個 seed 會生成完全一致的 `tc_mode_switch_random` 向量與 expected。
+- 同一個 seed 也會生成完全一致的 sanity vectors（`tc_mode2a/2b/2c/2d_sanity`）；不同 seed 會改變其向量。
+- `iverilog` 與 `verilator` 都使用同一份 seed 生成流程，因此兩者都保證上述 seed 行為一致。
+- 每個 testcase 都有獨立 log，且開頭會記錄該次 seed，便於下次還原。
+- log 位置：
   - `sim/logs/<simulator>/<timestamp>_run<idx>/seed_<seed>_<case>.log`
 
-## Run
+## 執行
 
 ```bash
 bash sim/run_sim.sh
 ```
 
-## Waveform Output
+## 波形輸出
 
-- When waveform output is enabled, files are written to:
+- 啟用波形後，輸出位置為：
   - `sim/waves/<simulator>/<case>/wave.<fmt>`
 
-## Simulator Differences (Handled by Script)
+## 參數差異（腳本已內建處理）
 
-- `iverilog`: runs through `iverilog + vvp`; waveform via `$dumpfile/$dumpvars` (commonly VCD).
-- `verilator`: automatically adds:
+- `iverilog`：以 `iverilog + vvp` 路徑執行；波形以 `$dumpfile/$dumpvars` 生成（實務預設 VCD）。
+- `verilator`：依格式自動加：
   - `--trace`（VCD）
   - `--trace-fst`（FST）

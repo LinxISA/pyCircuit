@@ -182,7 +182,11 @@ def _compile_entrypoint(
     build: Any, *, top_name: str, jit_params: Mapping[str, object]
 ) -> Module | Design:
     if _is_timed_domain_build(build):
-        return compile_cycle_aware(build, name=top_name, **dict(jit_params))
+        compiled = compile_cycle_aware(build, name=top_name, **dict(jit_params))
+        hierarchical_design = getattr(compiled, "_v5_design", None)
+        if isinstance(hierarchical_design, Design):
+            return hierarchical_design
+        return compiled
     return jit_compile(build, name=top_name, **dict(jit_params))
 
 

@@ -29,7 +29,7 @@ module tc_mode2b_sanity;
     localparam [1:0] MODE_2B = 2'b01;
     localparam string CASE_NAME = "2b";
 
-    pe_int_l3 dut (
+    PE_INT dut (
         .clk(clk), .rst_n(rst_n), .vld(vld), .mode(mode), .a(a), .b(b), .b1(b1),
         .e1_a(e1_a), .e1_b0(e1_b0), .e1_b1(e1_b1), .out0(out0), .out1(out1), .vld_out(vld_out)
     );

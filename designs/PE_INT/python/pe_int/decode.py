@@ -12,6 +12,15 @@ def sext(value, bits: int):
     return raw._sext(width=bits)
 
 
+def zext(value, bits: int):
+    if hasattr(value, "zext"):
+        return value.zext(width=bits)
+    raw = wire_of(value)
+    if hasattr(raw, "zext"):
+        return raw.zext(width=bits)
+    return raw._zext(width=bits)
+
+
 def lane5(word, idx: int):
     lo = 5 * idx
     return wire_of(word)[lo : lo + 5]

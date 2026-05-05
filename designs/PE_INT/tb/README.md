@@ -1,14 +1,14 @@
-# tb (PyCircuit / Model-Oriented Testbench)
+# tb（pyCircuit / 模型測試）
 
-This directory only contains:
+本目錄只放：
 
-- PyCircuit testbenches (for example `tb_pe_int_pycircuit.py`)
-- PyCircuit-related test flow files
+- pyCircuit testbench（例如 `tb_pe_int_pycircuit.py`）
+- pyCircuit 相關測試流程檔
 
-## Do Not Put Here
+## 不放內容
 
-- Model implementation and model regression files (put in `model/`)
-- RTL-specific Verilog testbenches
-- RTL testcase datasets
+- 模型本體與模型回歸（統一放 `model/`）
+- RTL 專用 Verilog testbench
+- RTL case 資料集
 
-Those artifacts belong in `model/` and `tb_rtl/` respectively.
+上述內容分別統一放在 `model/` 與 `tb_rtl/`。

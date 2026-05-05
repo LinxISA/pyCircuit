@@ -3,7 +3,7 @@ from __future__ import annotations
 from pycircuit import wire_of
 
 from .decode import decode_s4_from_40, decode_s4_hi_from_80, decode_s5, decode_s5_hi_from_80, decode_s8_from_lane_word
-from .lane_mac import booth_mul_signed, dot8_reduce, dot16_split8_reduce, select_one_hot4, sum_shift_pair
+from .lane_mac import booth_mul_signed, select_one_hot4, sum_shift_pair, wallace_dot8_tree
 
 
 def _mode_one_hot(mode):
@@ -61,7 +61,15 @@ def comb1_generate_products(a, b, b1):
     }
 
 
-def comb2_reduce_products(products):
+def _wallace_dot8(domain, products, *, prefix: str):
+    return domain.call(
+        wallace_dot8_tree,
+        inputs={f"in{idx}": product for idx, product in enumerate(products)},
+        prefix=prefix,
+    )["sum"]
+
+
+def comb2_reduce_products(domain, products):
     """
     DS §5.5:
     - dot8 reduction for 2a/2b/2d
@@ -75,13 +83,15 @@ def comb2_reduce_products(products):
     p2c0 = products["p2c0"]
     p2c1 = products["p2c1"]
 
-    s2a = dot8_reduce(p2a)
-    s2b0 = dot8_reduce(p2b0)
-    s2b1 = dot8_reduce(p2b1)
-    s2d0 = dot8_reduce(p2d0)
-    s2d1 = dot8_reduce(p2d1)
-    s2c0_lo, s2c0_hi = dot16_split8_reduce(p2c0)
-    s2c1_lo, s2c1_hi = dot16_split8_reduce(p2c1)
+    s2a = _wallace_dot8(domain, p2a, prefix="pe_int_s2a_wallace")
+    s2b0 = _wallace_dot8(domain, p2b0, prefix="pe_int_s2b0_wallace")
+    s2b1 = _wallace_dot8(domain, p2b1, prefix="pe_int_s2b1_wallace")
+    s2d0 = _wallace_dot8(domain, p2d0, prefix="pe_int_s2d0_wallace")
+    s2d1 = _wallace_dot8(domain, p2d1, prefix="pe_int_s2d1_wallace")
+    s2c0_lo = _wallace_dot8(domain, p2c0[0:8], prefix="pe_int_s2c0_lo_wallace")
+    s2c0_hi = _wallace_dot8(domain, p2c0[8:16], prefix="pe_int_s2c0_hi_wallace")
+    s2c1_lo = _wallace_dot8(domain, p2c1[0:8], prefix="pe_int_s2c1_lo_wallace")
+    s2c1_hi = _wallace_dot8(domain, p2c1[8:16], prefix="pe_int_s2c1_hi_wallace")
     return {
         "s2a": s2a,
         "s2b0": s2b0,
@@ -95,13 +105,12 @@ def comb2_reduce_products(products):
     }
 
 
-def comb3_mode_merge(reduced, mode, e1_a, e1_b0, e1_b1):
+def comb3_mode_merge(reduced, e1_a, e1_b0, e1_b1, *, is_2a, is_2b, is_2c, is_2d):
     """
     DS §5.7:
     - 2c post-scale x1/x2/x4
     - one-hot mode merge for out0_raw/out1_raw
     """
-    is_2a, is_2b, is_2c, is_2d = _mode_one_hot(mode)
     s2c0 = sum_shift_pair(reduced["s2c0_lo"], reduced["s2c0_hi"], e1_a, e1_b0)
     s2c1 = sum_shift_pair(reduced["s2c1_lo"], reduced["s2c1_hi"], e1_a, e1_b1)
 

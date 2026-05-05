@@ -14,10 +14,6 @@ CASES=(
   "tc_mode2b_sanity"
   "tc_mode2c_sanity"
   "tc_mode2d_sanity"
-  "tc_mode2a_sanity_rand_timing"
-  "tc_mode2b_sanity_rand_timing"
-  "tc_mode2c_sanity_rand_timing"
-  "tc_mode2d_sanity_rand_timing"
   "tc_mode_switch_random"
 )
 
@@ -189,118 +185,6 @@ cleanup_pass_logs() {
   fi
 }
 
-run_cases_parallel_iverilog() {
-  local seed="$1"
-  local log_root="$2"
-  local failures=0
-  local -a pids=()
-  local -a names=()
-
-  for c in "${CASES[@]}"; do
-    local case_log="${log_root}/seed_${seed}_${c}.log"
-    (
-      set -euo pipefail
-      echo "[INFO] simulator=iverilog case=${c} seed=${seed}"
-      iverilog -g2012 -s "$c" -f "$RTL_FILELIST" -f "$TB_FILELIST" -o "build/${c}.iv.out"
-      if [[ "$WAVE_ON" -eq 1 ]]; then
-        CASE_WAVE_DIR="${WAVE_ROOT}/${c}"
-        mkdir -p "$CASE_WAVE_DIR"
-        (
-          cd "$CASE_WAVE_DIR"
-          vvp "${ROOT}/build/${c}.iv.out" +GEN_DIR="${GEN_DIR}" +WAVE=1 +WAVE_FST=0
-        )
-      else
-        vvp "build/${c}.iv.out" +GEN_DIR="${GEN_DIR}"
-      fi
-    ) >"$case_log" 2>&1 &
-    pids+=("$!")
-    names+=("$c")
-    echo "[INFO] launch iverilog case=${c} (log=${case_log})"
-  done
-
-  for idx in "${!pids[@]}"; do
-    local pid="${pids[$idx]}"
-    local case_name="${names[$idx]}"
-    local case_log="${log_root}/seed_${seed}_${case_name}.log"
-    if wait "$pid"; then
-      echo "[PASS] [iverilog] ${case_name}"
-    else
-      failures=$((failures + 1))
-      echo "[FAIL] [iverilog] ${case_name} (see ${case_log})"
-    fi
-  done
-
-  if (( failures > 0 )); then
-    echo "[ERR] [iverilog] failed cases: ${failures}"
-    return 1
-  fi
-}
-
-run_cases_parallel_verilator() {
-  local seed="$1"
-  local log_root="$2"
-  local failures=0
-  local -a pids=()
-  local -a names=()
-
-  if [[ "$seed_idx" -eq 0 ]]; then
-    echo "[INFO] build verilator binaries for all cases..."
-    for c in "${CASES[@]}"; do
-      if [[ "$WAVE_ON" -eq 1 && "$WAVE_FMT" == "fst" ]]; then
-        verilator --binary --timing -Wall -Wno-fatal --trace-fst -f "$RTL_FILELIST" -f "$TB_FILELIST" --top-module "$c" -o "${c}.vlt.out"
-      elif [[ "$WAVE_ON" -eq 1 ]]; then
-        verilator --binary --timing -Wall -Wno-fatal --trace -f "$RTL_FILELIST" -f "$TB_FILELIST" --top-module "$c" -o "${c}.vlt.out"
-      else
-        verilator --binary --timing -Wall -Wno-fatal -f "$RTL_FILELIST" -f "$TB_FILELIST" --top-module "$c" -o "${c}.vlt.out"
-      fi
-    done
-  else
-    echo "[INFO] reuse existing verilator binaries for all cases"
-  fi
-
-  for c in "${CASES[@]}"; do
-    local case_log="${log_root}/seed_${seed}_${c}.log"
-    (
-      set -euo pipefail
-      echo "[INFO] simulator=verilator case=${c} seed=${seed}"
-      if [[ "$WAVE_ON" -eq 1 ]]; then
-        CASE_WAVE_DIR="${WAVE_ROOT}/${c}"
-        mkdir -p "$CASE_WAVE_DIR"
-        (
-          cd "$CASE_WAVE_DIR"
-          if [[ "$WAVE_FMT" == "fst" ]]; then
-            "${ROOT}/obj_dir/${c}.vlt.out" +GEN_DIR="${GEN_DIR}" +WAVE=1 +WAVE_FST=1
-          else
-            "${ROOT}/obj_dir/${c}.vlt.out" +GEN_DIR="${GEN_DIR}" +WAVE=1 +WAVE_FST=0
-          fi
-        )
-      else
-        "./obj_dir/${c}.vlt.out" +GEN_DIR="${GEN_DIR}"
-      fi
-    ) >"$case_log" 2>&1 &
-    pids+=("$!")
-    names+=("$c")
-    echo "[INFO] launch verilator case=${c} (log=${case_log})"
-  done
-
-  for idx in "${!pids[@]}"; do
-    local pid="${pids[$idx]}"
-    local case_name="${names[$idx]}"
-    local case_log="${log_root}/seed_${seed}_${case_name}.log"
-    if wait "$pid"; then
-      echo "[PASS] [verilator] ${case_name}"
-    else
-      failures=$((failures + 1))
-      echo "[FAIL] [verilator] ${case_name} (see ${case_log})"
-    fi
-  done
-
-  if (( failures > 0 )); then
-    echo "[ERR] [verilator] failed cases: ${failures}"
-    return 1
-  fi
-}
-
 echo
 echo "[INFO] simulator=$SIM wave=$WAVE_ON format=$WAVE_FMT base_seed=$BASE_SEED seed_runs=$SEED_RUNS"
 
@@ -324,9 +208,56 @@ for ((seed_idx = 0; seed_idx < SEED_RUNS; seed_idx++)); do
   echo "[INFO] testcase logs are under ${LOG_ROOT}"
 
   if [[ "$SIM" == "iverilog" ]]; then
-    run_cases_parallel_iverilog "$SEED" "$LOG_ROOT"
+    for c in "${CASES[@]}"; do
+      CASE_LOG="${LOG_ROOT}/seed_${SEED}_${c}.log"
+      {
+        echo "[INFO] simulator=iverilog case=${c} seed=${SEED}"
+        iverilog -g2012 -s "$c" -f "$RTL_FILELIST" -f "$TB_FILELIST" -o "build/${c}.iv.out"
+        if [[ "$WAVE_ON" -eq 1 ]]; then
+          CASE_WAVE_DIR="${WAVE_ROOT}/${c}"
+          mkdir -p "$CASE_WAVE_DIR"
+          (
+            cd "$CASE_WAVE_DIR"
+            vvp "${ROOT}/build/${c}.iv.out" +GEN_DIR="${GEN_DIR}" +WAVE=1 +WAVE_FST=0
+          )
+        else
+          vvp "build/${c}.iv.out" +GEN_DIR="${GEN_DIR}"
+        fi
+      } 2>&1 | tee "$CASE_LOG"
+    done
   else
-    run_cases_parallel_verilator "$SEED" "$LOG_ROOT"
+    for c in "${CASES[@]}"; do
+      CASE_LOG="${LOG_ROOT}/seed_${SEED}_${c}.log"
+      {
+        echo "[INFO] simulator=verilator case=${c} seed=${SEED}"
+        if [[ "$seed_idx" -eq 0 ]]; then
+          if [[ "$WAVE_ON" -eq 1 && "$WAVE_FMT" == "fst" ]]; then
+            verilator --binary --timing -Wall -Wno-fatal --trace-fst -f "$RTL_FILELIST" -f "$TB_FILELIST" --top-module "$c" -o "${c}.vlt.out"
+          elif [[ "$WAVE_ON" -eq 1 ]]; then
+            verilator --binary --timing -Wall -Wno-fatal --trace -f "$RTL_FILELIST" -f "$TB_FILELIST" --top-module "$c" -o "${c}.vlt.out"
+          else
+            verilator --binary --timing -Wall -Wno-fatal -f "$RTL_FILELIST" -f "$TB_FILELIST" --top-module "$c" -o "${c}.vlt.out"
+          fi
+        else
+          echo "[INFO] reuse existing verilator binary for ${c}"
+        fi
+
+        if [[ "$WAVE_ON" -eq 1 ]]; then
+          CASE_WAVE_DIR="${WAVE_ROOT}/${c}"
+          mkdir -p "$CASE_WAVE_DIR"
+          (
+            cd "$CASE_WAVE_DIR"
+            if [[ "$WAVE_FMT" == "fst" ]]; then
+              "${ROOT}/obj_dir/${c}.vlt.out" +GEN_DIR="${GEN_DIR}" +WAVE=1 +WAVE_FST=1
+            else
+              "${ROOT}/obj_dir/${c}.vlt.out" +GEN_DIR="${GEN_DIR}" +WAVE=1 +WAVE_FST=0
+            fi
+          )
+        else
+          "./obj_dir/${c}.vlt.out" +GEN_DIR="${GEN_DIR}"
+        fi
+      } 2>&1 | tee "$CASE_LOG"
+    done
   fi
 done
 
