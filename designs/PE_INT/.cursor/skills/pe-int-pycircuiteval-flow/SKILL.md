@@ -58,7 +58,9 @@ Extract executable checks from `docs/spec.md`:
 
 1. Implement in `python/`.
 2. Build through `pycircuit.cli build` / `pycc`.
-3. Keep generated RTL in `rtl/`; do not manually patch final RTL.
+3. After each build, sync deliverable RTL artifacts from the build output tree into `rtl/build/`.
+4. Refresh `filelist/pe_int.f` after each sync so simulations consume the latest deliverable set.
+5. Do not manually patch final RTL deliverables.
 
 ### Step B.1: PyCircuit Structure Rules
 
@@ -84,6 +86,19 @@ No hidden full register-chain helper loops.
   - one-to-one valid mapping
   - fixed latency and cross-mode consistency
   - no bubble under full-pipeline working window
+
+### Step C.1: Latency Counting Rule (Mandatory)
+
+When checking latency / stage counts, always count the **actual number of
+registers on the real signal path** in generated RTL.
+
+Do **not** infer latency only from stage naming (`s0/s1/...`) or comment labels.
+
+Required checks:
+
+1. Count register depth separately for control (`vld_out`) and data (`out0/out1`).
+2. Confirm control/data path depths are aligned at output boundary.
+3. If mismatch exists, report effective latency based on register count.
 
 ### Step D (Optional): RTL Simulator Validation
 

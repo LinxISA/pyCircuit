@@ -36,6 +36,7 @@ module tc_mode_switch_random;
 
     reg [18:0] exp_o0 [0:N_EXP_MAX-1];
     reg [15:0] exp_o1 [0:N_EXP_MAX-1];
+    localparam string CASE_NAME = "rand";
 
     pe_int_l3 dut (
         .clk(clk), .rst_n(rst_n), .vld(vld), .mode(mode), .a(a), .b(b), .b1(b1),
@@ -43,22 +44,15 @@ module tc_mode_switch_random;
     );
 
     `include "common_wave_dump.vh"
+    `include "common_exact_latency_scoreboard.vh"
 
     always #5 clk = ~clk;
 
     always @(posedge clk) begin
-        if (rst_n && vld_out) begin
-            if (got >= exp_count) begin
-                $display("[ERR][rand] unexpected extra output out0=%0d out1=%0d", $signed(out0), $signed(out1));
-                err <= err + 1;
-            end else begin
-                if (out0 !== exp_o0[got] || out1 !== exp_o1[got]) begin
-                    $display("[ERR][rand] idx=%0d got(out0,out1)=(%0d,%0d) exp=(%0d,%0d)",
-                        got, $signed(out0), $signed(out1), $signed(exp_o0[got]), $signed(exp_o1[got]));
-                    err <= err + 1;
-                end
-            end
-            got <= got + 1;
+        if (!rst_n) begin
+            sb_reset();
+        end else begin
+            sb_tick();
         end
     end
 
@@ -66,7 +60,7 @@ module tc_mode_switch_random;
         clk = 0; rst_n = 0; vld = 0; mode = 0;
         a = 0; b = 0; b1 = 0; e1_a = 0; e1_b0 = 0; e1_b1 = 0;
         got = 0; err = 0;
-        exp_count = 0;
+        exp_count = 0; sb_reset();
 
         if (!$value$plusargs("GEN_DIR=%s", gen_dir)) begin
             gen_dir = "tb_rtl/case/generated";
@@ -104,11 +98,7 @@ module tc_mode_switch_random;
         vld = 0; mode = 0; a = 0; b = 0; b1 = 0; e1_a = 0; e1_b0 = 0; e1_b1 = 0;
 
         repeat (30) @(posedge clk);
-
-        if (got !== exp_count) begin
-            $display("[ERR][rand] expected %0d outputs, got %0d", exp_count, got);
-            err = err + 1;
-        end
+        sb_final_check();
 
         if (err == 0) begin
             $display("[PASS] tc_mode_switch_random");

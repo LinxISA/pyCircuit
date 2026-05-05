@@ -16,12 +16,10 @@ module tc_mode2c_sanity;
     wire signed [15:0] out1;
     wire        vld_out;
 
-    integer got;
     integer err;
     integer i;
-
+    integer exp_count;
     localparam integer N_TX_2C = 1000;
-    localparam integer N_EXP_2C = 1000;
     string gen_dir;
     reg [79:0] tx_a [0:N_TX_2C-1];
     reg [79:0] tx_b0 [0:N_TX_2C-1];
@@ -29,10 +27,11 @@ module tc_mode2c_sanity;
     reg [1:0]  tx_e1a [0:N_TX_2C-1];
     reg [1:0]  tx_e1b0 [0:N_TX_2C-1];
     reg [1:0]  tx_e1b1 [0:N_TX_2C-1];
-    reg [18:0] exp_o0 [0:N_EXP_2C-1];
-    reg [15:0] exp_o1 [0:N_EXP_2C-1];
+    reg [18:0] exp_o0 [0:N_TX_2C-1];
+    reg [15:0] exp_o1 [0:N_TX_2C-1];
 
     localparam [1:0] MODE_2C = 2'b10;
+    localparam string CASE_NAME = "2c";
 
     pe_int_l3 dut (
         .clk(clk), .rst_n(rst_n), .vld(vld), .mode(mode), .a(a), .b(b), .b1(b1),
@@ -40,27 +39,22 @@ module tc_mode2c_sanity;
     );
 
     `include "common_wave_dump.vh"
+    `include "common_exact_latency_scoreboard.vh"
 
     always #5 clk = ~clk;
 
     always @(posedge clk) begin
-        if (rst_n && vld_out) begin
-            got <= got + 1;
-            if (got >= N_EXP_2C) begin
-                $display("[ERR][2c] unexpected extra output out0=%0d out1=%0d", $signed(out0), $signed(out1));
-                err <= err + 1;
-            end else if (out0 !== exp_o0[got] || out1 !== exp_o1[got]) begin
-                $display("[ERR][2c] idx=%0d out0=%0d out1=%0d exp=(%0d,%0d)",
-                    got, $signed(out0), $signed(out1), $signed(exp_o0[got]), $signed(exp_o1[got]));
-                err <= err + 1;
-            end
+        if (!rst_n) begin
+            sb_reset();
+        end else begin
+            sb_tick();
         end
     end
 
     initial begin
         clk = 0; rst_n = 0; vld = 0; mode = 0;
         a = 0; b = 0; b1 = 0; e1_a = 0; e1_b0 = 0; e1_b1 = 0;
-        got = 0; err = 0;
+        err = 0; exp_count = N_TX_2C; sb_reset();
 
         if (!$value$plusargs("GEN_DIR=%s", gen_dir)) begin
             gen_dir = "tb_rtl/case/generated";
@@ -87,12 +81,8 @@ module tc_mode2c_sanity;
         @(negedge clk);
         vld = 0; mode = 0; a = 0; b = 0; b1 = 0; e1_a = 0; e1_b0 = 0; e1_b1 = 0;
 
-        repeat (10) @(posedge clk);
-
-        if (got !== N_EXP_2C) begin
-            $display("[ERR][2c] expected %0d outputs, got %0d", N_EXP_2C, got);
-            err = err + 1;
-        end
+        repeat (12) @(posedge clk);
+        sb_final_check();
 
         if (err == 0) begin
             $display("[PASS] tc_mode2c_sanity");

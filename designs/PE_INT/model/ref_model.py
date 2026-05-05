@@ -25,27 +25,27 @@ def get_lane5(word80: int, lane_idx: int) -> int:
 
 def decode_s8x8_from_laneword(word80: int) -> List[int]:
     vals: List[int] = []
-    for i in range(8):
-        lo = (get_lane5(word80, 2 * i) >> 1) & 0xF
-        hi = (get_lane5(word80, 2 * i + 1) >> 1) & 0xF
+    for idx in range(8):
+        lo = (get_lane5(word80, 2 * idx) >> 1) & 0xF
+        hi = (get_lane5(word80, 2 * idx + 1) >> 1) & 0xF
         vals.append(to_signed((hi << 4) | lo, 8))
     return vals
 
 
 def decode_s4x8_from_40(word40: int) -> List[int]:
     vals: List[int] = []
-    for i in range(8):
-        lane = (word40 >> (5 * i)) & 0x1F
+    for idx in range(8):
+        lane = (word40 >> (5 * idx)) & 0x1F
         vals.append(to_signed((lane >> 1) & 0xF, 4))
     return vals
 
 
 def decode_s5x8_from_40(word40: int) -> List[int]:
-    return [to_signed((word40 >> (5 * i)) & 0x1F, 5) for i in range(8)]
+    return [to_signed((word40 >> (5 * idx)) & 0x1F, 5) for idx in range(8)]
 
 
 def decode_s5x16_from_80(word80: int) -> List[int]:
-    return [to_signed((word80 >> (5 * i)) & 0x1F, 5) for i in range(16)]
+    return [to_signed((word80 >> (5 * idx)) & 0x1F, 5) for idx in range(16)]
 
 
 def _e1_shift(e1_pair_a: Sequence[int], e1_pair_b: Sequence[int]) -> Tuple[int, int]:
@@ -96,14 +96,13 @@ def compute_transaction(
         sum1 = sum(x * y for x, y in zip(a, b1))
         return MacResult(to_signed(sum0, 19), to_signed(sum1, 16))
 
-    # MODE_2C
     a = decode_s5x16_from_80(a80)
     b0 = decode_s5x16_from_80(b80)
     b1 = decode_s5x16_from_80(b1_80)
-    lo0 = sum(a[i] * b0[i] for i in range(8))
-    hi0 = sum(a[i] * b0[i] for i in range(8, 16))
-    lo1 = sum(a[i] * b1[i] for i in range(8))
-    hi1 = sum(a[i] * b1[i] for i in range(8, 16))
+    lo0 = sum(a[idx] * b0[idx] for idx in range(8))
+    hi0 = sum(a[idx] * b0[idx] for idx in range(8, 16))
+    lo1 = sum(a[idx] * b1[idx] for idx in range(8))
+    hi1 = sum(a[idx] * b1[idx] for idx in range(8, 16))
 
     sh0_lo, sh0_hi = _e1_shift(e1_a, e1_b0)
     sh1_lo, sh1_hi = _e1_shift(e1_a, e1_b1)
@@ -116,12 +115,12 @@ def pack_s8x8_to_laneword(values: Sequence[int]) -> int:
     if len(values) != 8:
         raise ValueError("need 8 S8 values")
     word = 0
-    for i, val in enumerate(values):
+    for idx, val in enumerate(values):
         raw = val & 0xFF
         lane_lo = (raw & 0xF) << 1
         lane_hi = ((raw >> 4) & 0xF) << 1
-        word |= lane_lo << (5 * (2 * i))
-        word |= lane_hi << (5 * (2 * i + 1))
+        word |= lane_lo << (5 * (2 * idx))
+        word |= lane_hi << (5 * (2 * idx + 1))
     return word
 
 
@@ -129,9 +128,9 @@ def pack_s4x8_to_40(values: Sequence[int]) -> int:
     if len(values) != 8:
         raise ValueError("need 8 S4 values")
     word = 0
-    for i, val in enumerate(values):
+    for idx, val in enumerate(values):
         lane = ((val & 0xF) << 1) & 0x1F
-        word |= lane << (5 * i)
+        word |= lane << (5 * idx)
     return word
 
 
@@ -139,8 +138,8 @@ def pack_s5x8_to_40(values: Sequence[int]) -> int:
     if len(values) != 8:
         raise ValueError("need 8 S5 values")
     word = 0
-    for i, val in enumerate(values):
-        word |= (val & 0x1F) << (5 * i)
+    for idx, val in enumerate(values):
+        word |= (val & 0x1F) << (5 * idx)
     return word
 
 
@@ -148,6 +147,6 @@ def pack_s5x16_to_80(values: Sequence[int]) -> int:
     if len(values) != 16:
         raise ValueError("need 16 S5 values")
     word = 0
-    for i, val in enumerate(values):
-        word |= (val & 0x1F) << (5 * i)
+    for idx, val in enumerate(values):
+        word |= (val & 0x1F) << (5 * idx)
     return word

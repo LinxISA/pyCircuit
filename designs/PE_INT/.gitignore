@@ -1,5 +1,8 @@
 # Tool-generated outputs
 build/
+!rtl/build/
+!rtl/build/*.v
+local_issues/
 obj_dir/
 sim/logs/
 sim/waves/

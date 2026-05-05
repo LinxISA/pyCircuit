@@ -16,24 +16,24 @@ module tc_mode2a_sanity;
     wire signed [15:0] out1;
     wire        vld_out;
 
-    integer got;
     integer err;
     integer i;
-    integer vec_idx;
-
-    localparam integer N_CASE_2A = 1000;
-    localparam integer N_TX_2A = 2000;
-    localparam integer N_EXP_2A = 2000;
+    integer exp_count;
+    integer n_case_2a;
+    integer n_tx_2a;
+    localparam integer MAX_CASE_2A = 1000;
+    localparam integer MAX_TX_2A = 2000;
     string gen_dir;
-    reg [79:0] pre_a [0:N_CASE_2A-1];
-    reg [79:0] pre_b [0:N_CASE_2A-1];
-    reg [79:0] a2a [0:N_CASE_2A-1];
-    reg [79:0] b2a [0:N_CASE_2A-1];
-    reg [15:0] exp_pre_o1 [0:N_CASE_2A-1];
-    reg [18:0] exp_2a_o0 [0:N_CASE_2A-1];
+    reg [79:0] pre_a [0:MAX_CASE_2A-1];
+    reg [79:0] pre_b [0:MAX_CASE_2A-1];
+    reg [79:0] a2a [0:MAX_CASE_2A-1];
+    reg [79:0] b2a [0:MAX_CASE_2A-1];
+    reg [18:0] exp_o0 [0:MAX_TX_2A-1];
+    reg [15:0] exp_o1 [0:MAX_TX_2A-1];
 
     localparam [1:0] MODE_2A = 2'b00;
     localparam [1:0] MODE_2B = 2'b01;
+    localparam string CASE_NAME = "2a";
 
     pe_int_l3 dut (
         .clk(clk), .rst_n(rst_n), .vld(vld), .mode(mode), .a(a), .b(b), .b1(b1),
@@ -41,43 +41,29 @@ module tc_mode2a_sanity;
     );
 
     `include "common_wave_dump.vh"
+    `include "common_exact_latency_scoreboard.vh"
 
     always #5 clk = ~clk;
 
     always @(posedge clk) begin
-        if (rst_n && vld_out) begin
-            got <= got + 1;
-            if (got >= N_EXP_2A) begin
-                $display("[ERR][2a] unexpected extra output out0=%0d out1=%0d", $signed(out0), $signed(out1));
-                err <= err + 1;
-            end else begin
-                vec_idx = got >> 1;
-                if ((got & 1) == 0) begin
-                    if (out1 !== exp_pre_o1[vec_idx]) begin
-                        $display("[ERR][2a] idx=%0d preload out1 mismatch got=%0d exp=%0d",
-                            vec_idx, $signed(out1), $signed(exp_pre_o1[vec_idx]));
-                        err <= err + 1;
-                    end
-                end else begin
-                    if (out0 !== exp_2a_o0[vec_idx]) begin
-                        $display("[ERR][2a] idx=%0d out0 mismatch got=%0d exp=%0d",
-                            vec_idx, $signed(out0), $signed(exp_2a_o0[vec_idx]));
-                        err <= err + 1;
-                    end
-                    if (out1 !== exp_pre_o1[vec_idx]) begin
-                        $display("[ERR][2a] idx=%0d out1 hold mismatch got=%0d exp=%0d",
-                            vec_idx, $signed(out1), $signed(exp_pre_o1[vec_idx]));
-                        err <= err + 1;
-                    end
-                end
-            end
+        if (!rst_n) begin
+            sb_reset();
+        end else begin
+            sb_tick();
         end
     end
 
     initial begin
         clk = 0; rst_n = 0; vld = 0; mode = 0;
         a = 0; b = 0; b1 = 0; e1_a = 0; e1_b0 = 0; e1_b1 = 0;
-        got = 0; err = 0;
+        n_case_2a = MAX_CASE_2A;
+        if ($value$plusargs("N_CASE_2A=%d", n_case_2a)) begin
+            if (n_case_2a < 1 || n_case_2a > MAX_CASE_2A) begin
+                $fatal(1, "[FAIL] invalid N_CASE_2A=%0d, valid range is 1..%0d", n_case_2a, MAX_CASE_2A);
+            end
+        end
+        n_tx_2a = n_case_2a * 2;
+        err = 0; exp_count = n_tx_2a; sb_reset();
 
         if (!$value$plusargs("GEN_DIR=%s", gen_dir)) begin
             gen_dir = "tb_rtl/case/generated";
@@ -86,28 +72,27 @@ module tc_mode2a_sanity;
         $readmemh({gen_dir, "/tc_mode2a_sanity_pre_b.mem"}, pre_b);
         $readmemh({gen_dir, "/tc_mode2a_sanity_a2a.mem"}, a2a);
         $readmemh({gen_dir, "/tc_mode2a_sanity_b2a.mem"}, b2a);
-        $readmemh({gen_dir, "/tc_mode2a_sanity_exp_pre_o1.mem"}, exp_pre_o1);
-        $readmemh({gen_dir, "/tc_mode2a_sanity_exp_2a_o0.mem"}, exp_2a_o0);
+        $readmemh({gen_dir, "/tc_mode2a_sanity_exp_o0.mem"}, exp_o0);
+        $readmemh({gen_dir, "/tc_mode2a_sanity_exp_o1.mem"}, exp_o1);
 
         repeat (3) @(posedge clk);
         rst_n = 1;
         repeat (3) @(posedge clk);
 
-        for (i = 0; i < N_CASE_2A; i = i + 1) begin
+        for (i = 0; i < n_case_2a; i = i + 1) begin
             @(negedge clk);
             vld = 1; mode = MODE_2B; a = pre_a[i]; b = pre_b[i]; b1 = 0;
+            e1_a = 0; e1_b0 = 0; e1_b1 = 0;
             @(negedge clk);
             vld = 1; mode = MODE_2A; a = a2a[i]; b = b2a[i]; b1 = 0;
+            e1_a = 0; e1_b0 = 0; e1_b1 = 0;
         end
+
         @(negedge clk);
-        vld = 0; mode = 0; a = 0; b = 0; b1 = 0;
+        vld = 0; mode = 0; a = 0; b = 0; b1 = 0; e1_a = 0; e1_b0 = 0; e1_b1 = 0;
 
         repeat (12) @(posedge clk);
-
-        if (got !== N_EXP_2A) begin
-            $display("[ERR][2a] expected %0d outputs, got %0d", N_EXP_2A, got);
-            err = err + 1;
-        end
+        sb_final_check();
 
         if (err == 0) begin
             $display("[PASS] tc_mode2a_sanity");

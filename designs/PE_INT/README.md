@@ -4,7 +4,7 @@ Fixed-point / integer vector MAC unit.
 
 Implementation flow:
 
-`docs/spec.md` -> `python/pe_int_pycircuit.py` -> `pycircuit.cli build` -> `rtl/` + `tb/`
+`docs/spec.md` -> `python/pe_int_pycircuit.py` -> `pycircuit.cli build` -> `rtl/build/` + `tb/`
 
 ## Baseline
 
@@ -19,12 +19,12 @@ Implementation flow:
 - `tb/`: PyCircuit testbench flow (not RTL simulator flow)
 - `tb_rtl/`: dedicated RTL test environment (Verilog testbench + cases)
 - `sim/`: one-command simulation entrypoints (iverilog / verilator + wave options)
-- `rtl/`: generated RTL deliverables only
+- `rtl/build/`: generated RTL deliverables only
 
 ## Key Files
 
 - `model/ref_model.py`: reference math and pack/unpack model for all four modes
-- `model/pe_int_pycircuit_eval.py`: cycle-accurate pipeline golden model (`L=3`)
+- `model/pe_int_pycircuit_eval.py`: cycle-accurate pipeline golden model (`L=4`)
 - `model/test_pe_int.py`: model-level random regressions
 - `model/gen_rtl_case_vectors.py`: regenerates expected vectors for `tb_rtl/case`
 - `python/pe_int_pycircuit.py`: PyCircuit frontend top entry (RTL source of truth)
@@ -51,6 +51,10 @@ python model/test_pe_int.py
 python python/build.py --target both --out-dir build/pe_int
 ```
 
+After each build, sync deliverable RTL artifacts from the build output tree into
+`rtl/build/`, then refresh `filelist/pe_int.f` so simulation always resolves the
+latest deliverable set.
+
 3) Run dedicated RTL regressions (WSL):
 
 ```bash
@@ -65,6 +69,7 @@ bash sim/run_sim.sh
 
 ## Process Constraints
 
-- Do not handwrite `rtl/*.v`.
+- Do not handwrite `rtl/build/*.v`.
+- After each build, sync deliverable artifacts into `rtl/build/` and refresh `filelist/pe_int.f`.
 - `vld_out` must align with `out0`/`out1`; under mode `2a`, `out1` uses hold policy to avoid unnecessary toggles.
 - On a new machine without existing profiles, bootstrap the environment from `LinxISA/pyCircuit` first.

@@ -1,17 +1,9 @@
 from __future__ import annotations
 
-from pycircuit import wire_of
+from pycircuit import mux, wire_of
 
 from .decode import decode_s4_from_40, decode_s4_hi_from_80, decode_s5, decode_s5_hi_from_80, decode_s8_from_lane_word
-from .lane_mac import booth_mul_signed, dot8_reduce, dot16_split8_reduce, select_one_hot4, sum_shift_pair
-
-
-def _mode_one_hot(mode):
-    is_2a = mode == 0
-    is_2b = mode == 1
-    is_2c = mode == 2
-    is_2d = mode == 3
-    return is_2a, is_2b, is_2c, is_2d
+from .lane_mac import booth_mul_signed, dot8_reduce, dot16_split8_reduce, sum_shift_pair
 
 
 def comb1_generate_products(a, b, b1):
@@ -95,34 +87,28 @@ def comb2_reduce_products(products):
     }
 
 
-def comb3_mode_merge(reduced, mode, e1_a, e1_b0, e1_b1):
+def comb3_mode_merge(reduced, e1_a, e1_b0, e1_b1, *, is_2a, is_2b, is_2c, is_2d):
     """
     DS §5.7:
     - 2c post-scale x1/x2/x4
     - one-hot mode merge for out0_raw/out1_raw
     """
-    is_2a, is_2b, is_2c, is_2d = _mode_one_hot(mode)
     s2c0 = sum_shift_pair(reduced["s2c0_lo"], reduced["s2c0_hi"], e1_a, e1_b0)
     s2c1 = sum_shift_pair(reduced["s2c1_lo"], reduced["s2c1_hi"], e1_a, e1_b1)
 
-    out0_raw = select_one_hot4(
-        is_2a,
-        is_2b,
-        is_2c,
-        is_2d,
-        reduced["s2a"],
-        reduced["s2b0"],
-        s2c0,
-        reduced["s2d0"],
-    )
-    out1_raw = select_one_hot4(
-        is_2a,
-        is_2b,
-        is_2c,
-        is_2d,
-        reduced["s2a"] * 0,
-        reduced["s2b1"],
-        s2c1,
-        reduced["s2d1"],
-    )
+    # DS hard rule: comb3 mode merge uses registered one-hot directly; no mode==const compare here.
+    # Keep comb3 as raw-wire combinational logic so cycle-aware balancing does not add flops here.
+    is_2a_w = wire_of(is_2a)
+    is_2b_w = wire_of(is_2b)
+    is_2c_w = wire_of(is_2c)
+    s2a_w = wire_of(reduced["s2a"])
+    s2b0_w = wire_of(reduced["s2b0"])
+    s2b1_w = wire_of(reduced["s2b1"])
+    s2d0_w = wire_of(reduced["s2d0"])
+    s2d1_w = wire_of(reduced["s2d1"])
+
+    out0_raw = mux(is_2a_w, s2a_w, mux(is_2b_w, s2b0_w, mux(is_2c_w, s2c0, s2d0_w)))
+    # 2a does not commit out1; use a real datapath branch instead of `* 0`
+    # so pyCircuit does not insert multiplier balance registers in comb3.
+    out1_raw = mux(is_2a_w, s2b1_w, mux(is_2b_w, s2b1_w, mux(is_2c_w, s2c1, s2d1_w)))
     return out0_raw, out1_raw

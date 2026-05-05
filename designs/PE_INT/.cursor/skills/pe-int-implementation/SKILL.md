@@ -44,6 +44,9 @@ Use `pass/fail` wording in reports.
 - Keep fixed latency `L` across all modes.
 - Keep internal pipeline stage count identical across all modes.
 - Use full pipeline datapath; no independent FIFOs for reordering.
+- Latency must be measured by **actual register count on real paths** (control and data),
+  not by stage naming conventions.
+- Always verify `vld_out` path and `out0/out1` paths separately, then check alignment.
 
 ## Power and Area Priority
 

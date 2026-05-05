@@ -2,7 +2,7 @@
 
 This document defines the functional and timing contract for the PE_INT fixed-point / integer vector MAC unit.
 
-**Spec baseline: v2.0.5 (frozen baseline).**
+**Spec baseline: v2.0.6 (frozen baseline).**
 
 ---
 
@@ -167,6 +167,8 @@ Narrower mode results must be sign-extended to unified top-level width.
 
 - One sampled `vld=1` transaction maps to one `vld_out=1` transaction.
 - `vld -> vld_out` latency is fixed as `L` cycles.
+- Fixed project contract: `L = 4`.
+- 0-based latency convention: if input transaction is sampled at `t0`, the corresponding committed output valid appears at `t0+L` (for this project, `t0+4`).
 - `L` must be identical for modes 2a/2b/2c/2d.
 - Under sustained valid traffic after pipeline fill, no output bubbles are allowed.
 
@@ -176,6 +178,7 @@ Narrower mode results must be sign-extended to unified top-level width.
 
 | Version | Date | Notes |
 |---------|------|-------|
+| `2.0.6` | 2026-04-29 | Updated fixed latency contract to `L=4` and aligned verification baseline. |
 | `2.0.5` | 2026-04-17 | Added `vld_out` bundle requirement and mode-2a `out1` stability rule. |
 | `2.0.4` | 2026-04-17 | Added `vld` contract and reset/clock-domain clarification. |
 | `2.0.3` | 2026-04-17 | Enforced registered outputs and input-to-first-register depth cap. |
