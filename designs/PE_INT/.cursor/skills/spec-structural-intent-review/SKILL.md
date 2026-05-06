@@ -26,6 +26,9 @@ Passing functional tests is not enough when the spec requires a particular struc
 4. For latency, count actual registers on the real signal path.
 5. For arithmetic, verify the requested topology is present, not just functionally equivalent.
 6. For width contracts, verify each operation's input/output width has no arbitrary margin and no overflow in covered scenarios.
+7. Review generated RTL warnings for unused signals/bits/ports. Do not ignore
+   them only because simulation passes; unused logic increases later dead-code
+   cleanup cost and can hide source-structure mistakes.
 
 ## When To Warn
 
@@ -36,6 +39,8 @@ Warn the user when:
 - Multiple comb blocks are merged without checking logic depth.
 - A generated design adds hidden balancing registers that change effective latency.
 - A datapath expression relies on implicit or private width behavior.
+- Generated RTL exposes unused signals, unused high bits, or unused clock/reset
+  ports on combinational submodules.
 
 ## Required Evidence
 

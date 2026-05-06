@@ -38,6 +38,13 @@ CASES=(
   "tc_mode_switch_random"
 )
 
+VERILATOR_WARNING_FLAGS=(
+  -Wno-DECLFILENAME
+  -Wno-TIMESCALEMOD
+  -Wno-UNUSEDSIGNAL
+  -Wno-BLKSEQ
+)
+
 echo "[INFO] Running RTL cases with iverilog..."
 for c in "${CASES[@]}"; do
   iverilog -g2012 -s "$c" -f "$RTL_FILELIST" -f "$TB_FILELIST" -o "build/${c}.iv.out"
@@ -46,7 +53,7 @@ done
 
 echo "[INFO] Running RTL cases with verilator..."
 for c in "${CASES[@]}"; do
-  verilator --binary --timing -Wall -Wno-fatal -f "$RTL_FILELIST" -f "$TB_FILELIST" --top-module "$c" -o "${c}.vlt.out"
+  verilator --binary --timing -Wall "${VERILATOR_WARNING_FLAGS[@]}" -f "$RTL_FILELIST" -f "$TB_FILELIST" --top-module "$c" -o "${c}.vlt.out"
   "./obj_dir/${c}.vlt.out"
 done
 

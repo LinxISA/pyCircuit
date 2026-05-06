@@ -8,7 +8,7 @@ from pathlib import Path
 MODEL_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(MODEL_DIR))
 
-from pe_int_pycircuit_eval import DEFAULT_PIPELINE_L, PEIntL3Model
+from pe_int_pycircuit_eval import DEFAULT_PIPELINE_L, PEIntModel
 from ref_model import (
     MODE_2A,
     MODE_2B,
@@ -85,7 +85,7 @@ class TestPEIntModel(unittest.TestCase):
                 self.assertLessEqual(got.out1_16, (1 << 15) - 1)
 
     def test_pipeline_alignment_and_mode_switch(self) -> None:
-        dut = PEIntL3Model()
+        dut = PEIntModel()
         expected: list[tuple[int, int, int, int]] = []  # cycle, mode, out0, out1
         out_hits = 0
 
@@ -143,7 +143,7 @@ class TestPEIntModel(unittest.TestCase):
         self.assertGreater(out_hits, 0)
 
     def test_mode2a_out1_no_toggle(self) -> None:
-        dut = PEIntL3Model()
+        dut = PEIntModel()
 
         # First, drive one non-2a sample to set out1 base.
         a, b, b1, e1a, e1b0, e1b1 = _make_txn(MODE_2B)
@@ -159,7 +159,7 @@ class TestPEIntModel(unittest.TestCase):
             self.assertEqual(dut.out1, base_out1)
 
     def test_async_reset_clears_pipeline(self) -> None:
-        dut = PEIntL3Model()
+        dut = PEIntModel()
         # inject a valid sample
         a, b, b1, e1a, e1b0, e1b1 = _make_txn(MODE_2D)
         dut.step(rst_n=1, vld=1, mode=MODE_2D, a=a, b=b, b1=b1, e1_a=e1a, e1_b0=e1b0, e1_b1=e1b1)

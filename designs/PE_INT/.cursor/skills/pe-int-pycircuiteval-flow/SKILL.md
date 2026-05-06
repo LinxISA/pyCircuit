@@ -71,6 +71,10 @@ Extract executable checks from `docs/spec.md`:
 3. Keep submodule core logic around 200 lines or less when practical.
 4. Keep top-level focused on stage connection/alignment.
 5. Keep control-path and datapath depth-aligned.
+6. Pure combinational submodules should not expose or propagate `clk`/`rst`.
+   Only stateful submodules should carry clock/reset ports; if a PyCircuit API
+   forces clock/reset on a combinational hierarchy boundary, document it as a
+   framework limitation and avoid adding internal logic that depends on them.
 
 ### Step B.2: Mandatory Stage Contract
 

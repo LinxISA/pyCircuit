@@ -36,13 +36,13 @@ Do this before implementation:
 
 Decision policy:
 - `<= 25`: within target, no action needed.
-- `26 ~ 30`: acceptable as guideline overflow; must warn user and suggest optional repartition.
+- `26..30`: acceptable as guideline overflow; must warn user and suggest optional repartition.
 - `> 30`: strong risk; propose repartition or structural optimization and request user decision.
 
 ## 6) Definition of Done (DoD)
 - [ ] Latency convention is explicitly documented.
 - [ ] Functional spec and design spec latency semantics are consistent.
 - [ ] Real RTL path register-count evidence is provided.
-- [ ] Stage logic depth check is recorded (including warning if 26~30).
+- [ ] Stage logic depth check is recorded (including warning if 26..30).
 - [ ] Regression/simulation passes.
 - [ ] No transaction reorder under continuous valid traffic.

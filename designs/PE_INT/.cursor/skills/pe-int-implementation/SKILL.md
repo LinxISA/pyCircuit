@@ -64,6 +64,10 @@ If area and dynamic power conflict, prioritize dynamic power.
 3. Keep each submodule core logic around 200 lines or less when possible.
 4. Keep top-level focused on stage orchestration and alignment.
 5. Control and datapath must advance at matching stage depth.
+6. Pure combinational submodules should not have `clk`/`rst` ports. If a
+   PyCircuit hierarchy API forces these ports on a combinational submodule,
+   treat that as a framework limitation to report, not as a normal coding
+   pattern to copy.
 
 ## Mandatory Stage Coding Contract
 

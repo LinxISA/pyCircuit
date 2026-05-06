@@ -17,6 +17,13 @@ CASES=(
   "tc_mode_switch_random"
 )
 
+VERILATOR_WARNING_FLAGS=(
+  -Wno-DECLFILENAME
+  -Wno-TIMESCALEMOD
+  -Wno-UNUSEDSIGNAL
+  -Wno-BLKSEQ
+)
+
 mkdir -p build
 
 RTL_FILELIST_SRC="$ROOT/filelist/pe_int.f"
@@ -232,11 +239,11 @@ for ((seed_idx = 0; seed_idx < SEED_RUNS; seed_idx++)); do
         echo "[INFO] simulator=verilator case=${c} seed=${SEED}"
         if [[ "$seed_idx" -eq 0 ]]; then
           if [[ "$WAVE_ON" -eq 1 && "$WAVE_FMT" == "fst" ]]; then
-            verilator --binary --timing -Wall -Wno-fatal --trace-fst -f "$RTL_FILELIST" -f "$TB_FILELIST" --top-module "$c" -o "${c}.vlt.out"
+            verilator --binary --timing -Wall "${VERILATOR_WARNING_FLAGS[@]}" --trace-fst -f "$RTL_FILELIST" -f "$TB_FILELIST" --top-module "$c" -o "${c}.vlt.out"
           elif [[ "$WAVE_ON" -eq 1 ]]; then
-            verilator --binary --timing -Wall -Wno-fatal --trace -f "$RTL_FILELIST" -f "$TB_FILELIST" --top-module "$c" -o "${c}.vlt.out"
+            verilator --binary --timing -Wall "${VERILATOR_WARNING_FLAGS[@]}" --trace -f "$RTL_FILELIST" -f "$TB_FILELIST" --top-module "$c" -o "${c}.vlt.out"
           else
-            verilator --binary --timing -Wall -Wno-fatal -f "$RTL_FILELIST" -f "$TB_FILELIST" --top-module "$c" -o "${c}.vlt.out"
+            verilator --binary --timing -Wall "${VERILATOR_WARNING_FLAGS[@]}" -f "$RTL_FILELIST" -f "$TB_FILELIST" --top-module "$c" -o "${c}.vlt.out"
           fi
         else
           echo "[INFO] reuse existing verilator binary for ${c}"

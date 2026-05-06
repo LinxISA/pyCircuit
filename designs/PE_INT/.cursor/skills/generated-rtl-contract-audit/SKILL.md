@@ -21,6 +21,8 @@ Do not treat source-level tests or model regressions as sufficient proof that de
 6. Confirm stale generated modules/files are removed or excluded.
 7. Confirm submodules instantiated by the top are present in the filelist.
 8. Confirm generated RTL has no unexpected compatibility wrapper unless explicitly required.
+9. Check simulator/lint warnings for unused signals, unused bits, and unused
+   ports. Treat `UNUSEDSIGNAL` as a review item even when functionality passes.
 
 ## Required Evidence
 
@@ -29,6 +31,8 @@ When closing the task, report:
 - Which generated files were audited.
 - The key contract points checked.
 - The command or search used to prove there are no stale names/files.
+- Any unused-signal warnings found, why they exist, and whether source changes
+  can remove them instead of suppressing them.
 - Regression status after the audit.
 
 ## Common Failure Patterns
@@ -38,3 +42,5 @@ When closing the task, report:
 - Top module name is patched but submodule or primitive names are not.
 - Source module names are correct but deliverable filenames violate repo convention.
 - Old build directories leak stale modules into synced RTL.
+- Generated RTL contains unused ports/signals/bits that come from stale
+  intermediates, over-wide expressions, or copied submodule interfaces.

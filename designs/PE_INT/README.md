@@ -22,7 +22,7 @@
 ## 主要檔案
 
 - `model/ref_model.py`: 四模式數學與打包/解包參考模型
-- `model/pe_int_pycircuit_eval.py`: cycle-accurate golden pipeline model（L=3）
+- `model/pe_int_pycircuit_eval.py`: cycle-accurate golden pipeline model（L=4）
 - `model/test_pe_int.py`: 模型層隨機回歸（功能與時序對齊）
 - `model/gen_rtl_case_vectors.py`: 自動重生 `tb_rtl/case` 的 expected 向量
 - `python/pe_int_pycircuit.py`: pyCircuit frontend 設計入口（source of RTL）
