@@ -1,0 +1,18 @@
+---
+description: Require user confirmation before editing files outside designs/PE_INT
+alwaysApply: true
+---
+
+# PE_INT Scope Boundary
+
+When working on PE_INT tasks, do not modify files outside `designs/PE_INT/`
+unless the user explicitly confirms that cross-tree change first.
+
+If a PE_INT issue appears to require PyCircuit framework changes, stop and ask
+the user whether to:
+
+- file or update a framework issue,
+- make a framework patch in the same branch, or
+- keep the change documented as a known limitation.
+
+This rule does not block read-only inspection outside `designs/PE_INT/`.

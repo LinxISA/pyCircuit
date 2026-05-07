@@ -145,8 +145,8 @@ def build(
 
     # reg3/output commit: vld_out/out0/out1 from the same commit boundary.
     out1 = domain.state(width=OUT1_W, reset_value=0, name="pe_int_out1")
-    out1_commit = wire_of(s2_vld)._select_internal(
-        wire_of(s2_is_2a)._select_internal(wire_of(out1), wire_of(c3_out1)),
+    out1_commit = wire_of(s2_vld).select(
+        wire_of(s2_is_2a).select(wire_of(out1), wire_of(c3_out1)),
         wire_of(out1),
     )
     out1.set(out1_commit)

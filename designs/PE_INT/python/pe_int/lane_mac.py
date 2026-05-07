@@ -208,9 +208,9 @@ def shift_scale_x1_x2_x4(value, shift2b):
     DS §3.3: use 2-level muxed shift (x1/x2/x4), avoid barrel shifter.
     """
     value_w = wire_of(value)
-    return wire_of(shift2b == 0)._select_internal(
+    return wire_of(shift2b == 0).select(
         value_w,
-        wire_of(shift2b == 1)._select_internal(value_w << 1, value_w << 2),
+        wire_of(shift2b == 1).select(value_w << 1, value_w << 2),
     )
 
 
@@ -219,9 +219,9 @@ def select_one_hot4(sel0, sel1, sel2, cand0, cand1, cand2, cand3):
     One-hot mode selection. Use muxes instead of boolean-masked
     multiplication so PyCircuit does not insert balancing registers in comb3.
     """
-    lo_pair = wire_of(sel0)._select_internal(wire_of(cand0), wire_of(cand1))
-    hi_pair = wire_of(sel2)._select_internal(wire_of(cand2), wire_of(cand3))
-    return wire_of(sel0 | sel1)._select_internal(lo_pair, hi_pair)
+    lo_pair = wire_of(sel0).select(wire_of(cand0), wire_of(cand1))
+    hi_pair = wire_of(sel2).select(wire_of(cand2), wire_of(cand3))
+    return wire_of(sel0 | sel1).select(lo_pair, hi_pair)
 
 
 def sum_shift_pair(lo, hi, e1_a, e1_b, *, width: int = REDUCE_W):

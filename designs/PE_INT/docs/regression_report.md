@@ -2,7 +2,11 @@
 
 Date: 2026-05-07
 
-Git HEAD at run start: `1372963`
+Git HEAD at run start: `c88b634`
+
+Working tree at run time included the public API cleanup for PE_INT
+(`sext`/`zext`/`select`), the project-level `codereviewer` model configuration,
+and the PE_INT scope-boundary rule.
 
 Scope:
 
