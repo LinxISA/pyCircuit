@@ -54,6 +54,17 @@ class CycleAwareCircuit(Circuit):
             return self._v5_design.emit_mlir()
         return super().emit_mlir()
 
+    @property
+    def hierarchical_design(self) -> Any | None:
+        """Compiled hierarchical :class:`Design`, or ``None`` for flat circuits.
+
+        This exposes the design object produced by
+        ``compile_cycle_aware(..., eager=True, hierarchical=True)`` without
+        requiring downstream build integrations to depend on the private
+        ``_v5_design`` implementation field.
+        """
+        return self._v5_design
+
     def create_domain(
         self, name: str, *, frequency_desc: str = "", reset_active_high: bool = False
     ) -> "CycleAwareDomain":
