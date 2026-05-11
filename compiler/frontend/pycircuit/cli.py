@@ -1440,6 +1440,10 @@ def _collect_testbench_payload(
     )
 
 
+def _has_testbench_entrypoint(mod: object) -> bool:
+    return hasattr(mod, "tb") and callable(getattr(mod, "tb"))
+
+
 def _emit_testbench_pyc_file(
     *,
     out_dir: Path,
@@ -1751,6 +1755,15 @@ def _cmd_build(args: argparse.Namespace) -> int:
         )
         sys.stdout.write("jit-cache: miss\n")
 
+    target = str(args.target)
+    do_cpp = target in {"cpp", "both"}
+    do_v = target in {"verilator", "both"}
+    has_tb = _has_testbench_entrypoint(mod)
+    if not has_tb and do_v:
+        raise SystemExit(
+            "DUT-only build without @testbench currently supports --target cpp only; "
+            "Verilator/SV simulation requires `@testbench def tb(t: Tb): ...`"
+        )
     pycc = _detect_pycc()
     jobs = max(1, int(args.jobs))
     if int(args.logic_depth) <= 0:
@@ -1761,10 +1774,6 @@ def _cmd_build(args: argparse.Namespace) -> int:
     device_v_root = out_dir / "device" / "verilog"
     device_cpp_root.mkdir(parents=True, exist_ok=True)
     device_v_root.mkdir(parents=True, exist_ok=True)
-
-    target = str(args.target)
-    do_cpp = target in {"cpp", "both"}
-    do_v = target in {"verilator", "both"}
     pycc_build_profile = "dev-fast" if str(args.profile) == "dev" else "release"
     pycc_hard_hierarchy_flags = [
         f"--build-profile={pycc_build_profile}",
@@ -1846,24 +1855,29 @@ def _cmd_build(args: argparse.Namespace) -> int:
             except TraceConfigError as e:
                 raise SystemExit(f"trace config error: {e}") from e
 
-    tb_probes = TbProbes.from_probe_manifest(probe_manifest_obj)
-    tb_name, tb_payload_json = _collect_testbench_payload(
-        mod, iface, trace_plan=trace_plan, tb_probes=tb_probes
-    )
-    tb_pyc_path = _emit_testbench_pyc_file(
-        out_dir=out_dir, tb_name=tb_name, payload_json=tb_payload_json
-    )
-    manifest["testbench"] = {
-        "name": tb_name,
-        "pyc": str(tb_pyc_path.relative_to(out_dir)),
-    }
+    tb_name = ""
+    tb_pyc_path: Path | None = None
+    if has_tb:
+        tb_probes = TbProbes.from_probe_manifest(probe_manifest_obj)
+        tb_name, tb_payload_json = _collect_testbench_payload(
+            mod, iface, trace_plan=trace_plan, tb_probes=tb_probes
+        )
+        tb_pyc_path = _emit_testbench_pyc_file(
+            out_dir=out_dir, tb_name=tb_name, payload_json=tb_payload_json
+        )
+        manifest["testbench"] = {
+            "name": tb_name,
+            "pyc": str(tb_pyc_path.relative_to(out_dir)),
+        }
+    else:
+        manifest["testbench"] = None
     if trace_plan is not None:
         trace_path = out_dir / "trace_plan.json"
         _save_json(trace_path, trace_plan.as_dict())
         manifest["trace_plan"] = str(trace_path.relative_to(out_dir))
 
-    tb_cpp_out = out_dir / "tb" / f"{tb_name}.cpp"
-    tb_sv_out = out_dir / "tb" / f"{tb_name}.sv"
+    tb_cpp_out = out_dir / "tb" / f"{tb_name}.cpp" if has_tb else None
+    tb_sv_out = out_dir / "tb" / f"{tb_name}.sv" if has_tb else None
     for sym in sorted(module_paths.keys()):
         mp = module_paths[sym]
         h = _module_hash(mp)
@@ -1915,7 +1929,7 @@ def _cmd_build(args: argparse.Namespace) -> int:
                 )
             )
 
-    if do_cpp:
+    if do_cpp and has_tb and tb_pyc_path is not None and tb_cpp_out is not None:
         tb_key = f"tb:{tb_name}"
         tb_hash = _module_hash(tb_pyc_path)
         module_hashes[tb_key] = tb_hash
@@ -1933,7 +1947,7 @@ def _cmd_build(args: argparse.Namespace) -> int:
                     ],
                 )
             )
-    if do_v:
+    if do_v and has_tb and tb_pyc_path is not None and tb_sv_out is not None:
         tb_key = f"tb:{tb_name}"
         tb_hash = module_hashes.get(tb_key) or _module_hash(tb_pyc_path)
         module_hashes[tb_key] = tb_hash
@@ -1962,7 +1976,7 @@ def _cmd_build(args: argparse.Namespace) -> int:
         cpp_sources = _gather_cpp_sources(device_cpp_root)
         if not cpp_sources:
             raise SystemExit("build(cpp): no generated C++ sources found")
-        if not tb_cpp_out.is_file():
+        if has_tb and (tb_cpp_out is None or not tb_cpp_out.is_file()):
             raise SystemExit(
                 f"build(cpp): missing generated TB C++ source: {tb_cpp_out}"
             )
@@ -1979,7 +1993,7 @@ def _cmd_build(args: argparse.Namespace) -> int:
         build_manifest = {
             "version": 3,
             "target_name": iface.sym,
-            "tb_cpp": str(tb_cpp_out),
+            "tb_cpp": str(tb_cpp_out) if tb_cpp_out is not None else None,
             "sources": [str(p) for p in cpp_sources],
             "headers": [str(p) for p in cpp_headers],
             "include_dirs": include_dirs,
@@ -1989,6 +2003,15 @@ def _cmd_build(args: argparse.Namespace) -> int:
         }
         cpp_manifest = out_dir / "cpp_project_manifest.json"
         _save_json(cpp_manifest, build_manifest)
+        manifest["cpp_project_manifest"] = str(cpp_manifest.relative_to(out_dir))
+
+        if not has_tb:
+            manifest["cpp_sources"] = [str(p.relative_to(out_dir)) for p in cpp_sources]
+            manifest["cpp_headers"] = [str(p.relative_to(out_dir)) for p in cpp_headers]
+            manifest["cpp_executable"] = None
+            _save_json(manifest_path, manifest)
+            sys.stdout.write(f"{manifest_path}\n")
+            return 0
 
         gen_script = _tool_script("gen_cmake_from_manifest.py")
         cmake_src = out_dir / "cpp_build" / "src"
@@ -2042,7 +2065,7 @@ def _cmd_build(args: argparse.Namespace) -> int:
         manifest["cpp_executable"] = str(cmake_build / "pyc_tb")
 
     if do_v:
-        if not tb_sv_out.is_file():
+        if tb_sv_out is None or not tb_sv_out.is_file():
             raise SystemExit(
                 f"build(verilator): missing generated TB SV source: {tb_sv_out}"
             )

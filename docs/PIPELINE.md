@@ -13,7 +13,7 @@ Frontend responsibilities:
 - materialize `@module(value_params=...)` as runtime boundary input ports
 - emit one `.pyc` per specialized module
 - emit a deterministic `project_manifest.json`
-- emit a testbench `.pyc` payload from `@testbench`
+- emit a testbench `.pyc` payload from `@testbench` when present
 
 All emitted modules are stamped with:
 - `pyc.frontend.contract = "pycircuit"`
@@ -48,6 +48,15 @@ Build a project (multi-module + testbench):
 ```bash
 python3 -m pycircuit.cli build <tb_or_top.py> --out-dir <dir> --target cpp|verilator|both --jobs <N>
 ```
+
+Build a DUT only for an external C++ driver:
+
+```bash
+python3 -m pycircuit.cli build <top.py> --out-dir <dir> --target cpp --jobs <N>
+```
+
+In DUT-only mode the manifest has `"testbench": null`; C++ device sources and
+headers are still generated, but no generated pyCircuit TB executable is built.
 
 Simulation (Verilator):
 
