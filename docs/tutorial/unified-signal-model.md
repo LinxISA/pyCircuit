@@ -33,6 +33,24 @@ Key points:
 - `m.out(...)` creates a register with an explicit clock/reset and init value.
 - `.out()` reads the current value.
 - `.set(next, when=cond)` updates the register conditionally (otherwise it holds).
+- pyCircuit is still a hardware construction language: Python expressions build
+  wires, registers, memories, and module instances. A software-only mental model
+  is not enough for timing, reset, or area-sensitive designs.
+
+## Occurrence alignment in one page
+
+Cycle-aware APIs attach a logical occurrence to values so pipeline code can be
+written in stage order. Occurrence tags do not hide hardware:
+
+- `domain.next()` advances only the authoring occurrence counter.
+- Reading a state register Q at a later occurrence stays a Q read; that read
+  does not need a balance register.
+- Combining operands from different occurrences inserts real balance registers
+  on the earlier operand until both operands have the same occurrence.
+- Integer literals and raw wires used in a cycle-aware expression are treated as
+  values at the current occurrence.
+- Use `domain.next()` when the design has a real pipeline boundary; avoid using
+  it only as a separator before ordinary next-state register assignments.
 
 ## Structured IO (`spec`)
 
