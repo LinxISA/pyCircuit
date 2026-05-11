@@ -52,3 +52,29 @@ def test_cycle_aware_reverse_subtraction_compiles_through_jit() -> None:
     mlir = design.emit_mlir()
 
     assert "_v5_bal_" not in mlir
+
+
+def test_hierarchical_design_accessor_reports_hierarchical_design() -> None:
+    def child(m, domain, *, inputs=None, prefix: str = "child"):
+        value = pycircuit.submodule_input(
+            inputs, "value", m, domain, prefix=prefix, width=8
+        )
+        m.output(f"{prefix}_out", pycircuit.wire_of(value))
+        return {"out": value}
+
+    def build(m, domain):
+        value = pycircuit.cas(domain, m.input("value", width=8), cycle=0)
+        return domain.call(child, inputs={"value": value}, prefix="u_child")
+
+    circuit = pycircuit.compile_cycle_aware(
+        build, name="hier_accessor", eager=True, hierarchical=True
+    )
+
+    assert circuit.hierarchical_design is not None
+    assert circuit.hierarchical_design.top == "hier_accessor"
+
+
+def test_hierarchical_design_accessor_is_none_for_flat_circuit() -> None:
+    circuit = pycircuit.CycleAwareCircuit("flat")
+
+    assert circuit.hierarchical_design is None
