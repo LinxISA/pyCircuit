@@ -1441,7 +1441,9 @@ def _collect_testbench_payload(
 
 
 def _has_testbench_entrypoint(mod: object) -> bool:
-    return hasattr(mod, "tb") and callable(getattr(mod, "tb"))
+    if not hasattr(mod, "tb"):
+        return False
+    return callable(mod.tb)
 
 
 def _emit_testbench_pyc_file(

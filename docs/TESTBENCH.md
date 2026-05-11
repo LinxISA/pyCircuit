@@ -1,6 +1,7 @@
 # Testbench
 
 `@testbench` lets pyCircuit keep host/device simulation intent in the same frontend flow:
+
 - frontend emits a TB `.pyc` payload (JSON encoded in module attrs)
 - backend (`pycc`) lowers that payload to C++ or SystemVerilog testbench text
 
