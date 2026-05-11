@@ -160,6 +160,18 @@ static std::string getPortCanonicalFieldPath(func::FuncOp f, unsigned idx, bool 
   return "out" + std::to_string(idx);
 }
 
+static bool isActiveLowResetPort(func::FuncOp f, unsigned idx) {
+  if (idx >= f.getNumArguments())
+    return false;
+  if (!isa<pyc::ResetType>(f.getArgument(idx).getType()))
+    return false;
+  auto polarities = f->getAttrOfType<ArrayAttr>("pyc.reset_polarities");
+  if (!polarities || idx >= polarities.size())
+    return false;
+  auto polarity = dyn_cast<StringAttr>(polarities[idx]);
+  return polarity && polarity.getValue() == "active_low";
+}
+
 struct ProbeAliasEntry {
   std::string canonicalPath;
   std::string sourcePath;
@@ -634,12 +646,24 @@ static LogicalResult emitFunc(func::FuncOp f, llvm::raw_ostream &os, const CppEm
   outNames.reserve(f.getNumResults());
   std::vector<std::string> outCanon;
   outCanon.reserve(f.getNumResults());
+  struct ResetAlias {
+    std::string externalName;
+    std::string internalName;
+  };
+  std::vector<ResetAlias> resetAliases;
   for (auto [i, arg] : llvm::enumerate(f.getArguments())) {
     inCanon.push_back(getPortCanonicalFieldPath(f, i, /*isResult=*/false));
     std::string name = nt.unique(getPortName(f, i, /*isResult=*/false));
     inNames.push_back(name);
-    nt.names.try_emplace(arg, name);
     os << "  " << cppType(arg.getType()) << " " << name << "{};\n";
+    if (isActiveLowResetPort(f, static_cast<unsigned>(i))) {
+      std::string internalName = nt.unique(name + "__active_high");
+      resetAliases.push_back(ResetAlias{name, internalName});
+      nt.names.try_emplace(arg, internalName);
+      os << "  pyc::cpp::Wire<1> " << internalName << "{};\n";
+    } else {
+      nt.names.try_emplace(arg, name);
+    }
   }
   for (unsigned i = 0; i < f.getNumResults(); ++i) {
     outCanon.push_back(getPortCanonicalFieldPath(f, i, /*isResult=*/true));
@@ -1340,6 +1364,13 @@ static LogicalResult emitFunc(func::FuncOp f, llvm::raw_ostream &os, const CppEm
   os << "    eval();\n";
   os << "    #endif\n";
   os << "  }\n\n";
+
+  if (!resetAliases.empty()) {
+    os << "  inline void _pyc_sync_reset_polarity() {\n";
+    for (const ResetAlias &alias : resetAliases)
+      os << "    " << alias.internalName << " = ~" << alias.externalName << ";\n";
+    os << "  }\n\n";
+  }
 
   // Emit fused comb helpers.
   for (auto [i, comb] : llvm::enumerate(combs)) {
@@ -2293,6 +2324,8 @@ static LogicalResult emitFunc(func::FuncOp f, llvm::raw_ostream &os, const CppEm
   }
 
   os << "  void eval() {\n";
+  if (!resetAliases.empty())
+    os << "    _pyc_sync_reset_polarity();\n";
   if (hasFullTopo) {
     if (!topoEvalMethods.empty()) {
       for (const std::string &methodName : topoEvalMethods)
@@ -2368,6 +2401,8 @@ static LogicalResult emitFunc(func::FuncOp f, llvm::raw_ostream &os, const CppEm
   }
 
   os << "  void tick_compute() {\n";
+  if (!resetAliases.empty())
+    os << "    _pyc_sync_reset_polarity();\n";
   if (!instInfos.empty()) {
     os << "    // Sub-modules.\n";
     for (unsigned i = 0; i < subParts; ++i)

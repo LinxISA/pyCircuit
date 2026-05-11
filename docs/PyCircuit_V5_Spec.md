@@ -105,7 +105,7 @@ m = CycleAwareCircuit("my_circuit")
 
 | 方法 | 说明 |
 |------|------|
-| `create_domain(name, *, frequency_desc="", reset_active_high=False)` | 创建 `CycleAwareDomain` |
+| `create_domain(name, *, frequency_desc="", reset_name=None, reset_polarity="active_high")` | 创建 `CycleAwareDomain`，可配置顶层 reset 端口名和极性 |
 | `input(name, width)` | 创建输入端口（返回 `Wire`——需用 `cas()` 或 `submodule_input()` 包装） |
 | `output(name, wire)` | 注册模块输出（传入 `wire_of(signal)`） |
 | `const(value, width)` | 创建常量 `Wire`（用 `cas()` 包装后参与表达式） |
@@ -117,6 +117,8 @@ m = CycleAwareCircuit("my_circuit")
 
 ```python
 domain = m.create_domain("clk")
+# Existing RTL interface style:
+domain = m.create_domain("clk", reset_name="rst_n", reset_polarity="active_low")
 ```
 
 | 方法 | 说明 |
@@ -1137,9 +1139,26 @@ ir.emit_mlir()   # 输出包含所有子模块
 | `fn` | `def fn(m: CycleAwareCircuit, domain: CycleAwareDomain, ...) -> dict` |
 | `name` | 模块/电路名称（可选） |
 | `domain_name` | 时钟域名称（默认 `"clk"`） |
+| `reset_name` | 顶层 reset 端口名（默认 `"rst"`，或非默认 domain 的 `"<domain>_rst"`） |
+| `reset_polarity` | 顶层 reset 端口极性：`"active_high"`（默认）或 `"active_low"` |
 | `eager` | `True` 时直接执行 Python 函数体（不经 JIT） |
 | `hierarchical` | `True` 时保留 `domain.call()` 边界为独立 MLIR 模块（需 `eager=True`） |
 | `**jit_params` | 传递给 `fn` 的额外关键字参数 |
+
+例如，已有 RTL 规范要求 active-low `rst_n` 顶层端口时：
+
+```python
+circ = compile_cycle_aware(
+    build,
+    name="my_top",
+    eager=True,
+    reset_name="rst_n",
+    reset_polarity="active_low",
+)
+```
+
+IR 内部仍使用 active-high reset 语义；C++/Verilog 后端会在模块边界把
+`rst_n` 转换为内部 active-high reset，再连接到寄存器、FIFO 和 memory 原语。
 
 ---
 

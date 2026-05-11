@@ -55,10 +55,21 @@ class CycleAwareCircuit(Circuit):
         return super().emit_mlir()
 
     def create_domain(
-        self, name: str, *, frequency_desc: str = "", reset_active_high: bool = False
+        self,
+        name: str,
+        *,
+        frequency_desc: str = "",
+        reset_name: str | None = None,
+        reset_polarity: str = "active_high",
+        reset_active_high: bool | None = None,
     ) -> "CycleAwareDomain":
-        _ = (frequency_desc, reset_active_high)
-        return CycleAwareDomain(self, str(name))
+        _ = frequency_desc
+        polarity = _normalize_reset_polarity(
+            reset_polarity, reset_active_high=reset_active_high
+        )
+        return CycleAwareDomain(
+            self, str(name), reset_name=reset_name, reset_polarity=polarity
+        )
 
     def const_signal(self, value: int, width: int, domain: "CycleAwareDomain") -> Wire:
         return domain.create_const(int(value), width=int(width))
@@ -70,10 +81,24 @@ class CycleAwareCircuit(Circuit):
 class CycleAwareDomain:
     """Clock domain with logical occurrence index (tutorial: next/prev/push/pop/cycle)."""
 
-    def __init__(self, circuit: Circuit, domain_name: str) -> None:
+    def __init__(
+        self,
+        circuit: Circuit,
+        domain_name: str,
+        *,
+        reset_name: str | None = None,
+        reset_polarity: str = "active_high",
+    ) -> None:
         self._m = circuit
         self._name = str(domain_name)
-        self._cd = _clock_domain_ports(circuit, self._name)
+        self._reset_name = None if reset_name is None else str(reset_name)
+        self._reset_polarity = _normalize_reset_polarity(reset_polarity)
+        self._cd = _clock_domain_ports(
+            circuit,
+            self._name,
+            reset_name=self._reset_name,
+            reset_polarity=self._reset_polarity,
+        )
         self._occurrence = 0
         self._stack: list[int] = []
         self._delay_serial = 0
@@ -461,10 +486,55 @@ def _make_compiled_module(fn: Any, circuit: CycleAwareCircuit, sym_name: str) ->
     )
 
 
-def _clock_domain_ports(m: Circuit, name: str) -> ClockDomain:
+def _normalize_reset_polarity(
+    reset_polarity: str, *, reset_active_high: bool | None = None
+) -> str:
+    if reset_active_high is not None:
+        return "active_high" if bool(reset_active_high) else "active_low"
+    p = str(reset_polarity).strip().lower().replace("-", "_")
+    if p in {"active_high", "high", "1", "true"}:
+        return "active_high"
+    if p in {"active_low", "low", "0", "false"}:
+        return "active_low"
+    raise ValueError(
+        "reset_polarity must be 'active_high' or 'active_low' "
+        f"(got {reset_polarity!r})"
+    )
+
+
+def _record_reset_polarity(m: Circuit, reset_port: str, polarity: str) -> None:
+    by_port = getattr(m, "_v5_reset_polarities", None)
+    if not isinstance(by_port, dict):
+        by_port = {}
+        setattr(m, "_v5_reset_polarities", by_port)
+    by_port[str(reset_port)] = str(polarity)
+
+    values: list[str] = []
+    for arg_name, sig in getattr(m, "_args", []):
+        if getattr(sig, "ty", "") == "!pyc.reset":
+            values.append(str(by_port.get(arg_name, "active_high")))
+        else:
+            values.append("")
+    m.set_func_attr_json("pyc.reset_polarities", values)
+
+
+def _clock_domain_ports(
+    m: Circuit,
+    name: str,
+    *,
+    reset_name: str | None = None,
+    reset_polarity: str = "active_high",
+) -> ClockDomain:
     if name == "clk":
-        return ClockDomain(clk=m.clock("clk"), rst=m.reset("rst"))
-    return m.domain(name)
+        clk = m.clock("clk")
+        rst_port = "rst" if reset_name is None else str(reset_name)
+        rst = m.reset(rst_port)
+    else:
+        clk = m.clock(f"{name}_clk")
+        rst_port = f"{name}_rst" if reset_name is None else str(reset_name)
+        rst = m.reset(rst_port)
+    _record_reset_polarity(m, rst_port, _normalize_reset_polarity(reset_polarity))
+    return ClockDomain(clk=clk, rst=rst)
 
 
 def _as_wire(
@@ -1126,7 +1196,11 @@ def cas(
 
 
 def _strip_domain_for_jit(
-    fn: Callable[..., Any], *, domain_name: str
+    fn: Callable[..., Any],
+    *,
+    domain_name: str,
+    reset_name: str | None,
+    reset_polarity: str,
 ) -> Callable[..., Any]:
     """Drop the ``domain`` parameter for JIT and prepend ``domain = m.create_domain(...)``."""
     try:
@@ -1168,7 +1242,18 @@ def _strip_domain_for_jit(
                 ctx=ast.Load(),
             ),
             args=[ast.Constant(value=str(domain_name))],
-            keywords=[],
+            keywords=[
+                ast.keyword(
+                    arg="reset_name",
+                    value=ast.Constant(
+                        value=None if reset_name is None else str(reset_name)
+                    ),
+                ),
+                ast.keyword(
+                    arg="reset_polarity",
+                    value=ast.Constant(value=str(reset_polarity)),
+                ),
+            ],
         ),
     )
     fdef.body.insert(0, prelude)
@@ -1193,6 +1278,9 @@ def compile_cycle_aware(
     *,
     name: str | None = None,
     domain_name: str = "clk",
+    reset_name: str | None = None,
+    reset_polarity: str = "active_high",
+    reset_active_high: bool | None = None,
     eager: bool = False,
     hierarchical: bool = False,
     structural: bool | None = None,
@@ -1212,6 +1300,10 @@ def compile_cycle_aware(
     MLIR ops and instantiated via ``pyc.instance``.  The returned circuit's
     ``emit_mlir()`` emits a multi-module ``Design``.
     """
+    normalized_reset_polarity = _normalize_reset_polarity(
+        reset_polarity, reset_active_high=reset_active_high
+    )
+
     if eager:
         circuit_name = (
             name
@@ -1219,7 +1311,11 @@ def compile_cycle_aware(
             else getattr(fn, "__name__", "design") or "design"
         )
         m = CycleAwareCircuit(str(circuit_name), design_ctx=design_ctx)
-        dom = m.create_domain(str(domain_name))
+        dom = m.create_domain(
+            str(domain_name),
+            reset_name=reset_name,
+            reset_polarity=normalized_reset_polarity,
+        )
 
         if hierarchical:
             from .design import Design
@@ -1265,7 +1361,12 @@ def compile_cycle_aware(
 
     domain_n = str(domain_name)
 
-    _jit_fn = _strip_domain_for_jit(fn, domain_name=domain_n)
+    _jit_fn = _strip_domain_for_jit(
+        fn,
+        domain_name=domain_n,
+        reset_name=reset_name,
+        reset_polarity=normalized_reset_polarity,
+    )
     setattr(_jit_fn, "__pycircuit_module_name__", sym)
     setattr(_jit_fn, "__pycircuit_kind__", "module")
     setattr(_jit_fn, "__pycircuit_inline__", False)
