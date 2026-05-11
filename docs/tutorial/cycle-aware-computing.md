@@ -60,3 +60,35 @@ m.assign(w, raw, dst_cycle=1, src_cycle=0)
 ```
 
 See `docs/cycle_balance_improvement.md` and (for V5 logical cycles) `docs/PyCircuit_V5_Spec.md`.
+
+## Hardware boundary and auto-alignment rules
+
+pyCircuit does not remove the need to reason about hardware. The Python syntax
+is an authoring surface for a static circuit graph: registers, memories,
+combinational paths, clock domains, and D/Q boundaries are still explicit in the
+lowered `pyc` IR. A valid design should be explainable as that hardware graph.
+
+Occurrence cycles are metadata on values, not hidden simulation steps. They are
+used to decide whether an earlier value must be delayed before it is combined
+with a later value. When the compiler sees operands from different occurrences,
+it inserts real balance registers on the earlier operands. This is intentional
+for pipeline alignment and must be accounted for in area/latency expectations.
+
+The practical rules are:
+
+- A value created at the current occurrence carries that occurrence.
+- A raw `Wire` or integer literal used in a cycle-aware expression is treated as
+  current at the domain's current occurrence.
+- A state register's Q output is readable at later occurrences without adding a
+  balance register just to read Q.
+- Combining values from different occurrences aligns to the maximum occurrence
+  by inserting balance registers on earlier operands.
+- `domain.next()` / `clk.next()` only advances the authoring occurrence counter;
+  it does not create hardware by itself.
+- Registers are created by explicit state APIs such as `m.out(...)` or
+  `domain.signal(...)`; balance registers are created only when occurrence
+  alignment requires them.
+
+For ordinary next-state code, compute the next value from the register Q and
+assign it to the register D input. Use occurrence advancement when a pipeline
+stage boundary is semantically part of the design, not as a visual separator.
