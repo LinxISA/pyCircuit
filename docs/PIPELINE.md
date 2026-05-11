@@ -61,6 +61,10 @@ python3 -m pycircuit.cli build <top.py> --out-dir <dir> --target cpp --jobs <N>
 
 In DUT-only mode the manifest has `"testbench": null`; C++ device sources and
 headers are still generated, but no generated pyCircuit TB executable is built.
+The build also emits `cmodel/` with an `interface.json` port contract and a
+small C++ driver scaffold for hand-written TLM or algorithmic reference models.
+When a pyCircuit `@testbench` is present, `cmodel/tb_program.json` is emitted so
+external models can replay the same pyCircuit-authored stimulus stream.
 
 Simulation (Verilator):
 
