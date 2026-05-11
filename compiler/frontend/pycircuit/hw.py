@@ -746,12 +746,31 @@ class Circuit(Module):
     def domain(self, name: str) -> ClockDomain:
         return ClockDomain(clk=self.clock(f"{name}_clk"), rst=self.reset(f"{name}_rst"))
 
-    def create_domain(self, name: str, *, frequency_desc: str = "", reset_active_high: bool = False) -> Any:
+    def create_domain(
+        self,
+        name: str,
+        *,
+        frequency_desc: str = "",
+        reset_name: str | None = None,
+        reset_polarity: str = "active_high",
+        reset_active_high: bool | None = None,
+    ) -> Any:
         """V5 cycle-aware domain (next/prev/push/pop); see `pycircuit.v5.CycleAwareDomain`."""
         from .v5 import CycleAwareDomain
 
-        _ = (frequency_desc, reset_active_high)
-        return CycleAwareDomain(self, str(name))
+        _ = frequency_desc
+        return CycleAwareDomain(
+            self,
+            str(name),
+            reset_name=reset_name,
+            reset_polarity=(
+                "active_high"
+                if reset_active_high is True
+                else "active_low"
+                if reset_active_high is False
+                else reset_polarity
+            ),
+        )
 
     def input(self, name: str, *, width: int, signed: bool = False) -> Wire:  # type: ignore[override]
         """Declare a module input port and return it as a `Wire`."""
