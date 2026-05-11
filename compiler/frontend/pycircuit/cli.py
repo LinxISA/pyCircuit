@@ -1530,6 +1530,85 @@ def _save_json(path: Path, data: dict[str, Any]) -> None:
     _write_text_atomic(path, json.dumps(data, sort_keys=True, indent=2) + "\n")
 
 
+def _emit_cmodel_scaffold(
+    *,
+    out_dir: Path,
+    iface: _TopIface,
+    tb_payload_json: str | None,
+) -> dict[str, Any]:
+    cmodel_dir = out_dir / "cmodel"
+    cmodel_dir.mkdir(parents=True, exist_ok=True)
+
+    interface = {
+        "version": 1,
+        "top_symbol": iface.sym,
+        "inputs": [
+            {"name": name, "type": ty}
+            for name, ty in zip(iface.in_raw, iface.in_tys, strict=True)
+        ],
+        "outputs": [
+            {"name": name, "type": ty}
+            for name, ty in zip(iface.out_raw, iface.out_tys, strict=True)
+        ],
+        "cpp_project_manifest": "../cpp_project_manifest.json",
+    }
+    interface_path = cmodel_dir / "interface.json"
+    _save_json(interface_path, interface)
+
+    tb_program_rel: str | None = None
+    if tb_payload_json is not None:
+        tb_program_path = cmodel_dir / "tb_program.json"
+        _save_json(tb_program_path, json.loads(tb_payload_json))
+        tb_program_rel = str(tb_program_path.relative_to(out_dir))
+
+    driver_text = f"""\
+// Generated external C-model scaffold for {iface.sym}.
+//
+// This file is intentionally small: use cmodel/interface.json for the DUT port
+// contract and cmodel/tb_program.json, when present, to replay pyCircuit
+// testbench stimulus in a hand-written C++/TLM model.
+
+#include <iostream>
+
+int main(int argc, char **argv) {{
+  (void)argc;
+  (void)argv;
+  std::cout << "External C-model scaffold for {iface.sym}\\n";
+  std::cout << "Read cmodel/interface.json for ports";
+"""
+    if tb_program_rel is not None:
+        driver_text += ' << " and cmodel/tb_program.json for testbench stimulus"'
+    driver_text += """ << "\\n";
+  return 0;
+}
+"""
+    driver_path = cmodel_dir / "driver.cpp"
+    _write_text_atomic(driver_path, driver_text)
+
+    cmake_path = cmodel_dir / "CMakeLists.txt"
+    _write_text_atomic(
+        cmake_path,
+        f"""\
+cmake_minimum_required(VERSION 3.20)
+project({iface.sym}_cmodel LANGUAGES CXX)
+
+add_executable({iface.sym}_cmodel driver.cpp)
+target_compile_features({iface.sym}_cmodel PRIVATE cxx_std_17)
+""",
+    )
+
+    result = {
+        "version": 1,
+        "dir": str(cmodel_dir.relative_to(out_dir)),
+        "interface": str(interface_path.relative_to(out_dir)),
+        "driver": str(driver_path.relative_to(out_dir)),
+        "cmake": str(cmake_path.relative_to(out_dir)),
+    }
+    if tb_program_rel is not None:
+        result["tb_program"] = tb_program_rel
+    return result
+
+
 def _base_name_of(fn: Any) -> str:
     override = getattr(fn, "__pycircuit_module_name__", None)
     if isinstance(override, str) and override.strip():
@@ -1859,6 +1938,7 @@ def _cmd_build(args: argparse.Namespace) -> int:
 
     tb_name = ""
     tb_pyc_path: Path | None = None
+    tb_payload_json: str | None = None
     if has_tb:
         tb_probes = TbProbes.from_probe_manifest(probe_manifest_obj)
         tb_name, tb_payload_json = _collect_testbench_payload(
@@ -2006,6 +2086,11 @@ def _cmd_build(args: argparse.Namespace) -> int:
         cpp_manifest = out_dir / "cpp_project_manifest.json"
         _save_json(cpp_manifest, build_manifest)
         manifest["cpp_project_manifest"] = str(cpp_manifest.relative_to(out_dir))
+        manifest["cmodel"] = _emit_cmodel_scaffold(
+            out_dir=out_dir,
+            iface=iface,
+            tb_payload_json=tb_payload_json,
+        )
 
         if not has_tb:
             manifest["cpp_sources"] = [str(p.relative_to(out_dir)) for p in cpp_sources]

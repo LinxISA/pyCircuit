@@ -36,8 +36,12 @@ def tb(t: Tb):
 `.pyc` modules, generated C++ device sources, and `cpp_project_manifest.json`,
 but it does not generate a testbench executable. `verilator` and `both` targets
 still require a decorated `@testbench` because they produce simulation harnesses.
+DUT-only C++ builds also emit `cmodel/interface.json` plus a small
+`cmodel/driver.cpp` scaffold for external C++ or TLM drivers.
 
 If a `tb(...)` function is present, it must be decorated with `@testbench`.
+When present, the build also exports `cmodel/tb_program.json` so external models
+can replay the same pyCircuit-authored stimulus.
 
 ## Tb API (selected)
 
