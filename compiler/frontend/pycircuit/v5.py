@@ -633,7 +633,7 @@ class ForwardSignal:
 
     @property
     def cycle(self) -> int:
-        return self._state.cycle
+        return self._state._current_view().cycle
 
     @property
     def domain(self) -> "CycleAwareDomain":
@@ -641,63 +641,66 @@ class ForwardSignal:
 
     @property
     def name(self) -> str:
-        return str(self._state._cas._w)
+        return str(self._state._current_view()._w)
 
     @property
     def wire(self) -> Wire:
-        return self._state._cas._w
+        return self._state._current_view()._w
 
     # ── arithmetic / logic operators (forward to inner CAS) ──────────
 
     def __add__(self, other: object) -> "CycleAwareSignal":
-        return self._state._cas.__add__(other)
+        return self._state._current_view().__add__(other)
 
     def __radd__(self, other: object) -> "CycleAwareSignal":
-        return self._state._cas.__radd__(other)
+        return self._state._current_view().__radd__(other)
 
     def __sub__(self, other: object) -> "CycleAwareSignal":
-        return self._state._cas.__sub__(other)
+        return self._state._current_view().__sub__(other)
+
+    def __rsub__(self, other: object) -> "CycleAwareSignal":
+        return self._state._current_view().__rsub__(other)
 
     def __mul__(self, other: object) -> "CycleAwareSignal":
-        return self._state._cas.__mul__(other)
+        return self._state._current_view().__mul__(other)
 
     def __and__(self, other: object) -> "CycleAwareSignal":
-        return self._state._cas.__and__(other)
+        return self._state._current_view().__and__(other)
 
     def __or__(self, other: object) -> "CycleAwareSignal":
         if isinstance(other, str):
-            return self._state._cas
-        return self._state._cas.__or__(other)
+            return self._state._current_view()
+        return self._state._current_view().__or__(other)
 
     def __xor__(self, other: object) -> "CycleAwareSignal":
-        return self._state._cas.__xor__(other)
+        return self._state._current_view().__xor__(other)
 
     def __invert__(self) -> "CycleAwareSignal":
-        return self._state._cas.__invert__()
+        return self._state._current_view().__invert__()
 
     def __eq__(self, other: object) -> "CycleAwareSignal":  # type: ignore[override]
-        return self._state._cas.__eq__(other)
+        return self._state._current_view().__eq__(other)
 
     def __ne__(self, other: object) -> "CycleAwareSignal":  # type: ignore[override]
-        return self._state._cas.__ne__(other)
+        return self._state._current_view().__ne__(other)
 
     def __lt__(self, other: object) -> "CycleAwareSignal":
-        return self._state._cas.__lt__(other)
+        return self._state._current_view().__lt__(other)
 
     def __gt__(self, other: object) -> "CycleAwareSignal":
-        return self._state._cas.__gt__(other)
+        return self._state._current_view().__gt__(other)
 
     def __le__(self, other: object) -> "CycleAwareSignal":
-        return self._state._cas.__le__(other)
+        return self._state._current_view().__le__(other)
 
     def __ge__(self, other: object) -> "CycleAwareSignal":
-        return self._state._cas.__ge__(other)
+        return self._state._current_view().__ge__(other)
 
     def __getitem__(self, idx: int | slice) -> "CycleAwareSignal":
-        return self._state._cas.__getitem__(idx)
+        return self._state._current_view().__getitem__(idx)
 
     def __getattr__(self, name: str) -> object:
-        return getattr(self._state._cas, name)
+        return getattr(self._state._current_view(), name)
 
     def __repr__(self) -> str:
         return f"ForwardSignal({self._state._cas._w}, cycle={self._state.cycle})"
@@ -839,7 +842,7 @@ class CycleAwareSignal:
         other: "CycleAwareSignal | StateSignal | ForwardSignal | Wire | Reg | int | LiteralValue",
     ) -> tuple[Wire, Wire, int]:
         if isinstance(other, ForwardSignal):
-            return self._align(other._state._cas)
+            return self._align(other._state._current_view())
         if isinstance(other, StateSignal):
             return self._align(other._current_view())
         if isinstance(other, CycleAwareSignal):
@@ -1014,9 +1017,9 @@ def mux(
 
         def _unwrap(v: object) -> object:
             if isinstance(v, ForwardSignal):
-                return v._state._cas
+                return v._state._current_view()
             if isinstance(v, StateSignal):
-                return v._cas
+                return v._current_view()
             return v
 
         return _mux_cycle_aware(_unwrap(cond), _unwrap(a), _unwrap(b))

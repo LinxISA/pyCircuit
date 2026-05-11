@@ -30,6 +30,30 @@ def test_state_signal_feedback_does_not_insert_balance_registers() -> None:
     assert "_v5_bal_" not in mlir
 
 
+def test_forward_signal_reads_rebase_to_current_occurrence() -> None:
+    circuit = pycircuit.CycleAwareCircuit("rebased_forward")
+    domain = circuit.create_domain("clk")
+    counter = domain.signal(width=8, reset_value=0, name="counter")
+
+    domain.next()
+    expr = counter + 1
+
+    assert expr.cycle == domain.cycle_index
+
+
+def test_forward_signal_feedback_does_not_insert_balance_registers() -> None:
+    circuit = pycircuit.CycleAwareCircuit("forward_counter_feedback")
+    domain = circuit.create_domain("clk")
+    counter = domain.signal(width=8, reset_value=0, name="counter")
+
+    domain.next()
+    counter.assign(counter + 1)
+
+    mlir = circuit.emit_mlir()
+    assert mlir.count("pyc.reg") == 1
+    assert "_v5_bal_" not in mlir
+
+
 def test_state_signal_slice_reads_rebase_to_current_occurrence() -> None:
     circuit = pycircuit.CycleAwareCircuit("rebased_slice")
     domain = circuit.create_domain("clk")
