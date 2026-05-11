@@ -1245,7 +1245,9 @@ def _strip_domain_for_jit(
             keywords=[
                 ast.keyword(
                     arg="reset_name",
-                    value=ast.Constant(value=None if reset_name is None else str(reset_name)),
+                    value=ast.Constant(
+                        value=None if reset_name is None else str(reset_name)
+                    ),
                 ),
                 ast.keyword(
                     arg="reset_polarity",
