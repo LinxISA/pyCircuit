@@ -1,6 +1,7 @@
 # Testbench
 
 `@testbench` lets pyCircuit keep host/device simulation intent in the same frontend flow:
+
 - frontend emits a TB `.pyc` payload (JSON encoded in module attrs)
 - backend (`pycc`) lowers that payload to C++ or SystemVerilog testbench text
 
@@ -30,7 +31,13 @@ def tb(t: Tb):
     t.finish(at=10)
 ```
 
-`pycircuit build` expects `tb` to be decorated with `@testbench`.
+`pycircuit build` can also compile a DUT-only source that does not define
+`tb(...)` when the target is `cpp`. In that mode pyCircuit emits the device
+`.pyc` modules, generated C++ device sources, and `cpp_project_manifest.json`,
+but it does not generate a testbench executable. `verilator` and `both` targets
+still require a decorated `@testbench` because they produce simulation harnesses.
+
+If a `tb(...)` function is present, it must be decorated with `@testbench`.
 
 ## Tb API (selected)
 
