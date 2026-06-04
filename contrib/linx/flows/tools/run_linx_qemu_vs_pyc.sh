@@ -118,8 +118,13 @@ fi
 echo "[llvm-mc] $SRC"
 "$LLVM_MC" -triple=linx64 -filetype=obj "$SRC" -o "$OBJ"
 
+QEMU_ARGS=(-nographic -monitor none -machine virt -kernel "$OBJ")
+if [[ "$(basename -- "$QEMU_BIN")" != *bios-none ]]; then
+  QEMU_ARGS+=(-bios none)
+fi
+
 echo "[qemu] commit trace: $QEMU_TRACE"
-LINX_COMMIT_TRACE="$QEMU_TRACE" "$QEMU_BIN" -nographic -monitor none -machine virt -kernel "$OBJ" >/dev/null
+LINX_COMMIT_TRACE="$QEMU_TRACE" "$QEMU_BIN" "${QEMU_ARGS[@]}" >/dev/null
 
 echo "[pyc] commit trace: $PYC_TRACE"
 PYC_KONATA=0 PYC_EXPECT_EXIT=0 PYC_BOOT_PC=0x10000 PYC_COMMIT_TRACE="$PYC_TRACE" \
