@@ -343,6 +343,7 @@ The following PTO ISA instructions map to other Davinci instruction domains (not
 | TSUBVIEW / TRESHAPE | Software tile aliasing | — |
 | TSETFMATRIX / TSET_IMG2COL_* | CSR writes (cube/MTE config) | Scalar |
 | TPRINT | Debug hook (not in hardware ISA) | — |
+| TGET_SCALE_ADDR | Software address computation | — |
 
 #### 2.2.5 Instruction Count Summary
 
