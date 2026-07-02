@@ -1,8 +1,8 @@
-# Linx Out-of-Order Processor Core
+# Davinci Out-of-Order Processor Core
 
 ## 1. Overview & Design Philosophy
 
-The Linx core is a **single-threaded, 4-wide, out-of-order** processor targeting AI inference, HPC, and dense linear algebra workloads. It executes a unified instruction stream containing four instruction domains — scalar, vector, cube (matrix), and memory-tile-engine (MTE) — on a shared pipeline front-end with distributed back-end execution units.
+The Davinci core is a **single-threaded, 4-wide, out-of-order** processor targeting AI inference, HPC, and dense linear algebra workloads. It executes a unified instruction stream containing four instruction domains — scalar, vector, cube (matrix), and memory-tile-engine (MTE) — on a shared pipeline front-end with distributed back-end execution units.
 
 **Key design decisions:**
 
@@ -46,7 +46,7 @@ The Linx core is a **single-threaded, 4-wide, out-of-order** processor targeting
 
 ## 2. ISA Summary
 
-The Linx core fetches, decodes, renames, and dispatches instructions from four domains within a single instruction stream. All instructions use a **32-bit fixed-width** encoding.
+The Davinci core fetches, decodes, renames, and dispatches instructions from four domains within a single instruction stream. All instructions use a **32-bit fixed-width** encoding.
 
 ### 2.1 Scalar ISA
 
@@ -321,9 +321,9 @@ Partial operations handle tiles with mismatched valid regions (out-of-bounds ele
 
 #### 2.2.4 PTO ISA Cross-Reference
 
-The following PTO ISA instructions map to other Linx instruction domains (not the vector unit):
+The following PTO ISA instructions map to other Davinci instruction domains (not the vector unit):
 
-| PTO instruction | Linx mapping | Domain |
+| PTO instruction | Davinci mapping | Domain |
 |----------------|----------------|--------|
 | TLOAD | TILE.LD | MTE (§2.4.1) |
 | TSTORE / TSTORE_FP | TILE.ST | MTE (§2.4.1) |
@@ -595,7 +595,7 @@ The 7-bit opcode field encodes the instruction domain:
 
 ## 4. Pipeline Overview
 
-The Linx core uses a **12-stage** scalar pipeline. There is **no retire/commit stage** because the design does not require precise architectural state.
+The Davinci core uses a **12-stage** scalar pipeline. There is **no retire/commit stage** because the design does not require precise architectural state.
 
 ### 4.1 Pipeline Stages
 
@@ -1087,7 +1087,7 @@ The LSU handles all scalar memory operations with a **simplified** design enable
 
 #### 8.2.3 Simplified Store Commit
 
-Because the Linx core does not support precise exceptions, **stores can commit to cache out-of-order** once their address and data are resolved. The store buffer serves only as a write-combining queue, not as a speculative buffer waiting for in-order retirement.
+Because the Davinci core does not support precise exceptions, **stores can commit to cache out-of-order** once their address and data are resolved. The store buffer serves only as a write-combining queue, not as a speculative buffer waiting for in-order retirement.
 
 The store buffer still provides **store-to-load forwarding**: when a load's address matches a store buffer entry, the data is forwarded directly, avoiding a cache read. Address ambiguity (unknown store addresses) causes the load to wait until all older stores have their addresses computed.
 
@@ -1554,7 +1554,7 @@ See `tregfile4k.md` for calendar rotation, bypass rules, and scheduling constrai
 
 ## 10. Out-of-Order Execution Model
 
-The Linx core implements a **ROB-less out-of-order** execution model. Because the core does not need to maintain precise architectural state (no interrupts, no exceptions), it dispenses with the Reorder Buffer entirely. This section describes how instructions flow through the core and how correctness is maintained.
+The Davinci core implements a **ROB-less out-of-order** execution model. Because the core does not need to maintain precise architectural state (no interrupts, no exceptions), it dispenses with the Reorder Buffer entirely. This section describes how instructions flow through the core and how correctness is maintained.
 
 ### 10.1 Core Principles
 
@@ -1790,7 +1790,7 @@ Tile refcount is 3 bits (max 7 concurrent readers per physical tile), which suff
 | Write-combining | Adjacent stores to same cache line are merged |
 | Drain policy | Oldest-first to L1-D when not conflicting with loads |
 
-Because the Linx core does not require precise exceptions, stores are committed to the cache hierarchy as soon as their address and data are both resolved. There is no need to hold stores until in-order retirement.
+Because the Davinci core does not require precise exceptions, stores are committed to the cache hierarchy as soon as their address and data are both resolved. There is no need to hold stores until in-order retirement.
 
 ### 11.4 MTE Memory Path
 
@@ -2011,7 +2011,7 @@ Reference `outerCube.md` §7–§8 for detailed cycle counts. Key results:
 
 ### 15.2 Cache Coherence
 
-The Linx core is designed primarily for single-core or non-coherent multi-core configurations (AI accelerator context). When coherence is needed:
+The Davinci core is designed primarily for single-core or non-coherent multi-core configurations (AI accelerator context). When coherence is needed:
 
 | Parameter | Value |
 |-----------|-------|
@@ -2044,7 +2044,7 @@ For tile data (TRegFile-4K), coherence is managed at the software level. Tile da
 | **MXU** | Matrix Unit — the outerCube outer-product accumulation engine |
 | **TRegFile-4K** | Tile Register File with 4 KB physical tiles (256 × 4 KB = 1 MB), 8R+8W ports |
 | **OPA** | Outer Product Accumulate — the fundamental cube computation |
-| **ROB** | Reorder Buffer — *not present* in Linx (no precise exceptions) |
+| **ROB** | Reorder Buffer — *not present* in Davinci (no precise exceptions) |
 | **MSHR** | Miss Status Holding Register — tracks outstanding cache misses |
 | **BTB** | Branch Target Buffer — caches branch target addresses |
 | **TAGE** | TAgged GEometric history length predictor |
