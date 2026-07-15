@@ -185,9 +185,7 @@ OP_BSTART_VSEQ = 142
 # --- block header descriptors ---
 OP_B_TEXT = 143
 OP_B_IOT = 144
-OP_B_IOTI = 145
 OP_B_IOR = 146
-OP_B_ATTR = 147
 OP_B_DIM = 148
 
 # --- system register ops (bring-up no-op semantics in the pyc core model) ---
