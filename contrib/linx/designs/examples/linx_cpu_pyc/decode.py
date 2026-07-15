@@ -316,7 +316,7 @@ def decode_window(m: Circuit, window: Wire) -> Decode:
     if cond:
         op = OP_B_IOT
         len_bytes = 4
-    cond = in32 & masked_eq(m, insn32, mask=0x0000607F, match=0x00006013)
+    cond = in32 & masked_eq(m, insn32, mask=0xC03FFFFF, match=0x00006013)
     if cond:
         op = OP_B_IOT
         len_bytes = 4
