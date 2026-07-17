@@ -160,11 +160,11 @@ All instructions below operate on **4 KB tiles** (T0–T31 architectural, rename
 | VMAX | TMAX | Td, Ts1, Ts2 | Td[i,j] = max(Ts1[i,j], Ts2[i,j]) | same | 16 |
 | VDIV | TDIV | Td, Ts1, Ts2 | Td[i,j] = Ts1[i,j] / Ts2[i,j] | FP64/32/16/BF16 | 16 |
 | VREM | TREM | Td, Ts1, Ts2 | Td[i,j] = remainder(Ts1[i,j], Ts2[i,j]) | INT32/16/8 | 16 |
-| VFMOD | TFMOD | Td, Ts1, Ts2 | Td[i,j] = fmod(Ts1[i,j], Ts2[i,j]) | FP64/32/16/BF16 | 16 |
+| VFMOD | — | Td, Ts1, Ts2 | Davinci-local fmod; no canonical LinxISA v0.57 PTO origin | FP64/32/16/BF16 | 16 |
 | VADDC | TADDC | Td, Ts1, Ts2, Ts3 | Td[i,j] = Ts1[i,j] + Ts2[i,j] + Ts3[i,j] | FP32/16/BF16, INT32/16 | 16 |
 | VSUBC | TSUBC | Td, Ts1, Ts2, Ts3 | Td[i,j] = Ts1[i,j] − Ts2[i,j] + Ts3[i,j] | same | 16 |
 | VFMA | — | Td, Ts1, Ts2, Ts3 | Td[i,j] = Ts1[i,j] × Ts2[i,j] + Ts3[i,j] | FP64/32/16/BF16 | 16 |
-| VPRELU | TPRELU | Td, Ts1, Ts2 | Td[i,j] = Ts1[i,j]≥0 ? Ts1[i,j] : Ts1[i,j]×Ts2[i,j] | FP32/16/BF16 | 16 |
+| VPRELU | TPRELU | Td, Ts1, Ts2 | Inherited canonical v0.57 TEPL operation retained unchanged in v0.57 | FP32/16/BF16 | 16 |
 
 **Category B — Elementwise Arithmetic (tile × scalar → tile)**
 
@@ -181,7 +181,7 @@ All instructions below operate on **4 KB tiles** (T0–T31 architectural, rename
 | VXORS | TXORS | Td, Ts1, Xs | Td[i,j] = Ts1[i,j] ^ Xs | INT32/16/8 | 16 |
 | VSHLS | TSHLS | Td, Ts1, Xs | Td[i,j] = Ts1[i,j] << Xs | INT32/16/8 | 16 |
 | VSHRS | TSHRS | Td, Ts1, Xs | Td[i,j] = Ts1[i,j] >> Xs | INT32/16/8 | 16 |
-| VLRELU | TLRELU | Td, Ts1, Xs | Td[i,j] = Ts1[i,j]≥0 ? Ts1[i,j] : Ts1[i,j]×Xs | FP32/16/BF16 | 16 |
+| VLRELU | — | Td, Ts1, Xs | Davinci-local leaky ReLU; no canonical LinxISA v0.57 PTO origin | FP32/16/BF16 | 16 |
 | VADDSC | TADDSC | Td, Ts1, Xs, Ts2 | Td[i,j] = Ts1[i,j] + Xs + Ts2[i,j] | FP32/16/BF16 | 16 |
 | VSUBSC | TSUBSC | Td, Ts1, Xs, Ts2 | Td[i,j] = Ts1[i,j] − Xs + Ts2[i,j] | FP32/16/BF16 | 16 |
 | VEXPAND | TEXPANDS | Td, Xs | Td[i,j] = Xs (broadcast scalar to all elements) | all | 16 |
@@ -331,7 +331,7 @@ The following PTO ISA instructions map to other Davinci instruction domains (not
 | MSCATTER | TILE.SCATTER | MTE (§2.4.1) |
 | TPREFETCH | TILE.LD (prefetch hint) | MTE (§2.4.1) |
 | TMOV / TALIAS | TILE.MOVE (rename-only) | MTE (§2.4.2) |
-| TTRANS | TILE.TRANSPOSE | MTE (§2.4.2) |
+| TTRANSPOSE | TILE.TRANSPOSE | MTE (§2.4.2) |
 | TMATMUL / TMATMUL_ACC / TMATMUL_BIAS | CUBE.OPA + CUBE.DRAIN | Cube (§2.3) |
 | TMATMUL_MX | CUBE.OPA (MXFP4/HiFP4 mode) | Cube (§2.3) |
 | TGEMV / TGEMV_ACC / TGEMV_BIAS | CUBE.OPA (M=1 row) | Cube (§2.3) |
