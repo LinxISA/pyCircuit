@@ -82,7 +82,12 @@ fi
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/linx-diff.XXXXXX")"
 KEEP_WORK=0
+QEMU_PID=""
 cleanup() {
+  if [[ -n "${QEMU_PID}" ]] && kill -0 "${QEMU_PID}" >/dev/null 2>&1; then
+    kill -TERM "${QEMU_PID}" >/dev/null 2>&1 || true
+    wait "${QEMU_PID}" >/dev/null 2>&1 || true
+  fi
   if [[ "${KEEP_WORK}" == "0" ]]; then
     rm -rf "${WORK}"
   else
@@ -124,7 +129,30 @@ if [[ "$(basename -- "$QEMU_BIN")" != *bios-none ]]; then
 fi
 
 echo "[qemu] commit trace: $QEMU_TRACE"
-LINX_COMMIT_TRACE="$QEMU_TRACE" "$QEMU_BIN" "${QEMU_ARGS[@]}" >/dev/null
+QEMU_TRACE_MIN_RECORDS="${LINX_QEMU_VS_PYC_TRACE_MIN_RECORDS:-64}"
+LINX_COMMIT_TRACE="$QEMU_TRACE" "$QEMU_BIN" "${QEMU_ARGS[@]}" >/dev/null &
+QEMU_PID=$!
+while kill -0 "${QEMU_PID}" >/dev/null 2>&1; do
+  if [[ -s "${QEMU_TRACE}" ]] &&
+     [[ "$(wc -l <"${QEMU_TRACE}")" -ge "${QEMU_TRACE_MIN_RECORDS}" ]]; then
+    kill -TERM "${QEMU_PID}" >/dev/null 2>&1 || true
+    break
+  fi
+  sleep 0.01
+done
+set +e
+wait "${QEMU_PID}"
+qemu_rc=$?
+set -e
+QEMU_PID=""
+if [[ "${qemu_rc}" -ne 0 && "${qemu_rc}" -ne 143 ]]; then
+  echo "error: QEMU trace run failed (rc=${qemu_rc})" >&2
+  exit "${qemu_rc}"
+fi
+if [[ ! -s "${QEMU_TRACE}" ]]; then
+  echo "error: qemu trace was not produced: ${QEMU_TRACE}" >&2
+  exit 2
+fi
 
 echo "[pyc] commit trace: $PYC_TRACE"
 PYC_KONATA=0 PYC_EXPECT_EXIT=0 PYC_BOOT_PC=0x10000 PYC_COMMIT_TRACE="$PYC_TRACE" \
