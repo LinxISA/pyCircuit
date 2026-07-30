@@ -35,7 +35,8 @@ See `docs/TESTBENCH.md` for the full `Tb` API.
 - Read-during-write defaults to **old-data** unless explicitly overridden.
 - Reset/init semantics must be identical across backends (C++ and Verilog).
 
-These contracts are enforced via MLIR-level verifiers/passes (see `docs/updatePLAN.md`).
+These contracts are enforced via MLIR-level verifiers/passes (see
+`docs/rfcs/pyc4.0-decisions.md`).
 
 ## Occurrence cycles on combinational assigns
 

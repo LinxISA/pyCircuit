@@ -7,7 +7,6 @@ The public frontend surface is the current pyc5 API. The active semantic
 evidence corpus remains:
 
 - `docs/rfcs/pyc4.0-decisions.md`
-- `docs/updatePLAN.md`
 - `docs/gates/decision_status_v40.md`
 
 ## Read in this order

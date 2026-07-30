@@ -144,7 +144,7 @@ pyCircuit
 - `docs/FRONTEND_API.md`
 - `docs/TESTBENCH.md`
 - `docs/IR_SPEC.md`
-- `docs/updatePLAN.md` and `docs/rfcs/pyc4.0-decisions.md`
+- `docs/rfcs/pyc4.0-decisions.md`
 
 ## Contributing and Governance
 

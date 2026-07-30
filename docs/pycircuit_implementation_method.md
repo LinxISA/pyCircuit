@@ -18,7 +18,7 @@ All normative and tutorial material for authoring lives under the repository **`
 | **Testbenches** (low-level `Tb` API) | `docs/TESTBENCH.md` |
 | **IR / lowering expectations** | `docs/IR_SPEC.md`, `docs/PIPELINE.md` |
 | **Primitives vs generated code** | `docs/PRIMITIVES.md` |
-| **Compiler upgrade rules (agents)** | `docs/updatePLAN.md`, `docs/rfcs/pyc4.0-decisions.md`, root `AGENTS.md` |
+| **Compiler semantic rules (agents)** | `docs/rfcs/pyc4.0-decisions.md`, root `AGENTS.md` |
 | **Diagnostics** | `docs/DIAGNOSTICS.md` |
 | **API index** | `docs/api/index.md`, `docs/index.md` |
 

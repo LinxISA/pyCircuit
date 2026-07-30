@@ -47,4 +47,4 @@ def build(m: Circuit) -> None:
 - `docs/development/index.md`
 - `docs/development/testing-and-gates.md`
 - `designs/examples/README.md`
-- `docs/rfcs/pyc4.0-decisions.md` and `docs/updatePLAN.md` (contracts + execution plan)
+- `docs/rfcs/pyc4.0-decisions.md` (semantic contracts and decisions)

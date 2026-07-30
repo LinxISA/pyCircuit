@@ -8,7 +8,6 @@ with the current pyc5 authoring surface.
 
 - Read the decision corpus before changing semantics:
   - `docs/rfcs/pyc4.0-decisions.md`
-  - `docs/updatePLAN.md`
 - Follow gate-first development. If semantics change, add or tighten the MLIR
   verifier or pass path before relying on backend behavior.
 - Build and validate from the current worktree. Never copy toolchains or shared
