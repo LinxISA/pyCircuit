@@ -3,8 +3,8 @@
 // RUN: %acir_opt --emit-bytecode -o %t.bc %s
 // RUN: %acir_opt %t.bc | %FileCheck %s
 
-// Every ACIR v0.1 public type is intentionally spelled out here. This is also
-// the source consumed by the public-type inventory check.
+// This file covers all 16 SSA-legal ACIR v0.1 public types. Channel's 17th
+// parser/printer case is covered by ACIRTypesTest.PublicTypeInventoryRoundTrips.
 builtin.module attributes {ac.contract_epoch = "0.1"} {
   "builtin.unrealized_conversion_cast"() : () -> !ac.struct<@Header>
   "builtin.unrealized_conversion_cast"() : () -> !ac.packet<@Request>
