@@ -1,4 +1,9 @@
-add_acir_library(ACIRDialect SOURCES ACIRDialect.cpp ACIROps.cpp ACIRTypes.cpp)
+add_acir_library(ACIRDialect SOURCES
+  ACIRDialect.cpp
+  ACIRInterfaces.cpp
+  ACIROps.cpp
+  ACIRTypes.cpp
+)
 add_dependencies(ACIRDialect
   ACIRDialectIncGen
   ACIRAttributesIncGen

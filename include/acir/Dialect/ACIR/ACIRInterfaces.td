@@ -13,4 +13,24 @@ def ACIR_RecordLike : OpInterface<"RecordLikeOpInterface"> {
   ];
 }
 
+def ACIR_InterfaceContainer : OpInterface<"InterfaceContainerOpInterface"> {
+  let cppNamespace = "::acir::ac";
+  let methods = [
+    InterfaceMethod<"Returns the declaration region containing roles and ports.",
+                    "::mlir::Region &", "getInterfaceBody", (ins), [{
+      return $_op.getBody();
+    }]>
+  ];
+}
+
+def ACIR_ProtocolContainer : OpInterface<"ProtocolContainerOpInterface"> {
+  let cppNamespace = "::acir::ac";
+  let methods = [
+    InterfaceMethod<"Returns the finite-state protocol declaration region.",
+                    "::mlir::Region &", "getProtocolBody", (ins), [{
+      return $_op.getBody();
+    }]>
+  ];
+}
+
 #endif

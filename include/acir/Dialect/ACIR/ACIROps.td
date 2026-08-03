@@ -4,6 +4,7 @@
 include "acir/Dialect/ACIR/ACIRInterfaces.td"
 include "acir/Dialect/ACIR/ACIRTypes.td"
 include "mlir/IR/SymbolInterfaces.td"
+include "mlir/IR/RegionKindInterface.td"
 include "mlir/Interfaces/DataLayoutInterfaces.td"
 include "mlir/Interfaces/SideEffectInterfaces.td"
 
@@ -81,6 +82,74 @@ def ACIR_PacketSerializeOp : ACIR_Op<"packet.serialize", [Pure]> {
 def ACIR_PacketDeserializeOp : ACIR_Op<"packet.deserialize", [Pure]> {
   let arguments = (ins AnyType:$bytes, SymbolRefAttr:$packet);
   let results = (outs AnyType:$packet_value);
+  let hasVerifier = 1;
+}
+
+def ACIR_InterfaceOp : ACIR_Op<"interface", [
+    Symbol, SymbolTable, SingleBlock, NoTerminator, IsolatedFromAbove,
+    RegionKindInterface, HasOnlyGraphRegion, ACIR_InterfaceContainer
+  ]> {
+  let arguments = (ins SymbolNameAttr:$sym_name);
+  let regions = (region SizedRegion<1>:$body);
+  let builders = [OpBuilder<(ins "::llvm::StringRef":$name), [{
+    $_state.addAttribute(::mlir::SymbolTable::getSymbolAttrName(),
+                        $_builder.getStringAttr(name));
+    $_state.addRegion();
+  }]>];
+  let hasVerifier = 1;
+}
+
+def ACIR_ProtocolOp : ACIR_Op<"protocol", [
+    Symbol, SymbolTable, SingleBlock, NoTerminator, IsolatedFromAbove,
+    RegionKindInterface, HasOnlyGraphRegion, ACIR_ProtocolContainer
+  ]> {
+  let arguments = (ins SymbolNameAttr:$sym_name);
+  let regions = (region SizedRegion<1>:$body);
+  let builders = [OpBuilder<(ins "::llvm::StringRef":$name), [{
+    $_state.addAttribute(::mlir::SymbolTable::getSymbolAttrName(),
+                        $_builder.getStringAttr(name));
+    $_state.addRegion();
+  }]>];
+  let hasVerifier = 1;
+}
+
+def ACIR_RoleOp : ACIR_Op<"role", [Symbol, Pure]> {
+  let arguments = (ins SymbolNameAttr:$sym_name, FlatSymbolRefAttr:$dual,
+                       StrAttr:$cardinality);
+  let hasVerifier = 1;
+}
+
+def ACIR_StateOp : ACIR_Op<"state", [Symbol, Pure]> {
+  let arguments = (ins SymbolNameAttr:$sym_name, BoolAttr:$initial,
+                       BoolAttr:$terminal);
+  let hasVerifier = 1;
+}
+
+def ACIR_EventOp : ACIR_Op<"event", [Symbol, Pure]> {
+  let arguments = (ins SymbolNameAttr:$sym_name, FlatSymbolRefAttr:$from,
+                       FlatSymbolRefAttr:$to, TypeAttr:$payload,
+                       StrAttr:$action);
+  let hasVerifier = 1;
+}
+
+def ACIR_TransitionOp : ACIR_Op<"transition", [SingleBlock, NoTerminator]> {
+  let arguments = (ins FlatSymbolRefAttr:$source, FlatSymbolRefAttr:$target,
+                       FlatSymbolRefAttr:$event,
+                       OptionalAttr<I64Attr>:$priority,
+                       DefaultValuedAttr<BoolAttr, "false">:$transfer,
+                       DefaultValuedAttr<BoolAttr, "false">:$retain);
+  let regions = (region AnyRegion:$guard);
+  let hasVerifier = 1;
+}
+
+def ACIR_GuaranteeOp : ACIR_Op<"guarantee", [Pure]> {
+  let arguments = (ins StrAttr:$kind, AnyAttr:$value);
+  let hasVerifier = 1;
+}
+
+def ACIR_PortOp : ACIR_Op<"port", [Symbol, Pure]> {
+  let arguments = (ins SymbolNameAttr:$sym_name, TypeAttr:$type,
+                       FlatSymbolRefAttr:$from, FlatSymbolRefAttr:$to);
   let hasVerifier = 1;
 }
 

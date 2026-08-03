@@ -1,7 +1,7 @@
 #ifndef ACIR_INITALLPASSES_H
 #define ACIR_INITALLPASSES_H
 
-#include "acir/Dialect/ACIR/ACIRTypes.h"
+#include "acir/Dialect/ACIR/ACIROps.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Pass/PassRegistry.h"
@@ -44,13 +44,17 @@ public:
             .wasInterrupted();
       };
       for (mlir::NamedAttribute attribute : operation->getAttrs()) {
+        if (mlir::isa<acir::ac::PortOp>(operation) &&
+            attribute.getName() == "type")
+          continue;
         if (!rejectChannel(attribute.getValue()))
           continue;
         operation->emitError("channel type is only permitted in an "
                              "ac.interface channel declaration");
         return mlir::WalkResult::interrupt();
       }
-      if (rejectChannel(operation->getPropertiesAsAttribute()) ||
+      if ((!mlir::isa<acir::ac::PortOp>(operation) &&
+           rejectChannel(operation->getPropertiesAsAttribute())) ||
           rejectChannel(mlir::LocationAttr(operation->getLoc()))) {
         operation->emitError("channel type is only permitted in an "
                              "ac.interface channel declaration");
@@ -79,6 +83,8 @@ public:
                                  "ac.interface channel declaration");
             return mlir::WalkResult::interrupt();
           }
+      if (mlir::failed(acir::ac::verifyTopologyTypeUses(operation)))
+        return mlir::WalkResult::interrupt();
       return mlir::WalkResult::advance();
     });
     if (result.wasInterrupted())

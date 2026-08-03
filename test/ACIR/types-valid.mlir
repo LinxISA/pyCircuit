@@ -6,6 +6,15 @@
 // This file covers all 16 SSA-legal ACIR v0.1 public types. Channel's 17th
 // parser/printer case is covered by ACIRTypesTest.PublicTypeInventoryRoundTrips.
 builtin.module attributes {ac.contract_epoch = "0.1"} {
+  "ac.protocol"() <{sym_name = "test_protocol"}> ({
+    "ac.role"() <{sym_name = "producer", dual = @consumer, cardinality = "exclusive"}> : () -> ()
+    "ac.role"() <{sym_name = "consumer", dual = @producer, cardinality = "exclusive"}> : () -> ()
+    "ac.state"() <{sym_name = "idle", initial = true, terminal = true}> : () -> ()
+  }) : () -> ()
+  "ac.interface"() <{sym_name = "MemoryPort"}> ({
+    "ac.role"() <{sym_name = "initiator", dual = @target, cardinality = "exclusive"}> : () -> ()
+    "ac.role"() <{sym_name = "target", dual = @initiator, cardinality = "exclusive"}> : () -> ()
+  }) : () -> ()
   "builtin.unrealized_conversion_cast"() : () -> !ac.struct<@types::@Header>
   "builtin.unrealized_conversion_cast"() : () -> !ac.packet<@types::@Request>
   "builtin.unrealized_conversion_cast"() : () -> !ac.transaction<@types::@Dma>
@@ -15,7 +24,7 @@ builtin.module attributes {ac.contract_epoch = "0.1"} {
   "builtin.unrealized_conversion_cast"() : () -> !ac.list<!ac.struct<@types::@Entry>>
   "builtin.unrealized_conversion_cast"() : () -> !ac.vector<4 x i8>
   "builtin.unrealized_conversion_cast"() : () -> !ac.vector<9223372036854775807 x i8>
-  "builtin.unrealized_conversion_cast"() : () -> !ac.flow<!ac.packet<@types::@Request>, @ready_valid>
+  "builtin.unrealized_conversion_cast"() : () -> !ac.flow<i8, @test_protocol>
   "builtin.unrealized_conversion_cast"() : () -> !ac.endpoint<@MemoryPort, @target>
   "builtin.unrealized_conversion_cast"() : () -> !ac.resource_ref<@Memory, @reader>
   "builtin.unrealized_conversion_cast"() : () -> !ac.duration<cycles>
@@ -46,7 +55,7 @@ builtin.module attributes {ac.contract_epoch = "0.1"} {
 // CHECK: !ac.list<!ac.struct<@types::@Entry>>
 // CHECK: !ac.vector<4 x i8>
 // CHECK: !ac.vector<9223372036854775807 x i8>
-// CHECK: !ac.flow<!ac.packet<@types::@Request>, @ready_valid>
+// CHECK: !ac.flow<i8, @test_protocol>
 // CHECK: !ac.endpoint<@MemoryPort, @target>
 // CHECK: !ac.resource_ref<@Memory, @reader>
 // CHECK: !ac.duration<cycles>

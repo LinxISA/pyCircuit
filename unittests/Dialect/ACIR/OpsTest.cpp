@@ -7,9 +7,13 @@
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/MLIRContext.h"
+#include "mlir/IR/Verifier.h"
 #include "mlir/Interfaces/DataLayoutInterfaces.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
+#include "mlir/Parser/Parser.h"
 #include "gtest/gtest.h"
+
+#include <array>
 
 namespace acir::ac {
 namespace {
@@ -168,6 +172,86 @@ TEST(ACIROpsTest, PublicRegistryIncludesOnlyRequiredDLTIDependency) {
   mlir::MLIRContext context(registry);
   context.loadAllAvailableDialects();
   EXPECT_NE(context.getLoadedDialect("dlti"), nullptr);
+}
+
+TEST(ACIROpsTest, PublicBuildersConstructEveryTaskFiveOperation) {
+  mlir::MLIRContext context;
+  context.loadDialect<ACIRDialect>();
+  mlir::OpBuilder builder(&context);
+  auto loc = builder.getUnknownLoc();
+  auto module = mlir::ModuleOp::create(loc);
+  builder.setInsertionPointToStart(module.getBody());
+
+  auto protocol = ProtocolOp::create(builder, loc, "p");
+  builder.setInsertionPointToStart(&protocol.getBody().emplaceBlock());
+  auto roleA = RoleOp::create(builder, loc, "a", "b", "exclusive");
+  EXPECT_TRUE(roleA);
+  EXPECT_TRUE(RoleOp::create(builder, loc, "b", "a", "exclusive"));
+  EXPECT_TRUE(StateOp::create(builder, loc, "s", true, false));
+  EXPECT_TRUE(EventOp::create(builder, loc, "e", "a", "b", builder.getI8Type(),
+                              "notify"));
+  auto transition =
+      TransitionOp::create(builder, loc, "s", "s", "e", nullptr, false, false);
+  transition.getGuard().emplaceBlock();
+  EXPECT_TRUE(transition);
+  EXPECT_TRUE(GuaranteeOp::create(builder, loc, "ordering",
+                                  builder.getStringAttr("fifo")));
+
+  builder.setInsertionPointAfter(protocol);
+  auto interface = InterfaceOp::create(builder, loc, "I");
+  builder.setInsertionPointToStart(&interface.getBody().emplaceBlock());
+  EXPECT_TRUE(RoleOp::create(builder, loc, "source", "sink", "exclusive"));
+  EXPECT_TRUE(RoleOp::create(builder, loc, "sink", "source", "exclusive"));
+  auto channel = ChannelType::get(&context, builder.getI8Type(),
+                                  mlir::FlatSymbolRefAttr::get(&context, "p"));
+  EXPECT_TRUE(PortOp::create(builder, loc, "data", channel, "source", "sink"));
+  EXPECT_TRUE(mlir::isa<ProtocolContainerOpInterface>(protocol.getOperation()));
+  EXPECT_TRUE(
+      mlir::isa<InterfaceContainerOpInterface>(interface.getOperation()));
+  EXPECT_TRUE(mlir::isa<mlir::RegionKindInterface>(protocol.getOperation()));
+  EXPECT_TRUE(mlir::isa<mlir::RegionKindInterface>(interface.getOperation()));
+  EXPECT_TRUE(mlir::isMemoryEffectFree(roleA.getOperation()));
+  EXPECT_TRUE(mlir::succeeded(mlir::verify(module)));
+}
+
+TEST(ACIROpsTest, TaskFiveRegistryContainsExactlyTheRequiredNewOperations) {
+  mlir::MLIRContext context;
+  context.loadDialect<ACIRDialect>();
+  const std::array<llvm::StringLiteral, 8> names = {
+      "ac.interface", "ac.protocol",   "ac.role",      "ac.state",
+      "ac.event",     "ac.transition", "ac.guarantee", "ac.port",
+  };
+  for (llvm::StringLiteral name : names)
+    EXPECT_TRUE(mlir::OperationName(name, &context).isRegistered())
+        << name.str();
+  EXPECT_FALSE(mlir::OperationName("ac.connect", &context).isRegistered());
+  EXPECT_FALSE(mlir::OperationName("ac.ready_valid", &context).isRegistered());
+}
+
+TEST(ACIROpsTest, TransitionTableRejectsAmbiguousRowsDeterministically) {
+  mlir::MLIRContext context;
+  context.loadDialect<ACIRDialect>();
+  constexpr llvm::StringLiteral source = R"mlir(
+    builtin.module {
+      "ac.protocol"() <{sym_name = "p"}> ({
+        "ac.role"() <{sym_name = "a", dual = @b, cardinality = "exclusive"}> : () -> ()
+        "ac.role"() <{sym_name = "b", dual = @a, cardinality = "exclusive"}> : () -> ()
+        "ac.state"() <{sym_name = "s", initial = true, terminal = false}> : () -> ()
+        "ac.event"() <{sym_name = "e", from = @a, to = @b, payload = i8, action = "notify"}> : () -> ()
+        "ac.transition"() <{source = @s, target = @s, event = @e}> ({}) : () -> ()
+        "ac.transition"() <{source = @s, target = @s, event = @e}> ({}) : () -> ()
+      }) : () -> ()
+    }
+  )mlir";
+  std::string diagnostic;
+  mlir::ScopedDiagnosticHandler handler(&context, [&](mlir::Diagnostic &value) {
+    llvm::raw_string_ostream(diagnostic) << value;
+    return mlir::success();
+  });
+  EXPECT_FALSE(mlir::parseSourceString<mlir::ModuleOp>(source, &context));
+  EXPECT_NE(
+      diagnostic.find("overlapping transitions require explicit priority"),
+      std::string::npos);
 }
 
 } // namespace
