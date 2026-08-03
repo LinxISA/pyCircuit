@@ -89,10 +89,36 @@ def markdown_destination(raw_target):
     return target.split(maxsplit=1)[0]
 
 
+def markdown_prose_lines(path):
+    prose = []
+    fence_character = None
+    fence_length = 0
+    for line in path.read_text().splitlines():
+        if fence_character is not None:
+            closing_fence = rf"^ {{0,3}}{re.escape(fence_character)}{{{fence_length},}}\s*$"
+            if re.match(closing_fence, line):
+                fence_character = None
+                fence_length = 0
+            prose.append("")
+            continue
+
+        opening_fence = re.match(r"^ {0,3}(`{3,}|~{3,})", line)
+        if opening_fence:
+            fence = opening_fence.group(1)
+            fence_character = fence[0]
+            fence_length = len(fence)
+            prose.append("")
+        elif line.startswith("    ") or line.startswith("\t"):
+            prose.append("")
+        else:
+            prose.append(line)
+    return prose
+
+
 def github_heading_anchors(path):
     anchors = set()
     counts = {}
-    lines = path.read_text().splitlines()
+    lines = markdown_prose_lines(path)
     headings = []
     for index, line in enumerate(lines):
         atx = re.match(r"^ {0,3}#{1,6}\s+(.+?)\s*#*\s*$", line)
@@ -124,7 +150,8 @@ def check_links(errors):
     pattern = re.compile(r"!?\[[^\]]*\]\(([^)]+)\)")
     anchor_cache = {}
     for path in tracked_markdown_files():
-        for raw_target in pattern.findall(path.read_text()):
+        prose = "\n".join(markdown_prose_lines(path))
+        for raw_target in pattern.findall(prose):
             target = markdown_destination(raw_target)
             if not target or target.startswith("//") or re.match(
                 r"^[a-z][a-z0-9+.-]*:", target, re.IGNORECASE

@@ -185,6 +185,50 @@ class RepositoryContractsTest(unittest.TestCase):
         self.assertTrue(errors, "missing Markdown fragment was not checked")
         self.assertIn("guide.md#missing-heading", errors[0])
 
+    def test_checker_ignores_links_in_fenced_and_indented_code(self):
+        temporary_directory, root = initialize_markdown_fixture(
+            {
+                "README.md": (
+                    "# Fixture\n\n"
+                    "```markdown\n"
+                    "[fenced](missing-fenced.txt)\n"
+                    "![fenced image](missing-fenced.png)\n"
+                    "```\n\n"
+                    "    [indented](missing-indented.txt)\n"
+                ),
+            }
+        )
+        self.addCleanup(temporary_directory.cleanup)
+        checker = load_contract_checker()
+        checker.ROOT = root
+        errors = []
+
+        checker.check_links(errors)
+
+        self.assertEqual([], errors, f"code example links were checked: {errors}")
+
+    def test_code_example_headings_do_not_satisfy_fragments(self):
+        temporary_directory, root = initialize_markdown_fixture(
+            {
+                "README.md": "# Fixture\n\n[section](guide.md#example-heading)\n",
+                "guide.md": (
+                    "# Guide\n\n"
+                    "```markdown\n"
+                    "# Example Heading\n"
+                    "```\n"
+                ),
+            }
+        )
+        self.addCleanup(temporary_directory.cleanup)
+        checker = load_contract_checker()
+        checker.ROOT = root
+        errors = []
+
+        checker.check_links(errors)
+
+        self.assertTrue(errors, "code example heading satisfied a real fragment")
+        self.assertIn("guide.md#example-heading", errors[0])
+
     def test_repository_has_no_placeholder_markers(self):
         offenders = []
         marker = re.compile(r"\b(?:TODO|TBD|FIXME|XXX)\b")
