@@ -2,9 +2,11 @@
 #define ACIR_DIALECT_ACIR_GRAPHREGION_H
 
 #include "mlir/IR/Attributes.h"
+#include "mlir/IR/DialectInterface.h"
 #include "mlir/Support/LogicalResult.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/StringRef.h"
+#include "llvm/ADT/StringSet.h"
 
 #include <string>
 
@@ -13,6 +15,37 @@ class Operation;
 }
 
 namespace acir::ac {
+
+class ACIRDialect;
+
+/// Context-owned registry of exact build-time structural providers. The
+/// registry is populated by dialect-registry extensions before parsing and is
+/// never model/runtime configuration.
+class StructuralProviderRegistry {
+public:
+  void registerExternal(llvm::StringRef name);
+  void registerGenerator(llvm::StringRef name);
+  bool hasExternal(llvm::StringRef name) const;
+  bool hasGenerator(llvm::StringRef name) const;
+
+private:
+  llvm::StringSet<> externalProviders;
+  llvm::StringSet<> generatorProviders;
+};
+
+class StructuralProviderDialectInterface
+    : public mlir::DialectInterface::Base<StructuralProviderDialectInterface> {
+public:
+  explicit StructuralProviderDialectInterface(mlir::Dialect *dialect)
+      : Base(dialect) {}
+  StructuralProviderRegistry &getRegistry() { return registry; }
+
+private:
+  StructuralProviderRegistry registry;
+};
+
+StructuralProviderRegistry &
+getStructuralProviderRegistry(mlir::MLIRContext *context);
 
 /// Verifies whole-file hierarchy selection, stable ownership identities and
 /// the statically-resolved subset of topology freeze implemented by ACIR v0.1.

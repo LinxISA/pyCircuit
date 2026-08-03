@@ -6,5 +6,5 @@ configure_lit_site_cfg(
 
 add_lit_testsuite(check-acir "Running Agentic Circuit lit tests"
   "${CMAKE_CURRENT_BINARY_DIR}"
-  DEPENDS acir-opt
+  DEPENDS acir-opt acir-opt-internal
 )

@@ -2,8 +2,8 @@
 // RUN: %acir_opt %s | %acir_opt | %FileCheck %s
 
 builtin.module attributes {ac.contract_epoch = "0.1"} {
-  "ac.system"() <{sym_name = "soc", root = @Top, root_name = "root", tick_epoch = 0 : i64, tick_unit = "cycle", seed_policy = {kind = "fixed", value = 7 : i64}, instrumentation = [], result_schema = {kind = "none"}, selected = true}> : () -> ()
-  "ac.system"() <{sym_name = "leaf_harness", root = @Leaf, root_name = "leaf", tick_epoch = 0 : i64, tick_unit = "cycle", seed_policy = {kind = "fixed", value = 9 : i64}, instrumentation = [], result_schema = {kind = "none"}, selected = false}> : () -> ()
+  "ac.system"() <{sym_name = "soc", root = @Top, root_name = "root", tick_epoch = 0 : i64, tick_unit = "cycle", seed_policy = {kind = "fixed", value = 7 : i64}, instrumentation = [], result_schema = {id = "default", format = "json"}, selected = true}> : () -> ()
+  "ac.system"() <{sym_name = "leaf_harness", root = @Leaf, root_name = "leaf", tick_epoch = 0 : i64, tick_unit = "cycle", seed_policy = {kind = "fixed", value = 9 : i64}, instrumentation = [], result_schema = {id = "default", format = "json"}, selected = false}> : () -> ()
 
   "ac.module"() <{sym_name = "Top", function_type = (i32) -> i32, static_params = {}}> ({
   ^bb0(%arg0 : i32):

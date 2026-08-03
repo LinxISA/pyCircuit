@@ -273,7 +273,9 @@ def ACIR_ArrayOp : ACIR_Op<"array", [Pure]> {
 }
 
 def ACIR_InstancesOp : ACIR_Op<"instances", [Pure]> {
-  let arguments = (ins Variadic<AnyType>:$inputs, ArrayAttr:$definitions,
+  let arguments = (ins Variadic<AnyType>:$inputs,
+                       SymbolNameAttr:$sym_name, StrAttr:$stable_id,
+                       StrAttr:$path, ArrayAttr:$definitions,
                        StrArrayAttr:$names, StrArrayAttr:$stable_ids,
                        StrArrayAttr:$paths,
                        TypeAttrOf<FunctionType>:$interface,
@@ -281,20 +283,24 @@ def ACIR_InstancesOp : ACIR_Op<"instances", [Pure]> {
   let results = (outs Variadic<AnyType>:$outputs);
   let hasVerifier = 1;
   let assemblyFormat = [{
-    `definitions` $definitions `names` $names `ids` $stable_ids
+    $sym_name `definitions` $definitions `names` $names `ids` $stable_ids
     `paths` $paths `interface` $interface `(` $inputs `)`
-    `static` $static_args attr-dict `:` functional-type($inputs, $outputs)
+    `static` $static_args `id` $stable_id `path` $path attr-dict
+    `:` functional-type($inputs, $outputs)
   }];
 }
 
 def ACIR_ViewOp : ACIR_Op<"view", [Pure]> {
   let arguments = (ins Variadic<AnyType>:$inputs, StrAttr:$kind,
+                       ArrayAttr:$source_shapes,
+                       OptionalAttr<I64Attr>:$axis,
                        DenseI64ArrayAttr:$indices,
                        DenseI64ArrayAttr:$shape);
   let results = (outs Variadic<AnyType>:$outputs);
   let hasVerifier = 1;
   let assemblyFormat = [{
-    $kind `(` $inputs `)` `indices` $indices `shape` $shape attr-dict
+    $kind `(` $inputs `)` `sources` $source_shapes (`axis` $axis^)?
+    `indices` $indices `shape` $shape attr-dict
     `:` functional-type($inputs, $outputs)
   }];
 }

@@ -1,4 +1,5 @@
 #include "acir/Dialect/ACIR/ACIRDialect.h"
+#include "acir/Dialect/ACIR/GraphRegion.h"
 
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/Diagnostics.h"
@@ -207,6 +208,7 @@ ACIR_DEFINE_NAMED_LAYOUT(UnionType, false)
 #include "acir/Dialect/ACIR/ACIRTypes.cpp.inc"
 
 void acir::ac::ACIRDialect::initialize() {
+  addInterfaces<StructuralProviderDialectInterface>();
   addTypes<
 #define GET_TYPEDEF_LIST
 #include "acir/Dialect/ACIR/ACIRTypes.cpp.inc"

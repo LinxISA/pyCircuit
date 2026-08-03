@@ -287,6 +287,8 @@ TEST(ACIROpsTest, TaskFiveRegistryContainsExactlyTheRequiredNewOperations) {
 TEST(ACIROpsTest, PublicBuildersConstructEveryTaskSixOperation) {
   mlir::MLIRContext context;
   context.loadDialect<ACIRDialect>();
+  getStructuralProviderRegistry(&context).registerExternal("Leaf");
+  getStructuralProviderRegistry(&context).registerGenerator("Generated");
   mlir::OpBuilder builder(&context);
   auto loc = builder.getUnknownLoc();
   auto file = mlir::ModuleOp::create(loc);
@@ -326,14 +328,16 @@ TEST(ACIROpsTest, PublicBuildersConstructEveryTaskSixOperation) {
       mlir::FlatSymbolRefAttr::get(&context, "Generated"),
   });
   auto instances = InstancesOp::create(
-      builder, loc, mlir::TypeRange{}, mlir::ValueRange{}, definitions,
-      builder.getStrArrayAttr({"a", "b"}),
+      builder, loc, mlir::TypeRange{}, mlir::ValueRange{}, "mixed", "mixed",
+      "mixed", definitions, builder.getStrArrayAttr({"a", "b"}),
       builder.getStrArrayAttr({"mix-a", "mix-b"}),
       builder.getStrArrayAttr({"mix_a", "mix_b"}), emptyType,
       builder.getArrayAttr({emptyDictionary, emptyDictionary}));
   auto view = ViewOp::create(
-      builder, loc, mlir::TypeRange{}, mlir::ValueRange{}, "concat",
-      llvm::ArrayRef<int64_t>{}, llvm::ArrayRef<int64_t>{0});
+      builder, loc, mlir::TypeRange{}, mlir::ValueRange{}, "permutation",
+      builder.getArrayAttr({builder.getDenseI64ArrayAttr({0})}),
+      mlir::IntegerAttr(), llvm::ArrayRef<int64_t>{},
+      llvm::ArrayRef<int64_t>{0});
   auto returnOp = ReturnOp::create(builder, loc, mlir::ValueRange{});
   EXPECT_TRUE(instance);
   EXPECT_TRUE(array);
@@ -346,8 +350,10 @@ TEST(ACIROpsTest, PublicBuildersConstructEveryTaskSixOperation) {
       builder.getNamedAttr("kind", builder.getStringAttr("fixed")),
       builder.getNamedAttr("value", builder.getI64IntegerAttr(0)),
   });
-  auto resultSchema = builder.getDictionaryAttr(
-      {builder.getNamedAttr("kind", builder.getStringAttr("none"))});
+  auto resultSchema = builder.getDictionaryAttr({
+      builder.getNamedAttr("id", builder.getStringAttr("default")),
+      builder.getNamedAttr("format", builder.getStringAttr("json")),
+  });
   auto system = SystemOp::create(builder, loc, "soc", "Top", "root", 0, "cycle",
                                  mlir::FlatSymbolRefAttr(), seedPolicy,
                                  builder.getArrayAttr({}), resultSchema, true);
@@ -377,6 +383,7 @@ TEST(ACIROpsTest, TaskSixRegistryDeltaIsExactlyNineGraphOperations) {
 TEST(ACIROpsTest, LargeArrayVerificationIsDeterministic) {
   mlir::MLIRContext context;
   context.loadDialect<ACIRDialect>();
+  getStructuralProviderRegistry(&context).registerExternal("Leaf");
   mlir::OpBuilder builder(&context);
   auto loc = builder.getUnknownLoc();
   auto file = mlir::ModuleOp::create(loc);
@@ -403,6 +410,108 @@ TEST(ACIROpsTest, LargeArrayVerificationIsDeterministic) {
   EXPECT_TRUE(mlir::succeeded(verifyGraphStructure(file)));
   EXPECT_EQ(buildArrayElementPath("root.large", {1, 2, 3}),
             "root.large[1][2][3]");
+}
+
+TEST(ACIROpsTest, ModulePortMetadataPrintsAndReparsesCanonically) {
+  mlir::MLIRContext context;
+  context.loadDialect<ACIRDialect>();
+  constexpr llvm::StringLiteral source = R"mlir(
+    ac.module @M(%x : i32 {ac.port_name = "input"})
+        -> (i32 {ac.port_name = "output"}) parameters {}
+        attributes {ac.graph_label = "graph"} graph {
+      ac.return %x : i32
+    }
+  )mlir";
+  auto module = mlir::parseSourceString<mlir::ModuleOp>(source, &context);
+  ASSERT_TRUE(module);
+  auto operation = *module->getOps<ModuleOp>().begin();
+  ASSERT_TRUE(operation.getArgAttrsAttr());
+  ASSERT_TRUE(operation.getResAttrsAttr());
+  std::string printed;
+  llvm::raw_string_ostream(printed) << *module;
+  auto reparsed = mlir::parseSourceString<mlir::ModuleOp>(printed, &context);
+  ASSERT_TRUE(reparsed);
+  auto reparsedOperation = *reparsed->getOps<ModuleOp>().begin();
+  EXPECT_EQ(operation.getArgAttrsAttr(), reparsedOperation.getArgAttrsAttr());
+  EXPECT_EQ(operation.getResAttrsAttr(), reparsedOperation.getResAttrsAttr());
+  EXPECT_EQ(operation->getAttr("ac.graph_label"),
+            reparsedOperation->getAttr("ac.graph_label"));
+}
+
+TEST(ACIROpsTest, StructuralProvidersAreContextOwnedAndExact) {
+  mlir::MLIRContext context;
+  context.loadDialect<ACIRDialect>();
+  auto &providers = getStructuralProviderRegistry(&context);
+  providers.registerExternal("test.external");
+  providers.registerGenerator("test.generator");
+  EXPECT_TRUE(providers.hasExternal("test.external"));
+  EXPECT_TRUE(providers.hasGenerator("test.generator"));
+  EXPECT_FALSE(providers.hasExternal("test.generator"));
+  EXPECT_FALSE(providers.hasGenerator("test.external"));
+}
+
+TEST(ACIROpsTest, HierarchyDepthAndOwnerBudgetsRejectCompactGraphs) {
+  auto buildGraph = [](mlir::MLIRContext &context, unsigned moduleCount,
+                       unsigned fanout, llvm::StringRef prefix) {
+    mlir::OpBuilder builder(&context);
+    auto loc = builder.getUnknownLoc();
+    auto file = mlir::ModuleOp::create(loc);
+    auto emptyType = builder.getFunctionType({}, {});
+    auto emptyDictionary = builder.getDictionaryAttr({});
+    builder.setInsertionPointToStart(file.getBody());
+    for (unsigned index = 0; index != moduleCount; ++index) {
+      std::string name = (prefix + std::to_string(index)).str();
+      auto module =
+          ModuleOp::create(builder, loc, name, emptyType, emptyDictionary);
+      builder.setInsertionPointToStart(module.addEntryBlock());
+      if (index + 1 != moduleCount) {
+        std::string target = (prefix + std::to_string(index + 1)).str();
+        for (unsigned child = 0; child != fanout; ++child) {
+          std::string segment = "child" + std::to_string(child);
+          InstanceOp::create(builder, loc, mlir::TypeRange{},
+                             mlir::ValueRange{}, target, segment, segment,
+                             segment, emptyDictionary);
+        }
+      }
+      ReturnOp::create(builder, loc, mlir::ValueRange{});
+      builder.setInsertionPointToEnd(file.getBody());
+    }
+    auto seed = builder.getDictionaryAttr({
+        builder.getNamedAttr("kind", builder.getStringAttr("fixed")),
+        builder.getNamedAttr("value", builder.getI64IntegerAttr(0)),
+    });
+    auto results = builder.getDictionaryAttr({
+        builder.getNamedAttr("id", builder.getStringAttr("budget")),
+        builder.getNamedAttr("format", builder.getStringAttr("json")),
+    });
+    std::string root = (prefix + "0").str();
+    SystemOp::create(builder, loc, "budget", root, "root", 0, "cycle",
+                     mlir::FlatSymbolRefAttr(), seed, builder.getArrayAttr({}),
+                     results, true);
+    return file;
+  };
+
+  mlir::MLIRContext context;
+  context.loadDialect<ACIRDialect>();
+  llvm::SmallVector<std::string> diagnostics;
+  mlir::ScopedDiagnosticHandler handler(
+      &context, [&](mlir::Diagnostic &diagnostic) {
+        std::string text;
+        llvm::raw_string_ostream(text) << diagnostic;
+        diagnostics.push_back(std::move(text));
+        return mlir::success();
+      });
+  auto tooDeep = buildGraph(context, 1026, 1, "Depth");
+  EXPECT_TRUE(mlir::failed(verifyGraphStructure(tooDeep)));
+  EXPECT_TRUE(llvm::any_of(diagnostics, [](llvm::StringRef diagnostic) {
+    return diagnostic.contains("hierarchy depth exceeds bound 1024");
+  }));
+  diagnostics.clear();
+  auto tooWide = buildGraph(context, 21, 2, "Wide");
+  EXPECT_TRUE(mlir::failed(verifyGraphStructure(tooWide)));
+  EXPECT_TRUE(llvm::any_of(diagnostics, [](llvm::StringRef diagnostic) {
+    return diagnostic.contains("owner count exceeds bound 1048576");
+  }));
 }
 
 TEST(ACIROpsTest, TopologyVerifierWalksTypeAttributesAndLocations) {

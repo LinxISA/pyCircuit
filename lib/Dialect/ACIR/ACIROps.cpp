@@ -1147,10 +1147,11 @@ Operation *lookupGraphSymbol(Operation *from, FlatSymbolRefAttr name) {
 
 LogicalResult verifyConcreteDictionary(Operation *op, DictionaryAttr values,
                                        StringRef subject) {
-  if (!isConcreteStaticValue(values))
-    return op->emitOpError() << subject
-                             << " must contain only concrete builtin static "
-                                "values";
+  for (NamedAttribute value : values)
+    if (!isConcreteStaticValue(value.getValue()))
+      return op->emitOpError() << subject
+                               << " must contain only concrete builtin static "
+                                  "values";
   LogicalResult result = success();
   values.walk([&](SymbolRefAttr reference) {
     if (SymbolTable::lookupNearestSymbolFrom(op, reference))
@@ -1163,6 +1164,24 @@ LogicalResult verifyConcreteDictionary(Operation *op, DictionaryAttr values,
   if (failed(result))
     return failure();
   return success();
+}
+
+LogicalResult verifyOuterPlacement(Operation *op) {
+  auto outer = dyn_cast_or_null<mlir::ModuleOp>(op->getParentOp());
+  if (outer &&
+      (!outer->getParentOp() || (isa<mlir::ModuleOp>(outer->getParentOp()) &&
+                                 !outer->getParentOp()->getParentOp())))
+    return success();
+  return op->emitOpError("must be a direct child of the outer builtin.module");
+}
+
+LogicalResult verifyStructuralPlacement(Operation *op) {
+  auto module = dyn_cast_or_null<ModuleOp>(op->getParentOp());
+  if (module && !module.getBody().empty() &&
+      op->getBlock() == &module.getBody().front())
+    return success();
+  return op->emitOpError(
+      "must be a direct child of the unique ac.module Graph block");
 }
 
 LogicalResult verifyExactBinding(Operation *op, DictionaryAttr binding,
@@ -1203,9 +1222,13 @@ LogicalResult verifyStaticArgumentSet(Operation *op, DictionaryAttr arguments,
         "static argument names must exactly match definition parameters");
   for (NamedAttribute parameter : parameters) {
     Attribute argument = arguments.get(parameter.getName());
-    if (!argument || argument.getTypeID() != parameter.getValue().getTypeID())
+    if (!argument)
       return op->emitOpError(
           "static argument names must exactly match definition parameters");
+    if (argument.getTypeID() != parameter.getValue().getTypeID())
+      return op->emitOpError()
+             << "static argument '" << parameter.getName().getValue()
+             << "' must match parameter attribute kind";
     auto parameterInteger = dyn_cast<IntegerAttr>(parameter.getValue());
     auto argumentInteger = dyn_cast<IntegerAttr>(argument);
     if (parameterInteger &&
@@ -1214,6 +1237,16 @@ LogicalResult verifyStaticArgumentSet(Operation *op, DictionaryAttr arguments,
              << "static argument '" << parameter.getName().getValue()
              << "' must match parameter attribute type "
              << parameterInteger.getType();
+    auto parameterUnit = dyn_cast<DictionaryAttr>(parameter.getValue());
+    if (parameterUnit) {
+      auto argumentUnit = cast<DictionaryAttr>(argument);
+      if (parameterUnit.getAs<StringAttr>("unit") !=
+          argumentUnit.getAs<StringAttr>("unit"))
+        return op->emitOpError()
+               << "static argument '" << parameter.getName().getValue()
+               << "' must preserve unit '"
+               << parameterUnit.getAs<StringAttr>("unit").getValue() << "'";
+    }
   }
   return success();
 }
@@ -1231,6 +1264,8 @@ bool isStableHierarchySegment(StringRef segment) {
 } // namespace
 
 LogicalResult SystemOp::verify() {
+  if (failed(verifyOuterPlacement(*this)))
+    return failure();
   if (!isStableHierarchySegment(getRootName()))
     return emitOpError(
         "root instance name must be one stable hierarchy segment");
@@ -1239,24 +1274,32 @@ LogicalResult SystemOp::verify() {
   if (!hasStringValue(getTickUnit(), {"cycle", "ps", "ns", "us", "ms", "s"}))
     return emitOpError() << "unsupported exact global tick unit '"
                          << getTickUnit() << "'";
-  if (failed(verifyConcreteDictionary(*this, getSeedPolicy(), "seed policy")) ||
-      failed(
-          verifyConcreteDictionary(*this, getResultSchema(), "result schema")))
-    return failure();
   auto seedKind = getSeedPolicy().getAs<StringAttr>("kind");
   auto seedValue = getSeedPolicy().getAs<IntegerAttr>("value");
   if (getSeedPolicy().size() != 2 || !seedKind ||
-      seedKind.getValue() != "fixed" || !seedValue)
-    return emitOpError("seed policy requires exact {kind = \"fixed\", value = "
-                       "integer} schema");
-  auto resultKind = getResultSchema().getAs<StringAttr>("kind");
-  if (!resultKind || resultKind.getValue().empty())
-    return emitOpError("result schema requires a non-empty string 'kind'");
-  if (!llvm::all_of(getInstrumentation(), [](Attribute value) {
-        return isa<StringAttr, SymbolRefAttr>(value);
-      }))
+      seedKind.getValue() != "fixed" || !seedValue ||
+      !seedValue.getType().isSignlessInteger(64))
     return emitOpError(
-        "instrumentation must be an ordered list of static names");
+        "seed policy requires exact {kind = \"fixed\", value = signless i64} "
+        "schema");
+  if (seedValue.getInt() < 0)
+    return emitOpError("fixed seed value must be a non-negative signless i64");
+  auto resultId = getResultSchema().getAs<StringAttr>("id");
+  auto resultFormat = getResultSchema().getAs<StringAttr>("format");
+  if (getResultSchema().size() != 2 || !resultId ||
+      resultId.getValue().empty() || !resultFormat ||
+      resultFormat.getValue() != "json")
+    return emitOpError("result schema requires exact {id = non-empty string, "
+                       "format = \"json\"}");
+  for (Attribute value : getInstrumentation()) {
+    auto reference = dyn_cast<SymbolRefAttr>(value);
+    if (!reference)
+      return emitOpError("instrumentation entries must be symbol references");
+    Operation *target = SymbolTable::lookupNearestSymbolFrom(*this, reference);
+    if (!target || target->getName().getStringRef() != "ac.instrumentation")
+      return emitOpError() << "instrumentation reference '" << reference
+                           << "' does not resolve to ac.instrumentation";
+  }
   return success();
 }
 
@@ -1264,13 +1307,38 @@ ParseResult ModuleOp::parse(OpAsmParser &parser, OperationState &result) {
   StringAttr name;
   SmallVector<OpAsmParser::Argument> arguments;
   SmallVector<Type> results;
+  SmallVector<DictionaryAttr> resultAttrs;
+  bool isVariadic = false;
   if (parser.parseSymbolName(name, SymbolTable::getSymbolAttrName(),
                              result.attributes) ||
-      parser.parseArgumentList(arguments, OpAsmParser::Delimiter::Paren,
-                               /*allowType=*/true,
-                               /*allowAttrs=*/false) ||
-      parser.parseOptionalArrowTypeList(results))
+      function_interface_impl::parseFunctionSignatureWithArguments(
+          parser, /*allowVariadic=*/false, arguments, isVariadic, results,
+          resultAttrs))
     return failure();
+
+  SmallVector<Attribute> argumentAttrs;
+  argumentAttrs.reserve(arguments.size());
+  bool hasArgumentAttrs = false;
+  for (const OpAsmParser::Argument &argument : arguments) {
+    DictionaryAttr attrs = argument.attrs;
+    hasArgumentAttrs |= static_cast<bool>(attrs) && !attrs.empty();
+    argumentAttrs.push_back(attrs ? attrs
+                                  : parser.getBuilder().getDictionaryAttr({}));
+  }
+  if (hasArgumentAttrs)
+    result.addAttribute("arg_attrs",
+                        parser.getBuilder().getArrayAttr(argumentAttrs));
+  if (llvm::any_of(resultAttrs, [](DictionaryAttr attrs) {
+        return attrs && !attrs.empty();
+      })) {
+    SmallVector<Attribute> normalizedResultAttrs;
+    normalizedResultAttrs.reserve(resultAttrs.size());
+    for (DictionaryAttr attrs : resultAttrs)
+      normalizedResultAttrs.push_back(
+          attrs ? attrs : parser.getBuilder().getDictionaryAttr({}));
+    result.addAttribute(
+        "res_attrs", parser.getBuilder().getArrayAttr(normalizedResultAttrs));
+  }
 
   DictionaryAttr staticParameters;
   if (succeeded(parser.parseOptionalKeyword("parameters"))) {
@@ -1292,7 +1360,7 @@ ParseResult ModuleOp::parse(OpAsmParser &parser, OperationState &result) {
       "function_type",
       TypeAttr::get(parser.getBuilder().getFunctionType(inputs, results)));
   Region *body = result.addRegion();
-  return parser.parseRegion(*body, arguments, /*enableNameShadowing=*/true);
+  return parser.parseRegion(*body, arguments, /*enableNameShadowing=*/false);
 }
 
 void ModuleOp::print(OpAsmPrinter &printer) {
@@ -1312,6 +1380,8 @@ void ModuleOp::print(OpAsmPrinter &printer) {
 }
 
 LogicalResult ModuleOp::verify() {
+  if (failed(verifyOuterPlacement(*this)))
+    return failure();
   if (failed(verifyConcreteDictionary(*this, getStaticParams(),
                                       "static parameters")))
     return failure();
@@ -1320,31 +1390,79 @@ LogicalResult ModuleOp::verify() {
   Block &entry = getBody().front();
   if (!llvm::equal(entry.getArgumentTypes(), getFunctionType().getInputs()))
     return emitOpError("Graph region arguments must match module signature");
-  for (Operation &child : entry)
+  llvm::StringSet<> localNames;
+  llvm::StringSet<> stableIds;
+  llvm::StringSet<> paths;
+  for (Operation &child : entry) {
     if (!isStructuralGraphChild(child))
       return child.emitOpError(
           "operation is not legal in an ac.module structural Graph region");
+    StringAttr localName;
+    StringAttr stableId;
+    StringAttr path;
+    if (auto instance = dyn_cast<InstanceOp>(child)) {
+      localName = instance.getSymNameAttr();
+      stableId = instance.getStableIdAttr();
+      path = instance.getPathAttr();
+    } else if (auto array = dyn_cast<ArrayOp>(child)) {
+      localName = array.getSymNameAttr();
+      stableId = array.getStableIdAttr();
+      path = array.getPathAttr();
+    } else if (auto instances = dyn_cast<InstancesOp>(child)) {
+      localName = instances.getSymNameAttr();
+      stableId = instances.getStableIdAttr();
+      path = instances.getPathAttr();
+    }
+    if (localName && !localNames.insert(localName.getValue()).second)
+      return child.emitOpError() << "duplicate local structural name '"
+                                 << localName.getValue() << "'";
+    if (stableId && !stableIds.insert(stableId.getValue()).second)
+      return child.emitOpError() << "duplicate local structural stable id '"
+                                 << stableId.getValue() << "'";
+    if (path && !paths.insert(path.getValue()).second)
+      return child.emitOpError()
+             << "duplicate local structural path '" << path.getValue() << "'";
+  }
   if (entry.empty() || !isa<ReturnOp>(entry.back()))
     return emitOpError("module Graph region must end with ac.return");
   return success();
 }
 
 LogicalResult ModuleExternOp::verify() {
+  if (failed(verifyOuterPlacement(*this)))
+    return failure();
   if (failed(verifyConcreteDictionary(*this, getStaticParams(),
                                       "static parameters")))
     return failure();
-  return verifyExactBinding(*this, getImplementation(),
-                            "external module implementation", "cpp");
+  if (failed(verifyExactBinding(*this, getImplementation(),
+                                "external module implementation", "cpp")))
+    return failure();
+  StringRef name = getImplementation().getAs<StringAttr>("name").getValue();
+  if (!getStructuralProviderRegistry(getContext()).hasExternal(name))
+    return emitOpError() << "structural provider 'cpp:" << name
+                         << "' is not registered";
+  return success();
 }
 
 LogicalResult ModuleGeneratedOp::verify() {
+  if (failed(verifyOuterPlacement(*this)))
+    return failure();
   if (failed(verifyConcreteDictionary(*this, getStaticParams(),
                                       "static parameters")))
     return failure();
-  return verifyExactBinding(*this, getGenerator(), "generated module", "ac");
+  if (failed(
+          verifyExactBinding(*this, getGenerator(), "generated module", "ac")))
+    return failure();
+  StringRef name = getGenerator().getAs<StringAttr>("name").getValue();
+  if (!getStructuralProviderRegistry(getContext()).hasGenerator(name))
+    return emitOpError() << "structural provider 'ac:" << name
+                         << "' is not registered";
+  return success();
 }
 
 LogicalResult InstanceOp::verify() {
+  if (failed(verifyStructuralPlacement(*this)))
+    return failure();
   Operation *definition = lookupGraphSymbol(*this, getDefinitionAttr());
   if (!isa_and_nonnull<ModuleOp, ModuleExternOp, ModuleGeneratedOp>(definition))
     return emitOpError() << "unresolved module definition '"
@@ -1361,6 +1479,8 @@ LogicalResult InstanceOp::verify() {
 }
 
 LogicalResult ArrayOp::verify() {
+  if (failed(verifyStructuralPlacement(*this)))
+    return failure();
   Operation *definition = lookupGraphSymbol(*this, getDefinitionAttr());
   if (!isa_and_nonnull<ModuleOp, ModuleExternOp, ModuleGeneratedOp>(definition))
     return emitOpError() << "unresolved array element definition '"
@@ -1398,22 +1518,35 @@ LogicalResult ArrayOp::verify() {
       return emitOpError(
           "array static arguments must be concrete dictionaries");
   }
-  SmallVector<Type> expectedInputs;
-  SmallVector<Type> expectedOutputs;
-  for (uint64_t index = 0; index < count; ++index) {
-    expectedInputs.append(signature.getInputs().begin(),
-                          signature.getInputs().end());
-    expectedOutputs.append(signature.getResults().begin(),
-                           signature.getResults().end());
-  }
-  if (!llvm::equal(getInputs().getTypes(), expectedInputs) ||
-      !llvm::equal(getOutputs().getTypes(), expectedOutputs))
+  auto matchesRepeatedSignature = [count](TypeRange actual,
+                                          TypeRange elementTypes) {
+    if (elementTypes.empty())
+      return actual.empty();
+    if (count > std::numeric_limits<uint64_t>::max() / elementTypes.size() ||
+        actual.size() != count * elementTypes.size())
+      return false;
+    for (auto [index, type] : llvm::enumerate(actual))
+      if (type != elementTypes[index % elementTypes.size()])
+        return false;
+    return true;
+  };
+  if (!matchesRepeatedSignature(getInputs().getTypes(),
+                                signature.getInputs()) ||
+      !matchesRepeatedSignature(getOutputs().getTypes(),
+                                signature.getResults()))
     return emitOpError("array flattened interface shape does not match element "
                        "signature and static cardinality");
   return success();
 }
 
 LogicalResult InstancesOp::verify() {
+  if (failed(verifyStructuralPlacement(*this)))
+    return failure();
+  if (!isStableHierarchySegment(getSymName()) ||
+      !isStableHierarchySegment(getStableId()) ||
+      !isStableHierarchySegment(getPath()))
+    return emitOpError("collection name, stable id, and path must be stable "
+                       "local segments");
   size_t count = getDefinitions().size();
   if (count == 0 || getNames().size() != count ||
       getStableIds().size() != count || getPaths().size() != count ||
@@ -1422,6 +1555,7 @@ LogicalResult InstancesOp::verify() {
                        "non-zero cardinality");
   llvm::SmallDenseSet<StringRef> names;
   llvm::SmallDenseSet<StringRef> ids;
+  llvm::SmallDenseSet<StringRef> paths;
   for (size_t index = 0; index < count; ++index) {
     auto definition = dyn_cast<FlatSymbolRefAttr>(getDefinitions()[index]);
     if (!definition)
@@ -1444,88 +1578,258 @@ LogicalResult InstancesOp::verify() {
         !isStableHierarchySegment(id) || !ids.insert(id).second)
       return emitOpError("collection names and stable ids must be non-empty "
                          "and unique in declared order");
-    if (!isStableHierarchySegment(path))
-      return emitOpError(
-          "collection paths must be stable parent-relative segments");
+    if (!isStableHierarchySegment(path) || !paths.insert(path).second)
+      return emitOpError("collection paths must be stable, unique "
+                         "parent-relative segments");
   }
-  SmallVector<Type> expectedInputs;
-  SmallVector<Type> expectedOutputs;
-  for (size_t index = 0; index < count; ++index) {
-    expectedInputs.append(getInterface().getInputs().begin(),
-                          getInterface().getInputs().end());
-    expectedOutputs.append(getInterface().getResults().begin(),
-                           getInterface().getResults().end());
-  }
-  if (!llvm::equal(getInputs().getTypes(), expectedInputs) ||
-      !llvm::equal(getOutputs().getTypes(), expectedOutputs))
+  auto matchesRepeatedInterface = [count](TypeRange actual,
+                                          TypeRange elementTypes) {
+    if (elementTypes.empty())
+      return actual.empty();
+    if (count > std::numeric_limits<size_t>::max() / elementTypes.size() ||
+        actual.size() != count * elementTypes.size())
+      return false;
+    for (auto [index, type] : llvm::enumerate(actual))
+      if (type != elementTypes[index % elementTypes.size()])
+        return false;
+    return true;
+  };
+  if (!matchesRepeatedInterface(getInputs().getTypes(),
+                                getInterface().getInputs()) ||
+      !matchesRepeatedInterface(getOutputs().getTypes(),
+                                getInterface().getResults()))
     return emitOpError("ordered collection IO does not match its common "
                        "interface shape");
   return success();
 }
 
 LogicalResult ViewOp::verify() {
+  if (failed(verifyStructuralPlacement(*this)))
+    return failure();
   ArrayRef<int64_t> indices = getIndices();
   ArrayRef<int64_t> shape = getShape();
-  if (shape.empty() ||
-      llvm::any_of(shape, [](int64_t value) { return value < 0; }))
+  if (llvm::any_of(shape, [](int64_t value) { return value < 0; }))
     return emitOpError("view shape must be fully static and non-negative");
-  auto requireIndex = [&](int64_t index) {
-    return index >= 0 && static_cast<size_t>(index) < getInputs().size();
+  auto checkedProduct = [&](ArrayRef<int64_t> dimensions,
+                            uint64_t &product) -> LogicalResult {
+    product = 1;
+    for (int64_t extent : dimensions) {
+      if (extent < 0)
+        return emitOpError(
+            "source shapes must be fully static and non-negative");
+      if (extent != 0 && product > std::numeric_limits<uint64_t>::max() /
+                                       static_cast<uint64_t>(extent))
+        return emitOpError("view cardinality overflows 64 bits");
+      product *= static_cast<uint64_t>(extent);
+    }
+    return success();
   };
-  SmallVector<Type> expected;
+
+  SmallVector<SmallVector<int64_t>> sourceShapes;
+  SmallVector<SmallVector<Value>> sources;
+  llvm::SmallDenseSet<Operation *> sourceProducers;
+  auto getProducerShape = [&](Operation *producer) {
+    SmallVector<int64_t> producerShape;
+    if (auto instance = dyn_cast<InstanceOp>(producer))
+      producerShape.push_back(instance.getNumResults());
+    else if (auto array = dyn_cast<ArrayOp>(producer)) {
+      producerShape.append(array.getShape().begin(), array.getShape().end());
+      producerShape.push_back(
+          graphSignature(lookupGraphSymbol(array, array.getDefinitionAttr()))
+              .getNumResults());
+    } else if (auto instances = dyn_cast<InstancesOp>(producer)) {
+      producerShape.push_back(instances.getDefinitions().size());
+      producerShape.push_back(instances.getInterface().getNumResults());
+    } else if (auto view = dyn_cast<ViewOp>(producer))
+      producerShape.append(view.getShape().begin(), view.getShape().end());
+    return producerShape;
+  };
+  size_t operandOffset = 0;
+  for (Attribute attribute : getSourceShapes()) {
+    auto sourceShape = dyn_cast<DenseI64ArrayAttr>(attribute);
+    if (!sourceShape)
+      return emitOpError("source_shapes entries must be dense i64 arrays");
+    uint64_t cardinality = 0;
+    if (failed(checkedProduct(sourceShape.asArrayRef(), cardinality)))
+      return failure();
+    if (cardinality > getInputs().size() - operandOffset)
+      return emitOpError("source_shapes do not partition the view operands");
+    SmallVector<Value> source;
+    source.append(getInputs().begin() + operandOffset,
+                  getInputs().begin() + operandOffset + cardinality);
+    operandOffset += cardinality;
+    if (!source.empty()) {
+      Operation *producer = source.front().getDefiningOp();
+      if (!producer ||
+          !isa<InstanceOp, ArrayOp, InstancesOp, ViewOp>(producer) ||
+          producer->getBlock() != getOperation()->getBlock())
+        return emitOpError("each source must be the complete result group of "
+                           "one sibling structural producer");
+      if (!sourceProducers.insert(producer).second ||
+          producer->getNumResults() != source.size())
+        return emitOpError(
+            "source producers must be complete and non-repeated");
+      for (auto [index, value] : llvm::enumerate(source))
+        if (value != producer->getResult(index))
+          return emitOpError(
+              "source operands must preserve producer result order");
+      SmallVector<int64_t> producerShape = getProducerShape(producer);
+      if (producerShape != sourceShape.asArrayRef())
+        return emitOpError("source_shapes must exactly match producer shapes");
+    } else {
+      Operation *zeroProducer = nullptr;
+      for (Operation &candidate : *getOperation()->getBlock()) {
+        if (&candidate == getOperation() || candidate.getNumResults() != 0 ||
+            !isa<InstanceOp, ArrayOp, InstancesOp, ViewOp>(candidate) ||
+            sourceProducers.contains(&candidate) ||
+            !llvm::equal(getProducerShape(&candidate),
+                         sourceShape.asArrayRef()))
+          continue;
+        if (zeroProducer)
+          return emitOpError("zero-cardinality source provenance is ambiguous");
+        zeroProducer = &candidate;
+      }
+      if (!zeroProducer)
+        return emitOpError(
+            "zero-cardinality source has no matching structural producer");
+      sourceProducers.insert(zeroProducer);
+    }
+    sourceShapes.emplace_back(sourceShape.asArrayRef().begin(),
+                              sourceShape.asArrayRef().end());
+    sources.push_back(std::move(source));
+  }
+  if (operandOffset != getInputs().size())
+    return emitOpError("source_shapes do not partition the view operands");
+
+  SmallVector<Value> expected;
   StringRef kind = getKind();
-  if (kind == "selection") {
-    if (indices.size() != 1 || !requireIndex(indices[0]))
-      return emitOpError("selection requires one in-bounds constant index");
-    expected.push_back(getInputs()[indices[0]].getType());
+  if (kind == "select") {
+    if (sources.size() != 1 || indices.size() != sourceShapes[0].size() ||
+        !shape.empty() || getAxisAttr())
+      return emitOpError("select requires one source, one coordinate per "
+                         "dimension, scalar shape, and no axis");
+    uint64_t ordinal = 0;
+    for (auto [coordinate, extent] : llvm::zip(indices, sourceShapes[0])) {
+      if (coordinate < 0 || coordinate >= extent)
+        return emitOpError("select coordinate is out of bounds");
+      ordinal = ordinal * static_cast<uint64_t>(extent) + coordinate;
+    }
+    expected.push_back(sources[0][ordinal]);
   } else if (kind == "slice") {
-    if (indices.size() < 2 || indices.size() > 3)
-      return emitOpError(
-          "slice requires constant start, end, and optional step");
-    int64_t start = indices[0], end = indices[1];
-    int64_t step = indices.size() == 3 ? indices[2] : 1;
-    if (step <= 0 || start < 0 || end < start ||
-        end > static_cast<int64_t>(getInputs().size()))
-      return emitOpError("slice bounds and step are invalid");
-    for (int64_t index = start; index < end; index += step)
-      expected.push_back(getInputs()[index].getType());
-  } else if (kind == "concat" || kind == "elementwise_binding") {
-    if (!indices.empty())
-      return emitOpError() << kind << " view does not accept index metadata";
-    auto inputTypes = getInputs().getTypes();
-    expected.append(inputTypes.begin(), inputTypes.end());
+    if (sources.size() != 1 || getAxisAttr() ||
+        indices.size() != 2 * sourceShapes[0].size())
+      return emitOpError("slice requires one source and [lower, upper] bounds "
+                         "for every dimension");
+    SmallVector<int64_t> derivedShape;
+    for (size_t dimension = 0; dimension < sourceShapes[0].size();
+         ++dimension) {
+      int64_t lower = indices[2 * dimension];
+      int64_t upper = indices[2 * dimension + 1];
+      if (lower < 0 || upper < lower || upper > sourceShapes[0][dimension])
+        return emitOpError("slice bounds are invalid");
+      derivedShape.push_back(upper - lower);
+    }
+    if (derivedShape != shape)
+      return emitOpError("slice result shape must equal its bound extents");
+    for (size_t ordinal = 0; ordinal < sources[0].size(); ++ordinal) {
+      size_t remainder = ordinal;
+      bool included = true;
+      for (size_t reverse = sourceShapes[0].size(); reverse-- > 0;) {
+        int64_t coordinate = remainder % sourceShapes[0][reverse];
+        remainder /= sourceShapes[0][reverse];
+        included &= coordinate >= indices[2 * reverse] &&
+                    coordinate < indices[2 * reverse + 1];
+      }
+      if (included)
+        expected.push_back(sources[0][ordinal]);
+    }
+  } else if (kind == "concat") {
+    if (sources.size() < 2 || !indices.empty() || !getAxisAttr())
+      return emitOpError("concat requires at least two sources, an axis, and "
+                         "no index metadata");
+    int64_t axis = getAxisAttr().getInt();
+    size_t rank = sourceShapes.front().size();
+    if (axis < 0 || static_cast<size_t>(axis) >= rank)
+      return emitOpError("concat axis is out of bounds");
+    SmallVector<int64_t> derivedShape = sourceShapes.front();
+    derivedShape[axis] = 0;
+    for (ArrayRef<int64_t> sourceShape : sourceShapes) {
+      if (sourceShape.size() != rank)
+        return emitOpError("concat source ranks must match");
+      for (size_t dimension = 0; dimension < rank; ++dimension)
+        if (dimension != static_cast<size_t>(axis) &&
+            sourceShape[dimension] != derivedShape[dimension])
+          return emitOpError("concat non-axis dimensions must match");
+      if (sourceShape[axis] >
+          std::numeric_limits<int64_t>::max() - derivedShape[axis])
+        return emitOpError("concat axis extent overflows signed i64");
+      derivedShape[axis] += sourceShape[axis];
+    }
+    if (derivedShape != shape)
+      return emitOpError("concat result shape is not derived from its sources");
+    uint64_t outer = 1, inner = 1;
+    for (int64_t extent : ArrayRef<int64_t>(shape).take_front(axis))
+      outer *= extent;
+    for (int64_t extent : ArrayRef<int64_t>(shape).drop_front(axis + 1))
+      inner *= extent;
+    for (uint64_t outerIndex = 0; outerIndex < outer; ++outerIndex)
+      for (auto [sourceIndex, source] : llvm::enumerate(sources)) {
+        uint64_t chunk = sourceShapes[sourceIndex][axis] * inner;
+        expected.append(source.begin() + outerIndex * chunk,
+                        source.begin() + (outerIndex + 1) * chunk);
+      }
   } else if (kind == "zip") {
-    if (!indices.empty())
-      return emitOpError("zip view does not accept index metadata");
-    if (getInputs().size() % 2 != 0)
-      return emitOpError("zip view requires equal source cardinalities");
-    size_t half = getInputs().size() / 2;
-    for (size_t index = 0; index < half; ++index) {
-      expected.push_back(getInputs()[index].getType());
-      expected.push_back(getInputs()[index + half].getType());
+    if (sources.size() != 2 || !indices.empty() || getAxisAttr() ||
+        sourceShapes[0] != sourceShapes[1])
+      return emitOpError("zip requires two equal-shaped sources and no axis or "
+                         "index metadata");
+    SmallVector<int64_t> derivedShape = sourceShapes[0];
+    derivedShape.push_back(2);
+    if (derivedShape != shape)
+      return emitOpError("zip result shape must append source count");
+    for (size_t index = 0; index < sources[0].size(); ++index) {
+      expected.push_back(sources[0][index]);
+      expected.push_back(sources[1][index]);
     }
   } else if (kind == "permutation") {
-    if (indices.size() != getInputs().size())
-      return emitOpError("permutation requires one index per input");
+    if (sources.size() != 1 || getAxisAttr() ||
+        !llvm::equal(shape, sourceShapes[0]) ||
+        indices.size() != sources[0].size())
+      return emitOpError("permutation requires one source, unchanged shape, "
+                         "and one index per element");
     llvm::SmallDenseSet<int64_t> seen;
     for (int64_t index : indices) {
-      if (!requireIndex(index) || !seen.insert(index).second)
+      if (index < 0 || static_cast<size_t>(index) >= sources[0].size() ||
+          !seen.insert(index).second)
         return emitOpError(
             "permutation indices must be an in-bounds bijection");
-      expected.push_back(getInputs()[index].getType());
+      expected.push_back(sources[0][index]);
     }
+  } else if (kind == "elementwise") {
+    if (sources.size() < 2 || !indices.empty() || getAxisAttr())
+      return emitOpError("elementwise requires at least two sources and no "
+                         "axis or index metadata");
+    if (llvm::any_of(sourceShapes, [&](const auto &sourceShape) {
+          return !llvm::equal(sourceShape, sourceShapes.front());
+        }))
+      return emitOpError("elementwise source shapes must match");
+    SmallVector<int64_t> derivedShape = sourceShapes.front();
+    derivedShape.push_back(sources.size());
+    if (derivedShape != shape)
+      return emitOpError("elementwise result shape must append source count");
+    for (size_t index = 0; index < sources.front().size(); ++index)
+      for (ArrayRef<Value> source : sources)
+        expected.push_back(source[index]);
   } else {
     return emitOpError() << "unsupported static view kind '" << kind << "'";
   }
-  uint64_t cardinality = 1;
-  for (int64_t extent : shape) {
-    if (extent != 0 && cardinality > std::numeric_limits<uint64_t>::max() /
-                                         static_cast<uint64_t>(extent))
-      return emitOpError("view cardinality overflows 64 bits");
-    cardinality *= static_cast<uint64_t>(extent);
-  }
+  uint64_t cardinality = 0;
+  if (failed(checkedProduct(shape, cardinality)))
+    return failure();
   if (cardinality != expected.size() ||
-      !llvm::equal(getOutputs().getTypes(), expected))
+      !llvm::equal(getOutputs().getTypes(),
+                   llvm::map_range(
+                       expected, [](Value value) { return value.getType(); })))
     return emitOpError("resolved view shape/order/types do not match outputs");
   return success();
 }

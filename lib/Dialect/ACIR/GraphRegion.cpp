@@ -1,5 +1,6 @@
 #include "acir/Dialect/ACIR/GraphRegion.h"
 
+#include "acir/Dialect/ACIR/ACIRDialect.h"
 #include "acir/Dialect/ACIR/ACIROps.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/SymbolTable.h"
@@ -81,18 +82,44 @@ LogicalResult verifyFiniteInstantiationGraph(mlir::ModuleOp file) {
 
 } // namespace
 
+void StructuralProviderRegistry::registerExternal(StringRef name) {
+  externalProviders.insert(name);
+}
+
+void StructuralProviderRegistry::registerGenerator(StringRef name) {
+  generatorProviders.insert(name);
+}
+
+bool StructuralProviderRegistry::hasExternal(StringRef name) const {
+  return externalProviders.contains(name);
+}
+
+bool StructuralProviderRegistry::hasGenerator(StringRef name) const {
+  return generatorProviders.contains(name);
+}
+
+StructuralProviderRegistry &
+getStructuralProviderRegistry(MLIRContext *context) {
+  auto *dialect = context->getOrLoadDialect<ACIRDialect>();
+  auto *interface =
+      dialect->getRegisteredInterface<StructuralProviderDialectInterface>();
+  assert(interface && "ACIR structural provider interface must be registered");
+  return interface->getRegistry();
+}
+
 bool isConcreteStaticValue(Attribute value) {
   if (!value)
     return false;
-  if (isa<IntegerAttr, BoolAttr, StringAttr, TypeAttr, SymbolRefAttr, UnitAttr>(
-          value))
+  if (isa<IntegerAttr, BoolAttr, StringAttr, TypeAttr, SymbolRefAttr>(value))
     return true;
-  if (auto array = dyn_cast<ArrayAttr>(value))
-    return llvm::all_of(array, isConcreteStaticValue);
-  if (auto dictionary = dyn_cast<DictionaryAttr>(value))
-    return llvm::all_of(dictionary, [](NamedAttribute item) {
-      return isConcreteStaticValue(item.getValue());
-    });
+  if (auto dictionary = dyn_cast<DictionaryAttr>(value)) {
+    if (dictionary.size() != 2)
+      return false;
+    auto amount = dictionary.getAs<IntegerAttr>("value");
+    auto unit = dictionary.getAs<StringAttr>("unit");
+    return amount && amount.getType().isSignlessInteger(64) && unit &&
+           !unit.getValue().empty();
+  }
   return false;
 }
 
@@ -119,9 +146,13 @@ LogicalResult verifyGraphStructure(Operation *topLevel) {
       selectedSystem = system;
     }
     Operation *root = SymbolTable::lookupSymbolIn(file, system.getRootAttr());
-    if (!isModuleDeclaration(root))
+    if (!isa_and_nonnull<ModuleOp>(root)) {
+      if (system.getSelected())
+        return system.emitOpError(
+            "selected root must resolve to a materialized ac.module");
       return system.emitOpError() << "root '" << system.getRootAttr()
-                                  << "' does not resolve to a module";
+                                  << "' does not resolve to ac.module";
+    }
     if (FlatSymbolRefAttr workload = system.getPrimaryWorkloadAttr()) {
       Operation *target = SymbolTable::lookupSymbolIn(file, workload);
       if (!target)
@@ -140,6 +171,86 @@ LogicalResult verifyGraphStructure(Operation *topLevel) {
     return failure();
   if (!selectedSystem)
     return success();
+
+  constexpr uint64_t maxHierarchyDepth = 1024;
+  constexpr uint64_t maxHierarchyOwners = 1048576;
+  struct ExpansionStats {
+    uint64_t owners = 0;
+    uint64_t depth = 0;
+  };
+  auto saturatedAdd = [](uint64_t left, uint64_t right, uint64_t cap) {
+    return left >= cap || right >= cap || left > cap - right ? cap
+                                                             : left + right;
+  };
+  auto saturatedMultiply = [](uint64_t left, uint64_t right, uint64_t cap) {
+    return left && right > cap / left ? cap : std::min(left * right, cap);
+  };
+  llvm::DenseMap<Operation *, ExpansionStats> expansionMemo;
+  std::function<ExpansionStats(Operation *)> expansionStats =
+      [&](Operation *definition) -> ExpansionStats {
+    auto module = dyn_cast_or_null<ModuleOp>(definition);
+    if (!module)
+      return {};
+    if (auto found = expansionMemo.find(module); found != expansionMemo.end())
+      return found->second;
+    ExpansionStats stats;
+    for (Operation &child : module.getBody().front()) {
+      ExpansionStats childStats;
+      uint64_t localOwners = 0;
+      uint64_t localDepth = 0;
+      if (auto instance = dyn_cast<InstanceOp>(child)) {
+        childStats = expansionStats(
+            SymbolTable::lookupSymbolIn(file, instance.getDefinitionAttr()));
+        localOwners =
+            saturatedAdd(1, childStats.owners, maxHierarchyOwners + 1);
+        localDepth = saturatedAdd(1, childStats.depth, maxHierarchyDepth + 1);
+      } else if (auto array = dyn_cast<ArrayOp>(child)) {
+        uint64_t count = 1;
+        for (int64_t extent : array.getShape())
+          count = saturatedMultiply(count, static_cast<uint64_t>(extent),
+                                    maxHierarchyOwners + 1);
+        childStats = expansionStats(
+            SymbolTable::lookupSymbolIn(file, array.getDefinitionAttr()));
+        uint64_t perElement =
+            saturatedAdd(1, childStats.owners, maxHierarchyOwners + 1);
+        localOwners = saturatedAdd(
+            1, saturatedMultiply(count, perElement, maxHierarchyOwners + 1),
+            maxHierarchyOwners + 1);
+        localDepth = count == 0 ? 1
+                                : saturatedAdd(2, childStats.depth,
+                                               maxHierarchyDepth + 1);
+      } else if (auto instances = dyn_cast<InstancesOp>(child)) {
+        localOwners = 1;
+        localDepth = 1;
+        for (Attribute reference : instances.getDefinitions()) {
+          childStats = expansionStats(SymbolTable::lookupSymbolIn(
+              file, cast<FlatSymbolRefAttr>(reference)));
+          localOwners = saturatedAdd(
+              localOwners,
+              saturatedAdd(1, childStats.owners, maxHierarchyOwners + 1),
+              maxHierarchyOwners + 1);
+          localDepth =
+              std::max(localDepth, saturatedAdd(2, childStats.depth,
+                                                maxHierarchyDepth + 1));
+        }
+      }
+      stats.owners =
+          saturatedAdd(stats.owners, localOwners, maxHierarchyOwners + 1);
+      stats.depth = std::max(stats.depth, localDepth);
+    }
+    expansionMemo[module] = stats;
+    return stats;
+  };
+  ExpansionStats selectedStats = expansionStats(
+      SymbolTable::lookupSymbolIn(file, selectedSystem.getRootAttr()));
+  if (selectedStats.depth > maxHierarchyDepth)
+    return selectedSystem.emitOpError()
+           << "elaborated hierarchy depth exceeds bound " << maxHierarchyDepth;
+  if (saturatedAdd(1, selectedStats.owners, maxHierarchyOwners + 1) >
+      maxHierarchyOwners)
+    return selectedSystem.emitOpError()
+           << "elaborated hierarchy owner count exceeds bound "
+           << maxHierarchyOwners;
 
   llvm::StringSet<> paths;
   llvm::StringSet<> stableIds;
@@ -195,14 +306,20 @@ LogicalResult verifyGraphStructure(Operation *topLevel) {
             return failure();
         }
       } else if (auto instances = dyn_cast<InstancesOp>(child)) {
+        std::string collectionPath =
+            (parentPath + "." + instances.getPath()).str();
+        std::string collectionId =
+            (parentId + "/" + instances.getStableId()).str();
+        if (failed(registerOwner(&child, collectionPath, collectionId)))
+          return failure();
         for (size_t index = 0; index < instances.getDefinitions().size();
              ++index) {
           StringRef segment =
               cast<StringAttr>(instances.getPaths()[index]).getValue();
           StringRef localId =
               cast<StringAttr>(instances.getStableIds()[index]).getValue();
-          std::string path = (parentPath + "." + segment).str();
-          std::string id = (parentId + "/" + localId).str();
+          std::string path = (collectionPath + "." + segment).str();
+          std::string id = (collectionId + "/" + localId).str();
           auto target =
               cast<FlatSymbolRefAttr>(instances.getDefinitions()[index]);
           if (failed(registerOwner(&child, path, id)) ||
