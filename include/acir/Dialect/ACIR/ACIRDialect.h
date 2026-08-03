@@ -3,6 +3,8 @@
 
 #include "mlir/IR/Dialect.h"
 
+#include "acir/Dialect/ACIR/ACIRTypes.h"
+
 #include "acir/Dialect/ACIR/ACIRDialect.h.inc"
 
 #endif // ACIR_DIALECT_ACIR_ACIRDIALECT_H
