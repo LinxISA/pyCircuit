@@ -41,19 +41,4 @@ def ACIR_Unit : I32EnumAttr<"Unit", "ACIR exact measurement unit", [
   let cppNamespace = "::acir::ac";
 }
 
-def ACIR_UnitAttr : EnumAttr<ACIR_Dialect, ACIR_Unit, "unit">;
-
-def ACIR_Endianness_Little : I32EnumAttrCase<"Little", 0, "little">;
-def ACIR_Endianness_Big : I32EnumAttrCase<"Big", 1, "big">;
-def ACIR_Endianness
-    : I32EnumAttr<"Endianness", "serialized data byte order", [
-        ACIR_Endianness_Little, ACIR_Endianness_Big
-      ]> {
-  let genSpecializedAttr = 0;
-  let cppNamespace = "::acir::ac";
-}
-
-def ACIR_EndiannessAttr
-    : EnumAttr<ACIR_Dialect, ACIR_Endianness, "endianness">;
-
 #endif // ACIR_DIALECT_ACIR_ACIRATTRIBUTES_TD

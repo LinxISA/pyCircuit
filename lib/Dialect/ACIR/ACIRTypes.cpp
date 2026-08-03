@@ -30,32 +30,19 @@ bool isTimeUnit(Unit unit) {
   llvm_unreachable("unknown ACIR unit");
 }
 
-bool containsChannelTypeImpl(Type type) {
-  if (isa<ChannelType>(type))
-    return true;
-  if (auto optional = dyn_cast<OptionalType>(type))
-    return containsChannelTypeImpl(optional.getElementType());
-  if (auto list = dyn_cast<ListType>(type))
-    return containsChannelTypeImpl(list.getElementType());
-  if (auto vector = dyn_cast<VectorType>(type))
-    return containsChannelTypeImpl(vector.getElementType());
-  if (auto flow = dyn_cast<FlowType>(type))
-    return containsChannelTypeImpl(flow.getElementType());
-  if (auto event = dyn_cast<EventType>(type))
-    return containsChannelTypeImpl(event.getElementType());
-  return false;
-}
-
 LogicalResult verifyValueElement(function_ref<InFlightDiagnostic()> emitError,
                                  Type elementType) {
-  if (!containsChannelTypeImpl(elementType))
+  if (!containsChannelType(elementType))
     return success();
   return emitError() << "channel types cannot be nested inside value types";
 }
 
 } // namespace
 
-bool containsChannelType(Type type) { return containsChannelTypeImpl(type); }
+bool containsChannelType(Type type) {
+  return type.walk([](ChannelType) { return WalkResult::interrupt(); })
+      .wasInterrupted();
+}
 
 LogicalResult OptionalType::verify(function_ref<InFlightDiagnostic()> emitError,
                                    Type elementType) {
@@ -81,7 +68,7 @@ LogicalResult FlowType::verify(function_ref<InFlightDiagnostic()> emitError,
 
 LogicalResult ChannelType::verify(function_ref<InFlightDiagnostic()> emitError,
                                   Type elementType, FlatSymbolRefAttr) {
-  if (!containsChannelTypeImpl(elementType))
+  if (!containsChannelType(elementType))
     return success();
   return emitError() << "channel types cannot carry channel types";
 }
@@ -111,17 +98,10 @@ LogicalResult EventType::verify(function_ref<InFlightDiagnostic()> emitError,
 
 #include "acir/Dialect/ACIR/ACIREnums.cpp.inc"
 
-#define GET_ATTRDEF_CLASSES
-#include "acir/Dialect/ACIR/ACIRAttributes.cpp.inc"
-
 #define GET_TYPEDEF_CLASSES
 #include "acir/Dialect/ACIR/ACIRTypes.cpp.inc"
 
 void acir::ac::ACIRDialect::initialize() {
-  addAttributes<
-#define GET_ATTRDEF_LIST
-#include "acir/Dialect/ACIR/ACIRAttributes.cpp.inc"
-      >();
   addTypes<
 #define GET_TYPEDEF_LIST
 #include "acir/Dialect/ACIR/ACIRTypes.cpp.inc"

@@ -1,13 +1,88 @@
 #include "acir/Dialect/ACIR/ACIRDialect.h"
 #include "acir/Dialect/ACIR/ACIRTypes.h"
 
+#include "mlir/AsmParser/AsmParser.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Diagnostics.h"
 #include "mlir/IR/MLIRContext.h"
 #include "gtest/gtest.h"
 
+#include <array>
+
 namespace acir::ac {
 namespace {
+
+TEST(ACIRTypesTest, PublicTypeInventoryRoundTrips) {
+  mlir::MLIRContext context;
+  context.loadDialect<ACIRDialect>();
+
+  struct TypeCase {
+    llvm::StringLiteral spelling;
+    mlir::TypeID typeID;
+  };
+  const std::array<TypeCase, 17> cases = {{
+      {"!ac.struct<@Struct>", StructType::getTypeID()},
+      {"!ac.packet<@Packet>", PacketType::getTypeID()},
+      {"!ac.transaction<@Transaction>", TransactionType::getTypeID()},
+      {"!ac.enum<@Enum>", EnumType::getTypeID()},
+      {"!ac.union<@Union>", UnionType::getTypeID()},
+      {"!ac.optional<i8>", OptionalType::getTypeID()},
+      {"!ac.list<i8>", ListType::getTypeID()},
+      {"!ac.vector<4 x i8>", VectorType::getTypeID()},
+      {"!ac.flow<i8, @protocol>", FlowType::getTypeID()},
+      {"!ac.endpoint<@interface, @role>", EndpointType::getTypeID()},
+      {"!ac.resource_ref<@resource_type, @role>", ResourceRefType::getTypeID()},
+      {"!ac.channel<i8, @protocol>", ChannelType::getTypeID()},
+      {"!ac.duration<cycles>", DurationType::getTypeID()},
+      {"!ac.rate<bytes, cycles>", RateType::getTypeID()},
+      {"!ac.event<i8>", EventType::getTypeID()},
+      {"!ac.address<@space>", AddressType::getTypeID()},
+      {"!ac.resource_token<@resource>", ResourceTokenType::getTypeID()},
+  }};
+
+  for (const TypeCase &testCase : cases) {
+    mlir::Type type = mlir::parseType(testCase.spelling, &context);
+    ASSERT_TRUE(type) << testCase.spelling.str();
+    EXPECT_EQ(type.getTypeID(), testCase.typeID) << testCase.spelling.str();
+
+    std::string printed;
+    llvm::raw_string_ostream(printed) << type;
+    EXPECT_EQ(printed, testCase.spelling) << testCase.spelling.str();
+    EXPECT_EQ(type, mlir::parseType(printed, &context));
+  }
+}
+
+TEST(ACIRTypesTest, EveryUnitCategoryIsChecked) {
+  mlir::MLIRContext context;
+  context.loadDialect<ACIRDialect>();
+  mlir::ScopedDiagnosticHandler suppressExpectedDiagnostics(
+      &context, [](mlir::Diagnostic &) { return mlir::success(); });
+  auto location = mlir::UnknownLoc::get(&context);
+  auto emitError = [location] { return mlir::emitError(location); };
+
+  const std::array timeUnits = {
+      Unit::Ticks,        Unit::Cycles,       Unit::Seconds,
+      Unit::Milliseconds, Unit::Microseconds, Unit::Nanoseconds,
+      Unit::Picoseconds,
+  };
+  const std::array dataUnits = {Unit::Bytes, Unit::Bits, Unit::Entries,
+                                Unit::Packets, Unit::Transactions};
+
+  for (Unit timeUnit : timeUnits) {
+    EXPECT_TRUE(DurationType::getChecked(emitError, &context, timeUnit));
+    EXPECT_TRUE(
+        RateType::getChecked(emitError, &context, Unit::Bytes, timeUnit));
+    EXPECT_FALSE(
+        RateType::getChecked(emitError, &context, timeUnit, Unit::Cycles));
+  }
+  for (Unit dataUnit : dataUnits) {
+    EXPECT_FALSE(DurationType::getChecked(emitError, &context, dataUnit));
+    EXPECT_TRUE(
+        RateType::getChecked(emitError, &context, dataUnit, Unit::Cycles));
+    EXPECT_FALSE(
+        RateType::getChecked(emitError, &context, Unit::Bytes, dataUnit));
+  }
+}
 
 TEST(ACIRTypesTest, TypesAreUniquedByTheirParameters) {
   mlir::MLIRContext context;

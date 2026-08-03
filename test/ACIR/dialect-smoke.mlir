@@ -1,7 +1,7 @@
 // RUN: %split_file %s %t
 // RUN: %acir_opt --show-dialects | %FileCheck %s --check-prefix=DIALECTS
 // RUN: %acir_opt %t/canonical.mlir | %FileCheck %s --check-prefix=CANONICAL
-// RUN: %acir_opt --pass-pipeline='builtin.module(verify-ac-contract-epoch)' %t/canonical.mlir | %FileCheck %s --check-prefix=CANONICAL
+// RUN: %acir_opt --pass-pipeline='builtin.module(verify-ac-file)' %t/canonical.mlir | %FileCheck %s --check-prefix=CANONICAL
 // RUN: %not %acir_opt %t/missing-epoch.mlir 2>&1 | %FileCheck %s --check-prefix=MISSING
 // RUN: %not %acir_opt %t/wrong-epoch.mlir 2>&1 | %FileCheck %s --check-prefix=WRONG
 // RUN: %not %acir_opt %t/unknown-ac-op.mlir 2>&1 | %FileCheck %s --check-prefix=UNKNOWN-AC

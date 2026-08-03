@@ -10,18 +10,16 @@
 
 namespace acir {
 
-class VerifyContractEpochPass
-    : public mlir::PassWrapper<VerifyContractEpochPass,
+class VerifyACIRFilePass
+    : public mlir::PassWrapper<VerifyACIRFilePass,
                                mlir::OperationPass<mlir::ModuleOp>> {
 public:
-  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(VerifyContractEpochPass)
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(VerifyACIRFilePass)
 
-  llvm::StringRef getArgument() const override {
-    return "verify-ac-contract-epoch";
-  }
+  llvm::StringRef getArgument() const override { return "verify-ac-file"; }
 
   llvm::StringRef getDescription() const override {
-    return "Verify the Agentic Circuit public file contract epoch";
+    return "Verify the Agentic Circuit epoch and whole-file legality";
   }
 
   void runOnOperation() override {
@@ -36,6 +34,28 @@ public:
     }
 
     mlir::WalkResult result = module.walk([&](mlir::Operation *operation) {
+      auto rejectChannel = [&](mlir::Attribute attribute) {
+        if (!attribute)
+          return false;
+        return attribute
+            .walk([](acir::ac::ChannelType) {
+              return mlir::WalkResult::interrupt();
+            })
+            .wasInterrupted();
+      };
+      for (mlir::NamedAttribute attribute : operation->getAttrs()) {
+        if (!rejectChannel(attribute.getValue()))
+          continue;
+        operation->emitError("channel type is only permitted in an "
+                             "ac.interface channel declaration");
+        return mlir::WalkResult::interrupt();
+      }
+      if (rejectChannel(operation->getPropertiesAsAttribute()) ||
+          rejectChannel(mlir::LocationAttr(operation->getLoc()))) {
+        operation->emitError("channel type is only permitted in an "
+                             "ac.interface channel declaration");
+        return mlir::WalkResult::interrupt();
+      }
       for (mlir::Type type : operation->getOperandTypes()) {
         if (!acir::ac::containsChannelType(type))
           continue;
@@ -68,7 +88,7 @@ public:
 
 inline void registerAllPasses() {
   mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
-    return std::make_unique<VerifyContractEpochPass>();
+    return std::make_unique<VerifyACIRFilePass>();
   });
 }
 

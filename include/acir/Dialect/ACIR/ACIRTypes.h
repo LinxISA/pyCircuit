@@ -6,9 +6,6 @@
 
 #include "acir/Dialect/ACIR/ACIREnums.h.inc"
 
-#define GET_ATTRDEF_CLASSES
-#include "acir/Dialect/ACIR/ACIRAttributes.h.inc"
-
 #define GET_TYPEDEF_CLASSES
 #include "acir/Dialect/ACIR/ACIRTypes.h.inc"
 
