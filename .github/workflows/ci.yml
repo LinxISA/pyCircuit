@@ -28,6 +28,11 @@ jobs:
       - name: Install locked development requirements
         run: python -m pip install --disable-pip-version-check -r requirements-dev.lock
 
+      - name: Install native test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends libgtest-dev
+
       - name: Run repository contracts
         run: python -m unittest tests.contracts.test_contracts -v
 
@@ -48,16 +53,36 @@ jobs:
           echo "${LLVM_SOURCE_SHA256}  .cache/llvm-project-${LLVM_RELEASE}.src.tar.xz" | sha256sum --check --strict
           tar -C .cache -xf .cache/llvm-project-${LLVM_RELEASE}.src.tar.xz
 
-      - name: Build locked MLIR package
+      - name: Compute LLVM build fingerprint
+        id: llvm-build-fingerprint
         run: |
-          cmake -S .cache/llvm-project-${LLVM_RELEASE}.src/llvm -B .cache/llvm-build -G Ninja \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DLLVM_ENABLE_PROJECTS=mlir \
-            -DLLVM_TARGETS_TO_BUILD=Native \
-            -DLLVM_INCLUDE_TESTS=OFF \
-            -DLLVM_INCLUDE_BENCHMARKS=OFF \
-            -DLLVM_INCLUDE_EXAMPLES=OFF
-          cmake --build .cache/llvm-build --target mlir-opt
+          {
+            c++ --version
+            cmake --version
+            ninja --version
+            uname -m
+            ldd --version 2>&1 | head -n 1
+          } | sha256sum | awk '{print "value=" $1}' >> "${GITHUB_OUTPUT}"
+
+      - name: Cache exact LLVM build outputs
+        id: llvm-build-cache
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684
+        with:
+          path: .cache/llvm-build
+          key: llvm-build-${{ runner.os }}-${{ runner.arch }}-${{ env.LLVM_SOURCE_SHA256 }}-${{ hashFiles('toolchains/llvm.lock.json', 'scripts/ci-build-llvm.sh') }}-${{ steps.llvm-build-fingerprint.outputs.value }}
+
+      - name: Build locked MLIR package
+        if: steps.llvm-build-cache.outputs.cache-hit != 'true'
+        run: bash scripts/ci-build-llvm.sh
+
+      - name: Verify exact LLVM build outputs
+        run: |
+          test -x .cache/llvm-build/bin/mlir-opt
+          test -f .cache/llvm-build/lib/cmake/llvm/LLVMConfigVersion.cmake
+          test -f .cache/llvm-build/lib/cmake/mlir/MLIRConfigVersion.cmake
+          .cache/llvm-build/bin/mlir-opt --version | grep -F "LLVM version ${LLVM_RELEASE}"
+          grep -F "set(PACKAGE_VERSION \"${LLVM_RELEASE}\")" .cache/llvm-build/lib/cmake/llvm/LLVMConfigVersion.cmake
+          grep -F "set(PACKAGE_VERSION \"${LLVM_RELEASE}\")" .cache/llvm-build/lib/cmake/mlir/MLIRConfigVersion.cmake
 
       - name: Configure development preset
         env:

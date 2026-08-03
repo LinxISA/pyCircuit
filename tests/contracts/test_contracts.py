@@ -53,10 +53,15 @@ def initialize_markdown_fixture(files):
 
 
 class RepositoryContractsTest(unittest.TestCase):
-    def test_ci_caches_only_the_verified_llvm_archive(self):
+    def test_ci_caches_verified_llvm_sources_and_exact_build_outputs(self):
         workflow = (ROOT / ".github/workflows/ci.yml").read_text()
-        cache_step = re.search(
-            r"      - name: Cache content-addressed LLVM.*?(?=\n      - name:)",
+        source_cache_step = re.search(
+            r"      - name: Cache content-addressed LLVM source archive.*?(?=\n      - name:)",
+            workflow,
+            re.DOTALL,
+        ).group()
+        build_cache_step = re.search(
+            r"      - name: Cache exact LLVM build outputs.*?(?=\n      - name:)",
             workflow,
             re.DOTALL,
         ).group()
@@ -72,13 +77,35 @@ class RepositoryContractsTest(unittest.TestCase):
         ).group()
 
         self.assertRegex(
-            cache_step,
+            source_cache_step,
             r"(?m)^\s+path: \.cache/llvm-project-22\.1\.8\.src\.tar\.xz$",
         )
-        self.assertEqual(1, cache_step.count(".cache/"), cache_step)
+        self.assertEqual(1, source_cache_step.count(".cache/"), source_cache_step)
         self.assertNotRegex(verification_step, r"(?m)^\s+if:")
         self.assertIn("sha256sum --check --strict", verification_step)
-        self.assertNotRegex(build_step, r"(?m)^\s+if:")
+        self.assertIn("path: .cache/llvm-build", build_cache_step)
+        self.assertIn("steps.llvm-build-fingerprint.outputs.value", build_cache_step)
+        self.assertIn("env.LLVM_SOURCE_SHA256", build_cache_step)
+        self.assertIn("hashFiles(", build_cache_step)
+        self.assertIn("'toolchains/llvm.lock.json'", build_cache_step)
+        self.assertIn("'scripts/ci-build-llvm.sh'", build_cache_step)
+        self.assertIn("steps.llvm-build-cache.outputs.cache-hit != 'true'", build_step)
+
+        native_dependencies = re.search(
+            r"      - name: Install native test dependencies.*?(?=\n      - name:)",
+            workflow,
+            re.DOTALL,
+        ).group()
+        self.assertIn("libgtest-dev", native_dependencies)
+
+        build_verification = re.search(
+            r"      - name: Verify exact LLVM build outputs.*?(?=\n      - name:)",
+            workflow,
+            re.DOTALL,
+        ).group()
+        self.assertIn("mlir-opt --version", build_verification)
+        self.assertIn("LLVMConfigVersion.cmake", build_verification)
+        self.assertIn("MLIRConfigVersion.cmake", build_verification)
 
     def test_cmake_package_versions_require_exact_match(self):
         cmake = (ROOT / "CMakeLists.txt").read_text()
