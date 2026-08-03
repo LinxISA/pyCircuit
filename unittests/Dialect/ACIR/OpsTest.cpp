@@ -1,5 +1,6 @@
 #include "acir/Dialect/ACIR/ACIRDialect.h"
 #include "acir/Dialect/ACIR/ACIROps.h"
+#include "acir/Dialect/ACIR/ACIRResources.h"
 #include "acir/Dialect/ACIR/GraphRegion.h"
 #include "acir/InitAllDialects.h"
 
@@ -16,6 +17,7 @@
 
 #include <array>
 #include <chrono>
+#include <limits>
 
 namespace acir::ac {
 namespace {
@@ -251,8 +253,11 @@ TEST(ACIROpsTest, TaskFiveRegistryContainsExactlyTheRequiredNewOperations) {
   llvm::sort(actual);
   std::vector<std::string> expected = {
       "ac.array",
+      "ac.address_map",
+      "ac.address_space",
       "ac.enum",
       "ac.event",
+      "ac.event_queue",
       "ac.guarantee",
       "ac.interface",
       "ac.instance",
@@ -265,14 +270,17 @@ TEST(ACIROpsTest, TaskFiveRegistryContainsExactlyTheRequiredNewOperations) {
       "ac.packet.serialize",
       "ac.port",
       "ac.protocol",
+      "ac.queue",
       "ac.record.create",
       "ac.record.get",
       "ac.record.with",
       "ac.return",
+      "ac.resource",
       "ac.role",
       "ac.state",
       "ac.struct",
       "ac.system",
+      "ac.time_domain",
       "ac.transaction",
       "ac.transition",
       "ac.type_alias",
@@ -378,8 +386,7 @@ TEST(ACIROpsTest, TaskSixRegistryDeltaIsExactlyNineGraphOperations) {
     EXPECT_TRUE(mlir::OperationName(name, &context).isRegistered())
         << name.str();
   EXPECT_FALSE(mlir::OperationName("ac.connect", &context).isRegistered());
-  EXPECT_FALSE(mlir::OperationName("ac.queue", &context).isRegistered());
-  EXPECT_FALSE(mlir::OperationName("ac.time_domain", &context).isRegistered());
+  EXPECT_FALSE(mlir::OperationName("ac.process", &context).isRegistered());
 }
 
 TEST(ACIROpsTest, LargeArrayVerificationIsDeterministic) {
@@ -718,6 +725,196 @@ TEST(ACIROpsTest, TransitionTableRejectsAmbiguousRowsDeterministically) {
   EXPECT_NE(
       diagnostic.find("overlapping transitions require explicit priority"),
       std::string::npos);
+}
+
+TEST(ACIRResourcesTest, CheckedArithmeticAndIntervalsRejectBoundaries) {
+  uint64_t result = 0;
+  EXPECT_TRUE(checkedAdd(4, 5, result));
+  EXPECT_EQ(result, 9u);
+  EXPECT_FALSE(checkedAdd(std::numeric_limits<uint64_t>::max(), 1, result));
+  EXPECT_TRUE(checkedMultiply(7, 6, result));
+  EXPECT_EQ(result, 42u);
+  EXPECT_FALSE(
+      checkedMultiply(std::numeric_limits<uint64_t>::max(), 2, result));
+  EXPECT_TRUE(intervalsOverlap({0, 8}, {7, 9}));
+  EXPECT_FALSE(intervalsOverlap({0, 8}, {8, 9}));
+  EXPECT_EQ(compareAddressMapOrder({0, 8, 2}, {0, 4, 1}), -1);
+}
+
+TEST(ACIRResourcesTest, RationalNormalizationIsExactAndBounded) {
+  uint64_t ticks = 0;
+  EXPECT_TRUE(normalizeRationalToTicks(3, 2, 1, 2, ticks));
+  EXPECT_EQ(ticks, 3u);
+  EXPECT_FALSE(normalizeRationalToTicks(1, 3, 1, 2, ticks));
+  EXPECT_FALSE(normalizeRationalToTicks(1, 0, 1, 1, ticks));
+  EXPECT_FALSE(normalizeRationalToTicks(std::numeric_limits<uint64_t>::max(), 1,
+                                        1, 2, ticks));
+  EXPECT_TRUE(normalizeRationalToTicks(1, 1000000000, 1, 1000000000000, ticks));
+  EXPECT_EQ(ticks, 1000u);
+  EXPECT_TRUE(normalizeRationalToTicks(0, 1, 1, 1, ticks));
+  EXPECT_EQ(ticks, 0u);
+}
+
+TEST(ACIRResourcesTest, TaskSevenRegistryDeltaIsExactlySixOperations) {
+  mlir::MLIRContext context;
+  context.loadDialect<ACIRDialect>();
+  const std::array<llvm::StringLiteral, 6> names = {
+      "ac.queue",         "ac.event_queue", "ac.resource",
+      "ac.address_space", "ac.address_map", "ac.time_domain",
+  };
+  for (llvm::StringLiteral name : names)
+    EXPECT_TRUE(mlir::OperationName(name, &context).isRegistered())
+        << name.str();
+  EXPECT_FALSE(mlir::OperationName("ac.process", &context).isRegistered());
+  EXPECT_FALSE(mlir::OperationName("ac.try_issue", &context).isRegistered());
+}
+
+TEST(ACIRResourcesTest, PublicBuildersAndTypedEffectsCoverAllSixOperations) {
+  mlir::MLIRContext context;
+  context.loadDialect<ACIRDialect>();
+  mlir::OpBuilder builder(&context);
+  auto location = builder.getUnknownLoc();
+  auto file = mlir::ModuleOp::create(location);
+  builder.setInsertionPointToStart(file.getBody());
+  auto module =
+      ModuleOp::create(builder, location, "M", builder.getFunctionType({}, {}),
+                       builder.getDictionaryAttr({}));
+  builder.setInsertionPointToStart(module.addEntryBlock());
+
+  auto i64 = [&](int64_t value) { return builder.getI64IntegerAttr(value); };
+  auto string = [&](llvm::StringRef value) {
+    return builder.getStringAttr(value);
+  };
+  auto symbol = [&](llvm::StringRef value) {
+    return mlir::FlatSymbolRefAttr::get(&context, value);
+  };
+  auto queue =
+      QueueOp::create(builder, location, string("q"), string("q"), string("q"),
+                      mlir::TypeAttr::get(builder.getI32Type()), i64(8),
+                      mlir::IntegerAttr(), string("fifo"), symbol("p"),
+                      string("exclusive"), mlir::DictionaryAttr(), i64(1));
+  auto domain = TimeDomainOp::create(builder, location, string("clock"), i64(1),
+                                     i64(0), i64(1), mlir::FlatSymbolRefAttr(),
+                                     mlir::DictionaryAttr());
+  auto eventQueue = EventQueueOp::create(
+      builder, location, string("events"), string("events"), string("events"),
+      mlir::TypeAttr::get(EventType::get(&context, builder.getI32Type())),
+      i64(8), string("time_then_sequence"), symbol("clock"), i64(1));
+  auto latency = builder.getDictionaryAttr({
+      builder.getNamedAttr("kind", string("fixed")),
+      builder.getNamedAttr("ticks", i64(2)),
+  });
+  auto lifecycle = builder.getDictionaryAttr({
+      builder.getNamedAttr("reservation", string("propose_commit")),
+      builder.getNamedAttr("release", string("balanced")),
+      builder.getNamedAttr("cancellation", string("explicit")),
+  });
+  auto resource = ResourceOp::create(
+      builder, location, string("r"), string("r"), string("r"), i64(2), i64(1),
+      i64(1), latency, lifecycle, string("exclusive"),
+      mlir::FlatSymbolRefAttr(), builder.getArrayAttr({}), i64(1));
+  auto address = AddressSpaceOp::create(
+      builder, location, string("memory"), string("memory"), string("memory"),
+      i64(32), string("byte"), mlir::Attribute(), mlir::FlatSymbolRefAttr(),
+      mlir::DictionaryAttr());
+  auto addressMap =
+      AddressMapOp::create(builder, location, string("map"), symbol("memory"),
+                           builder.getArrayAttr({}),
+                           builder.getDictionaryAttr({
+                               builder.getNamedAttr("kind", string("unmapped")),
+                           }));
+  ReturnOp::create(builder, location, mlir::ValueRange{});
+
+  EXPECT_TRUE(queue && eventQueue && resource && address && addressMap &&
+              domain);
+  auto hasWriteOn = [](mlir::Operation *operation,
+                       mlir::SideEffects::Resource *resourceKind) {
+    llvm::SmallVector<mlir::MemoryEffects::EffectInstance> effects;
+    mlir::cast<mlir::MemoryEffectOpInterface>(operation).getEffects(effects);
+    return llvm::any_of(effects, [&](const auto &effect) {
+      return mlir::isa<mlir::MemoryEffects::Write>(effect.getEffect()) &&
+             effect.getResource() == resourceKind;
+    });
+  };
+  EXPECT_TRUE(hasWriteOn(queue, QueueStateResource::get()));
+  EXPECT_TRUE(hasWriteOn(eventQueue, EventQueueStateResource::get()));
+  EXPECT_TRUE(hasWriteOn(resource, ReservationStateResource::get()));
+  EXPECT_FALSE(mlir::isMemoryEffectFree(queue));
+  EXPECT_FALSE(mlir::isMemoryEffectFree(eventQueue));
+  EXPECT_FALSE(mlir::isMemoryEffectFree(resource));
+}
+
+TEST(ACIRResourcesTest, LargeAddressMapAndParentGraphScaleNearLinearly) {
+  mlir::MLIRContext context;
+  context.loadDialect<ACIRDialect>();
+  mlir::OpBuilder builder(&context);
+  auto location = builder.getUnknownLoc();
+  auto emptyDictionary = builder.getDictionaryAttr({});
+  auto file = mlir::ModuleOp::create(location);
+  builder.setInsertionPointToStart(file.getBody());
+  auto module = ModuleOp::create(
+      builder, location, "M", builder.getFunctionType({}, {}), emptyDictionary);
+  builder.setInsertionPointToStart(module.addEntryBlock());
+  AddressSpaceOp::create(
+      builder, location, builder.getStringAttr("space"),
+      builder.getStringAttr("space"), builder.getStringAttr("space"),
+      builder.getI64IntegerAttr(32), builder.getStringAttr("byte"),
+      mlir::Attribute(), mlir::FlatSymbolRefAttr(), mlir::DictionaryAttr());
+
+  constexpr unsigned entryCount = 10000;
+  llvm::SmallVector<mlir::Attribute> entries;
+  entries.reserve(entryCount);
+  for (unsigned index = 0; index != entryCount; ++index) {
+    entries.push_back(builder.getDictionaryAttr({
+        builder.getNamedAttr("base", builder.getI64IntegerAttr(index)),
+        builder.getNamedAttr("size", builder.getI64IntegerAttr(1)),
+        builder.getNamedAttr("target",
+                             mlir::FlatSymbolRefAttr::get(&context, "space")),
+        builder.getNamedAttr("offset", builder.getI64IntegerAttr(index)),
+        builder.getNamedAttr(
+            "permissions",
+            builder.getArrayAttr({builder.getStringAttr("read")})),
+        builder.getNamedAttr("classes", builder.getArrayAttr({})),
+    }));
+  }
+  AddressMapOp::create(
+      builder, location, "map", "space", builder.getArrayAttr(entries),
+      builder.getDictionaryAttr(
+          {builder.getNamedAttr("kind", builder.getStringAttr("unmapped"))}));
+  ReturnOp::create(builder, location, mlir::ValueRange{});
+
+  auto start = std::chrono::steady_clock::now();
+  EXPECT_TRUE(mlir::succeeded(mlir::verify(file)));
+  auto verifyElapsed = std::chrono::steady_clock::now() - start;
+
+  constexpr unsigned domainCount = 10000;
+  auto graphFile = mlir::ModuleOp::create(location);
+  builder.setInsertionPointToStart(graphFile.getBody());
+  auto graphModule =
+      ModuleOp::create(builder, location, "Graph",
+                       builder.getFunctionType({}, {}), emptyDictionary);
+  builder.setInsertionPointToStart(graphModule.addEntryBlock());
+  for (unsigned index = 0; index != domainCount; ++index) {
+    std::string name = "d" + std::to_string(index);
+    mlir::FlatSymbolRefAttr parent;
+    mlir::DictionaryAttr bridge;
+    if (index) {
+      parent = mlir::FlatSymbolRefAttr::get(&context,
+                                            "d" + std::to_string(index - 1));
+      bridge = emptyDictionary;
+    }
+    TimeDomainOp::create(builder, location, builder.getStringAttr(name),
+                         builder.getI64IntegerAttr(1),
+                         builder.getI64IntegerAttr(0),
+                         builder.getI64IntegerAttr(1), parent, bridge);
+  }
+  ReturnOp::create(builder, location, mlir::ValueRange{});
+
+  start = std::chrono::steady_clock::now();
+  EXPECT_TRUE(mlir::succeeded(verifyResourceStructure(graphFile)));
+  auto graphElapsed = std::chrono::steady_clock::now() - start;
+  EXPECT_LT(verifyElapsed, std::chrono::seconds(5));
+  EXPECT_LT(graphElapsed, std::chrono::seconds(5));
 }
 
 } // namespace

@@ -1,5 +1,6 @@
 #include "acir/Dialect/ACIR/ACIROps.h"
 #include "acir/Dialect/ACIR/GraphRegion.h"
+#include "acir/Dialect/ACIR/ACIRResources.h"
 
 #include "mlir/Dialect/DLTI/DLTI.h"
 #include "mlir/IR/BuiltinOps.h"
@@ -1252,7 +1253,9 @@ LogicalResult verifyStaticArgumentSet(Operation *op, DictionaryAttr arguments,
 }
 
 bool isStructuralGraphChild(Operation &child) {
-  return isa<InstanceOp, ArrayOp, InstancesOp, ViewOp, ReturnOp>(child);
+  return isa<InstanceOp, ArrayOp, InstancesOp, ViewOp, QueueOp, EventQueueOp,
+             ResourceOp, AddressSpaceOp, AddressMapOp, TimeDomainOp, ReturnOp>(
+      child);
 }
 
 bool isStableHierarchySegment(StringRef segment) {
@@ -1416,6 +1419,26 @@ LogicalResult ModuleOp::verify() {
       path = instances.getPathAttr();
     } else if (auto view = dyn_cast<ViewOp>(child)) {
       localName = view.getSymNameAttr();
+    } else if (auto queue = dyn_cast<QueueOp>(child)) {
+      localName = queue.getSymNameAttr();
+      stableId = queue.getStableIdAttr();
+      path = queue.getPathAttr();
+    } else if (auto eventQueue = dyn_cast<EventQueueOp>(child)) {
+      localName = eventQueue.getSymNameAttr();
+      stableId = eventQueue.getStableIdAttr();
+      path = eventQueue.getPathAttr();
+    } else if (auto resource = dyn_cast<ResourceOp>(child)) {
+      localName = resource.getSymNameAttr();
+      stableId = resource.getStableIdAttr();
+      path = resource.getPathAttr();
+    } else if (auto addressSpace = dyn_cast<AddressSpaceOp>(child)) {
+      localName = addressSpace.getSymNameAttr();
+      stableId = addressSpace.getStableIdAttr();
+      path = addressSpace.getPathAttr();
+    } else if (auto addressMap = dyn_cast<AddressMapOp>(child)) {
+      localName = addressMap.getSymNameAttr();
+    } else if (auto timeDomain = dyn_cast<TimeDomainOp>(child)) {
+      localName = timeDomain.getSymNameAttr();
     }
     if (localName && !localNames.insert(localName.getValue()).second)
       return child.emitOpError() << "duplicate local structural name '"
@@ -1864,6 +1887,8 @@ LogicalResult ReturnOp::verify() {
 
 LogicalResult verifyTopologyTypeUses(Operation *operation) {
   if (failed(verifyGraphStructure(operation)))
+    return failure();
+  if (failed(verifyResourceStructure(operation)))
     return failure();
   auto verifyType = [&](Type type, Value value) -> LogicalResult {
     if (Type nested = findNestedTopologyLeaf(type))

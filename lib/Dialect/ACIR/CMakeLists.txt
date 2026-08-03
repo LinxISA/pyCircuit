@@ -2,6 +2,7 @@ add_acir_library(ACIRDialect SOURCES
   ACIRDialect.cpp
   ACIRInterfaces.cpp
   ACIROps.cpp
+  ACIRResources.cpp
   ACIRTypes.cpp
   GraphRegion.cpp
 )

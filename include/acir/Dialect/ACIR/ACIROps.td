@@ -312,6 +312,98 @@ def ACIR_ViewOp : ACIR_Op<"view", [Pure]> {
   }];
 }
 
+class ACIR_OwnedStateOp<string mnemonic, list<Trait> traits = []>
+    : ACIR_Op<mnemonic, !listconcat([
+        DeclareOpInterfaceMethods<MemoryEffectsOpInterface>
+      ], traits)>;
+
+def ACIR_QueueOp : ACIR_OwnedStateOp<"queue"> {
+  let arguments = (ins SymbolNameAttr:$sym_name, StrAttr:$stable_id,
+                       StrAttr:$path, TypeAttr:$payload,
+                       I64Attr:$entry_capacity,
+                       OptionalAttr<I64Attr>:$byte_capacity,
+                       StrAttr:$ordering, FlatSymbolRefAttr:$protocol,
+                       StrAttr:$ownership,
+                       OptionalAttr<DictionaryAttr>:$watermarks,
+                       DefaultValuedAttr<I64Attr, "1">:$delay_ticks);
+  let hasVerifier = 1;
+  let assemblyFormat = [{
+    $sym_name `payload` $payload `entries` $entry_capacity
+    (`bytes` $byte_capacity^)? `ordering` $ordering `protocol` $protocol
+    `ownership` $ownership `id` $stable_id `path` $path
+    (`watermarks` $watermarks^)? attr-dict
+  }];
+}
+
+def ACIR_EventQueueOp : ACIR_OwnedStateOp<"event_queue"> {
+  let arguments = (ins SymbolNameAttr:$sym_name, StrAttr:$stable_id,
+                       StrAttr:$path, TypeAttr:$payload, I64Attr:$capacity,
+                       StrAttr:$ordering, FlatSymbolRefAttr:$time_domain,
+                       DefaultValuedAttr<I64Attr, "1">:$delay_ticks);
+  let hasVerifier = 1;
+  let assemblyFormat = [{
+    $sym_name `payload` $payload `capacity` $capacity `ordering` $ordering
+    `domain` $time_domain `id` $stable_id `path` $path attr-dict
+  }];
+}
+
+def ACIR_ResourceOp : ACIR_OwnedStateOp<"resource"> {
+  let arguments = (ins SymbolNameAttr:$sym_name, StrAttr:$stable_id,
+                       StrAttr:$path, I64Attr:$capacity,
+                       I64Attr:$issue_width, I64Attr:$initiation_interval,
+                       DictionaryAttr:$latency_model,
+                       DictionaryAttr:$lifecycle, StrAttr:$ownership,
+                       OptionalAttr<FlatSymbolRefAttr>:$arbitration_owner,
+                       ArrayAttr:$transaction_classes,
+                       DefaultValuedAttr<I64Attr, "1">:$delay_ticks);
+  let hasVerifier = 1;
+  let assemblyFormat = [{
+    $sym_name `capacity` $capacity `issue_width` $issue_width
+    `ii` $initiation_interval `latency` $latency_model
+    `lifecycle` $lifecycle `ownership` $ownership
+    (`arbiter` $arbitration_owner^)? `classes` $transaction_classes
+    `id` $stable_id `path` $path attr-dict
+  }];
+}
+
+def ACIR_AddressSpaceOp : ACIR_Op<"address_space"> {
+  let arguments = (ins SymbolNameAttr:$sym_name, StrAttr:$stable_id,
+                       StrAttr:$path, I64Attr:$address_width,
+                       StrAttr:$address_unit,
+                       OptionalAttr<AnyAttr>:$data_layout,
+                       OptionalAttr<FlatSymbolRefAttr>:$parent,
+                       OptionalAttr<DictionaryAttr>:$translation);
+  let hasVerifier = 1;
+  let assemblyFormat = [{
+    $sym_name `width` $address_width `unit` $address_unit
+    `id` $stable_id `path` $path (`layout` $data_layout^)?
+    (`parent` $parent^ `translate` $translation)? attr-dict
+  }];
+}
+
+def ACIR_AddressMapOp : ACIR_Op<"address_map"> {
+  let arguments = (ins SymbolNameAttr:$sym_name,
+                       FlatSymbolRefAttr:$source, ArrayAttr:$entries,
+                       DictionaryAttr:$default_behavior);
+  let hasVerifier = 1;
+  let assemblyFormat = [{
+    $sym_name `source` $source `entries` $entries
+    `default` $default_behavior attr-dict
+  }];
+}
+
+def ACIR_TimeDomainOp : ACIR_Op<"time_domain"> {
+  let arguments = (ins SymbolNameAttr:$sym_name, I64Attr:$period,
+                       I64Attr:$phase, I64Attr:$tick_scale,
+                       OptionalAttr<FlatSymbolRefAttr>:$parent,
+                       OptionalAttr<DictionaryAttr>:$bridge);
+  let hasVerifier = 1;
+  let assemblyFormat = [{
+    $sym_name `period` $period `phase` $phase `scale` $tick_scale
+    (`parent` $parent^ `bridge` $bridge)? attr-dict
+  }];
+}
+
 def ACIR_ReturnOp : ACIR_Op<"return", [Pure, Terminator, ReturnLike,
                                         HasParent<"ModuleOp">]> {
   let arguments = (ins Variadic<AnyType>:$operands);
