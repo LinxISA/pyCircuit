@@ -2,8 +2,10 @@
 import importlib.util
 import json
 import re
+import subprocess
 import sys
 from pathlib import Path
+from urllib.parse import unquote
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -70,16 +72,79 @@ def check_schemas(errors):
             errors.append(f"{path.relative_to(ROOT)} does not compile: {exc.message}")
 
 
+def tracked_markdown_files():
+    result = subprocess.run(
+        ["git", "ls-files", "-z", "--", "*.md"],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+    )
+    return [ROOT / path.decode() for path in result.stdout.split(b"\0") if path]
+
+
+def markdown_destination(raw_target):
+    target = raw_target.strip()
+    if target.startswith("<") and ">" in target:
+        return target[1 : target.index(">")]
+    return target.split(maxsplit=1)[0]
+
+
+def github_heading_anchors(path):
+    anchors = set()
+    counts = {}
+    lines = path.read_text().splitlines()
+    headings = []
+    for index, line in enumerate(lines):
+        atx = re.match(r"^ {0,3}#{1,6}\s+(.+?)\s*#*\s*$", line)
+        if atx:
+            headings.append(atx.group(1))
+        elif index and re.match(r"^ {0,3}(?:=+|-+)\s*$", line):
+            headings.append(lines[index - 1].strip())
+
+        for explicit in re.findall(
+            r"<(?:a\s+[^>]*name|[a-z][a-z0-9-]*\s+[^>]*id)=[\"']([^\"']+)[\"']",
+            line,
+            re.IGNORECASE,
+        ):
+            anchors.add(explicit)
+
+    for heading in headings:
+        rendered = re.sub(r"!\[([^\]]*)\]\([^)]*\)", r"\1", heading)
+        rendered = re.sub(r"\[([^\]]+)\]\([^)]*\)", r"\1", rendered)
+        rendered = re.sub(r"<[^>]+>", "", rendered)
+        rendered = re.sub(r"[`*_~]", "", rendered).lower()
+        slug = re.sub(r"[^\w\- ]", "", rendered, flags=re.UNICODE).replace(" ", "-")
+        count = counts.get(slug, 0)
+        counts[slug] = count + 1
+        anchors.add(slug if count == 0 else f"{slug}-{count}")
+    return anchors
+
+
 def check_links(errors):
-    pattern = re.compile(r"(?<!!)\[[^\]]+\]\(([^)]+)\)")
-    markdown = [ROOT / "README.md", *sorted((ROOT / "docs/specs").glob("*.md"))]
-    for path in markdown:
-        for target in pattern.findall(path.read_text()):
-            destination = target.split("#", 1)[0]
-            if not destination or re.match(r"^[a-z][a-z0-9+.-]*:", destination):
+    pattern = re.compile(r"!?\[[^\]]*\]\(([^)]+)\)")
+    anchor_cache = {}
+    for path in tracked_markdown_files():
+        for raw_target in pattern.findall(path.read_text()):
+            target = markdown_destination(raw_target)
+            if not target or target.startswith("//") or re.match(
+                r"^[a-z][a-z0-9+.-]*:", target, re.IGNORECASE
+            ):
                 continue
-            if not (path.parent / destination).resolve().exists():
+            destination, separator, fragment = target.partition("#")
+            target_path = path if not destination else path.parent / unquote(destination)
+            target_path = target_path.resolve()
+            if not target_path.exists():
                 errors.append(f"broken link: {path.relative_to(ROOT)} -> {target}")
+                continue
+            if separator and target_path.suffix.lower() == ".md":
+                anchors = anchor_cache.setdefault(
+                    target_path, github_heading_anchors(target_path)
+                )
+                decoded_fragment = unquote(fragment)
+                if decoded_fragment not in anchors:
+                    errors.append(
+                        f"broken fragment: {path.relative_to(ROOT)} -> {target}"
+                    )
 
 
 def check_placeholders(errors):

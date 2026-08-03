@@ -3,6 +3,7 @@ import json
 import re
 import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -31,7 +32,61 @@ GOVERNANCE_FILES = {
 }
 
 
+def load_contract_checker():
+    path = ROOT / "scripts/check-contracts.py"
+    spec = importlib.util.spec_from_file_location("contract_checker", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def initialize_markdown_fixture(files):
+    temporary_directory = tempfile.TemporaryDirectory()
+    root = Path(temporary_directory.name)
+    subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+    for relative_path, content in files.items():
+        path = root / relative_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content)
+    subprocess.run(["git", "add", "."], cwd=root, check=True)
+    return temporary_directory, root
+
+
 class RepositoryContractsTest(unittest.TestCase):
+    def test_ci_caches_only_the_verified_llvm_archive(self):
+        workflow = (ROOT / ".github/workflows/ci.yml").read_text()
+        cache_step = re.search(
+            r"      - name: Cache content-addressed LLVM.*?(?=\n      - name:)",
+            workflow,
+            re.DOTALL,
+        ).group()
+        verification_step = re.search(
+            r"      - name: Fetch and verify locked LLVM source.*?(?=\n      - name:)",
+            workflow,
+            re.DOTALL,
+        ).group()
+        build_step = re.search(
+            r"      - name: Build locked MLIR package.*?(?=\n      - name:)",
+            workflow,
+            re.DOTALL,
+        ).group()
+
+        self.assertRegex(
+            cache_step,
+            r"(?m)^\s+path: \.cache/llvm-project-22\.1\.8\.src\.tar\.xz$",
+        )
+        self.assertEqual(1, cache_step.count(".cache/"), cache_step)
+        self.assertNotRegex(verification_step, r"(?m)^\s+if:")
+        self.assertIn("sha256sum --check --strict", verification_step)
+        self.assertNotRegex(build_step, r"(?m)^\s+if:")
+
+    def test_cmake_package_versions_require_exact_match(self):
+        cmake = (ROOT / "CMakeLists.txt").read_text()
+        package_version = re.search(
+            r"write_basic_package_version_file\(.*?\n\)", cmake, re.DOTALL
+        ).group()
+        self.assertIn("COMPATIBILITY ExactVersion", package_version)
+
     def test_governance_files_are_present_and_nonempty(self):
         missing = sorted(
             path for path in GOVERNANCE_FILES if not (ROOT / path).is_file()
@@ -95,6 +150,40 @@ class RepositoryContractsTest(unittest.TestCase):
                 if not (path.parent / destination).resolve().exists():
                     broken.append(f"{path.relative_to(ROOT)} -> {target}")
         self.assertEqual([], broken, f"broken Markdown links: {broken}")
+
+    def test_checker_scans_tracked_markdown_and_image_targets(self):
+        temporary_directory, root = initialize_markdown_fixture(
+            {
+                "README.md": "# Fixture\n",
+                "nested/guide.md": "# Guide\n\n![missing](missing.png)\n",
+            }
+        )
+        self.addCleanup(temporary_directory.cleanup)
+        checker = load_contract_checker()
+        checker.ROOT = root
+        errors = []
+
+        checker.check_links(errors)
+
+        self.assertTrue(errors, "tracked Markdown image target was not checked")
+        self.assertIn("nested/guide.md -> missing.png", errors[0])
+
+    def test_checker_rejects_missing_markdown_fragments(self):
+        temporary_directory, root = initialize_markdown_fixture(
+            {
+                "README.md": "# Fixture\n\n[section](guide.md#missing-heading)\n",
+                "guide.md": "# Existing Heading\n",
+            }
+        )
+        self.addCleanup(temporary_directory.cleanup)
+        checker = load_contract_checker()
+        checker.ROOT = root
+        errors = []
+
+        checker.check_links(errors)
+
+        self.assertTrue(errors, "missing Markdown fragment was not checked")
+        self.assertIn("guide.md#missing-heading", errors[0])
 
     def test_repository_has_no_placeholder_markers(self):
         offenders = []

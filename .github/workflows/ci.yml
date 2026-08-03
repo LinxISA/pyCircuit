@@ -31,28 +31,24 @@ jobs:
       - name: Run repository contracts
         run: python -m unittest tests.contracts.test_contracts -v
 
-      - name: Cache content-addressed LLVM build
-        id: llvm-cache
+      - name: Cache content-addressed LLVM source archive
         uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684
         with:
-          path: |
-            .cache/llvm-project-22.1.8.src.tar.xz
-            .cache/llvm-project-22.1.8.src
-            .cache/llvm-build
+          path: .cache/llvm-project-22.1.8.src.tar.xz
           key: llvm-${{ runner.os }}-${{ runner.arch }}-${{ env.LLVM_SOURCE_SHA256 }}-${{ hashFiles('toolchains/llvm.lock.json') }}
 
       - name: Fetch and verify locked LLVM source
-        if: steps.llvm-cache.outputs.cache-hit != 'true'
         run: |
           mkdir -p .cache
-          curl --fail --location --proto '=https' --tlsv1.2 \
-            --output .cache/llvm-project-${LLVM_RELEASE}.src.tar.xz \
-            "${LLVM_SOURCE_URL}"
+          if [[ ! -f .cache/llvm-project-${LLVM_RELEASE}.src.tar.xz ]]; then
+            curl --fail --location --proto '=https' --tlsv1.2 \
+              --output .cache/llvm-project-${LLVM_RELEASE}.src.tar.xz \
+              "${LLVM_SOURCE_URL}"
+          fi
           echo "${LLVM_SOURCE_SHA256}  .cache/llvm-project-${LLVM_RELEASE}.src.tar.xz" | sha256sum --check --strict
           tar -C .cache -xf .cache/llvm-project-${LLVM_RELEASE}.src.tar.xz
 
       - name: Build locked MLIR package
-        if: steps.llvm-cache.outputs.cache-hit != 'true'
         run: |
           cmake -S .cache/llvm-project-${LLVM_RELEASE}.src/llvm -B .cache/llvm-build -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
