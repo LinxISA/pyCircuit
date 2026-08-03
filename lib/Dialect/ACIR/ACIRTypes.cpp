@@ -106,4 +106,8 @@ void acir::ac::ACIRDialect::initialize() {
 #define GET_TYPEDEF_LIST
 #include "acir/Dialect/ACIR/ACIRTypes.cpp.inc"
       >();
+  addOperations<
+#define GET_OP_LIST
+#include "acir/Dialect/ACIR/ACIROps.cpp.inc"
+      >();
 }

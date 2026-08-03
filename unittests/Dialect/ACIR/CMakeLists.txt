@@ -8,3 +8,13 @@ target_link_libraries(ACIRTypesTests PRIVATE
   GTest::gtest_main
 )
 add_test(NAME ACIRTypesTests COMMAND ACIRTypesTests)
+
+add_executable(ACIROpsTests OpsTest.cpp)
+target_link_libraries(ACIROpsTests PRIVATE
+  ACIRDialect
+  MLIRIR
+  MLIRDataLayoutInterfaces
+  MLIRSideEffectInterfaces
+  GTest::gtest_main
+)
+add_test(NAME ACIROpsTests COMMAND ACIROpsTests)

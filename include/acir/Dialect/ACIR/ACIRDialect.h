@@ -4,6 +4,7 @@
 #include "mlir/IR/Dialect.h"
 
 #include "acir/Dialect/ACIR/ACIRTypes.h"
+#include "acir/Dialect/ACIR/ACIROps.h"
 
 #include "acir/Dialect/ACIR/ACIRDialect.h.inc"
 
