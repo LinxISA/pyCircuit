@@ -149,7 +149,9 @@ def ACIR_GuaranteeOp : ACIR_Op<"guarantee", [Pure]> {
 
 def ACIR_PortOp : ACIR_Op<"port", [Symbol, Pure]> {
   let arguments = (ins SymbolNameAttr:$sym_name, TypeAttr:$type,
-                       FlatSymbolRefAttr:$from, FlatSymbolRefAttr:$to);
+                       FlatSymbolRefAttr:$from, FlatSymbolRefAttr:$to,
+                       FlatSymbolRefAttr:$protocol_from,
+                       FlatSymbolRefAttr:$protocol_to);
   let hasVerifier = 1;
 }
 

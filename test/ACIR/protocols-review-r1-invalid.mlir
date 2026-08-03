@@ -172,7 +172,7 @@ builtin.module attributes {ac.contract_epoch = "0.1"} {
 builtin.module attributes {ac.contract_epoch = "0.1"} {
   "ac.protocol"() <{sym_name = "p"}> ({
     "ac.state"() <{sym_name = "s", initial = true, terminal = true}> : () -> ()
-    "ac.port"() <{sym_name = "bad", type = i8, from = @a, to = @b}> : () -> ()
+    "ac.port"() <{sym_name = "bad", type = i8, from = @a, to = @b, protocol_from = @a, protocol_to = @b}> : () -> ()
   }) : () -> ()
 }
 

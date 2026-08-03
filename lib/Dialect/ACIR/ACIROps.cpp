@@ -7,6 +7,7 @@
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallSet.h"
+#include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/StringSwitch.h"
 #include "llvm/ADT/TypeSwitch.h"
 
@@ -717,86 +718,141 @@ LogicalResult ProtocolOp::verify() {
           "retain is only valid for offer and retry transitions");
   }
 
-  enum class Ownership { NoPending, Pending };
+  enum class Ownership : uint8_t { NoPending = 1, Pending = 2 };
   SmallVector<StateOp> states(getBody().getOps<StateOp>());
-  SmallVector<std::optional<Ownership>> ownership(states.size());
+  llvm::StringMap<unsigned> stateIndices;
+  for (auto [index, state] : llvm::enumerate(states))
+    stateIndices.try_emplace(state.getSymName(), index);
   auto stateIndex = [&](FlatSymbolRefAttr name) -> unsigned {
-    for (auto [index, state] : llvm::enumerate(states))
-      if (state.getSymName() == name.getValue())
-        return index;
-    llvm_unreachable("transition state references were verified");
+    auto found = stateIndices.find(name.getValue());
+    assert(found != stateIndices.end() &&
+           "transition state references were verified");
+    return found->second;
+  };
+
+  SmallVector<SmallVector<unsigned>> outgoing(states.size());
+  SmallVector<unsigned> transitionTargets;
+  SmallVector<EventOp> transitionEvents;
+  transitionTargets.reserve(transitions.size());
+  transitionEvents.reserve(transitions.size());
+  for (auto [index, transition] : llvm::enumerate(transitions)) {
+    outgoing[stateIndex(transition.getSourceAttr())].push_back(index);
+    transitionTargets.push_back(stateIndex(transition.getTargetAttr()));
+    transitionEvents.push_back(
+        lookupChild<EventOp>(*this, transition.getEventAttr()));
+  }
+
+  SmallVector<uint8_t> ownership(states.size(), 0);
+  SmallVector<std::pair<unsigned, Ownership>> worklist;
+  auto ownershipBit = [](Ownership value) {
+    return static_cast<uint8_t>(value);
+  };
+  auto hasOwnership = [&](unsigned state, Ownership value) {
+    return (ownership[state] & ownershipBit(value)) != 0;
+  };
+  auto addOwnership = [&](unsigned state, Ownership value) {
+    uint8_t bit = ownershipBit(value);
+    if (ownership[state] & bit)
+      return;
+    ownership[state] |= bit;
+    worklist.emplace_back(state, value);
   };
   for (auto [index, state] : llvm::enumerate(states))
     if (state.getInitial())
-      ownership[index] = Ownership::NoPending;
+      addOwnership(index, Ownership::NoPending);
 
-  bool changed;
-  do {
-    changed = false;
-    for (TransitionOp transition : transitions) {
-      unsigned source = stateIndex(transition.getSourceAttr());
-      if (!ownership[source])
-        continue;
-      EventOp event = lookupChild<EventOp>(*this, transition.getEventAttr());
-      Ownership input = *ownership[source];
-      Ownership output = input;
-      if (event.getAction() == "offer") {
-        if (input == Ownership::Pending)
-          return transition.emitOpError(
-              "offer cannot begin while another offer is pending");
-        output = transition.getTransfer() ? Ownership::NoPending
-                                          : Ownership::Pending;
-      } else if (event.getAction() == "retry") {
-        if (input != Ownership::Pending)
-          return transition.emitOpError("retry requires a pending offer");
-        output = Ownership::Pending;
-      } else if (event.getAction() == "cancel" ||
-                 event.getAction() == "reject") {
-        if (input != Ownership::Pending)
-          return transition.emitOpError(
-              "ownership resolution requires a pending offer");
-        output = Ownership::NoPending;
-      } else if (transition.getTransfer()) {
-        if (input != Ownership::Pending)
-          return transition.emitOpError(
-              "ownership transfer requires a pending offer");
-        output = Ownership::NoPending;
-      }
-      unsigned target = stateIndex(transition.getTargetAttr());
-      if (!ownership[target]) {
-        ownership[target] = output;
-        changed = true;
-      } else if (*ownership[target] != output) {
-        return transition.emitOpError()
-               << "ownership state conflict at join state '@"
-               << states[target].getSymName() << "'";
-      }
+  auto transferOwnership = [&](unsigned transitionIndex,
+                               Ownership input) -> std::optional<Ownership> {
+    TransitionOp transition = transitions[transitionIndex];
+    StringRef action = transitionEvents[transitionIndex].getAction();
+    if (action == "offer") {
+      if (input == Ownership::Pending)
+        return std::nullopt;
+      return transition.getTransfer() ? Ownership::NoPending
+                                      : Ownership::Pending;
     }
-  } while (changed);
-
-  for (TransitionOp transition : transitions) {
-    unsigned source = stateIndex(transition.getSourceAttr());
-    if (ownership[source])
-      continue;
-    EventOp event = lookupChild<EventOp>(*this, transition.getEventAttr());
+    if (action == "retry")
+      return input == Ownership::Pending
+                 ? std::optional<Ownership>(Ownership::Pending)
+                 : std::nullopt;
+    if (action == "cancel" || action == "reject")
+      return input == Ownership::Pending
+                 ? std::optional<Ownership>(Ownership::NoPending)
+                 : std::nullopt;
     if (transition.getTransfer())
-      return transition.emitOpError(
-          "ownership transfer requires a pending offer");
-    if (event.getAction() == "retry" || event.getAction() == "cancel" ||
-        event.getAction() == "reject")
-      return transition.emitOpError(
-          "ownership resolution is unreachable from the initial state");
+      return input == Ownership::Pending
+                 ? std::optional<Ownership>(Ownership::NoPending)
+                 : std::nullopt;
+    return input;
+  };
+
+  for (unsigned cursor = 0; cursor < worklist.size(); ++cursor) {
+    auto [source, input] = worklist[cursor];
+    for (unsigned transitionIndex : outgoing[source])
+      if (std::optional<Ownership> output =
+              transferOwnership(transitionIndex, input))
+        addOwnership(transitionTargets[transitionIndex], *output);
   }
 
+  uint8_t conflicting =
+      ownershipBit(Ownership::NoPending) | ownershipBit(Ownership::Pending);
+  for (auto [index, state] : llvm::enumerate(states))
+    if (ownership[index] == conflicting)
+      return state.emitOpError() << "ownership state conflict at join state '@"
+                                 << state.getSymName() << "'";
+
+  auto firstTransition = [&](auto predicate) -> TransitionOp {
+    for (auto [index, transition] : llvm::enumerate(transitions))
+      if (predicate(index, transition))
+        return transition;
+    return {};
+  };
+  if (TransitionOp transition = firstTransition([&](unsigned index, auto op) {
+        return transitionEvents[index].getAction() == "offer" &&
+               hasOwnership(stateIndex(op.getSourceAttr()), Ownership::Pending);
+      }))
+    return transition.emitOpError(
+        "offer cannot begin while another offer is pending");
+  if (TransitionOp transition = firstTransition([&](unsigned index, auto op) {
+        return transitionEvents[index].getAction() == "retry" &&
+               hasOwnership(stateIndex(op.getSourceAttr()),
+                            Ownership::NoPending);
+      }))
+    return transition.emitOpError("retry requires a pending offer");
+  if (TransitionOp transition = firstTransition([&](unsigned index, auto op) {
+        StringRef action = transitionEvents[index].getAction();
+        return (action == "cancel" || action == "reject") &&
+               hasOwnership(stateIndex(op.getSourceAttr()),
+                            Ownership::NoPending);
+      }))
+    return transition.emitOpError(
+        "ownership resolution requires a pending offer");
+  if (TransitionOp transition = firstTransition([&](unsigned index, auto op) {
+        StringRef action = transitionEvents[index].getAction();
+        return op.getTransfer() && action != "offer" && action != "retry" &&
+               action != "cancel" && action != "reject" &&
+               hasOwnership(stateIndex(op.getSourceAttr()),
+                            Ownership::NoPending);
+      }))
+    return transition.emitOpError(
+        "ownership transfer requires a pending offer");
+  if (TransitionOp transition = firstTransition([&](unsigned index, auto op) {
+        if (ownership[stateIndex(op.getSourceAttr())] != 0)
+          return false;
+        StringRef action = transitionEvents[index].getAction();
+        return op.getTransfer() || action == "retry" || action == "cancel" ||
+               action == "reject";
+      }))
+    return transition.emitOpError(
+        "ownership resolution is unreachable from the initial state");
+
   for (auto [index, state] : llvm::enumerate(states)) {
-    if (ownership[index] != Ownership::Pending)
+    if (!hasOwnership(index, Ownership::Pending))
       continue;
     if (state.getTerminal())
       return state.emitOpError() << "terminal state '@" << state.getSymName()
                                  << "' is reachable with pending ownership";
-    if (llvm::none_of(transitions, [&](TransitionOp transition) {
-          return transition.getSourceAttr().getValue() == state.getSymName();
-        }))
+    if (outgoing[index].empty())
       return state.emitOpError()
              << "pending ownership reaches state '@" << state.getSymName()
              << "' with no outgoing transition";
@@ -848,7 +904,7 @@ LogicalResult ProtocolOp::verify() {
       if (value.getValue() == "on_terminal_phase" &&
           llvm::none_of(llvm::enumerate(states), [&](auto indexedState) {
             return indexedState.value().getTerminal() &&
-                   ownership[indexedState.index()].has_value();
+                   ownership[indexedState.index()] != 0;
           }))
         return completion.emitOpError(
             "on_terminal_phase completion requires a reachable terminal state");
@@ -858,15 +914,30 @@ LogicalResult ProtocolOp::verify() {
   if (correlation) {
     auto field = dyn_cast<StringAttr>(correlation.getValue());
     if (field && !field.getValue().empty()) {
-      Type offerPayload;
+      Type correlationType;
       for (TransitionOp transition : transitions) {
         if (!ownership[stateIndex(transition.getSourceAttr())])
           continue;
         EventOp event = lookupChild<EventOp>(*this, transition.getEventAttr());
-        if (event.getAction() == "offer" && !offerPayload)
-          offerPayload = event.getPayload();
+        if (event.getAction() != "offer")
+          continue;
+        Operation *declaration = recordDecl(event, event.getPayload());
+        std::optional<unsigned> index =
+            declaration ? findField(declaration, field.getValue())
+                        : std::nullopt;
+        if (!index)
+          return correlation.emitOpError()
+                 << "correlation field '" << field.getValue()
+                 << "' is missing from reachable offer/response payload";
+        Type type = fieldType(declaration, *index);
+        if (!correlationType)
+          correlationType = type;
+        else if (type != correlationType)
+          return correlation.emitOpError()
+                 << "correlation field '" << field.getValue() << "' has type "
+                 << type << " but expected " << correlationType;
       }
-      if (!offerPayload)
+      if (!correlationType)
         return correlation.emitOpError()
                << "correlation field '" << field.getValue()
                << "' requires a reachable offer event";
@@ -876,15 +947,19 @@ LogicalResult ProtocolOp::verify() {
         EventOp event = lookupChild<EventOp>(*this, transition.getEventAttr());
         if (event.getAction() != "offer" && event.getAction() != "response")
           continue;
-        if (event.getPayload() != offerPayload)
-          return correlation.emitOpError(
-              "reachable offer and response events must use the same "
-              "correlation payload type");
         Operation *declaration = recordDecl(event, event.getPayload());
-        if (!declaration || !findField(declaration, field.getValue()))
+        std::optional<unsigned> index =
+            declaration ? findField(declaration, field.getValue())
+                        : std::nullopt;
+        if (!index)
           return correlation.emitOpError()
                  << "correlation field '" << field.getValue()
                  << "' is missing from reachable offer/response payload";
+        Type type = fieldType(declaration, *index);
+        if (type != correlationType)
+          return correlation.emitOpError()
+                 << "correlation field '" << field.getValue() << "' has type "
+                 << type << " but expected " << correlationType;
       }
     }
   }
@@ -1024,11 +1099,28 @@ LogicalResult PortOp::verify() {
   if (!protocol)
     return emitOpError() << "unresolved channel protocol '@"
                          << channel.getProtocol().getValue() << "'";
-  if (!matchesCarrierEvent(protocol, channel.getElementType(), getFromAttr(),
-                           getToAttr()))
+  RoleOp protocolFrom = lookupChild<RoleOp>(protocol, getProtocolFromAttr());
+  if (!protocolFrom)
+    return emitOpError() << "unresolved mapped protocol source role '@"
+                         << getProtocolFromAttr().getValue() << "'";
+  RoleOp protocolTo = lookupChild<RoleOp>(protocol, getProtocolToAttr());
+  if (!protocolTo)
+    return emitOpError() << "unresolved mapped protocol target role '@"
+                         << getProtocolToAttr().getValue() << "'";
+  if (protocolFrom.getDualAttr() != getProtocolToAttr() ||
+      protocolTo.getDualAttr() != getProtocolFromAttr())
+    return emitOpError("mapped protocol roles must be dual");
+  RoleOp toRole = lookupChild<RoleOp>(interface, getToAttr());
+  if (fromRole.getCardinality() != protocolFrom.getCardinality() ||
+      toRole.getCardinality() != protocolTo.getCardinality())
+    return emitOpError(
+        "interface and mapped protocol roles must have matching cardinality");
+  if (!matchesCarrierEvent(protocol, channel.getElementType(),
+                           getProtocolFromAttr(), getProtocolToAttr()))
     return emitOpError() << "channel payload " << channel.getElementType()
-                         << " from '@" << getFromAttr().getValue() << "' to '@"
-                         << getToAttr().getValue()
+                         << " from mapped protocol role '@"
+                         << getProtocolFromAttr().getValue() << "' to '@"
+                         << getProtocolToAttr().getValue()
                          << "' does not match any carrier event in protocol '@"
                          << channel.getProtocol().getValue() << "'";
   return success();

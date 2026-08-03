@@ -9,10 +9,10 @@
 // RUN: %not %acir_opt %t/unreachable-terminal.mlir 2>&1 | %FileCheck %s --check-prefix=TERMINAL
 
 // FLOW: flow payload 'i16' does not match any carrier event in protocol '@p'
-// DIRECTION: channel payload 'i8' from '@b' to '@a' does not match any carrier event in protocol '@p'
-// CONTROL: channel payload 'i8' from '@a' to '@b' does not match any carrier event in protocol '@p'
+// DIRECTION: channel payload 'i8' from mapped protocol role '@b' to '@a' does not match any carrier event in protocol '@p'
+// CONTROL: channel payload 'i8' from mapped protocol role '@a' to '@b' does not match any carrier event in protocol '@p'
 // NOTIFY-CORR: correlation field 'tag' is missing from reachable offer/response payload
-// CORR-TYPE: reachable offer and response events must use the same correlation payload type
+// CORR-TYPE: correlation field 'tag' has type 'i8' but expected 'i16'
 // RESPONSE: on_response completion requires a reachable response event
 // ACCEPT: on_accept completion requires a reachable accept event
 // TERMINAL: on_terminal_phase completion requires a reachable terminal state
@@ -41,7 +41,7 @@ builtin.module attributes {ac.contract_epoch = "0.1"} {
   "ac.interface"() <{sym_name = "I"}> ({
     "ac.role"() <{sym_name = "a", dual = @b, cardinality = "exclusive"}> : () -> ()
     "ac.role"() <{sym_name = "b", dual = @a, cardinality = "exclusive"}> : () -> ()
-    "ac.port"() <{sym_name = "x", type = !ac.channel<i8, @p>, from = @b, to = @a}> : () -> ()
+    "ac.port"() <{sym_name = "x", type = !ac.channel<i8, @p>, from = @b, to = @a, protocol_from = @b, protocol_to = @a}> : () -> ()
   }) : () -> ()
 }
 
@@ -57,7 +57,7 @@ builtin.module attributes {ac.contract_epoch = "0.1"} {
   "ac.interface"() <{sym_name = "I"}> ({
     "ac.role"() <{sym_name = "a", dual = @b, cardinality = "exclusive"}> : () -> ()
     "ac.role"() <{sym_name = "b", dual = @a, cardinality = "exclusive"}> : () -> ()
-    "ac.port"() <{sym_name = "x", type = !ac.channel<i8, @p>, from = @a, to = @b}> : () -> ()
+    "ac.port"() <{sym_name = "x", type = !ac.channel<i8, @p>, from = @a, to = @b, protocol_from = @a, protocol_to = @b}> : () -> ()
   }) : () -> ()
 }
 
@@ -84,7 +84,7 @@ builtin.module attributes {ac.contract_epoch = "0.1"} {
 //--- correlation-type.mlir
 builtin.module attributes {ac.contract_epoch = "0.1"} {
   "ac.type_scope"() <{sym_name = "types"}> ({
-    "ac.transaction"() <{sym_name = "Req", fields = [{name = "tag", type = i8}]}> : () -> ()
+    "ac.transaction"() <{sym_name = "Req", fields = [{name = "tag", type = i16}]}> : () -> ()
     "ac.transaction"() <{sym_name = "Resp", fields = [{name = "tag", type = i8}]}> : () -> ()
   }) : () -> ()
   "ac.protocol"() <{sym_name = "p"}> ({

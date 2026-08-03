@@ -14,6 +14,7 @@
 #include "gtest/gtest.h"
 
 #include <array>
+#include <chrono>
 
 namespace acir::ac {
 namespace {
@@ -204,8 +205,10 @@ TEST(ACIROpsTest, PublicBuildersConstructEveryTaskFiveOperation) {
   EXPECT_TRUE(RoleOp::create(builder, loc, "b", "a", "exclusive"));
   auto channel = ChannelType::get(&context, builder.getI8Type(),
                                   mlir::FlatSymbolRefAttr::get(&context, "p"));
-  auto port = PortOp::create(builder, loc, "data", channel, "a", "b");
+  auto port = PortOp::create(builder, loc, "data", channel, "a", "b", "a", "b");
   EXPECT_TRUE(port);
+  EXPECT_EQ(port.getProtocolFromAttr().getValue(), "a");
+  EXPECT_EQ(port.getProtocolToAttr().getValue(), "b");
   EXPECT_TRUE(mlir::isa<ProtocolContainerOpInterface>(protocol.getOperation()));
   EXPECT_TRUE(
       mlir::isa<InterfaceContainerOpInterface>(interface.getOperation()));
@@ -274,6 +277,8 @@ TEST(ACIROpsTest, TaskFiveRegistryContainsExactlyTheRequiredNewOperations) {
 TEST(ACIROpsTest, TopologyVerifierWalksTypeAttributesAndLocations) {
   mlir::MLIRContext context;
   context.loadDialect<ACIRDialect>();
+  mlir::ScopedDiagnosticHandler handler(
+      &context, [](mlir::Diagnostic &) { return mlir::success(); });
   mlir::OpBuilder builder(&context);
   auto protocol = mlir::FlatSymbolRefAttr::get(&context, "missing");
   auto flow = FlowType::get(&context, builder.getI8Type(), protocol);
@@ -297,6 +302,41 @@ TEST(ACIROpsTest, TopologyVerifierWalksTypeAttributesAndLocations) {
                                       mlir::TypeAttr::get(nested));
   auto locationModule = mlir::ModuleOp::create(location);
   EXPECT_TRUE(mlir::failed(verifyTopologyTypeUses(locationModule)));
+}
+
+TEST(ACIROpsTest, ReverseChainOwnershipAnalysisHasLinearScaling) {
+  mlir::MLIRContext context;
+  context.loadDialect<ACIRDialect>();
+  mlir::OpBuilder builder(&context);
+  auto loc = builder.getUnknownLoc();
+  auto module = mlir::ModuleOp::create(loc);
+  builder.setInsertionPointToStart(module.getBody());
+  auto protocol = ProtocolOp::create(builder, loc, "long_chain");
+  builder.setInsertionPointToStart(&protocol.getBody().emplaceBlock());
+  RoleOp::create(builder, loc, "a", "b", "exclusive");
+  RoleOp::create(builder, loc, "b", "a", "exclusive");
+
+  constexpr unsigned stateCount = 1201;
+  std::vector<std::string> stateNames;
+  stateNames.reserve(stateCount);
+  for (unsigned index = 0; index < stateCount; ++index) {
+    stateNames.push_back((llvm::Twine("s") + llvm::Twine(index)).str());
+    StateOp::create(builder, loc, stateNames.back(), index == 0,
+                    index + 1 == stateCount);
+  }
+  EventOp::create(builder, loc, "step", "a", "b", builder.getI8Type(),
+                  "notify");
+  for (unsigned index = stateCount - 1; index > 0; --index) {
+    auto transition =
+        TransitionOp::create(builder, loc, stateNames[index - 1],
+                             stateNames[index], "step", nullptr, false, false);
+    transition.getGuard().emplaceBlock();
+  }
+
+  auto start = std::chrono::steady_clock::now();
+  EXPECT_TRUE(mlir::succeeded(mlir::verify(module)));
+  auto elapsed = std::chrono::steady_clock::now() - start;
+  EXPECT_LT(elapsed, std::chrono::seconds(5));
 }
 
 TEST(ACIROpsTest, TransitionTableRejectsAmbiguousRowsDeterministically) {

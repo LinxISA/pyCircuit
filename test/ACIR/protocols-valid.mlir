@@ -4,6 +4,8 @@
 builtin.module attributes {ac.contract_epoch = "0.1"} {
   "ac.type_scope"() <{sym_name = "types"}> ({
     "ac.transaction"() <{sym_name = "Message", fields = [{name = "tag", type = i16}]}> : () -> ()
+    "ac.transaction"() <{sym_name = "Req", fields = [{name = "id", type = i16}, {name = "data", type = i8}]}> : () -> ()
+    "ac.transaction"() <{sym_name = "Resp", fields = [{name = "id", type = i16}, {name = "status", type = i1}]}> : () -> ()
   }) : () -> ()
   "ac.protocol"() <{sym_name = "handshake"}> ({
     "ac.role"() <{sym_name = "producer", dual = @consumer, cardinality = "exclusive"}> : () -> ()
@@ -33,8 +35,8 @@ builtin.module attributes {ac.contract_epoch = "0.1"} {
     "ac.role"() <{sym_name = "requester", dual = @responder, cardinality = "exclusive"}> : () -> ()
     "ac.role"() <{sym_name = "responder", dual = @requester, cardinality = "exclusive"}> : () -> ()
     "ac.state"() <{sym_name = "active", initial = true, terminal = false}> : () -> ()
-    "ac.event"() <{sym_name = "request", from = @requester, to = @responder, payload = !ac.transaction<@types::@Message>, action = "offer"}> : () -> ()
-    "ac.event"() <{sym_name = "response", from = @responder, to = @requester, payload = !ac.transaction<@types::@Message>, action = "response"}> : () -> ()
+    "ac.event"() <{sym_name = "request", from = @requester, to = @responder, payload = !ac.transaction<@types::@Req>, action = "offer"}> : () -> ()
+    "ac.event"() <{sym_name = "response", from = @responder, to = @requester, payload = !ac.transaction<@types::@Resp>, action = "response"}> : () -> ()
     "ac.transition"() <{source = @active, target = @active, event = @request, transfer = true}> ({}) : () -> ()
     "ac.transition"() <{source = @active, target = @active, event = @response}> ({
       %zero = "arith.constant"() <{value = 0 : i16}> : () -> i16
@@ -47,7 +49,17 @@ builtin.module attributes {ac.contract_epoch = "0.1"} {
     "ac.guarantee"() <{kind = "delivery", value = "exactly_once"}> : () -> ()
     "ac.guarantee"() <{kind = "completion", value = "on_response"}> : () -> ()
     "ac.guarantee"() <{kind = "max_inflight", value = 4 : i64}> : () -> ()
-    "ac.guarantee"() <{kind = "correlation", value = "tag"}> : () -> ()
+    "ac.guarantee"() <{kind = "correlation", value = "id"}> : () -> ()
+  }) : () -> ()
+
+  "ac.protocol"() <{sym_name = "terminal_completion"}> ({
+    "ac.state"() <{sym_name = "start", initial = true, terminal = false}> : () -> ()
+    "ac.state"() <{sym_name = "done", initial = false, terminal = true}> : () -> ()
+    "ac.event"() <{sym_name = "finish", from = @producer, to = @consumer, payload = i1, action = "notify"}> : () -> ()
+    "ac.role"() <{sym_name = "producer", dual = @consumer, cardinality = "exclusive"}> : () -> ()
+    "ac.role"() <{sym_name = "consumer", dual = @producer, cardinality = "exclusive"}> : () -> ()
+    "ac.transition"() <{source = @start, target = @done, event = @finish}> ({}) : () -> ()
+    "ac.guarantee"() <{kind = "completion", value = "on_terminal_phase"}> : () -> ()
   }) : () -> ()
 
   %flow = "builtin.unrealized_conversion_cast"() : () -> !ac.flow<i32, @handshake>

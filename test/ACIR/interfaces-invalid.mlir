@@ -41,7 +41,7 @@
 // FLOW-CARDINALITY: flow value has more than one functional use
 // PORT-TARGET: unresolved port target role '@missing'
 // PORT-DUAL: port source and target roles must be dual
-// PROTOCOL-PAYLOAD: channel payload 'i16' from '@a' to '@b' does not match any carrier event in protocol '@p'
+// PROTOCOL-PAYLOAD: channel payload 'i16' from mapped protocol role '@sender' to '@receiver' does not match any carrier event in protocol '@p'
 // DETERMINISTIC: unresolved port source role '@first_missing'
 
 //--- duplicate-role.mlir
@@ -73,7 +73,7 @@ builtin.module attributes {ac.contract_epoch = "0.1"} {
   "ac.interface"() <{sym_name = "I"}> ({
     "ac.role"() <{sym_name = "a", dual = @b, cardinality = "exclusive"}> : () -> ()
     "ac.role"() <{sym_name = "b", dual = @a, cardinality = "exclusive"}> : () -> ()
-    "ac.port"() <{sym_name = "x", type = !ac.channel<i8, @p>, from = @missing, to = @b}> : () -> ()
+    "ac.port"() <{sym_name = "x", type = !ac.channel<i8, @p>, from = @missing, to = @b, protocol_from = @missing, protocol_to = @b}> : () -> ()
   }) : () -> ()
 }
 
@@ -83,7 +83,7 @@ builtin.module attributes {ac.contract_epoch = "0.1"} {
   "ac.interface"() <{sym_name = "I"}> ({
     "ac.role"() <{sym_name = "a", dual = @b, cardinality = "exclusive"}> : () -> ()
     "ac.role"() <{sym_name = "b", dual = @a, cardinality = "exclusive"}> : () -> ()
-    "ac.port"() <{sym_name = "x", type = !ac.channel<!ac.endpoint<@I, @a>, @p>, from = @a, to = @b}> : () -> ()
+    "ac.port"() <{sym_name = "x", type = !ac.channel<!ac.endpoint<@I, @a>, @p>, from = @a, to = @b, protocol_from = @a, protocol_to = @b}> : () -> ()
   }) : () -> ()
 }
 
@@ -92,7 +92,7 @@ builtin.module attributes {ac.contract_epoch = "0.1"} {
   "ac.interface"() <{sym_name = "I"}> ({
     "ac.role"() <{sym_name = "a", dual = @b, cardinality = "exclusive"}> : () -> ()
     "ac.role"() <{sym_name = "b", dual = @a, cardinality = "exclusive"}> : () -> ()
-    "ac.port"() <{sym_name = "x", type = !ac.channel<i8, @missing>, from = @a, to = @b}> : () -> ()
+    "ac.port"() <{sym_name = "x", type = !ac.channel<i8, @missing>, from = @a, to = @b, protocol_from = @a, protocol_to = @b}> : () -> ()
   }) : () -> ()
 }
 
@@ -143,8 +143,8 @@ builtin.module attributes {ac.contract_epoch = "0.1"} {
   "ac.interface"() <{sym_name = "I"}> ({
     "ac.role"() <{sym_name = "a", dual = @b, cardinality = "exclusive"}> : () -> ()
     "ac.role"() <{sym_name = "b", dual = @a, cardinality = "exclusive"}> : () -> ()
-    "ac.port"() <{sym_name = "x", type = !ac.channel<i8, @p>, from = @a, to = @b}> : () -> ()
-    "ac.port"() <{sym_name = "x", type = !ac.channel<i8, @p>, from = @b, to = @a}> : () -> ()
+    "ac.port"() <{sym_name = "x", type = !ac.channel<i8, @p>, from = @a, to = @b, protocol_from = @a, protocol_to = @b}> : () -> ()
+    "ac.port"() <{sym_name = "x", type = !ac.channel<i8, @p>, from = @b, to = @a, protocol_from = @b, protocol_to = @a}> : () -> ()
   }) : () -> ()
 }
 
@@ -168,7 +168,7 @@ builtin.module attributes {ac.contract_epoch = "0.1"} {
   "ac.interface"() <{sym_name = "I"}> ({
     "ac.role"() <{sym_name = "a", dual = @b, cardinality = "exclusive"}> : () -> ()
     "ac.role"() <{sym_name = "b", dual = @a, cardinality = "exclusive"}> : () -> ()
-    "ac.port"() <{sym_name = "x", type = i8, from = @a, to = @b}> : () -> ()
+    "ac.port"() <{sym_name = "x", type = i8, from = @a, to = @b, protocol_from = @a, protocol_to = @b}> : () -> ()
   }) : () -> ()
 }
 
@@ -191,7 +191,7 @@ builtin.module attributes {ac.contract_epoch = "0.1"} {
   "ac.interface"() <{sym_name = "I"}> ({
     "ac.role"() <{sym_name = "a", dual = @b, cardinality = "exclusive"}> : () -> ()
     "ac.role"() <{sym_name = "b", dual = @a, cardinality = "exclusive"}> : () -> ()
-    "ac.port"() <{sym_name = "x", type = !ac.channel<i8, @p>, from = @first_missing, to = @second_missing}> : () -> ()
+    "ac.port"() <{sym_name = "x", type = !ac.channel<i8, @p>, from = @first_missing, to = @second_missing, protocol_from = @first_missing, protocol_to = @second_missing}> : () -> ()
   }) : () -> ()
 }
 
@@ -201,7 +201,7 @@ builtin.module attributes {ac.contract_epoch = "0.1"} {
   "ac.interface"() <{sym_name = "I"}> ({
     "ac.role"() <{sym_name = "a", dual = @b, cardinality = "exclusive"}> : () -> ()
     "ac.role"() <{sym_name = "b", dual = @a, cardinality = "exclusive"}> : () -> ()
-    "ac.port"() <{sym_name = "x", type = !ac.channel<i8, @p>, from = @a, to = @missing}> : () -> ()
+    "ac.port"() <{sym_name = "x", type = !ac.channel<i8, @p>, from = @a, to = @missing, protocol_from = @a, protocol_to = @missing}> : () -> ()
   }) : () -> ()
 }
 
@@ -213,7 +213,7 @@ builtin.module attributes {ac.contract_epoch = "0.1"} {
     "ac.role"() <{sym_name = "b", dual = @a, cardinality = "exclusive"}> : () -> ()
     "ac.role"() <{sym_name = "c", dual = @d, cardinality = "exclusive"}> : () -> ()
     "ac.role"() <{sym_name = "d", dual = @c, cardinality = "exclusive"}> : () -> ()
-    "ac.port"() <{sym_name = "x", type = !ac.channel<i8, @p>, from = @a, to = @c}> : () -> ()
+    "ac.port"() <{sym_name = "x", type = !ac.channel<i8, @p>, from = @a, to = @c, protocol_from = @a, protocol_to = @c}> : () -> ()
   }) : () -> ()
 }
 
@@ -228,6 +228,6 @@ builtin.module attributes {ac.contract_epoch = "0.1"} {
   "ac.interface"() <{sym_name = "I"}> ({
     "ac.role"() <{sym_name = "a", dual = @b, cardinality = "exclusive"}> : () -> ()
     "ac.role"() <{sym_name = "b", dual = @a, cardinality = "exclusive"}> : () -> ()
-    "ac.port"() <{sym_name = "x", type = !ac.channel<i16, @p>, from = @a, to = @b}> : () -> ()
+    "ac.port"() <{sym_name = "x", type = !ac.channel<i16, @p>, from = @a, to = @b, protocol_from = @sender, protocol_to = @receiver}> : () -> ()
   }) : () -> ()
 }
