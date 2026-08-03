@@ -3,6 +3,7 @@ add_acir_library(ACIRDialect SOURCES
   ACIRInterfaces.cpp
   ACIROps.cpp
   ACIRTypes.cpp
+  GraphRegion.cpp
 )
 add_dependencies(ACIRDialect
   ACIRDialectIncGen
@@ -12,8 +13,10 @@ add_dependencies(ACIRDialect
   ACIROpInterfacesIncGen
 )
 target_link_libraries(ACIRDialect PUBLIC
+  MLIRControlFlowInterfaces
   MLIRDLTIDialect
   MLIRDataLayoutInterfaces
+  MLIRFunctionInterfaces
   MLIRSideEffectInterfaces
 )
 target_include_directories(ACIRDialect PUBLIC

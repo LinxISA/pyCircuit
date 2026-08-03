@@ -1,15 +1,20 @@
 #include "acir/Dialect/ACIR/ACIROps.h"
+#include "acir/Dialect/ACIR/GraphRegion.h"
 
 #include "mlir/Dialect/DLTI/DLTI.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/SymbolTable.h"
+#include "mlir/Interfaces/FunctionImplementation.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallSet.h"
+#include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/StringSwitch.h"
 #include "llvm/ADT/TypeSwitch.h"
+
+#include <limits>
 
 using namespace mlir;
 
@@ -52,7 +57,7 @@ Operation *lookup(Operation *from, SymbolRefAttr name) {
     auto root = FlatSymbolRefAttr::get(name.getRootReference());
     scope = SymbolTable::lookupNearestSymbolFrom(from, root);
     if (!scope)
-      if (auto module = from->getParentOfType<ModuleOp>())
+      if (auto module = from->getParentOfType<mlir::ModuleOp>())
         scope = SymbolTable::lookupSymbolIn(module, root);
   }
   if (!isa_and_nonnull<TypeScopeOp>(scope))
@@ -169,7 +174,7 @@ OpTy lookupChild(Operation *container, FlatSymbolRefAttr name) {
 }
 
 ProtocolOp lookupProtocol(Operation *from, FlatSymbolRefAttr name) {
-  auto module = from->getParentOfType<ModuleOp>();
+  auto module = from->getParentOfType<mlir::ModuleOp>();
   return module ? dyn_cast_or_null<ProtocolOp>(
                       SymbolTable::lookupSymbolIn(module, name))
                 : ProtocolOp();
@@ -1126,7 +1131,422 @@ LogicalResult PortOp::verify() {
   return success();
 }
 
+namespace {
+
+FunctionType graphSignature(Operation *op) {
+  if (!op)
+    return {};
+  auto type = op->getAttrOfType<TypeAttr>("function_type");
+  return type ? dyn_cast<FunctionType>(type.getValue()) : FunctionType();
+}
+
+Operation *lookupGraphSymbol(Operation *from, FlatSymbolRefAttr name) {
+  auto file = from->getParentOfType<mlir::ModuleOp>();
+  return file ? SymbolTable::lookupSymbolIn(file, name) : nullptr;
+}
+
+LogicalResult verifyConcreteDictionary(Operation *op, DictionaryAttr values,
+                                       StringRef subject) {
+  if (!isConcreteStaticValue(values))
+    return op->emitOpError() << subject
+                             << " must contain only concrete builtin static "
+                                "values";
+  LogicalResult result = success();
+  values.walk([&](SymbolRefAttr reference) {
+    if (SymbolTable::lookupNearestSymbolFrom(op, reference))
+      return WalkResult::advance();
+    op->emitOpError() << "unresolved static symbol reference '" << reference
+                      << "'";
+    result = failure();
+    return WalkResult::interrupt();
+  });
+  if (failed(result))
+    return failure();
+  return success();
+}
+
+LogicalResult verifyExactBinding(Operation *op, DictionaryAttr binding,
+                                 StringRef subject,
+                                 StringRef requiredRegistry) {
+  auto registry = binding.getAs<StringAttr>("registry");
+  auto name = binding.getAs<StringAttr>("name");
+  if (binding.size() != 2 || !registry || registry.getValue().empty() ||
+      !name || name.getValue().empty() || registry.getValue() == "generic")
+    return op->emitOpError()
+           << subject << " requires exact registered {registry, name} metadata";
+  if (registry.getValue() != requiredRegistry)
+    return op->emitOpError() << subject << " requires registered registry '"
+                             << requiredRegistry << "'";
+  return success();
+}
+
+LogicalResult verifyCallShape(Operation *op, FunctionType signature,
+                              TypeRange inputs, TypeRange outputs) {
+  if (!signature)
+    return op->emitOpError("definition has no canonical module signature");
+  if (!llvm::equal(inputs, signature.getInputs()))
+    return op->emitOpError("operand types do not match module signature");
+  if (!llvm::equal(outputs, signature.getResults()))
+    return op->emitOpError("result types do not match module signature");
+  return success();
+}
+
+LogicalResult verifyStaticArgumentSet(Operation *op, DictionaryAttr arguments,
+                                      Operation *definition = nullptr) {
+  if (failed(verifyConcreteDictionary(op, arguments, "static arguments")))
+    return failure();
+  if (!definition)
+    return success();
+  auto parameters = definition->getAttrOfType<DictionaryAttr>("static_params");
+  if (!parameters || parameters.size() != arguments.size())
+    return op->emitOpError(
+        "static argument names must exactly match definition parameters");
+  for (NamedAttribute parameter : parameters) {
+    Attribute argument = arguments.get(parameter.getName());
+    if (!argument || argument.getTypeID() != parameter.getValue().getTypeID())
+      return op->emitOpError(
+          "static argument names must exactly match definition parameters");
+    auto parameterInteger = dyn_cast<IntegerAttr>(parameter.getValue());
+    auto argumentInteger = dyn_cast<IntegerAttr>(argument);
+    if (parameterInteger &&
+        parameterInteger.getType() != argumentInteger.getType())
+      return op->emitOpError()
+             << "static argument '" << parameter.getName().getValue()
+             << "' must match parameter attribute type "
+             << parameterInteger.getType();
+  }
+  return success();
+}
+
+bool isStructuralGraphChild(Operation &child) {
+  return isa<InstanceOp, ArrayOp, InstancesOp, ViewOp, ReturnOp>(child);
+}
+
+bool isStableHierarchySegment(StringRef segment) {
+  return !segment.empty() && llvm::all_of(segment, [](char c) {
+    return llvm::isAlnum(c) || c == '_' || c == '-';
+  });
+}
+
+} // namespace
+
+LogicalResult SystemOp::verify() {
+  if (!isStableHierarchySegment(getRootName()))
+    return emitOpError(
+        "root instance name must be one stable hierarchy segment");
+  if (getTickEpoch() != 0)
+    return emitOpError("global tick epoch must be exactly 0");
+  if (!hasStringValue(getTickUnit(), {"cycle", "ps", "ns", "us", "ms", "s"}))
+    return emitOpError() << "unsupported exact global tick unit '"
+                         << getTickUnit() << "'";
+  if (failed(verifyConcreteDictionary(*this, getSeedPolicy(), "seed policy")) ||
+      failed(
+          verifyConcreteDictionary(*this, getResultSchema(), "result schema")))
+    return failure();
+  auto seedKind = getSeedPolicy().getAs<StringAttr>("kind");
+  auto seedValue = getSeedPolicy().getAs<IntegerAttr>("value");
+  if (getSeedPolicy().size() != 2 || !seedKind ||
+      seedKind.getValue() != "fixed" || !seedValue)
+    return emitOpError("seed policy requires exact {kind = \"fixed\", value = "
+                       "integer} schema");
+  auto resultKind = getResultSchema().getAs<StringAttr>("kind");
+  if (!resultKind || resultKind.getValue().empty())
+    return emitOpError("result schema requires a non-empty string 'kind'");
+  if (!llvm::all_of(getInstrumentation(), [](Attribute value) {
+        return isa<StringAttr, SymbolRefAttr>(value);
+      }))
+    return emitOpError(
+        "instrumentation must be an ordered list of static names");
+  return success();
+}
+
+ParseResult ModuleOp::parse(OpAsmParser &parser, OperationState &result) {
+  StringAttr name;
+  SmallVector<OpAsmParser::Argument> arguments;
+  SmallVector<Type> results;
+  if (parser.parseSymbolName(name, SymbolTable::getSymbolAttrName(),
+                             result.attributes) ||
+      parser.parseArgumentList(arguments, OpAsmParser::Delimiter::Paren,
+                               /*allowType=*/true,
+                               /*allowAttrs=*/false) ||
+      parser.parseOptionalArrowTypeList(results))
+    return failure();
+
+  DictionaryAttr staticParameters;
+  if (succeeded(parser.parseOptionalKeyword("parameters"))) {
+    if (parser.parseAttribute(staticParameters))
+      return failure();
+  } else {
+    staticParameters = parser.getBuilder().getDictionaryAttr({});
+  }
+  result.addAttribute("static_params", staticParameters);
+  if (parser.parseOptionalAttrDictWithKeyword(result.attributes) ||
+      parser.parseKeyword("graph"))
+    return failure();
+
+  SmallVector<Type> inputs;
+  inputs.reserve(arguments.size());
+  for (const OpAsmParser::Argument &argument : arguments)
+    inputs.push_back(argument.type);
+  result.addAttribute(
+      "function_type",
+      TypeAttr::get(parser.getBuilder().getFunctionType(inputs, results)));
+  Region *body = result.addRegion();
+  return parser.parseRegion(*body, arguments, /*enableNameShadowing=*/true);
+}
+
+void ModuleOp::print(OpAsmPrinter &printer) {
+  printer << ' ';
+  printer.printSymbolName(getSymName());
+  function_interface_impl::printFunctionSignature(
+      printer, *this, getArgumentTypes(), /*isVariadic=*/false,
+      getResultTypes());
+  printer << " parameters " << getStaticParams();
+  printer.printOptionalAttrDictWithKeyword(
+      (*this)->getAttrs(), {SymbolTable::getSymbolAttrName(), "function_type",
+                            "static_params", "arg_attrs", "res_attrs"});
+  printer << " graph ";
+  printer.printRegion(getBody(), /*printEntryBlockArgs=*/false,
+                      /*printBlockTerminators=*/true,
+                      /*printEmptyBlock=*/true);
+}
+
+LogicalResult ModuleOp::verify() {
+  if (failed(verifyConcreteDictionary(*this, getStaticParams(),
+                                      "static parameters")))
+    return failure();
+  if (getBody().empty())
+    return emitOpError("module requires one Graph body block");
+  Block &entry = getBody().front();
+  if (!llvm::equal(entry.getArgumentTypes(), getFunctionType().getInputs()))
+    return emitOpError("Graph region arguments must match module signature");
+  for (Operation &child : entry)
+    if (!isStructuralGraphChild(child))
+      return child.emitOpError(
+          "operation is not legal in an ac.module structural Graph region");
+  if (entry.empty() || !isa<ReturnOp>(entry.back()))
+    return emitOpError("module Graph region must end with ac.return");
+  return success();
+}
+
+LogicalResult ModuleExternOp::verify() {
+  if (failed(verifyConcreteDictionary(*this, getStaticParams(),
+                                      "static parameters")))
+    return failure();
+  return verifyExactBinding(*this, getImplementation(),
+                            "external module implementation", "cpp");
+}
+
+LogicalResult ModuleGeneratedOp::verify() {
+  if (failed(verifyConcreteDictionary(*this, getStaticParams(),
+                                      "static parameters")))
+    return failure();
+  return verifyExactBinding(*this, getGenerator(), "generated module", "ac");
+}
+
+LogicalResult InstanceOp::verify() {
+  Operation *definition = lookupGraphSymbol(*this, getDefinitionAttr());
+  if (!isa_and_nonnull<ModuleOp, ModuleExternOp, ModuleGeneratedOp>(definition))
+    return emitOpError() << "unresolved module definition '"
+                         << getDefinitionAttr() << "'";
+  if (!isStableHierarchySegment(getSymName()) ||
+      !isStableHierarchySegment(getStableId()) ||
+      !isStableHierarchySegment(getPath()))
+    return emitOpError(
+        "instance name, stable id, and path must be stable local segments");
+  if (failed(verifyStaticArgumentSet(*this, getStaticArgs(), definition)))
+    return failure();
+  return verifyCallShape(*this, graphSignature(definition),
+                         getInputs().getTypes(), getOutputs().getTypes());
+}
+
+LogicalResult ArrayOp::verify() {
+  Operation *definition = lookupGraphSymbol(*this, getDefinitionAttr());
+  if (!isa_and_nonnull<ModuleOp, ModuleExternOp, ModuleGeneratedOp>(definition))
+    return emitOpError() << "unresolved array element definition '"
+                         << getDefinitionAttr() << "'";
+  if (!isStableHierarchySegment(getSymName()) ||
+      !isStableHierarchySegment(getStableId()) ||
+      !isStableHierarchySegment(getPath()))
+    return emitOpError(
+        "array name, stable id, and path must be stable local segments");
+  if (getShape().empty())
+    return emitOpError("array shape must have at least one dimension");
+  uint64_t count = 1;
+  for (int64_t extent : getShape()) {
+    if (extent < 0)
+      return emitOpError("array shape dimensions must be non-negative");
+    if (extent != 0 && count > std::numeric_limits<uint64_t>::max() /
+                                   static_cast<uint64_t>(extent))
+      return emitOpError("array cardinality overflows 64 bits");
+    count *= static_cast<uint64_t>(extent);
+  }
+  constexpr uint64_t maxStaticElements = 1U << 20;
+  if (count > maxStaticElements)
+    return emitOpError(
+        "array cardinality exceeds static elaboration bound 1048576");
+  FunctionType signature = graphSignature(definition);
+  if (!signature)
+    return emitOpError("array element definition has no signature");
+  if (getStaticArgs().size() != count)
+    return emitOpError("array requires one concrete static argument set per "
+                       "lexicographically ordered element");
+  for (Attribute value : getStaticArgs()) {
+    auto arguments = dyn_cast<DictionaryAttr>(value);
+    if (!arguments ||
+        failed(verifyStaticArgumentSet(*this, arguments, definition)))
+      return emitOpError(
+          "array static arguments must be concrete dictionaries");
+  }
+  SmallVector<Type> expectedInputs;
+  SmallVector<Type> expectedOutputs;
+  for (uint64_t index = 0; index < count; ++index) {
+    expectedInputs.append(signature.getInputs().begin(),
+                          signature.getInputs().end());
+    expectedOutputs.append(signature.getResults().begin(),
+                           signature.getResults().end());
+  }
+  if (!llvm::equal(getInputs().getTypes(), expectedInputs) ||
+      !llvm::equal(getOutputs().getTypes(), expectedOutputs))
+    return emitOpError("array flattened interface shape does not match element "
+                       "signature and static cardinality");
+  return success();
+}
+
+LogicalResult InstancesOp::verify() {
+  size_t count = getDefinitions().size();
+  if (count == 0 || getNames().size() != count ||
+      getStableIds().size() != count || getPaths().size() != count ||
+      getStaticArgs().size() != count)
+    return emitOpError("ordered instance metadata arrays must have identical "
+                       "non-zero cardinality");
+  llvm::SmallDenseSet<StringRef> names;
+  llvm::SmallDenseSet<StringRef> ids;
+  for (size_t index = 0; index < count; ++index) {
+    auto definition = dyn_cast<FlatSymbolRefAttr>(getDefinitions()[index]);
+    if (!definition)
+      return emitOpError("definitions must contain flat module symbols");
+    Operation *target = lookupGraphSymbol(*this, definition);
+    if (!isa_and_nonnull<ModuleOp, ModuleExternOp, ModuleGeneratedOp>(target))
+      return emitOpError() << "unresolved collection definition '" << definition
+                           << "'";
+    if (graphSignature(target) != getInterface())
+      return emitOpError("collection element definition does not implement "
+                         "the exact declared common interface");
+    auto arguments = dyn_cast<DictionaryAttr>(getStaticArgs()[index]);
+    if (!arguments || failed(verifyStaticArgumentSet(*this, arguments, target)))
+      return emitOpError("collection static arguments must be concrete "
+                         "dictionaries");
+    StringRef name = cast<StringAttr>(getNames()[index]).getValue();
+    StringRef id = cast<StringAttr>(getStableIds()[index]).getValue();
+    StringRef path = cast<StringAttr>(getPaths()[index]).getValue();
+    if (!isStableHierarchySegment(name) || !names.insert(name).second ||
+        !isStableHierarchySegment(id) || !ids.insert(id).second)
+      return emitOpError("collection names and stable ids must be non-empty "
+                         "and unique in declared order");
+    if (!isStableHierarchySegment(path))
+      return emitOpError(
+          "collection paths must be stable parent-relative segments");
+  }
+  SmallVector<Type> expectedInputs;
+  SmallVector<Type> expectedOutputs;
+  for (size_t index = 0; index < count; ++index) {
+    expectedInputs.append(getInterface().getInputs().begin(),
+                          getInterface().getInputs().end());
+    expectedOutputs.append(getInterface().getResults().begin(),
+                           getInterface().getResults().end());
+  }
+  if (!llvm::equal(getInputs().getTypes(), expectedInputs) ||
+      !llvm::equal(getOutputs().getTypes(), expectedOutputs))
+    return emitOpError("ordered collection IO does not match its common "
+                       "interface shape");
+  return success();
+}
+
+LogicalResult ViewOp::verify() {
+  ArrayRef<int64_t> indices = getIndices();
+  ArrayRef<int64_t> shape = getShape();
+  if (shape.empty() ||
+      llvm::any_of(shape, [](int64_t value) { return value < 0; }))
+    return emitOpError("view shape must be fully static and non-negative");
+  auto requireIndex = [&](int64_t index) {
+    return index >= 0 && static_cast<size_t>(index) < getInputs().size();
+  };
+  SmallVector<Type> expected;
+  StringRef kind = getKind();
+  if (kind == "selection") {
+    if (indices.size() != 1 || !requireIndex(indices[0]))
+      return emitOpError("selection requires one in-bounds constant index");
+    expected.push_back(getInputs()[indices[0]].getType());
+  } else if (kind == "slice") {
+    if (indices.size() < 2 || indices.size() > 3)
+      return emitOpError(
+          "slice requires constant start, end, and optional step");
+    int64_t start = indices[0], end = indices[1];
+    int64_t step = indices.size() == 3 ? indices[2] : 1;
+    if (step <= 0 || start < 0 || end < start ||
+        end > static_cast<int64_t>(getInputs().size()))
+      return emitOpError("slice bounds and step are invalid");
+    for (int64_t index = start; index < end; index += step)
+      expected.push_back(getInputs()[index].getType());
+  } else if (kind == "concat" || kind == "elementwise_binding") {
+    if (!indices.empty())
+      return emitOpError() << kind << " view does not accept index metadata";
+    auto inputTypes = getInputs().getTypes();
+    expected.append(inputTypes.begin(), inputTypes.end());
+  } else if (kind == "zip") {
+    if (!indices.empty())
+      return emitOpError("zip view does not accept index metadata");
+    if (getInputs().size() % 2 != 0)
+      return emitOpError("zip view requires equal source cardinalities");
+    size_t half = getInputs().size() / 2;
+    for (size_t index = 0; index < half; ++index) {
+      expected.push_back(getInputs()[index].getType());
+      expected.push_back(getInputs()[index + half].getType());
+    }
+  } else if (kind == "permutation") {
+    if (indices.size() != getInputs().size())
+      return emitOpError("permutation requires one index per input");
+    llvm::SmallDenseSet<int64_t> seen;
+    for (int64_t index : indices) {
+      if (!requireIndex(index) || !seen.insert(index).second)
+        return emitOpError(
+            "permutation indices must be an in-bounds bijection");
+      expected.push_back(getInputs()[index].getType());
+    }
+  } else {
+    return emitOpError() << "unsupported static view kind '" << kind << "'";
+  }
+  uint64_t cardinality = 1;
+  for (int64_t extent : shape) {
+    if (extent != 0 && cardinality > std::numeric_limits<uint64_t>::max() /
+                                         static_cast<uint64_t>(extent))
+      return emitOpError("view cardinality overflows 64 bits");
+    cardinality *= static_cast<uint64_t>(extent);
+  }
+  if (cardinality != expected.size() ||
+      !llvm::equal(getOutputs().getTypes(), expected))
+    return emitOpError("resolved view shape/order/types do not match outputs");
+  return success();
+}
+
+LogicalResult ReturnOp::verify() {
+  ModuleOp module = getOperation()->getParentOfType<ModuleOp>();
+  if (!module)
+    return emitOpError("must terminate an ac.module Graph region");
+  if (!llvm::equal(getOperandTypes(), module.getFunctionType().getResults()))
+    return emitOpError("operand types and count must exactly match module "
+                       "results");
+  if (llvm::any_of(getOperandTypes(),
+                   [](Type type) { return isa<ResourceTokenType>(type); }))
+    return emitOpError(
+        "private ownership handle cannot be exported from ac.module");
+  return success();
+}
+
 LogicalResult verifyTopologyTypeUses(Operation *operation) {
+  if (failed(verifyGraphStructure(operation)))
+    return failure();
   auto verifyType = [&](Type type, Value value) -> LogicalResult {
     if (Type nested = findNestedTopologyLeaf(type))
       return operation->emitOpError() << "topology type " << nested
@@ -1151,7 +1571,7 @@ LogicalResult verifyTopologyTypeUses(Operation *operation) {
             "flow value has more than one functional use");
     }
     if (auto endpoint = dyn_cast<EndpointType>(type)) {
-      auto module = operation->getParentOfType<ModuleOp>();
+      auto module = operation->getParentOfType<mlir::ModuleOp>();
       InterfaceOp interface =
           module ? dyn_cast_or_null<InterfaceOp>(SymbolTable::lookupSymbolIn(
                        module, endpoint.getInterface()))

@@ -1,5 +1,6 @@
 #include "acir/Dialect/ACIR/ACIRDialect.h"
 #include "acir/Dialect/ACIR/ACIROps.h"
+#include "acir/Dialect/ACIR/GraphRegion.h"
 #include "acir/InitAllDialects.h"
 
 #include "mlir/AsmParser/AsmParser.h"
@@ -249,10 +250,16 @@ TEST(ACIROpsTest, TaskFiveRegistryContainsExactlyTheRequiredNewOperations) {
     actual.push_back(operation.getStringRef().str());
   llvm::sort(actual);
   std::vector<std::string> expected = {
+      "ac.array",
       "ac.enum",
       "ac.event",
       "ac.guarantee",
       "ac.interface",
+      "ac.instance",
+      "ac.instances",
+      "ac.module",
+      "ac.module.extern",
+      "ac.module.generated",
       "ac.packet",
       "ac.packet.deserialize",
       "ac.packet.serialize",
@@ -261,17 +268,141 @@ TEST(ACIROpsTest, TaskFiveRegistryContainsExactlyTheRequiredNewOperations) {
       "ac.record.create",
       "ac.record.get",
       "ac.record.with",
+      "ac.return",
       "ac.role",
       "ac.state",
       "ac.struct",
+      "ac.system",
       "ac.transaction",
       "ac.transition",
       "ac.type_alias",
       "ac.type_scope",
       "ac.union",
+      "ac.view",
   };
   llvm::sort(expected);
   EXPECT_EQ(actual, expected);
+}
+
+TEST(ACIROpsTest, PublicBuildersConstructEveryTaskSixOperation) {
+  mlir::MLIRContext context;
+  context.loadDialect<ACIRDialect>();
+  mlir::OpBuilder builder(&context);
+  auto loc = builder.getUnknownLoc();
+  auto file = mlir::ModuleOp::create(loc);
+  file->setAttr("ac.contract_epoch", builder.getStringAttr("0.1"));
+  builder.setInsertionPointToStart(file.getBody());
+
+  auto emptyType = builder.getFunctionType({}, {});
+  auto emptyDictionary = builder.getDictionaryAttr({});
+  auto binding = builder.getDictionaryAttr({
+      builder.getNamedAttr("registry", builder.getStringAttr("cpp")),
+      builder.getNamedAttr("name", builder.getStringAttr("Leaf")),
+  });
+  auto generator = builder.getDictionaryAttr({
+      builder.getNamedAttr("registry", builder.getStringAttr("ac")),
+      builder.getNamedAttr("name", builder.getStringAttr("Generated")),
+  });
+  auto leaf =
+      ModuleExternOp::create(builder, loc, "Leaf", emptyType,
+                             mlir::StringAttr(), emptyDictionary, binding);
+  auto generated =
+      ModuleGeneratedOp::create(builder, loc, "Generated", emptyType,
+                                mlir::StringAttr(), emptyDictionary, generator);
+  EXPECT_TRUE(leaf);
+  EXPECT_TRUE(generated);
+
+  auto top = ModuleOp::create(builder, loc, "Top", emptyType, emptyDictionary);
+  builder.setInsertionPointToStart(top.addEntryBlock());
+  auto instance =
+      InstanceOp::create(builder, loc, mlir::TypeRange{}, mlir::ValueRange{},
+                         "Leaf", "child", "child", "child", emptyDictionary);
+  auto array = ArrayOp::create(
+      builder, loc, mlir::TypeRange{}, mlir::ValueRange{}, "Leaf", "lanes",
+      "lanes", "lanes", llvm::ArrayRef<int64_t>{2},
+      builder.getArrayAttr({emptyDictionary, emptyDictionary}));
+  auto definitions = builder.getArrayAttr({
+      mlir::FlatSymbolRefAttr::get(&context, "Leaf"),
+      mlir::FlatSymbolRefAttr::get(&context, "Generated"),
+  });
+  auto instances = InstancesOp::create(
+      builder, loc, mlir::TypeRange{}, mlir::ValueRange{}, definitions,
+      builder.getStrArrayAttr({"a", "b"}),
+      builder.getStrArrayAttr({"mix-a", "mix-b"}),
+      builder.getStrArrayAttr({"mix_a", "mix_b"}), emptyType,
+      builder.getArrayAttr({emptyDictionary, emptyDictionary}));
+  auto view = ViewOp::create(
+      builder, loc, mlir::TypeRange{}, mlir::ValueRange{}, "concat",
+      llvm::ArrayRef<int64_t>{}, llvm::ArrayRef<int64_t>{0});
+  auto returnOp = ReturnOp::create(builder, loc, mlir::ValueRange{});
+  EXPECT_TRUE(instance);
+  EXPECT_TRUE(array);
+  EXPECT_TRUE(instances);
+  EXPECT_TRUE(view);
+  EXPECT_TRUE(returnOp);
+
+  builder.setInsertionPointToStart(file.getBody());
+  auto seedPolicy = builder.getDictionaryAttr({
+      builder.getNamedAttr("kind", builder.getStringAttr("fixed")),
+      builder.getNamedAttr("value", builder.getI64IntegerAttr(0)),
+  });
+  auto resultSchema = builder.getDictionaryAttr(
+      {builder.getNamedAttr("kind", builder.getStringAttr("none"))});
+  auto system = SystemOp::create(builder, loc, "soc", "Top", "root", 0, "cycle",
+                                 mlir::FlatSymbolRefAttr(), seedPolicy,
+                                 builder.getArrayAttr({}), resultSchema, true);
+  EXPECT_TRUE(system);
+  EXPECT_TRUE(mlir::isa<mlir::FunctionOpInterface>(top.getOperation()));
+  EXPECT_TRUE(mlir::isa<mlir::RegionKindInterface>(top.getOperation()));
+  EXPECT_TRUE(mlir::succeeded(mlir::verify(file)));
+  EXPECT_TRUE(mlir::succeeded(verifyGraphStructure(file)));
+}
+
+TEST(ACIROpsTest, TaskSixRegistryDeltaIsExactlyNineGraphOperations) {
+  mlir::MLIRContext context;
+  context.loadDialect<ACIRDialect>();
+  const std::array<llvm::StringLiteral, 9> names = {
+      "ac.system",           "ac.module",   "ac.module.extern",
+      "ac.module.generated", "ac.instance", "ac.array",
+      "ac.instances",        "ac.view",     "ac.return",
+  };
+  for (llvm::StringLiteral name : names)
+    EXPECT_TRUE(mlir::OperationName(name, &context).isRegistered())
+        << name.str();
+  EXPECT_FALSE(mlir::OperationName("ac.connect", &context).isRegistered());
+  EXPECT_FALSE(mlir::OperationName("ac.queue", &context).isRegistered());
+  EXPECT_FALSE(mlir::OperationName("ac.time_domain", &context).isRegistered());
+}
+
+TEST(ACIROpsTest, LargeArrayVerificationIsDeterministic) {
+  mlir::MLIRContext context;
+  context.loadDialect<ACIRDialect>();
+  mlir::OpBuilder builder(&context);
+  auto loc = builder.getUnknownLoc();
+  auto file = mlir::ModuleOp::create(loc);
+  builder.setInsertionPointToStart(file.getBody());
+  auto emptyType = builder.getFunctionType({}, {});
+  auto emptyDictionary = builder.getDictionaryAttr({});
+  auto binding = builder.getDictionaryAttr({
+      builder.getNamedAttr("registry", builder.getStringAttr("cpp")),
+      builder.getNamedAttr("name", builder.getStringAttr("Leaf")),
+  });
+  ModuleExternOp::create(builder, loc, "Leaf", emptyType, mlir::StringAttr(),
+                         emptyDictionary, binding);
+  auto top = ModuleOp::create(builder, loc, "Top", emptyType, emptyDictionary);
+  builder.setInsertionPointToStart(top.addEntryBlock());
+  constexpr int64_t elementCount = 4096;
+  llvm::SmallVector<mlir::Attribute> arguments(elementCount, emptyDictionary);
+  ArrayOp::create(builder, loc, mlir::TypeRange{}, mlir::ValueRange{}, "Leaf",
+                  "large", "large", "large", llvm::ArrayRef<int64_t>{64, 64},
+                  builder.getArrayAttr(arguments));
+  ReturnOp::create(builder, loc, mlir::ValueRange{});
+
+  EXPECT_TRUE(mlir::succeeded(mlir::verify(file)));
+  EXPECT_TRUE(mlir::succeeded(mlir::verify(file)));
+  EXPECT_TRUE(mlir::succeeded(verifyGraphStructure(file)));
+  EXPECT_EQ(buildArrayElementPath("root.large", {1, 2, 3}),
+            "root.large[1][2][3]");
 }
 
 TEST(ACIROpsTest, TopologyVerifierWalksTypeAttributesAndLocations) {
