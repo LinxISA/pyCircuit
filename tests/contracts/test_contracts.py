@@ -52,9 +52,50 @@ def initialize_markdown_fixture(files):
     return temporary_directory, root
 
 
+def assert_exact_ci_cache_commands(test_case, workflow):
+    fingerprint_step = re.search(
+        r"      - name: Compute LLVM build fingerprint.*?(?=\n      - name:)",
+        workflow,
+        re.DOTALL,
+    ).group()
+    verification_step = re.search(
+        r"      - name: Verify exact LLVM build outputs.*?(?=\n      - name:)",
+        workflow,
+        re.DOTALL,
+    ).group()
+
+    for command in (
+        "pwd -P",
+        "command -v c++",
+        "c++ --version",
+        "cmake --version",
+        "ninja --version",
+        "uname -m",
+        "ldd --version 2>&1 | head -n 1",
+    ):
+        test_case.assertRegex(
+            fingerprint_step,
+            rf"(?m)^\s+{re.escape(command)}$",
+        )
+
+    exact_verification_commands = (
+        '.cache/llvm-build/bin/mlir-opt --version | grep -F "LLVM version ${LLVM_RELEASE}"',
+        'grep -F "set(PACKAGE_VERSION \\"${LLVM_RELEASE}\\")" .cache/llvm-build/lib/cmake/llvm/LLVMConfigVersion.cmake',
+        'grep -F "set(PACKAGE_VERSION \\"${LLVM_RELEASE}\\")" .cache/llvm-build/lib/cmake/mlir/MLIRConfigVersion.cmake',
+        'grep -F "CMAKE_HOME_DIRECTORY:INTERNAL=${GITHUB_WORKSPACE}/.cache/llvm-project-${LLVM_RELEASE}.src/llvm" .cache/llvm-build/CMakeCache.txt',
+        'grep -F "CMAKE_CACHEFILE_DIR:INTERNAL=${GITHUB_WORKSPACE}/.cache/llvm-build" .cache/llvm-build/CMakeCache.txt',
+    )
+    for command in exact_verification_commands:
+        test_case.assertRegex(
+            verification_step,
+            rf"(?m)^\s+{re.escape(command)}$",
+        )
+
+
 class RepositoryContractsTest(unittest.TestCase):
     def test_ci_caches_verified_llvm_sources_and_exact_build_outputs(self):
         workflow = (ROOT / ".github/workflows/ci.yml").read_text()
+        assert_exact_ci_cache_commands(self, workflow)
         source_cache_step = re.search(
             r"      - name: Cache content-addressed LLVM source archive.*?(?=\n      - name:)",
             workflow,
@@ -146,6 +187,30 @@ class RepositoryContractsTest(unittest.TestCase):
         )
         self.assertIn("CMAKE_HOME_DIRECTORY:INTERNAL=${GITHUB_WORKSPACE}", build_verification)
         self.assertIn("CMAKE_CACHEFILE_DIR:INTERNAL=${GITHUB_WORKSPACE}", build_verification)
+
+    def test_ci_cache_contract_rejects_inert_or_misdirected_checks(self):
+        workflow = (ROOT / ".github/workflows/ci.yml").read_text()
+        mutations = (
+            ("            c++ --version", "            echo 'c++ --version'"),
+            (
+                'grep -F "set(PACKAGE_VERSION \\"${LLVM_RELEASE}\\")" .cache/llvm-build/lib/cmake/mlir/MLIRConfigVersion.cmake',
+                'grep -F "set(PACKAGE_VERSION \\"${LLVM_RELEASE}\\")" .cache/llvm-build/lib/cmake/llvm/LLVMConfigVersion.cmake',
+            ),
+            (
+                "CMAKE_HOME_DIRECTORY:INTERNAL=${GITHUB_WORKSPACE}/.cache/llvm-project-${LLVM_RELEASE}.src/llvm",
+                "CMAKE_HOME_DIRECTORY:INTERNAL=${GITHUB_WORKSPACE}/wrong-source",
+            ),
+            (
+                "CMAKE_CACHEFILE_DIR:INTERNAL=${GITHUB_WORKSPACE}/.cache/llvm-build",
+                "CMAKE_CACHEFILE_DIR:INTERNAL=${GITHUB_WORKSPACE}/wrong-build",
+            ),
+        )
+        for original, replacement in mutations:
+            with self.subTest(original=original):
+                self.assertIn(original, workflow)
+                mutated = workflow.replace(original, replacement, 1)
+                with self.assertRaises(AssertionError):
+                    assert_exact_ci_cache_commands(self, mutated)
 
     def test_cmake_package_versions_require_exact_match(self):
         cmake = (ROOT / "CMakeLists.txt").read_text()
