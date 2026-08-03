@@ -65,6 +65,11 @@ class RepositoryContractsTest(unittest.TestCase):
             workflow,
             re.DOTALL,
         ).group()
+        fingerprint_step = re.search(
+            r"      - name: Compute LLVM build fingerprint.*?(?=\n      - name:)",
+            workflow,
+            re.DOTALL,
+        ).group()
         verification_step = re.search(
             r"      - name: Fetch and verify locked LLVM source.*?(?=\n      - name:)",
             workflow,
@@ -84,11 +89,23 @@ class RepositoryContractsTest(unittest.TestCase):
         self.assertNotRegex(verification_step, r"(?m)^\s+if:")
         self.assertIn("sha256sum --check --strict", verification_step)
         self.assertIn("path: .cache/llvm-build", build_cache_step)
-        self.assertIn("steps.llvm-build-fingerprint.outputs.value", build_cache_step)
-        self.assertIn("env.LLVM_SOURCE_SHA256", build_cache_step)
-        self.assertIn("hashFiles(", build_cache_step)
-        self.assertIn("'toolchains/llvm.lock.json'", build_cache_step)
-        self.assertIn("'scripts/ci-build-llvm.sh'", build_cache_step)
+        expected_build_cache_key = (
+            "key: llvm-build-${{ runner.os }}-${{ runner.arch }}-"
+            "${{ env.LLVM_SOURCE_SHA256 }}-"
+            "${{ hashFiles('toolchains/llvm.lock.json', "
+            "'scripts/ci-build-llvm.sh') }}-"
+            "${{ steps.llvm-build-fingerprint.outputs.value }}"
+        )
+        self.assertIn(expected_build_cache_key, build_cache_step)
+        for fingerprint_input in (
+            "pwd -P",
+            "command -v c++",
+            "c++ --version",
+            "cmake --version",
+            "ninja --version",
+            "ldd --version",
+        ):
+            self.assertIn(fingerprint_input, fingerprint_step)
         self.assertIn("steps.llvm-build-cache.outputs.cache-hit != 'true'", build_step)
 
         native_dependencies = re.search(
@@ -96,16 +113,39 @@ class RepositoryContractsTest(unittest.TestCase):
             workflow,
             re.DOTALL,
         ).group()
-        self.assertIn("libgtest-dev", native_dependencies)
+        self.assertRegex(
+            native_dependencies,
+            r"sudo apt-get install --yes --no-install-recommends libgtest-dev",
+        )
 
         build_verification = re.search(
             r"      - name: Verify exact LLVM build outputs.*?(?=\n      - name:)",
             workflow,
             re.DOTALL,
         ).group()
-        self.assertIn("mlir-opt --version", build_verification)
-        self.assertIn("LLVMConfigVersion.cmake", build_verification)
-        self.assertIn("MLIRConfigVersion.cmake", build_verification)
+        self.assertNotRegex(build_verification, r"(?m)^\s+if:")
+        self.assertIn("test -x .cache/llvm-build/bin/mlir-opt", build_verification)
+        self.assertIn(
+            "test -f .cache/llvm-build/lib/cmake/llvm/LLVMConfigVersion.cmake",
+            build_verification,
+        )
+        self.assertIn(
+            "test -f .cache/llvm-build/lib/cmake/mlir/MLIRConfigVersion.cmake",
+            build_verification,
+        )
+        self.assertIn(
+            'mlir-opt --version | grep -F "LLVM version ${LLVM_RELEASE}"',
+            build_verification,
+        )
+        self.assertEqual(
+            2,
+            build_verification.count(
+                'grep -F "set(PACKAGE_VERSION \\"${LLVM_RELEASE}\\")"'
+            ),
+            build_verification,
+        )
+        self.assertIn("CMAKE_HOME_DIRECTORY:INTERNAL=${GITHUB_WORKSPACE}", build_verification)
+        self.assertIn("CMAKE_CACHEFILE_DIR:INTERNAL=${GITHUB_WORKSPACE}", build_verification)
 
     def test_cmake_package_versions_require_exact_match(self):
         cmake = (ROOT / "CMakeLists.txt").read_text()

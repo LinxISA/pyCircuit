@@ -57,6 +57,8 @@ jobs:
         id: llvm-build-fingerprint
         run: |
           {
+            pwd -P
+            command -v c++
             c++ --version
             cmake --version
             ninja --version
@@ -83,6 +85,8 @@ jobs:
           .cache/llvm-build/bin/mlir-opt --version | grep -F "LLVM version ${LLVM_RELEASE}"
           grep -F "set(PACKAGE_VERSION \"${LLVM_RELEASE}\")" .cache/llvm-build/lib/cmake/llvm/LLVMConfigVersion.cmake
           grep -F "set(PACKAGE_VERSION \"${LLVM_RELEASE}\")" .cache/llvm-build/lib/cmake/mlir/MLIRConfigVersion.cmake
+          grep -F "CMAKE_HOME_DIRECTORY:INTERNAL=${GITHUB_WORKSPACE}/.cache/llvm-project-${LLVM_RELEASE}.src/llvm" .cache/llvm-build/CMakeCache.txt
+          grep -F "CMAKE_CACHEFILE_DIR:INTERNAL=${GITHUB_WORKSPACE}/.cache/llvm-build" .cache/llvm-build/CMakeCache.txt
 
       - name: Configure development preset
         env:
