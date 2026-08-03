@@ -148,12 +148,14 @@ LogicalResult verifyFields(Operation *op, ArrayAttr fields) {
              << "field '" << name << "' has non-value type " << type;
     if (failed(verifyNamedTypes(op, type)))
       return failure();
-    auto bound = field->getAs<IntegerAttr>("max_length");
+    Attribute boundAttribute = field->get("max_length");
+    auto bound = dyn_cast_or_null<IntegerAttr>(boundAttribute);
     if (containsList(type)) {
-      if (!bound || bound.getInt() <= 0)
+      if (!bound || !bound.getType().isSignlessInteger(64) ||
+          bound.getInt() <= 0)
         return op->emitOpError() << "list field '" << name
                                  << "' requires a finite positive max_length";
-    } else if (bound) {
+    } else if (boundAttribute) {
       return op->emitOpError()
              << "non-list field '" << name << "' cannot declare max_length";
     }
