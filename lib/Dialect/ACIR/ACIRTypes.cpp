@@ -3,6 +3,7 @@
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/Diagnostics.h"
 #include "mlir/IR/DialectImplementation.h"
+#include "mlir/Interfaces/DataLayoutInterfaces.h"
 #include "llvm/ADT/TypeSwitch.h"
 
 using namespace mlir;
@@ -37,12 +38,91 @@ LogicalResult verifyValueElement(function_ref<InFlightDiagnostic()> emitError,
   return emitError() << "channel types cannot be nested inside value types";
 }
 
+DictionaryAttr findLayoutEntry(Type type, DataLayoutEntryListRef entries) {
+  for (DataLayoutEntryInterface entry : entries)
+    if (entry.getKey() == DataLayoutEntryKey(type))
+      return dyn_cast<DictionaryAttr>(entry.getValue());
+  return {};
+}
+
+int64_t getPositiveLayoutInteger(Type type, DataLayoutEntryListRef entries,
+                                 StringRef name) {
+  DictionaryAttr entry = findLayoutEntry(type, entries);
+  auto value = entry ? entry.getAs<IntegerAttr>(name) : IntegerAttr();
+  return value && value.getInt() > 0 ? value.getInt() : 0;
+}
+
+llvm::TypeSize getNamedTypeSizeInBits(Type type,
+                                      DataLayoutEntryListRef entries) {
+  return llvm::TypeSize::getFixed(
+      static_cast<uint64_t>(getPositiveLayoutInteger(type, entries, "size")) *
+      8);
+}
+
+uint64_t getNamedTypeAlignment(Type type, DataLayoutEntryListRef entries,
+                               StringRef name) {
+  return static_cast<uint64_t>(getPositiveLayoutInteger(type, entries, name));
+}
+
+LogicalResult verifyNamedLayoutEntries(DataLayoutEntryListRef entries,
+                                       Location location, bool packet) {
+  for (DataLayoutEntryInterface entry : entries) {
+    auto dictionary = dyn_cast<DictionaryAttr>(entry.getValue());
+    auto size =
+        dictionary ? dictionary.getAs<IntegerAttr>("size") : IntegerAttr();
+    auto abi = dictionary ? dictionary.getAs<IntegerAttr>("abi_alignment")
+                          : IntegerAttr();
+    auto preferred = dictionary
+                         ? dictionary.getAs<IntegerAttr>("preferred_alignment")
+                         : IntegerAttr();
+    auto endian =
+        dictionary ? dictionary.getAs<StringAttr>("endianness") : StringAttr();
+    if (!size || !abi || !preferred || !endian || size.getInt() <= 0 ||
+        abi.getInt() <= 0 || preferred.getInt() <= 0 ||
+        (endian.getValue() != "little" && endian.getValue() != "big"))
+      return emitError(location)
+             << "layout entry requires positive size/alignment and explicit "
+                "endianness";
+    if (packet) {
+      auto width = dictionary.getAs<IntegerAttr>("serialization_width");
+      if (!width || width.getInt() <= 0)
+        return emitError(location)
+               << "packet layout entry requires positive serialization_width";
+    }
+  }
+  return success();
+}
+
 } // namespace
 
 bool containsChannelType(Type type) {
   return type.walk([](ChannelType) { return WalkResult::interrupt(); })
       .wasInterrupted();
 }
+
+LogicalResult
+verifyQualifiedDataName(function_ref<InFlightDiagnostic()> emitError,
+                        SymbolRefAttr name) {
+  if (name.getNestedReferences().size() == 1)
+    return success();
+  return emitError()
+         << "named data references require a qualified symbol such as "
+            "'@types::@S'";
+}
+
+#define ACIR_DEFINE_DATA_NAME_VERIFY(TYPE)                                     \
+  LogicalResult TYPE::verify(function_ref<InFlightDiagnostic()> emitError,     \
+                             SymbolRefAttr name) {                             \
+    return verifyQualifiedDataName(emitError, name);                           \
+  }
+
+ACIR_DEFINE_DATA_NAME_VERIFY(StructType)
+ACIR_DEFINE_DATA_NAME_VERIFY(PacketType)
+ACIR_DEFINE_DATA_NAME_VERIFY(TransactionType)
+ACIR_DEFINE_DATA_NAME_VERIFY(EnumType)
+ACIR_DEFINE_DATA_NAME_VERIFY(UnionType)
+
+#undef ACIR_DEFINE_DATA_NAME_VERIFY
 
 LogicalResult OptionalType::verify(function_ref<InFlightDiagnostic()> emitError,
                                    Type elementType) {
@@ -93,6 +173,31 @@ LogicalResult EventType::verify(function_ref<InFlightDiagnostic()> emitError,
                                 Type elementType) {
   return verifyValueElement(emitError, elementType);
 }
+
+#define ACIR_DEFINE_NAMED_LAYOUT(TYPE, IS_PACKET)                              \
+  llvm::TypeSize TYPE::getTypeSizeInBits(                                      \
+      const DataLayout &, DataLayoutEntryListRef entries) const {              \
+    return getNamedTypeSizeInBits(*this, entries);                             \
+  }                                                                            \
+  uint64_t TYPE::getABIAlignment(const DataLayout &,                           \
+                                 DataLayoutEntryListRef entries) const {       \
+    return getNamedTypeAlignment(*this, entries, "abi_alignment");             \
+  }                                                                            \
+  uint64_t TYPE::getPreferredAlignment(const DataLayout &,                     \
+                                       DataLayoutEntryListRef entries) const { \
+    return getNamedTypeAlignment(*this, entries, "preferred_alignment");       \
+  }                                                                            \
+  LogicalResult TYPE::verifyEntries(DataLayoutEntryListRef entries,            \
+                                    Location location) const {                 \
+    return verifyNamedLayoutEntries(entries, location, IS_PACKET);             \
+  }
+
+ACIR_DEFINE_NAMED_LAYOUT(StructType, false)
+ACIR_DEFINE_NAMED_LAYOUT(PacketType, true)
+ACIR_DEFINE_NAMED_LAYOUT(EnumType, false)
+ACIR_DEFINE_NAMED_LAYOUT(UnionType, false)
+
+#undef ACIR_DEFINE_NAMED_LAYOUT
 
 } // namespace acir::ac
 

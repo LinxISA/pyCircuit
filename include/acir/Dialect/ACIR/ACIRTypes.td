@@ -3,23 +3,35 @@
 
 include "acir/Dialect/ACIR/ACIRAttributes.td"
 include "mlir/IR/AttrTypeBase.td"
+include "mlir/Interfaces/DataLayoutInterfaces.td"
 
-class ACIR_Type<string name, string typeMnemonic>
-    : TypeDef<ACIR_Dialect, name> {
+class ACIR_Type<string name, string typeMnemonic, list<Trait> traits = []>
+    : TypeDef<ACIR_Dialect, name, traits> {
   let mnemonic = typeMnemonic;
 }
 
-class ACIR_NamedType<string name, string mnemonic>
-    : ACIR_Type<name, mnemonic> {
-  let parameters = (ins "mlir::FlatSymbolRefAttr":$name);
+class ACIR_NamedType<string name, string mnemonic, list<Trait> traits = []>
+    : ACIR_Type<name, mnemonic, traits> {
+  let parameters = (ins "mlir::SymbolRefAttr":$name);
   let assemblyFormat = "`<` $name `>`";
 }
 
-def ACIR_StructType : ACIR_NamedType<"Struct", "struct">;
-def ACIR_PacketType : ACIR_NamedType<"Packet", "packet">;
-def ACIR_TransactionType : ACIR_NamedType<"Transaction", "transaction">;
-def ACIR_EnumType : ACIR_NamedType<"Enum", "enum">;
-def ACIR_UnionType : ACIR_NamedType<"Union", "union">;
+class ACIR_DataNamedType<string name, string mnemonic, list<Trait> traits = []>
+    : ACIR_NamedType<name, mnemonic, traits> {
+  let genVerifyDecl = 1;
+}
+
+class ACIR_LayoutNamedType<string name, string mnemonic>
+    : ACIR_DataNamedType<name, mnemonic, [
+        DeclareTypeInterfaceMethods<DataLayoutTypeInterface,
+                                    ["verifyEntries", "getPreferredAlignment"]>
+      ]>;
+
+def ACIR_StructType : ACIR_LayoutNamedType<"Struct", "struct">;
+def ACIR_PacketType : ACIR_LayoutNamedType<"Packet", "packet">;
+def ACIR_TransactionType : ACIR_DataNamedType<"Transaction", "transaction">;
+def ACIR_EnumType : ACIR_LayoutNamedType<"Enum", "enum">;
+def ACIR_UnionType : ACIR_LayoutNamedType<"Union", "union">;
 def ACIR_AddressType : ACIR_NamedType<"Address", "address">;
 def ACIR_ResourceTokenType
     : ACIR_NamedType<"ResourceToken", "resource_token">;

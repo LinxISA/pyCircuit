@@ -11,49 +11,53 @@ using namespace mlir;
 namespace acir::ac {
 namespace {
 
-LogicalResult uniqueStrings(Operation *op, ArrayAttr values, StringRef noun) {
-  llvm::SmallDenseSet<StringRef> seen;
-  for (Attribute value : values) {
-    StringRef text = cast<StringAttr>(value).getValue();
-    if (!seen.insert(text).second)
-      return op->emitOpError() << "duplicate " << noun << " '" << text << "'";
-  }
-  return success();
-}
-
-LogicalResult fields(Operation *op, ArrayAttr names, ArrayAttr types) {
-  if (names.size() != types.size())
-    return op->emitOpError("field name and type counts must match");
-  return uniqueStrings(op, names, "field");
-}
-
 struct NamedRef {
-  FlatSymbolRefAttr name;
+  SymbolRefAttr name;
   StringRef opName;
 };
 
 std::optional<NamedRef> namedRef(Type type) {
   return TypeSwitch<Type, std::optional<NamedRef>>(type)
-      .Case<StructType>([](auto t) {
-        return NamedRef{t.getName(), StructOp::getOperationName()};
+      .Case<StructType>([](auto type) {
+        return NamedRef{type.getName(), StructOp::getOperationName()};
       })
-      .Case<PacketType>([](auto t) {
-        return NamedRef{t.getName(), PacketOp::getOperationName()};
+      .Case<PacketType>([](auto type) {
+        return NamedRef{type.getName(), PacketOp::getOperationName()};
       })
-      .Case<TransactionType>([](auto t) {
-        return NamedRef{t.getName(), TransactionOp::getOperationName()};
+      .Case<TransactionType>([](auto type) {
+        return NamedRef{type.getName(), TransactionOp::getOperationName()};
       })
-      .Case<EnumType>([](auto t) {
-        return NamedRef{t.getName(), EnumOp::getOperationName()};
+      .Case<EnumType>([](auto type) {
+        return NamedRef{type.getName(), EnumOp::getOperationName()};
       })
-      .Case<UnionType>([](auto t) {
-        return NamedRef{t.getName(), UnionOp::getOperationName()};
+      .Case<UnionType>([](auto type) {
+        return NamedRef{type.getName(), UnionOp::getOperationName()};
       })
       .Default([](Type) { return std::nullopt; });
 }
 
-Operation *lookup(Operation *from, FlatSymbolRefAttr name) {
-  return SymbolTable::lookupNearestSymbolFrom(from, name);
+Operation *lookup(Operation *from, SymbolRefAttr name) {
+  if (name.getNestedReferences().size() != 1)
+    return SymbolTable::lookupNearestSymbolFrom(from, name);
+  Operation *scope = nullptr;
+  if (auto enclosing = from->getParentOfType<TypeScopeOp>();
+      enclosing && enclosing.getSymNameAttr() == name.getRootReference())
+    scope = enclosing;
+  if (!scope) {
+    auto root = FlatSymbolRefAttr::get(name.getRootReference());
+    scope = SymbolTable::lookupNearestSymbolFrom(from, root);
+  }
+  if (!isa_and_nonnull<TypeScopeOp>(scope))
+    return nullptr;
+  return SymbolTable::lookupSymbolIn(scope, name.getLeafReference());
+}
+
+LogicalResult requireQualified(Operation *from, SymbolRefAttr name) {
+  if (name.getNestedReferences().size() == 1)
+    return success();
+  return from->emitOpError(
+      "named data references require a qualified symbol such as "
+      "'@types::@S'");
 }
 
 LogicalResult verifyNamedTypes(Operation *from, Type type) {
@@ -62,6 +66,10 @@ LogicalResult verifyNamedTypes(Operation *from, Type type) {
     auto ref = namedRef(nested);
     if (!ref)
       return WalkResult::advance();
+    if (failed(requireQualified(from, ref->name))) {
+      result = failure();
+      return WalkResult::interrupt();
+    }
     Operation *decl = lookup(from, ref->name);
     if (!decl) {
       from->emitOpError() << "unresolved named data type '" << ref->name << "'";
@@ -80,11 +88,81 @@ LogicalResult verifyNamedTypes(Operation *from, Type type) {
   return result;
 }
 
-ArrayAttr fieldNames(Operation *op) {
-  return op->getAttrOfType<ArrayAttr>("field_names");
+LogicalResult verifyPlacement(Operation *op) {
+  if (isa_and_nonnull<TypeScopeOp>(op->getParentOp()))
+    return success();
+  return op->emitOpError(
+      "named data declarations must be direct children of ac.type_scope");
 }
-ArrayAttr fieldTypes(Operation *op) {
-  return op->getAttrOfType<ArrayAttr>("field_types");
+
+FailureOr<DictionaryAttr> fieldDictionary(Operation *op, Attribute field) {
+  auto dictionary = dyn_cast<DictionaryAttr>(field);
+  if (!dictionary || !dictionary.getAs<StringAttr>("name") ||
+      !dictionary.getAs<TypeAttr>("type")) {
+    op->emitOpError("field metadata requires string 'name' and type 'type'");
+    return failure();
+  }
+  return dictionary;
+}
+
+StringRef fieldName(DictionaryAttr field) {
+  return field.getAs<StringAttr>("name").getValue();
+}
+
+Type fieldType(DictionaryAttr field) {
+  return field.getAs<TypeAttr>("type").getValue();
+}
+
+bool containsList(Type type) {
+  return type.walk([](ListType) { return WalkResult::interrupt(); })
+      .wasInterrupted();
+}
+
+bool isNormativeValueType(Type type) {
+  if (isa<IntegerType, FloatType, IndexType, StructType, PacketType,
+          TransactionType, EnumType, UnionType>(type))
+    return true;
+  if (auto optional = dyn_cast<OptionalType>(type))
+    return isNormativeValueType(optional.getElementType());
+  if (auto list = dyn_cast<ListType>(type))
+    return isNormativeValueType(list.getElementType());
+  if (auto vector = dyn_cast<VectorType>(type))
+    return isNormativeValueType(vector.getElementType());
+  if (auto vector = dyn_cast<mlir::VectorType>(type))
+    return isNormativeValueType(vector.getElementType());
+  return false;
+}
+
+LogicalResult verifyFields(Operation *op, ArrayAttr fields) {
+  llvm::SmallDenseSet<StringRef> seen;
+  for (Attribute attribute : fields) {
+    FailureOr<DictionaryAttr> field = fieldDictionary(op, attribute);
+    if (failed(field))
+      return failure();
+    StringRef name = fieldName(*field);
+    Type type = fieldType(*field);
+    if (!seen.insert(name).second)
+      return op->emitOpError() << "duplicate field '" << name << "'";
+    if (!isNormativeValueType(type))
+      return op->emitOpError()
+             << "field '" << name << "' has non-value type " << type;
+    if (failed(verifyNamedTypes(op, type)))
+      return failure();
+    auto bound = field->getAs<IntegerAttr>("max_length");
+    if (containsList(type)) {
+      if (!bound || bound.getInt() <= 0)
+        return op->emitOpError() << "list field '" << name
+                                 << "' requires a finite positive max_length";
+    } else if (bound) {
+      return op->emitOpError()
+             << "non-list field '" << name << "' cannot declare max_length";
+    }
+  }
+  return success();
+}
+
+ArrayAttr declarationFields(Operation *op) {
+  return op->getAttrOfType<ArrayAttr>("fields");
 }
 
 Operation *recordDecl(Operation *from, Type type) {
@@ -93,22 +171,40 @@ Operation *recordDecl(Operation *from, Type type) {
                ref->opName != PacketOp::getOperationName() &&
                ref->opName != TransactionOp::getOperationName()))
     return nullptr;
+  if (failed(requireQualified(from, ref->name)))
+    return nullptr;
   Operation *decl = lookup(from, ref->name);
   return decl && decl->getName().getStringRef() == ref->opName ? decl : nullptr;
 }
 
-std::optional<unsigned> findField(Operation *decl, StringRef field) {
-  for (auto [index, value] : llvm::enumerate(fieldNames(decl)))
-    if (cast<StringAttr>(value).getValue() == field)
+std::optional<unsigned> findField(Operation *decl, StringRef name) {
+  for (auto [index, attribute] : llvm::enumerate(declarationFields(decl))) {
+    auto field = cast<DictionaryAttr>(attribute);
+    if (fieldName(field) == name)
       return index;
+  }
   return std::nullopt;
 }
 
 Type fieldType(Operation *decl, unsigned index) {
-  return cast<TypeAttr>(fieldTypes(decl)[index]).getValue();
+  return fieldType(cast<DictionaryAttr>(declarationFields(decl)[index]));
 }
 
-LogicalResult noRecursion(Operation *root) {
+SmallVector<NamedRef> directValueReferences(Type type) {
+  if (isa<ListType>(type))
+    return {};
+  if (auto ref = namedRef(type))
+    return {*ref};
+  if (auto optional = dyn_cast<OptionalType>(type))
+    return directValueReferences(optional.getElementType());
+  if (auto vector = dyn_cast<VectorType>(type))
+    return directValueReferences(vector.getElementType());
+  if (auto vector = dyn_cast<mlir::VectorType>(type))
+    return directValueReferences(vector.getElementType());
+  return {};
+}
+
+LogicalResult verifyNoRecursion(Operation *root) {
   auto rootName =
       root->getAttrOfType<StringAttr>(SymbolTable::getSymbolAttrName());
   llvm::SmallDenseSet<Operation *> active;
@@ -119,20 +215,14 @@ LogicalResult noRecursion(Operation *root) {
                           << rootName.getValue() << "'";
       return failure();
     }
-    if (ArrayAttr types = fieldTypes(current)) {
-      for (Attribute attr : types) {
-        LogicalResult nestedResult = success();
-        cast<TypeAttr>(attr).getValue().walk([&](Type nested) {
-          auto ref = namedRef(nested);
-          Operation *next = ref ? lookup(root, ref->name) : nullptr;
-          if (next && fieldTypes(next) && failed(visit(next))) {
-            nestedResult = failure();
-            return WalkResult::interrupt();
-          }
-          return WalkResult::advance();
-        });
-        if (failed(nestedResult))
-          return failure();
+    if (ArrayAttr fields = declarationFields(current)) {
+      for (Attribute attribute : fields) {
+        Type type = fieldType(cast<DictionaryAttr>(attribute));
+        for (NamedRef ref : directValueReferences(type)) {
+          Operation *next = lookup(root, ref.name);
+          if (next && declarationFields(next) && failed(visit(next)))
+            return failure();
+        }
       }
     }
     active.erase(current);
@@ -141,37 +231,83 @@ LogicalResult noRecursion(Operation *root) {
   return visit(root);
 }
 
-LogicalResult recordDeclaration(Operation *op, ArrayAttr names,
-                                ArrayAttr types) {
-  if (failed(fields(op, names, types)))
+LogicalResult verifyRecordDeclaration(Operation *op, ArrayAttr fields) {
+  if (failed(verifyPlacement(op)) || failed(verifyFields(op, fields)))
     return failure();
-  for (Attribute type : types)
-    if (failed(verifyNamedTypes(op, cast<TypeAttr>(type).getValue())))
-      return failure();
-  return noRecursion(op);
+  return verifyNoRecursion(op);
 }
 
-LogicalResult packetLayout(PacketOp packet) {
-  DictionaryAttr data = packet.getSerialization();
-  auto size = data.getAs<IntegerAttr>("size");
-  auto alignment = data.getAs<IntegerAttr>("alignment");
-  auto endian = data.getAs<StringAttr>("endianness");
-  if (!size || !alignment || !endian || size.getInt() <= 0 ||
-      alignment.getInt() <= 0 ||
-      (endian.getValue() != "little" && endian.getValue() != "big"))
-    return packet.emitOpError("packet serialization metadata requires positive "
-                              "size and alignment and explicit endianness");
-  return success();
+SymbolRefAttr declarationReference(Operation *declaration) {
+  auto scope = cast<TypeScopeOp>(declaration->getParentOp());
+  auto leaf = FlatSymbolRefAttr::get(
+      declaration->getAttrOfType<StringAttr>(SymbolTable::getSymbolAttrName()));
+  return SymbolRefAttr::get(declaration->getContext(), scope.getSymName(),
+                            ArrayRef<FlatSymbolRefAttr>{leaf});
 }
 
-FailureOr<int64_t> packetSize(Operation *from, FlatSymbolRefAttr name) {
+Type declarationType(Operation *declaration) {
+  SymbolRefAttr reference = declarationReference(declaration);
+  return TypeSwitch<Operation *, Type>(declaration)
+      .Case<StructOp>([&](auto) {
+        return StructType::get(declaration->getContext(), reference);
+      })
+      .Case<PacketOp>([&](auto) {
+        return PacketType::get(declaration->getContext(), reference);
+      })
+      .Case<EnumOp>([&](auto) {
+        return EnumType::get(declaration->getContext(), reference);
+      })
+      .Case<UnionOp>([&](auto) {
+        return UnionType::get(declaration->getContext(), reference);
+      })
+      .Default([](Operation *) { return Type(); });
+}
+
+FailureOr<DictionaryAttr> queryLayout(TypeScopeOp scope, Type type) {
+  DataLayoutSpecInterface spec = scope.getDataLayoutSpec();
+  if (!spec)
+    return failure();
+  FailureOr<Attribute> value = spec.query(DataLayoutEntryKey(type));
+  if (failed(value))
+    return failure();
+  auto dictionary = dyn_cast<DictionaryAttr>(*value);
+  if (!dictionary)
+    return failure();
+  return dictionary;
+}
+
+LogicalResult verifyDeclarationLayout(Operation *declaration) {
+  Type type = declarationType(declaration);
+  auto scope = cast<TypeScopeOp>(declaration->getParentOp());
+  if (succeeded(queryLayout(scope, type)))
+    return success();
+  return declaration->emitOpError() << "missing DLTI layout entry for " << type;
+}
+
+FailureOr<int64_t> packetSerializationWidth(Operation *from,
+                                            SymbolRefAttr name) {
   auto packet = dyn_cast_or_null<PacketOp>(lookup(from, name));
   if (!packet)
     return failure();
-  auto size = packet.getSerialization().getAs<IntegerAttr>("size");
-  if (!size)
+  FailureOr<DictionaryAttr> layout =
+      queryLayout(cast<TypeScopeOp>(packet->getParentOp()),
+                  PacketType::get(from->getContext(), name));
+  if (failed(layout))
     return failure();
-  return size.getInt();
+  auto width = layout->getAs<IntegerAttr>("serialization_width");
+  if (!width || width.getInt() <= 0)
+    return failure();
+  return width.getInt();
+}
+
+LogicalResult verifyUniqueEnumerants(EnumOp op) {
+  llvm::SmallDenseSet<StringRef> seen;
+  for (Attribute value : op.getEnumerants()) {
+    StringRef text = cast<StringAttr>(value).getValue();
+    if (!seen.insert(text).second)
+      return op.emitOpError() << "duplicate enumerant '" << text << "'";
+  }
+  return success();
 }
 
 } // namespace
@@ -180,31 +316,42 @@ DataLayoutSpecInterface TypeScopeOp::getDataLayoutSpec() {
   return getOperation()->getAttrOfType<DataLayoutSpecInterface>(
       DLTIDialect::kDataLayoutAttrName);
 }
+
 TargetSystemSpecInterface TypeScopeOp::getTargetSystemSpec() {
   return getOperation()->getAttrOfType<TargetSystemSpecInterface>(
       DLTIDialect::kTargetSystemDescAttrName);
 }
 
 LogicalResult TypeAliasOp::verify() {
+  if (failed(verifyPlacement(*this)))
+    return failure();
   return verifyNamedTypes(*this, getTarget());
 }
 
 LogicalResult StructOp::verify() {
-  return recordDeclaration(*this, getFieldNames(), getFieldTypes());
-}
-LogicalResult TransactionOp::verify() {
-  return recordDeclaration(*this, getFieldNames(), getFieldTypes());
-}
-LogicalResult PacketOp::verify() {
-  if (failed(recordDeclaration(*this, getFieldNames(), getFieldTypes())))
+  if (failed(verifyRecordDeclaration(*this, getFields())))
     return failure();
-  return packetLayout(*this);
+  return verifyDeclarationLayout(*this);
 }
+
+LogicalResult TransactionOp::verify() {
+  return verifyRecordDeclaration(*this, getFields());
+}
+
+LogicalResult PacketOp::verify() {
+  if (failed(verifyRecordDeclaration(*this, getFields())))
+    return failure();
+  return verifyDeclarationLayout(*this);
+}
+
 LogicalResult EnumOp::verify() {
-  return uniqueStrings(*this, getEnumerants(), "enumerant");
+  if (failed(verifyPlacement(*this)) || failed(verifyUniqueEnumerants(*this)))
+    return failure();
+  return verifyDeclarationLayout(*this);
 }
+
 LogicalResult UnionOp::verify() {
-  if (failed(recordDeclaration(*this, getFieldNames(), getFieldTypes())))
+  if (failed(verifyRecordDeclaration(*this, getFields())))
     return failure();
   auto index = findField(*this, getDiscriminator());
   if (!index)
@@ -213,7 +360,7 @@ LogicalResult UnionOp::verify() {
   if (!isa<IntegerType, EnumType>(fieldType(*this, *index)))
     return emitOpError() << "union discriminator '" << getDiscriminator()
                          << "' must name an integer or enum field";
-  return success();
+  return verifyDeclarationLayout(*this);
 }
 
 LogicalResult RecordCreateOp::verify() {
@@ -221,16 +368,18 @@ LogicalResult RecordCreateOp::verify() {
   if (!decl)
     return emitOpError(
         "record.create result must resolve to a record declaration");
-  if (fieldNames(decl) != getFieldNames() ||
-      getValues().size() != fieldNames(decl).size())
+  ArrayAttr fields = declarationFields(decl);
+  if (getFieldNames().size() != fields.size() ||
+      getValues().size() != fields.size())
     return emitOpError("record.create fields must exactly match declaration");
-  for (auto [name, expected, value] :
-       llvm::zip_equal(fieldNames(decl), fieldTypes(decl), getValues())) {
-    Type expectedType = cast<TypeAttr>(expected).getValue();
-    if (expectedType != value.getType())
-      return emitOpError() << "field '" << cast<StringAttr>(name).getValue()
-                           << "' expects " << expectedType << " but received "
-                           << value.getType();
+  for (auto [index, value] : llvm::enumerate(getValues())) {
+    auto field = cast<DictionaryAttr>(fields[index]);
+    if (cast<StringAttr>(getFieldNames()[index]).getValue() != fieldName(field))
+      return emitOpError("record.create fields must exactly match declaration");
+    Type expected = fieldType(field);
+    if (expected != value.getType())
+      return emitOpError() << "field '" << fieldName(field) << "' expects "
+                           << expected << " but received " << value.getType();
   }
   return success();
 }
@@ -269,33 +418,43 @@ LogicalResult PacketSerializeOp::verify() {
   auto packetType = dyn_cast<PacketType>(getPacketValue().getType());
   if (!packetType)
     return emitOpError("packet.serialize requires a packet operand");
+  if (failed(requireQualified(*this, getPacketAttr())))
+    return failure();
   if (packetType.getName() != getPacketAttr())
     return emitOpError(
         "packet.serialize identity does not match packet operand");
-  FailureOr<int64_t> size = packetSize(*this, getPacketAttr());
-  if (failed(size))
+  FailureOr<int64_t> width = packetSerializationWidth(*this, getPacketAttr());
+  if (failed(width))
     return emitOpError("packet.serialize packet declaration is unresolved");
   auto bytes = dyn_cast<VectorType>(getBytes().getType());
-  if (!bytes || !bytes.getElementType().isInteger(8) ||
-      bytes.getLength() != *size)
+  if (!bytes || !bytes.getElementType().isInteger(8))
+    return emitOpError("packet.serialize result must be an i8 byte vector");
+  if (bytes.getLength() != *width)
     return emitOpError()
-           << "serialized byte vector width must equal packet size " << *size;
+           << "serialized byte vector width must equal packet serialization "
+              "width "
+           << *width;
   return success();
 }
 
 LogicalResult PacketDeserializeOp::verify() {
+  if (failed(requireQualified(*this, getPacketAttr())))
+    return failure();
   auto packetType = dyn_cast<PacketType>(getPacketValue().getType());
   if (!packetType || packetType.getName() != getPacketAttr())
     return emitOpError("packet.deserialize result identity does not match "
                        "serialization contract");
-  FailureOr<int64_t> size = packetSize(*this, getPacketAttr());
-  if (failed(size))
+  FailureOr<int64_t> width = packetSerializationWidth(*this, getPacketAttr());
+  if (failed(width))
     return emitOpError("packet.deserialize packet declaration is unresolved");
   auto bytes = dyn_cast<VectorType>(getBytes().getType());
-  if (!bytes || !bytes.getElementType().isInteger(8) ||
-      bytes.getLength() != *size)
+  if (!bytes || !bytes.getElementType().isInteger(8))
+    return emitOpError("packet.deserialize operand must be an i8 byte vector");
+  if (bytes.getLength() != *width)
     return emitOpError()
-           << "serialized byte vector width must equal packet size " << *size;
+           << "serialized byte vector width must equal packet serialization "
+              "width "
+           << *width;
   return success();
 }
 

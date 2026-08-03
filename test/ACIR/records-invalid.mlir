@@ -12,71 +12,74 @@
 // GET-TYPE: error: {{.*}}field 'x' has type 'i8' but operation returns 'i16'
 // IDENTITY: error: {{.*}}record.with must preserve record identity
 // SERIALIZE-KIND: error: {{.*}}packet.serialize requires a packet operand
-// SERIALIZE-WIDTH: error: {{.*}}serialized byte vector width must equal packet size 4
+// SERIALIZE-WIDTH: error: {{.*}}serialized byte vector width must equal packet serialization width 4
 // DESERIALIZE-ID: error: {{.*}}packet.deserialize result identity does not match serialization contract
 
 //--- missing-field.mlir
 builtin.module attributes {ac.contract_epoch = "0.1"} {
   "ac.type_scope"() <{sym_name = "types"}> ({
-    "ac.struct"() <{sym_name = "Pair", field_names = ["x", "y"], field_types = [i8, i8]}> : () -> ()
-    %x = "builtin.unrealized_conversion_cast"() : () -> i8
-    %v = "ac.record.create"(%x) <{field_names = ["x"]}> : (i8) -> !ac.struct<@Pair>
+    "ac.transaction"() <{sym_name = "Pair", fields = [{name = "x", type = i8}, {name = "y", type = i8}]}> : () -> ()
   }) : () -> ()
+  %x = "builtin.unrealized_conversion_cast"() : () -> i8
+  %v = "ac.record.create"(%x) <{field_names = ["x"]}> : (i8) -> !ac.transaction<@types::@Pair>
 }
 
 //--- create-type.mlir
 builtin.module attributes {ac.contract_epoch = "0.1"} {
   "ac.type_scope"() <{sym_name = "types"}> ({
-    "ac.struct"() <{sym_name = "One", field_names = ["x"], field_types = [i8]}> : () -> ()
-    %x = "builtin.unrealized_conversion_cast"() : () -> i16
-    %v = "ac.record.create"(%x) <{field_names = ["x"]}> : (i16) -> !ac.struct<@One>
+    "ac.transaction"() <{sym_name = "One", fields = [{name = "x", type = i8}]}> : () -> ()
   }) : () -> ()
+  %x = "builtin.unrealized_conversion_cast"() : () -> i16
+  %v = "ac.record.create"(%x) <{field_names = ["x"]}> : (i16) -> !ac.transaction<@types::@One>
 }
 
 //--- get-type.mlir
 builtin.module attributes {ac.contract_epoch = "0.1"} {
   "ac.type_scope"() <{sym_name = "types"}> ({
-    "ac.struct"() <{sym_name = "One", field_names = ["x"], field_types = [i8]}> : () -> ()
-    %v = "builtin.unrealized_conversion_cast"() : () -> !ac.struct<@One>
-    %x = "ac.record.get"(%v) <{field = "x"}> : (!ac.struct<@One>) -> i16
+    "ac.transaction"() <{sym_name = "One", fields = [{name = "x", type = i8}]}> : () -> ()
   }) : () -> ()
+  %v = "builtin.unrealized_conversion_cast"() : () -> !ac.transaction<@types::@One>
+  %x = "ac.record.get"(%v) <{field = "x"}> : (!ac.transaction<@types::@One>) -> i16
 }
 
 //--- with-identity.mlir
 builtin.module attributes {ac.contract_epoch = "0.1"} {
   "ac.type_scope"() <{sym_name = "types"}> ({
-    "ac.struct"() <{sym_name = "A", field_names = ["x"], field_types = [i8]}> : () -> ()
-    "ac.struct"() <{sym_name = "B", field_names = ["x"], field_types = [i8]}> : () -> ()
-    %v = "builtin.unrealized_conversion_cast"() : () -> !ac.struct<@A>
-    %x = "builtin.unrealized_conversion_cast"() : () -> i8
-    %bad = "ac.record.with"(%v, %x) <{field = "x"}> : (!ac.struct<@A>, i8) -> !ac.struct<@B>
+    "ac.transaction"() <{sym_name = "A", fields = [{name = "x", type = i8}]}> : () -> ()
+    "ac.transaction"() <{sym_name = "B", fields = [{name = "x", type = i8}]}> : () -> ()
   }) : () -> ()
+  %v = "builtin.unrealized_conversion_cast"() : () -> !ac.transaction<@types::@A>
+  %x = "builtin.unrealized_conversion_cast"() : () -> i8
+  %bad = "ac.record.with"(%v, %x) <{field = "x"}> : (!ac.transaction<@types::@A>, i8) -> !ac.transaction<@types::@B>
 }
 
 //--- serialize-kind.mlir
 builtin.module attributes {ac.contract_epoch = "0.1"} {
   "ac.type_scope"() <{sym_name = "types"}> ({
-    "ac.struct"() <{sym_name = "S", field_names = [], field_types = []}> : () -> ()
-    %v = "builtin.unrealized_conversion_cast"() : () -> !ac.struct<@S>
-    %bytes = "ac.packet.serialize"(%v) <{packet = @S}> : (!ac.struct<@S>) -> !ac.vector<1 x i8>
+    "ac.transaction"() <{sym_name = "T", fields = []}> : () -> ()
   }) : () -> ()
+  %v = "builtin.unrealized_conversion_cast"() : () -> !ac.transaction<@types::@T>
+  %bytes = "ac.packet.serialize"(%v) <{packet = @types::@T}> : (!ac.transaction<@types::@T>) -> !ac.vector<1 x i8>
 }
 
 //--- serialize-width.mlir
 builtin.module attributes {ac.contract_epoch = "0.1"} {
   "ac.type_scope"() <{sym_name = "types"}> ({
-    "ac.packet"() <{sym_name = "P", field_names = [], field_types = [], serialization = {alignment = 1 : i64, endianness = "little", size = 4 : i64}}> : () -> ()
-    %v = "builtin.unrealized_conversion_cast"() : () -> !ac.packet<@P>
-    %bytes = "ac.packet.serialize"(%v) <{packet = @P}> : (!ac.packet<@P>) -> !ac.vector<8 x i8>
-  }) : () -> ()
+    "ac.packet"() <{sym_name = "P", fields = []}> : () -> ()
+  }) {dlti.dl_spec = #dlti.dl_spec<!ac.packet<@types::@P> = {abi_alignment = 1 : i64, endianness = "little", preferred_alignment = 1 : i64, serialization_width = 4 : i64, size = 8 : i64}>} : () -> ()
+  %v = "builtin.unrealized_conversion_cast"() : () -> !ac.packet<@types::@P>
+  %bytes = "ac.packet.serialize"(%v) <{packet = @types::@P}> : (!ac.packet<@types::@P>) -> !ac.vector<8 x i8>
 }
 
 //--- deserialize-identity.mlir
 builtin.module attributes {ac.contract_epoch = "0.1"} {
   "ac.type_scope"() <{sym_name = "types"}> ({
-    "ac.packet"() <{sym_name = "P", field_names = [], field_types = [], serialization = {alignment = 1 : i64, endianness = "little", size = 4 : i64}}> : () -> ()
-    "ac.packet"() <{sym_name = "Q", field_names = [], field_types = [], serialization = {alignment = 1 : i64, endianness = "little", size = 4 : i64}}> : () -> ()
-    %bytes = "builtin.unrealized_conversion_cast"() : () -> !ac.vector<4 x i8>
-    %v = "ac.packet.deserialize"(%bytes) <{packet = @P}> : (!ac.vector<4 x i8>) -> !ac.packet<@Q>
-  }) : () -> ()
+    "ac.packet"() <{sym_name = "P", fields = []}> : () -> ()
+    "ac.packet"() <{sym_name = "Q", fields = []}> : () -> ()
+  }) {dlti.dl_spec = #dlti.dl_spec<
+    !ac.packet<@types::@P> = {abi_alignment = 1 : i64, endianness = "little", preferred_alignment = 1 : i64, serialization_width = 4 : i64, size = 4 : i64},
+    !ac.packet<@types::@Q> = {abi_alignment = 1 : i64, endianness = "little", preferred_alignment = 1 : i64, serialization_width = 4 : i64, size = 4 : i64}
+  >} : () -> ()
+  %bytes = "builtin.unrealized_conversion_cast"() : () -> !ac.vector<4 x i8>
+  %v = "ac.packet.deserialize"(%bytes) <{packet = @types::@P}> : (!ac.vector<4 x i8>) -> !ac.packet<@types::@Q>
 }

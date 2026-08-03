@@ -5,6 +5,7 @@
 #include "acir/Dialect/ACSim/ACSimDialect.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlow.h"
+#include "mlir/Dialect/DLTI/DLTI.h"
 #include "mlir/Dialect/Index/IR/IndexDialect.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/BuiltinDialect.h"
@@ -14,8 +15,9 @@ namespace acir {
 
 inline void registerAllDialects(mlir::DialectRegistry &registry) {
   registry.insert<ac::ACIRDialect, acsim::ACSimDialect, mlir::BuiltinDialect,
-                  mlir::arith::ArithDialect, mlir::index::IndexDialect,
-                  mlir::scf::SCFDialect, mlir::cf::ControlFlowDialect>();
+                  mlir::DLTIDialect, mlir::arith::ArithDialect,
+                  mlir::index::IndexDialect, mlir::scf::SCFDialect,
+                  mlir::cf::ControlFlowDialect>();
 }
 
 } // namespace acir

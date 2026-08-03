@@ -30,8 +30,7 @@ def ACIR_TypeAliasOp : ACIR_Op<"type_alias", [Symbol]> {
 
 class ACIR_RecordDeclarationOp<string mnemonic>
     : ACIR_Op<mnemonic, [Symbol, ACIR_RecordLike]> {
-  let arguments = (ins SymbolNameAttr:$sym_name, StrArrayAttr:$field_names,
-                       TypeArrayAttr:$field_types);
+  let arguments = (ins SymbolNameAttr:$sym_name, ArrayAttr:$fields);
   let hasVerifier = 1;
 }
 
@@ -43,14 +42,13 @@ def ACIR_EnumOp : ACIR_Op<"enum", [Symbol]> {
 }
 
 def ACIR_UnionOp : ACIR_Op<"union", [Symbol]> {
-  let arguments = (ins SymbolNameAttr:$sym_name, StrArrayAttr:$field_names,
-                       TypeArrayAttr:$field_types, StrAttr:$discriminator);
+  let arguments = (ins SymbolNameAttr:$sym_name, ArrayAttr:$fields,
+                       StrAttr:$discriminator);
   let hasVerifier = 1;
 }
 
 def ACIR_PacketOp : ACIR_Op<"packet", [Symbol, ACIR_RecordLike]> {
-  let arguments = (ins SymbolNameAttr:$sym_name, StrArrayAttr:$field_names,
-                       TypeArrayAttr:$field_types, DictionaryAttr:$serialization);
+  let arguments = (ins SymbolNameAttr:$sym_name, ArrayAttr:$fields);
   let hasVerifier = 1;
 }
 
@@ -75,13 +73,13 @@ def ACIR_RecordWithOp : ACIR_Op<"record.with", [Pure]> {
 }
 
 def ACIR_PacketSerializeOp : ACIR_Op<"packet.serialize", [Pure]> {
-  let arguments = (ins AnyType:$packet_value, FlatSymbolRefAttr:$packet);
+  let arguments = (ins AnyType:$packet_value, SymbolRefAttr:$packet);
   let results = (outs AnyType:$bytes);
   let hasVerifier = 1;
 }
 
 def ACIR_PacketDeserializeOp : ACIR_Op<"packet.deserialize", [Pure]> {
-  let arguments = (ins AnyType:$bytes, FlatSymbolRefAttr:$packet);
+  let arguments = (ins AnyType:$bytes, SymbolRefAttr:$packet);
   let results = (outs AnyType:$packet_value);
   let hasVerifier = 1;
 }

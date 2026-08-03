@@ -12,6 +12,11 @@ add_test(NAME ACIRTypesTests COMMAND ACIRTypesTests)
 add_executable(ACIROpsTests OpsTest.cpp)
 target_link_libraries(ACIROpsTests PRIVATE
   ACIRDialect
+  ACSimDialect
+  MLIRAsmParser
+  MLIRIndexDialect
+  MLIRSCFDialect
+  MLIROptLib
   MLIRIR
   MLIRDataLayoutInterfaces
   MLIRSideEffectInterfaces

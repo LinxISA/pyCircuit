@@ -21,11 +21,11 @@ TEST(ACIRTypesTest, PublicTypeInventoryRoundTrips) {
     mlir::TypeID typeID;
   };
   const std::array<TypeCase, 17> cases = {{
-      {"!ac.struct<@Struct>", StructType::getTypeID()},
-      {"!ac.packet<@Packet>", PacketType::getTypeID()},
-      {"!ac.transaction<@Transaction>", TransactionType::getTypeID()},
-      {"!ac.enum<@Enum>", EnumType::getTypeID()},
-      {"!ac.union<@Union>", UnionType::getTypeID()},
+      {"!ac.struct<@types::@Struct>", StructType::getTypeID()},
+      {"!ac.packet<@types::@Packet>", PacketType::getTypeID()},
+      {"!ac.transaction<@types::@Transaction>", TransactionType::getTypeID()},
+      {"!ac.enum<@types::@Enum>", EnumType::getTypeID()},
+      {"!ac.union<@types::@Union>", UnionType::getTypeID()},
       {"!ac.optional<i8>", OptionalType::getTypeID()},
       {"!ac.list<i8>", ListType::getTypeID()},
       {"!ac.vector<4 x i8>", VectorType::getTypeID()},
@@ -99,8 +99,10 @@ TEST(ACIRTypesTest, NamedTypesPreserveTheirIdentity) {
   mlir::MLIRContext context;
   context.loadDialect<ACIRDialect>();
 
-  auto lhs = mlir::FlatSymbolRefAttr::get(&context, "Left");
-  auto rhs = mlir::FlatSymbolRefAttr::get(&context, "Right");
+  auto lhs = mlir::SymbolRefAttr::get(
+      &context, "types", {mlir::FlatSymbolRefAttr::get(&context, "Left")});
+  auto rhs = mlir::SymbolRefAttr::get(
+      &context, "types", {mlir::FlatSymbolRefAttr::get(&context, "Right")});
   EXPECT_NE(StructType::get(&context, lhs), StructType::get(&context, rhs));
 }
 

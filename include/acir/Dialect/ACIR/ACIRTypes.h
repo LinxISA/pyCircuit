@@ -3,6 +3,7 @@
 
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/Types.h"
+#include "mlir/Interfaces/DataLayoutInterfaces.h"
 
 #include "acir/Dialect/ACIR/ACIREnums.h.inc"
 
