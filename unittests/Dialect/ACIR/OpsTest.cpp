@@ -334,7 +334,9 @@ TEST(ACIROpsTest, PublicBuildersConstructEveryTaskSixOperation) {
       builder.getStrArrayAttr({"mix_a", "mix_b"}), emptyType,
       builder.getArrayAttr({emptyDictionary, emptyDictionary}));
   auto view = ViewOp::create(
-      builder, loc, mlir::TypeRange{}, mlir::ValueRange{}, "permutation",
+      builder, loc, mlir::TypeRange{}, mlir::ValueRange{}, "view",
+      "permutation",
+      builder.getArrayAttr({mlir::FlatSymbolRefAttr::get(&context, "child")}),
       builder.getArrayAttr({builder.getDenseI64ArrayAttr({0})}),
       mlir::IntegerAttr(), llvm::ArrayRef<int64_t>{},
       llvm::ArrayRef<int64_t>{0});
@@ -450,6 +452,24 @@ TEST(ACIROpsTest, StructuralProvidersAreContextOwnedAndExact) {
   EXPECT_FALSE(providers.hasGenerator("test.external"));
 }
 
+TEST(ACIROpsTest, StaticUnitDictionaryUsesClosedACIRUnitSet) {
+  mlir::MLIRContext context;
+  mlir::Builder builder(&context);
+  auto unitValue = [&](llvm::StringRef unit) {
+    return builder.getDictionaryAttr({
+        builder.getNamedAttr("value", builder.getI64IntegerAttr(1)),
+        builder.getNamedAttr("unit", builder.getStringAttr(unit)),
+    });
+  };
+  for (llvm::StringRef unit :
+       {"ticks", "cycles", "seconds", "milliseconds", "microseconds",
+        "nanoseconds", "picoseconds", "bytes", "bits", "entries", "packets",
+        "transactions"})
+    EXPECT_TRUE(isConcreteStaticValue(unitValue(unit))) << unit.str();
+  EXPECT_FALSE(isConcreteStaticValue(unitValue("bananas")));
+  EXPECT_FALSE(isConcreteStaticValue(unitValue("")));
+}
+
 TEST(ACIROpsTest, HierarchyDepthAndOwnerBudgetsRejectCompactGraphs) {
   auto buildGraph = [](mlir::MLIRContext &context, unsigned moduleCount,
                        unsigned fanout, llvm::StringRef prefix) {
@@ -501,6 +521,9 @@ TEST(ACIROpsTest, HierarchyDepthAndOwnerBudgetsRejectCompactGraphs) {
         diagnostics.push_back(std::move(text));
         return mlir::success();
       });
+  auto depthBoundary = buildGraph(context, 1025, 1, "Boundary");
+  EXPECT_TRUE(mlir::succeeded(verifyGraphStructure(depthBoundary)));
+  diagnostics.clear();
   auto tooDeep = buildGraph(context, 1026, 1, "Depth");
   EXPECT_TRUE(mlir::failed(verifyGraphStructure(tooDeep)));
   EXPECT_TRUE(llvm::any_of(diagnostics, [](llvm::StringRef diagnostic) {
@@ -512,6 +535,98 @@ TEST(ACIROpsTest, HierarchyDepthAndOwnerBudgetsRejectCompactGraphs) {
   EXPECT_TRUE(llvm::any_of(diagnostics, [](llvm::StringRef diagnostic) {
     return diagnostic.contains("owner count exceeds bound 1048576");
   }));
+  diagnostics.clear();
+  auto veryDeep = buildGraph(context, 20001, 1, "VeryDeep");
+  EXPECT_TRUE(mlir::failed(verifyGraphStructure(veryDeep)));
+  ASSERT_EQ(diagnostics.size(), 1u);
+  EXPECT_TRUE(llvm::StringRef(diagnostics.front())
+                  .contains("hierarchy depth exceeds bound 1024"));
+}
+
+TEST(ACIROpsTest, ExplicitViewProvenanceScalesNearLinearly) {
+  mlir::MLIRContext context;
+  context.loadDialect<ACIRDialect>();
+  mlir::OpBuilder builder(&context);
+  auto loc = builder.getUnknownLoc();
+  auto emptyType = builder.getFunctionType({}, {});
+  auto emptyDictionary = builder.getDictionaryAttr({});
+  auto zeroShape = builder.getDenseI64ArrayAttr({0});
+
+  auto buildChain = [&](unsigned viewCount, llvm::StringRef prefix) {
+    auto file = mlir::ModuleOp::create(loc);
+    builder.setInsertionPointToStart(file.getBody());
+    auto leaf = ModuleOp::create(builder, loc, (prefix + "Leaf").str(),
+                                 emptyType, emptyDictionary);
+    builder.setInsertionPointToStart(leaf.addEntryBlock());
+    ReturnOp::create(builder, loc, mlir::ValueRange{});
+    builder.setInsertionPointToEnd(file.getBody());
+    auto top = ModuleOp::create(builder, loc, (prefix + "Top").str(), emptyType,
+                                emptyDictionary);
+    builder.setInsertionPointToStart(top.addEntryBlock());
+    std::string previous = "source";
+    InstanceOp::create(builder, loc, mlir::TypeRange{}, mlir::ValueRange{},
+                       (prefix + "Leaf").str(), previous, previous, previous,
+                       emptyDictionary);
+    for (unsigned index = 0; index != viewCount; ++index) {
+      std::string name = "view" + std::to_string(index);
+      ViewOp::create(builder, loc, mlir::TypeRange{}, mlir::ValueRange{}, name,
+                     "permutation",
+                     builder.getArrayAttr(
+                         {mlir::FlatSymbolRefAttr::get(&context, previous)}),
+                     builder.getArrayAttr({zeroShape}), mlir::IntegerAttr(),
+                     llvm::ArrayRef<int64_t>{}, llvm::ArrayRef<int64_t>{0});
+      previous = std::move(name);
+    }
+    ReturnOp::create(builder, loc, mlir::ValueRange{});
+    return file;
+  };
+
+  auto buildWide = [&] {
+    constexpr unsigned sourceCount = 1000;
+    auto file = mlir::ModuleOp::create(loc);
+    builder.setInsertionPointToStart(file.getBody());
+    auto leaf =
+        ModuleOp::create(builder, loc, "WideLeaf", emptyType, emptyDictionary);
+    builder.setInsertionPointToStart(leaf.addEntryBlock());
+    ReturnOp::create(builder, loc, mlir::ValueRange{});
+    builder.setInsertionPointToEnd(file.getBody());
+    auto top =
+        ModuleOp::create(builder, loc, "WideTop", emptyType, emptyDictionary);
+    builder.setInsertionPointToStart(top.addEntryBlock());
+    llvm::SmallVector<mlir::Attribute> producerRefs;
+    llvm::SmallVector<mlir::Attribute> sourceShapes;
+    producerRefs.reserve(sourceCount);
+    sourceShapes.reserve(sourceCount);
+    for (unsigned index = 0; index != sourceCount; ++index) {
+      std::string name = "source" + std::to_string(index);
+      InstanceOp::create(builder, loc, mlir::TypeRange{}, mlir::ValueRange{},
+                         "WideLeaf", name, name, name, emptyDictionary);
+      producerRefs.push_back(mlir::FlatSymbolRefAttr::get(&context, name));
+      sourceShapes.push_back(zeroShape);
+    }
+    ViewOp::create(builder, loc, mlir::TypeRange{}, mlir::ValueRange{}, "wide",
+                   "concat", builder.getArrayAttr(producerRefs),
+                   builder.getArrayAttr(sourceShapes),
+                   builder.getI64IntegerAttr(0), llvm::ArrayRef<int64_t>{},
+                   llvm::ArrayRef<int64_t>{0});
+    ReturnOp::create(builder, loc, mlir::ValueRange{});
+    return file;
+  };
+
+  auto wide = buildWide();
+  auto small = buildChain(1000, "Small");
+  auto large = buildChain(5000, "Large");
+  auto verifyTimed = [](mlir::ModuleOp file) {
+    auto start = std::chrono::steady_clock::now();
+    EXPECT_TRUE(mlir::succeeded(mlir::verify(file)));
+    return std::chrono::steady_clock::now() - start;
+  };
+  auto wideElapsed = verifyTimed(wide);
+  auto smallElapsed = verifyTimed(small);
+  auto largeElapsed = verifyTimed(large);
+  EXPECT_LT(wideElapsed, std::chrono::seconds(5));
+  EXPECT_LT(largeElapsed, std::chrono::seconds(5));
+  EXPECT_LT(largeElapsed, smallElapsed * 8 + std::chrono::milliseconds(50));
 }
 
 TEST(ACIROpsTest, TopologyVerifierWalksTypeAttributesAndLocations) {

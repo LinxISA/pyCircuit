@@ -2,6 +2,8 @@
 #include "acir/Dialect/ACIR/GraphRegion.h"
 #include "acir/InitAllDialects.h"
 #include "acir/InitAllPasses.h"
+#include "mlir/AsmParser/AsmParser.h"
+#include "mlir/IR/Diagnostics.h"
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Support/FileUtilities.h"
 #include "mlir/Tools/mlir-opt/MlirOptMain.h"
@@ -14,26 +16,40 @@
 
 namespace {
 
-bool containsGenericACIROperation(llvm::StringRef input) {
+enum class CanonicalScanResult { Canonical, GenericOperation, MalformedEscape };
+
+CanonicalScanResult scanCanonicalAssembly(llvm::StringRef input) {
+  mlir::MLIRContext stringContext;
+  mlir::ScopedDiagnosticHandler suppressStringDiagnostics(
+      &stringContext, [](mlir::Diagnostic &) { return mlir::success(); });
   for (size_t index = 0; index < input.size();) {
     if (input.substr(index).starts_with("//")) {
       index = input.find('\n', index);
       if (index == llvm::StringRef::npos)
-        return false;
+        return CanonicalScanResult::Canonical;
       continue;
     }
     if (input.substr(index).starts_with("/*")) {
-      index = input.find("*/", index + 2);
-      if (index == llvm::StringRef::npos)
-        return false;
+      unsigned depth = 1;
       index += 2;
+      while (index < input.size() && depth) {
+        if (input.substr(index).starts_with("/*")) {
+          ++depth;
+          index += 2;
+        } else if (input.substr(index).starts_with("*/")) {
+          --depth;
+          index += 2;
+        } else {
+          ++index;
+        }
+      }
       continue;
     }
     if (input[index] != '"') {
       ++index;
       continue;
     }
-    size_t start = ++index;
+    size_t start = index++;
     bool escaped = false;
     while (index < input.size()) {
       char value = input[index++];
@@ -43,15 +59,21 @@ bool containsGenericACIROperation(llvm::StringRef input) {
       if (value != '\\')
         escaped = false;
     }
-    llvm::StringRef spelling = input.slice(start, index - 1);
+    llvm::StringRef token = input.slice(start, index);
     size_t next = index;
     while (next < input.size() && llvm::isSpace(input[next]))
       ++next;
-    if (spelling.starts_with("ac.") && next < input.size() &&
-        input[next] == '(')
-      return true;
+    if (next >= input.size() || input[next] != '(')
+      continue;
+    auto parsed = mlir::parseAttribute(token, &stringContext);
+    auto spelling = mlir::dyn_cast_or_null<mlir::StringAttr>(parsed);
+    if (!spelling)
+      return CanonicalScanResult::MalformedEscape;
+    llvm::StringRef value = spelling.getValue();
+    if (value.starts_with("ac.") || value.starts_with("acsim."))
+      return CanonicalScanResult::GenericOperation;
   }
-  return false;
+  return CanonicalScanResult::Canonical;
 }
 
 } // namespace
@@ -95,10 +117,19 @@ int main(int argc, char **argv) {
   llvm::StringRef contents = input->getBuffer();
   bool isBytecode = contents.size() >= 4 &&
                     contents.take_front(4) == llvm::StringRef("ML\xefR", 4);
-  if (!isBytecode && containsGenericACIROperation(contents)) {
-    llvm::errs() << "error: generic ACIR operation spelling is internal-only; "
-                    "use canonical ACIR assembly\n";
-    return EXIT_FAILURE;
+  if (!isBytecode) {
+    switch (scanCanonicalAssembly(contents)) {
+    case CanonicalScanResult::Canonical:
+      break;
+    case CanonicalScanResult::GenericOperation:
+      llvm::errs()
+          << "error: generic ACIR operation spelling is internal-only; "
+             "use canonical ACIR assembly\n";
+      return EXIT_FAILURE;
+    case CanonicalScanResult::MalformedEscape:
+      llvm::errs() << "error: malformed quoted operation name escape\n";
+      return EXIT_FAILURE;
+    }
   }
 #endif
 

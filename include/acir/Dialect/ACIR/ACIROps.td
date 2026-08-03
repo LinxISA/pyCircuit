@@ -176,7 +176,7 @@ def ACIR_SystemOp : ACIR_Op<"system", [Symbol]> {
 }
 
 def ACIR_ModuleOp : ACIR_Op<"module", [
-    Symbol, FunctionOpInterface, IsolatedFromAbove, SingleBlock,
+    Symbol, SymbolTable, FunctionOpInterface, IsolatedFromAbove, SingleBlock,
     RegionKindInterface, HasOnlyGraphRegion
   ]> {
   let arguments = (ins SymbolNameAttr:$sym_name,
@@ -291,15 +291,22 @@ def ACIR_InstancesOp : ACIR_Op<"instances", [Pure]> {
 }
 
 def ACIR_ViewOp : ACIR_Op<"view", [Pure]> {
-  let arguments = (ins Variadic<AnyType>:$inputs, StrAttr:$kind,
+  let arguments = (ins Variadic<AnyType>:$inputs,
+                       SymbolNameAttr:$sym_name, StrAttr:$kind,
+                       FlatSymbolRefArrayAttr:$source_producers,
                        ArrayAttr:$source_shapes,
                        OptionalAttr<I64Attr>:$axis,
                        DenseI64ArrayAttr:$indices,
                        DenseI64ArrayAttr:$shape);
   let results = (outs Variadic<AnyType>:$outputs);
+  let extraClassDeclaration = [{
+    ::mlir::LogicalResult verifyWithProducerIndex(
+        const ::llvm::StringMap<::mlir::Operation *> &producerIndex);
+  }];
   let hasVerifier = 1;
   let assemblyFormat = [{
-    $kind `(` $inputs `)` `sources` $source_shapes (`axis` $axis^)?
+    $sym_name $kind `(` $inputs `)` `producers` $source_producers
+    `sources` $source_shapes (`axis` $axis^)?
     `indices` $indices `shape` $shape attr-dict
     `:` functional-type($inputs, $outputs)
   }];

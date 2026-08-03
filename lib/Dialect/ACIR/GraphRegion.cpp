@@ -26,57 +26,73 @@ bool isModuleDeclaration(Operation *op) {
   return isa_and_nonnull<ModuleOp, ModuleExternOp, ModuleGeneratedOp>(op);
 }
 
+Operation *lookupDefinition(SymbolTable &symbols, FlatSymbolRefAttr reference) {
+  return symbols.lookup(reference.getValue());
+}
+
 SmallVector<Operation *> instantiatedDefinitions(ModuleOp module,
-                                                 mlir::ModuleOp file) {
+                                                 SymbolTable &symbols) {
   SmallVector<Operation *> definitions;
   for (Operation &child : module.getBody().front()) {
     if (auto instance = dyn_cast<InstanceOp>(child)) {
       definitions.push_back(
-          SymbolTable::lookupSymbolIn(file, instance.getDefinitionAttr()));
+          lookupDefinition(symbols, instance.getDefinitionAttr()));
     } else if (auto array = dyn_cast<ArrayOp>(child)) {
       definitions.push_back(
-          SymbolTable::lookupSymbolIn(file, array.getDefinitionAttr()));
+          lookupDefinition(symbols, array.getDefinitionAttr()));
     } else if (auto instances = dyn_cast<InstancesOp>(child)) {
       for (Attribute definition : instances.getDefinitions())
-        definitions.push_back(SymbolTable::lookupSymbolIn(
-            file, cast<FlatSymbolRefAttr>(definition)));
+        definitions.push_back(
+            lookupDefinition(symbols, cast<FlatSymbolRefAttr>(definition)));
     }
   }
   return definitions;
 }
 
-LogicalResult verifyFiniteInstantiationGraph(mlir::ModuleOp file) {
+LogicalResult verifyFiniteInstantiationGraph(mlir::ModuleOp file,
+                                             SymbolTable &symbols) {
   enum class State : uint8_t { Unvisited, Active, Complete };
+  struct Frame {
+    ModuleOp module;
+    SmallVector<Operation *> definitions;
+    size_t nextDefinition = 0;
+  };
   llvm::DenseMap<Operation *, State> states;
-  SmallVector<ModuleOp> stack;
-  std::function<LogicalResult(ModuleOp)> visit =
-      [&](ModuleOp module) -> LogicalResult {
-    states[module] = State::Active;
-    stack.push_back(module);
-    for (Operation *definition : instantiatedDefinitions(module, file)) {
-      auto child = dyn_cast_or_null<ModuleOp>(definition);
+  SmallVector<Frame> stack;
+  for (ModuleOp root : file.getOps<ModuleOp>()) {
+    if (states.lookup(root) != State::Unvisited)
+      continue;
+    states[root] = State::Active;
+    stack.push_back({root, instantiatedDefinitions(root, symbols)});
+    while (!stack.empty()) {
+      Frame &frame = stack.back();
+      if (frame.nextDefinition == frame.definitions.size()) {
+        states[frame.module] = State::Complete;
+        stack.pop_back();
+        continue;
+      }
+
+      auto child =
+          dyn_cast_or_null<ModuleOp>(frame.definitions[frame.nextDefinition++]);
       if (!child)
         continue;
       if (states.lookup(child) == State::Active) {
-        auto start = llvm::find(stack, child);
+        auto start = llvm::find_if(stack, [child](const Frame &candidate) {
+          return candidate.module == child;
+        });
         InFlightDiagnostic diagnostic =
-            module.emitOpError("recursive module instantiation cycle: ");
+            frame.module.emitOpError("recursive module instantiation cycle: ");
         for (auto current = start; current != stack.end(); ++current)
-          diagnostic << '@' << current->getSymName() << " -> ";
+          diagnostic << '@' << current->module.getSymName() << " -> ";
         diagnostic << '@' << child.getSymName();
         return failure();
       }
-      if (states.lookup(child) == State::Unvisited && failed(visit(child)))
-        return failure();
+      if (states.lookup(child) == State::Unvisited) {
+        states[child] = State::Active;
+        stack.push_back({child, instantiatedDefinitions(child, symbols)});
+      }
     }
-    stack.pop_back();
-    states[module] = State::Complete;
-    return success();
-  };
-
-  for (ModuleOp module : file.getOps<ModuleOp>())
-    if (states.lookup(module) == State::Unvisited && failed(visit(module)))
-      return failure();
+  }
   return success();
 }
 
@@ -118,7 +134,7 @@ bool isConcreteStaticValue(Attribute value) {
     auto amount = dictionary.getAs<IntegerAttr>("value");
     auto unit = dictionary.getAs<StringAttr>("unit");
     return amount && amount.getType().isSignlessInteger(64) && unit &&
-           !unit.getValue().empty();
+           symbolizeUnit(unit.getValue()).has_value();
   }
   return false;
 }
@@ -137,6 +153,7 @@ LogicalResult verifyGraphStructure(Operation *topLevel) {
   auto file = dyn_cast<mlir::ModuleOp>(topLevel);
   if (!file)
     return success();
+  SymbolTable symbols(file);
 
   unsigned selected = 0;
   SystemOp selectedSystem;
@@ -145,7 +162,7 @@ LogicalResult verifyGraphStructure(Operation *topLevel) {
       ++selected;
       selectedSystem = system;
     }
-    Operation *root = SymbolTable::lookupSymbolIn(file, system.getRootAttr());
+    Operation *root = lookupDefinition(symbols, system.getRootAttr());
     if (!isa_and_nonnull<ModuleOp>(root)) {
       if (system.getSelected())
         return system.emitOpError(
@@ -154,7 +171,7 @@ LogicalResult verifyGraphStructure(Operation *topLevel) {
                                   << "' does not resolve to ac.module";
     }
     if (FlatSymbolRefAttr workload = system.getPrimaryWorkloadAttr()) {
-      Operation *target = SymbolTable::lookupSymbolIn(file, workload);
+      Operation *target = lookupDefinition(symbols, workload);
       if (!target)
         return system.emitOpError()
                << "primary workload '" << workload << "' is unresolved";
@@ -167,7 +184,7 @@ LogicalResult verifyGraphStructure(Operation *topLevel) {
     return file.emitError() << "ACIR file requires exactly one selected "
                                "ac.system, found "
                             << selected;
-  if (failed(verifyFiniteInstantiationGraph(file)))
+  if (failed(verifyFiniteInstantiationGraph(file, symbols)))
     return failure();
   if (!selectedSystem)
     return success();
@@ -185,22 +202,96 @@ LogicalResult verifyGraphStructure(Operation *topLevel) {
   auto saturatedMultiply = [](uint64_t left, uint64_t right, uint64_t cap) {
     return left && right > cap / left ? cap : std::min(left * right, cap);
   };
+
+  auto selectedRoot =
+      cast<ModuleOp>(lookupDefinition(symbols, selectedSystem.getRootAttr()));
+  llvm::DenseMap<Operation *, uint64_t> greatestIncomingDepth;
+  SmallVector<std::pair<ModuleOp, uint64_t>> depthWorklist;
+  greatestIncomingDepth[selectedRoot] = 0;
+  depthWorklist.push_back({selectedRoot, 0});
+  while (!depthWorklist.empty()) {
+    auto [module, incomingDepth] = depthWorklist.pop_back_val();
+    if (greatestIncomingDepth.lookup(module) != incomingDepth)
+      continue;
+    for (Operation &child : module.getBody().front()) {
+      auto enqueue = [&](Operation *definition,
+                         uint64_t depth) -> LogicalResult {
+        if (depth > maxHierarchyDepth)
+          return failure();
+        auto target = dyn_cast_or_null<ModuleOp>(definition);
+        if (target && greatestIncomingDepth.lookup(target) < depth) {
+          greatestIncomingDepth[target] = depth;
+          depthWorklist.push_back({target, depth});
+        }
+        return success();
+      };
+      if (auto instance = dyn_cast<InstanceOp>(child)) {
+        if (failed(
+                enqueue(lookupDefinition(symbols, instance.getDefinitionAttr()),
+                        incomingDepth + 1)))
+          return selectedSystem.emitOpError()
+                 << "elaborated hierarchy depth exceeds bound "
+                 << maxHierarchyDepth;
+      } else if (auto array = dyn_cast<ArrayOp>(child)) {
+        if (incomingDepth + 1 > maxHierarchyDepth)
+          return selectedSystem.emitOpError()
+                 << "elaborated hierarchy depth exceeds bound "
+                 << maxHierarchyDepth;
+        uint64_t count = 1;
+        for (int64_t extent : array.getShape())
+          count = saturatedMultiply(count, static_cast<uint64_t>(extent), 1);
+        if (count != 0 &&
+            failed(enqueue(lookupDefinition(symbols, array.getDefinitionAttr()),
+                           incomingDepth + 2)))
+          return selectedSystem.emitOpError()
+                 << "elaborated hierarchy depth exceeds bound "
+                 << maxHierarchyDepth;
+      } else if (auto instances = dyn_cast<InstancesOp>(child)) {
+        if (incomingDepth + 1 > maxHierarchyDepth)
+          return selectedSystem.emitOpError()
+                 << "elaborated hierarchy depth exceeds bound "
+                 << maxHierarchyDepth;
+        for (Attribute reference : instances.getDefinitions())
+          if (failed(enqueue(
+                  lookupDefinition(symbols, cast<FlatSymbolRefAttr>(reference)),
+                  incomingDepth + 2)))
+            return selectedSystem.emitOpError()
+                   << "elaborated hierarchy depth exceeds bound "
+                   << maxHierarchyDepth;
+      }
+    }
+  }
+
+  SmallVector<ModuleOp> postorder;
+  SmallVector<std::pair<ModuleOp, bool>> traversal;
+  llvm::DenseSet<Operation *> scheduled;
+  traversal.push_back({selectedRoot, false});
+  while (!traversal.empty()) {
+    auto [module, expanded] = traversal.pop_back_val();
+    if (expanded) {
+      postorder.push_back(module);
+      continue;
+    }
+    if (!scheduled.insert(module).second)
+      continue;
+    traversal.push_back({module, true});
+    SmallVector<Operation *> definitions =
+        instantiatedDefinitions(module, symbols);
+    for (Operation *definition : llvm::reverse(definitions))
+      if (auto child = dyn_cast_or_null<ModuleOp>(definition))
+        traversal.push_back({child, false});
+  }
+
   llvm::DenseMap<Operation *, ExpansionStats> expansionMemo;
-  std::function<ExpansionStats(Operation *)> expansionStats =
-      [&](Operation *definition) -> ExpansionStats {
-    auto module = dyn_cast_or_null<ModuleOp>(definition);
-    if (!module)
-      return {};
-    if (auto found = expansionMemo.find(module); found != expansionMemo.end())
-      return found->second;
+  for (ModuleOp module : postorder) {
     ExpansionStats stats;
     for (Operation &child : module.getBody().front()) {
       ExpansionStats childStats;
       uint64_t localOwners = 0;
       uint64_t localDepth = 0;
       if (auto instance = dyn_cast<InstanceOp>(child)) {
-        childStats = expansionStats(
-            SymbolTable::lookupSymbolIn(file, instance.getDefinitionAttr()));
+        childStats = expansionMemo.lookup(
+            lookupDefinition(symbols, instance.getDefinitionAttr()));
         localOwners =
             saturatedAdd(1, childStats.owners, maxHierarchyOwners + 1);
         localDepth = saturatedAdd(1, childStats.depth, maxHierarchyDepth + 1);
@@ -209,8 +300,8 @@ LogicalResult verifyGraphStructure(Operation *topLevel) {
         for (int64_t extent : array.getShape())
           count = saturatedMultiply(count, static_cast<uint64_t>(extent),
                                     maxHierarchyOwners + 1);
-        childStats = expansionStats(
-            SymbolTable::lookupSymbolIn(file, array.getDefinitionAttr()));
+        childStats = expansionMemo.lookup(
+            lookupDefinition(symbols, array.getDefinitionAttr()));
         uint64_t perElement =
             saturatedAdd(1, childStats.owners, maxHierarchyOwners + 1);
         localOwners = saturatedAdd(
@@ -223,8 +314,8 @@ LogicalResult verifyGraphStructure(Operation *topLevel) {
         localOwners = 1;
         localDepth = 1;
         for (Attribute reference : instances.getDefinitions()) {
-          childStats = expansionStats(SymbolTable::lookupSymbolIn(
-              file, cast<FlatSymbolRefAttr>(reference)));
+          childStats = expansionMemo.lookup(
+              lookupDefinition(symbols, cast<FlatSymbolRefAttr>(reference)));
           localOwners = saturatedAdd(
               localOwners,
               saturatedAdd(1, childStats.owners, maxHierarchyOwners + 1),
@@ -239,10 +330,8 @@ LogicalResult verifyGraphStructure(Operation *topLevel) {
       stats.depth = std::max(stats.depth, localDepth);
     }
     expansionMemo[module] = stats;
-    return stats;
-  };
-  ExpansionStats selectedStats = expansionStats(
-      SymbolTable::lookupSymbolIn(file, selectedSystem.getRootAttr()));
+  }
+  ExpansionStats selectedStats = expansionMemo.lookup(selectedRoot);
   if (selectedStats.depth > maxHierarchyDepth)
     return selectedSystem.emitOpError()
            << "elaborated hierarchy depth exceeds bound " << maxHierarchyDepth;
@@ -277,8 +366,8 @@ LogicalResult verifyGraphStructure(Operation *topLevel) {
         std::string id = (parentId + "/" + instance.getStableId()).str();
         if (failed(registerOwner(&child, path, id)) ||
             failed(elaborate(
-                SymbolTable::lookupSymbolIn(file, instance.getDefinitionAttr()),
-                path, id)))
+                lookupDefinition(symbols, instance.getDefinitionAttr()), path,
+                id)))
           return failure();
       } else if (auto array = dyn_cast<ArrayOp>(child)) {
         std::string basePath = (parentPath + "." + array.getPath()).str();
@@ -301,8 +390,8 @@ LogicalResult verifyGraphStructure(Operation *topLevel) {
           std::string id = buildArrayElementPath(baseId, indices);
           if (failed(registerOwner(&child, path, id)) ||
               failed(elaborate(
-                  SymbolTable::lookupSymbolIn(file, array.getDefinitionAttr()),
-                  path, id)))
+                  lookupDefinition(symbols, array.getDefinitionAttr()), path,
+                  id)))
             return failure();
         }
       } else if (auto instances = dyn_cast<InstancesOp>(child)) {
@@ -323,8 +412,7 @@ LogicalResult verifyGraphStructure(Operation *topLevel) {
           auto target =
               cast<FlatSymbolRefAttr>(instances.getDefinitions()[index]);
           if (failed(registerOwner(&child, path, id)) ||
-              failed(elaborate(SymbolTable::lookupSymbolIn(file, target), path,
-                               id)))
+              failed(elaborate(lookupDefinition(symbols, target), path, id)))
             return failure();
         }
       }
@@ -338,9 +426,8 @@ LogicalResult verifyGraphStructure(Operation *topLevel) {
   std::string root = selectedSystem.getRootName().str();
   paths.insert(root);
   stableIds.insert(root);
-  return elaborate(
-      SymbolTable::lookupSymbolIn(file, selectedSystem.getRootAttr()), root,
-      root);
+  return elaborate(lookupDefinition(symbols, selectedSystem.getRootAttr()),
+                   root, root);
 }
 
 } // namespace acir::ac

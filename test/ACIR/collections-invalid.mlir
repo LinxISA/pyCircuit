@@ -54,7 +54,7 @@ builtin.module attributes {ac.contract_epoch = "0.1"} {
   "ac.module"() <{sym_name = "Top", function_type = (i32, i32) -> (i32, i32), static_params = {}}> ({
   ^bb0(%a : i32, %b : i32):
     %source:2 = "ac.instance"(%a, %b) <{definition = @Pair, sym_name = "pair", stable_id = "pair", path = "pair", static_args = {}}> : (i32, i32) -> (i32, i32)
-    %x:2 = "ac.view"(%source#0, %source#1) <{kind = "permutation", source_shapes = [array<i64: 2>], indices = array<i64: 0, 0>, shape = array<i64: 2>}> : (i32, i32) -> (i32, i32)
+    %x:2 = "ac.view"(%source#0, %source#1) <{sym_name = "view", kind = "permutation", source_producers = [@pair], source_shapes = [array<i64: 2>], indices = array<i64: 0, 0>, shape = array<i64: 2>}> : (i32, i32) -> (i32, i32)
     "ac.return"(%x#0, %x#1) : (i32, i32) -> ()
   }) : () -> ()
 }
@@ -84,7 +84,7 @@ builtin.module attributes {ac.contract_epoch = "0.1"} {
 //--- view-overflow.mlir
 builtin.module attributes {ac.contract_epoch = "0.1"} {
   "ac.module"() <{sym_name = "Top", function_type = () -> (), static_params = {}}> ({
-    "ac.view"() <{kind = "concat", source_shapes = [array<i64: 9223372036854775807, 3>], axis = 0 : i64, indices = array<i64>, shape = array<i64: 9223372036854775807, 3>}> : () -> ()
+    "ac.view"() <{sym_name = "view", kind = "concat", source_producers = [@missing], source_shapes = [array<i64: 9223372036854775807, 3>], axis = 0 : i64, indices = array<i64>, shape = array<i64: 9223372036854775807, 3>}> : () -> ()
     "ac.return"() : () -> ()
   }) : () -> ()
 }
@@ -92,13 +92,15 @@ builtin.module attributes {ac.contract_epoch = "0.1"} {
 
 //--- view-provenance.mlir
 builtin.module attributes {ac.contract_epoch = "0.1"} {
+  "ac.module"() <{sym_name = "Identity", function_type = (i32) -> i32, static_params = {}}> ({ ^bb0(%x : i32): "ac.return"(%x) : (i32) -> () }) : () -> ()
   "ac.module"() <{sym_name = "Top", function_type = (i32) -> i32, static_params = {}}> ({
   ^bb0(%arg : i32):
-    %x = "ac.view"(%arg) <{kind = "permutation", source_shapes = [array<i64: 1>], indices = array<i64: 0>, shape = array<i64: 1>}> : (i32) -> i32
+    %source = "ac.instance"(%arg) <{definition = @Identity, sym_name = "source", stable_id = "source", path = "source", static_args = {}}> : (i32) -> i32
+    %x = "ac.view"(%arg) <{sym_name = "view", kind = "permutation", source_producers = [@source], source_shapes = [array<i64: 1>], indices = array<i64: 0>, shape = array<i64: 1>}> : (i32) -> i32
     "ac.return"(%x) : (i32) -> ()
   }) : () -> ()
 }
-// PROVENANCE: each source must be the complete result group of one sibling structural producer
+// PROVENANCE: each source must be the complete result group of its declared structural producer
 
 //--- bad-select.mlir
 builtin.module attributes {ac.contract_epoch = "0.1"} {
@@ -106,7 +108,7 @@ builtin.module attributes {ac.contract_epoch = "0.1"} {
   "ac.module"() <{sym_name = "Top", function_type = (i32, i32) -> i32, static_params = {}}> ({
   ^bb0(%a : i32, %b : i32):
     %source:2 = "ac.instance"(%a, %b) <{definition = @Pair, sym_name = "pair", stable_id = "pair", path = "pair", static_args = {}}> : (i32, i32) -> (i32, i32)
-    %x = "ac.view"(%source#0, %source#1) <{kind = "select", source_shapes = [array<i64: 2>], indices = array<i64: 2>, shape = array<i64>}> : (i32, i32) -> i32
+    %x = "ac.view"(%source#0, %source#1) <{sym_name = "view", kind = "select", source_producers = [@pair], source_shapes = [array<i64: 2>], indices = array<i64: 2>, shape = array<i64>}> : (i32, i32) -> i32
     "ac.return"(%x) : (i32) -> ()
   }) : () -> ()
 }
@@ -118,7 +120,7 @@ builtin.module attributes {ac.contract_epoch = "0.1"} {
   "ac.module"() <{sym_name = "Top", function_type = (i32, i32) -> (i32, i32), static_params = {}}> ({
   ^bb0(%a : i32, %b : i32):
     %source:2 = "ac.instance"(%a, %b) <{definition = @Pair, sym_name = "pair", stable_id = "pair", path = "pair", static_args = {}}> : (i32, i32) -> (i32, i32)
-    %x:2 = "ac.view"(%source#0, %source#1) <{kind = "slice", source_shapes = [array<i64: 2>], indices = array<i64: 0, 3>, shape = array<i64: 3>}> : (i32, i32) -> (i32, i32)
+    %x:2 = "ac.view"(%source#0, %source#1) <{sym_name = "view", kind = "slice", source_producers = [@pair], source_shapes = [array<i64: 2>], indices = array<i64: 0, 3>, shape = array<i64: 3>}> : (i32, i32) -> (i32, i32)
     "ac.return"(%x#0, %x#1) : (i32, i32) -> ()
   }) : () -> ()
 }
@@ -131,7 +133,7 @@ builtin.module attributes {ac.contract_epoch = "0.1"} {
   ^bb0(%a : i32, %b : i32):
     %left:2 = "ac.instance"(%a, %b) <{definition = @Pair, sym_name = "left", stable_id = "left", path = "left", static_args = {}}> : (i32, i32) -> (i32, i32)
     %right:2 = "ac.instance"(%a, %b) <{definition = @Pair, sym_name = "right", stable_id = "right", path = "right", static_args = {}}> : (i32, i32) -> (i32, i32)
-    %x:4 = "ac.view"(%left#0, %left#1, %right#0, %right#1) <{kind = "concat", source_shapes = [array<i64: 2>, array<i64: 2>], axis = 1 : i64, indices = array<i64>, shape = array<i64: 4>}> : (i32, i32, i32, i32) -> (i32, i32, i32, i32)
+    %x:4 = "ac.view"(%left#0, %left#1, %right#0, %right#1) <{sym_name = "view", kind = "concat", source_producers = [@left, @right], source_shapes = [array<i64: 2>, array<i64: 2>], axis = 1 : i64, indices = array<i64>, shape = array<i64: 4>}> : (i32, i32, i32, i32) -> (i32, i32, i32, i32)
     "ac.return"() : () -> ()
   }) : () -> ()
 }
@@ -144,7 +146,7 @@ builtin.module attributes {ac.contract_epoch = "0.1"} {
   ^bb0(%a : i32, %b : i32):
     %left:2 = "ac.instance"(%a, %b) <{definition = @Pair, sym_name = "left", stable_id = "left", path = "left", static_args = {}}> : (i32, i32) -> (i32, i32)
     %right:2 = "ac.instance"(%a, %b) <{definition = @Pair, sym_name = "right", stable_id = "right", path = "right", static_args = {}}> : (i32, i32) -> (i32, i32)
-    %x:4 = "ac.view"(%left#0, %left#1, %right#0, %right#1) <{kind = "zip", source_shapes = [array<i64: 2>, array<i64: 2>], indices = array<i64>, shape = array<i64: 4>}> : (i32, i32, i32, i32) -> (i32, i32, i32, i32)
+    %x:4 = "ac.view"(%left#0, %left#1, %right#0, %right#1) <{sym_name = "view", kind = "zip", source_producers = [@left, @right], source_shapes = [array<i64: 2>, array<i64: 2>], indices = array<i64>, shape = array<i64: 4>}> : (i32, i32, i32, i32) -> (i32, i32, i32, i32)
     "ac.return"() : () -> ()
   }) : () -> ()
 }
@@ -156,7 +158,7 @@ builtin.module attributes {ac.contract_epoch = "0.1"} {
   "ac.module"() <{sym_name = "Top", function_type = (i32, i32) -> (), static_params = {}}> ({
   ^bb0(%a : i32, %b : i32):
     %source:2 = "ac.instance"(%a, %b) <{definition = @Pair, sym_name = "pair", stable_id = "pair", path = "pair", static_args = {}}> : (i32, i32) -> (i32, i32)
-    %x:2 = "ac.view"(%source#0, %source#1) <{kind = "elementwise", source_shapes = [array<i64: 2>], indices = array<i64>, shape = array<i64: 2>}> : (i32, i32) -> (i32, i32)
+    %x:2 = "ac.view"(%source#0, %source#1) <{sym_name = "view", kind = "elementwise", source_producers = [@pair], source_shapes = [array<i64: 2>], indices = array<i64>, shape = array<i64: 2>}> : (i32, i32) -> (i32, i32)
     "ac.return"() : () -> ()
   }) : () -> ()
 }

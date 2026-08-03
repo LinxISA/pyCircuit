@@ -1309,7 +1309,7 @@ ParseResult ModuleOp::parse(OpAsmParser &parser, OperationState &result) {
   SmallVector<Type> results;
   SmallVector<DictionaryAttr> resultAttrs;
   bool isVariadic = false;
-  if (parser.parseSymbolName(name, SymbolTable::getSymbolAttrName(),
+  if (parser.parseSymbolName(name, mlir::SymbolTable::getSymbolAttrName(),
                              result.attributes) ||
       function_interface_impl::parseFunctionSignatureWithArguments(
           parser, /*allowVariadic=*/false, arguments, isVariadic, results,
@@ -1371,8 +1371,9 @@ void ModuleOp::print(OpAsmPrinter &printer) {
       getResultTypes());
   printer << " parameters " << getStaticParams();
   printer.printOptionalAttrDictWithKeyword(
-      (*this)->getAttrs(), {SymbolTable::getSymbolAttrName(), "function_type",
-                            "static_params", "arg_attrs", "res_attrs"});
+      (*this)->getAttrs(),
+      {mlir::SymbolTable::getSymbolAttrName(), "function_type", "static_params",
+       "arg_attrs", "res_attrs"});
   printer << " graph ";
   printer.printRegion(getBody(), /*printEntryBlockArgs=*/false,
                       /*printBlockTerminators=*/true,
@@ -1391,6 +1392,7 @@ LogicalResult ModuleOp::verify() {
   if (!llvm::equal(entry.getArgumentTypes(), getFunctionType().getInputs()))
     return emitOpError("Graph region arguments must match module signature");
   llvm::StringSet<> localNames;
+  llvm::StringMap<Operation *> producerIndex;
   llvm::StringSet<> stableIds;
   llvm::StringSet<> paths;
   for (Operation &child : entry) {
@@ -1412,10 +1414,14 @@ LogicalResult ModuleOp::verify() {
       localName = instances.getSymNameAttr();
       stableId = instances.getStableIdAttr();
       path = instances.getPathAttr();
+    } else if (auto view = dyn_cast<ViewOp>(child)) {
+      localName = view.getSymNameAttr();
     }
     if (localName && !localNames.insert(localName.getValue()).second)
       return child.emitOpError() << "duplicate local structural name '"
                                  << localName.getValue() << "'";
+    if (localName)
+      producerIndex.try_emplace(localName.getValue(), &child);
     if (stableId && !stableIds.insert(stableId.getValue()).second)
       return child.emitOpError() << "duplicate local structural stable id '"
                                  << stableId.getValue() << "'";
@@ -1425,6 +1431,9 @@ LogicalResult ModuleOp::verify() {
   }
   if (entry.empty() || !isa<ReturnOp>(entry.back()))
     return emitOpError("module Graph region must end with ac.return");
+  for (ViewOp view : entry.getOps<ViewOp>())
+    if (failed(view.verifyWithProducerIndex(producerIndex)))
+      return failure();
   return success();
 }
 
@@ -1603,9 +1612,10 @@ LogicalResult InstancesOp::verify() {
   return success();
 }
 
-LogicalResult ViewOp::verify() {
-  if (failed(verifyStructuralPlacement(*this)))
-    return failure();
+LogicalResult ViewOp::verify() { return verifyStructuralPlacement(*this); }
+
+LogicalResult ViewOp::verifyWithProducerIndex(
+    const llvm::StringMap<Operation *> &producerIndex) {
   ArrayRef<int64_t> indices = getIndices();
   ArrayRef<int64_t> shape = getShape();
   if (llvm::any_of(shape, [](int64_t value) { return value < 0; }))
@@ -1644,8 +1654,12 @@ LogicalResult ViewOp::verify() {
       producerShape.append(view.getShape().begin(), view.getShape().end());
     return producerShape;
   };
+  if (getSourceProducers().size() != getSourceShapes().size())
+    return emitOpError(
+        "source_producers and source_shapes must have identical cardinality");
   size_t operandOffset = 0;
-  for (Attribute attribute : getSourceShapes()) {
+  for (auto [producerReference, attribute] :
+       llvm::zip(getSourceProducers(), getSourceShapes())) {
     auto sourceShape = dyn_cast<DenseI64ArrayAttr>(attribute);
     if (!sourceShape)
       return emitOpError("source_shapes entries must be dense i64 arrays");
@@ -1658,42 +1672,33 @@ LogicalResult ViewOp::verify() {
     source.append(getInputs().begin() + operandOffset,
                   getInputs().begin() + operandOffset + cardinality);
     operandOffset += cardinality;
+    auto producerSymbol = cast<FlatSymbolRefAttr>(producerReference);
+    Operation *producer = producerIndex.lookup(producerSymbol.getValue());
+    if (!producer)
+      return emitOpError() << "source producer '" << producerReference
+                           << "' is unresolved";
+    if (producer == getOperation())
+      return emitOpError("view cannot name itself as a source producer");
+    if (!isa<InstanceOp, ArrayOp, InstancesOp, ViewOp>(producer) ||
+        producer->getBlock() != getOperation()->getBlock())
+      return emitOpError("source producer must resolve to a direct structural "
+                         "producer in the same ac.module");
+    if (!sourceProducers.insert(producer).second)
+      return emitOpError("source producers must not repeat");
     if (!source.empty()) {
-      Operation *producer = source.front().getDefiningOp();
-      if (!producer ||
-          !isa<InstanceOp, ArrayOp, InstancesOp, ViewOp>(producer) ||
-          producer->getBlock() != getOperation()->getBlock())
-        return emitOpError("each source must be the complete result group of "
-                           "one sibling structural producer");
-      if (!sourceProducers.insert(producer).second ||
+      if (source.front().getDefiningOp() != producer ||
           producer->getNumResults() != source.size())
         return emitOpError(
-            "source producers must be complete and non-repeated");
+            "each source must be the complete result group of its declared "
+            "structural producer");
       for (auto [index, value] : llvm::enumerate(source))
         if (value != producer->getResult(index))
           return emitOpError(
               "source operands must preserve producer result order");
-      SmallVector<int64_t> producerShape = getProducerShape(producer);
-      if (producerShape != sourceShape.asArrayRef())
-        return emitOpError("source_shapes must exactly match producer shapes");
-    } else {
-      Operation *zeroProducer = nullptr;
-      for (Operation &candidate : *getOperation()->getBlock()) {
-        if (&candidate == getOperation() || candidate.getNumResults() != 0 ||
-            !isa<InstanceOp, ArrayOp, InstancesOp, ViewOp>(candidate) ||
-            sourceProducers.contains(&candidate) ||
-            !llvm::equal(getProducerShape(&candidate),
-                         sourceShape.asArrayRef()))
-          continue;
-        if (zeroProducer)
-          return emitOpError("zero-cardinality source provenance is ambiguous");
-        zeroProducer = &candidate;
-      }
-      if (!zeroProducer)
-        return emitOpError(
-            "zero-cardinality source has no matching structural producer");
-      sourceProducers.insert(zeroProducer);
     }
+    SmallVector<int64_t> producerShape = getProducerShape(producer);
+    if (producerShape != sourceShape.asArrayRef())
+      return emitOpError("source_shapes must exactly match producer shapes");
     sourceShapes.emplace_back(sourceShape.asArrayRef().begin(),
                               sourceShape.asArrayRef().end());
     sources.push_back(std::move(source));
