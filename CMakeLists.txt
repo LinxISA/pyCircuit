@@ -11,14 +11,17 @@ include(TableGen)
 include(AddLLVM)
 include(AddMLIR)
 include(AddACIR)
+include(CTest)
 
-find_program(ACIR_LIT_EXECUTABLE NAMES llvm-lit lit
-  HINTS "${CMAKE_CURRENT_SOURCE_DIR}/.venv/bin"
-  REQUIRED
-)
-set(LLVM_EXTERNAL_LIT "${ACIR_LIT_EXECUTABLE}" CACHE FILEPATH
-  "lit executable used by Agentic Circuit tests" FORCE
-)
+if(BUILD_TESTING)
+  find_program(ACIR_LIT_EXECUTABLE NAMES llvm-lit lit
+    HINTS "${CMAKE_CURRENT_SOURCE_DIR}/.venv/bin"
+    REQUIRED
+  )
+  set(LLVM_EXTERNAL_LIT "${ACIR_LIT_EXECUTABLE}" CACHE FILEPATH
+    "lit executable used by Agentic Circuit tests" FORCE
+  )
+endif()
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -77,4 +80,6 @@ install(FILES cmake/modules/AddACIR.cmake DESTINATION lib/cmake/AgenticCircuit/m
 add_subdirectory(include)
 add_subdirectory(lib)
 add_subdirectory(tools)
-add_subdirectory(test)
+if(BUILD_TESTING)
+  add_subdirectory(test)
+endif()
