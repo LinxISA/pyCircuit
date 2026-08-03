@@ -1432,7 +1432,8 @@ LogicalResult ModuleOp::verify() {
   if (entry.empty() || !isa<ReturnOp>(entry.back()))
     return emitOpError("module Graph region must end with ac.return");
   for (ViewOp view : entry.getOps<ViewOp>())
-    if (failed(view.verifyWithProducerIndex(producerIndex)))
+    if (failed(view.verify()) ||
+        failed(view.verifyWithProducerIndex(producerIndex)))
       return failure();
   return success();
 }
@@ -1612,7 +1613,13 @@ LogicalResult InstancesOp::verify() {
   return success();
 }
 
-LogicalResult ViewOp::verify() { return verifyStructuralPlacement(*this); }
+LogicalResult ViewOp::verify() {
+  if (failed(verifyStructuralPlacement(*this)))
+    return failure();
+  if (!isStableHierarchySegment(getSymName()))
+    return emitOpError("view name must be a stable local segment");
+  return success();
+}
 
 LogicalResult ViewOp::verifyWithProducerIndex(
     const llvm::StringMap<Operation *> &producerIndex) {
@@ -1673,6 +1680,8 @@ LogicalResult ViewOp::verifyWithProducerIndex(
                   getInputs().begin() + operandOffset + cardinality);
     operandOffset += cardinality;
     auto producerSymbol = cast<FlatSymbolRefAttr>(producerReference);
+    if (!isStableHierarchySegment(producerSymbol.getValue()))
+      return emitOpError("source producer IDs must be stable local segments");
     Operation *producer = producerIndex.lookup(producerSymbol.getValue());
     if (!producer)
       return emitOpError() << "source producer '" << producerReference

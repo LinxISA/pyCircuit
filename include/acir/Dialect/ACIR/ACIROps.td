@@ -176,7 +176,7 @@ def ACIR_SystemOp : ACIR_Op<"system", [Symbol]> {
 }
 
 def ACIR_ModuleOp : ACIR_Op<"module", [
-    Symbol, SymbolTable, FunctionOpInterface, IsolatedFromAbove, SingleBlock,
+    Symbol, FunctionOpInterface, IsolatedFromAbove, SingleBlock,
     RegionKindInterface, HasOnlyGraphRegion
   ]> {
   let arguments = (ins SymbolNameAttr:$sym_name,
