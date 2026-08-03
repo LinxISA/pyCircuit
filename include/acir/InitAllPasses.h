@@ -34,6 +34,8 @@ public:
     }
 
     mlir::WalkResult result = module.walk([&](mlir::Operation *operation) {
+      if (mlir::failed(acir::ac::verifyTopologyTypeUses(operation)))
+        return mlir::WalkResult::interrupt();
       auto rejectChannel = [&](mlir::Attribute attribute) {
         if (!attribute)
           return false;
@@ -83,8 +85,6 @@ public:
                                  "ac.interface channel declaration");
             return mlir::WalkResult::interrupt();
           }
-      if (mlir::failed(acir::ac::verifyTopologyTypeUses(operation)))
-        return mlir::WalkResult::interrupt();
       return mlir::WalkResult::advance();
     });
     if (result.wasInterrupted())

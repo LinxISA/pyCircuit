@@ -186,31 +186,44 @@ TEST(ACIROpsTest, PublicBuildersConstructEveryTaskFiveOperation) {
   builder.setInsertionPointToStart(&protocol.getBody().emplaceBlock());
   auto roleA = RoleOp::create(builder, loc, "a", "b", "exclusive");
   EXPECT_TRUE(roleA);
-  EXPECT_TRUE(RoleOp::create(builder, loc, "b", "a", "exclusive"));
-  EXPECT_TRUE(StateOp::create(builder, loc, "s", true, false));
-  EXPECT_TRUE(EventOp::create(builder, loc, "e", "a", "b", builder.getI8Type(),
-                              "notify"));
+  auto roleB = RoleOp::create(builder, loc, "b", "a", "exclusive");
+  auto state = StateOp::create(builder, loc, "s", true, false);
+  auto event = EventOp::create(builder, loc, "e", "a", "b", builder.getI8Type(),
+                               "notify");
   auto transition =
       TransitionOp::create(builder, loc, "s", "s", "e", nullptr, false, false);
   transition.getGuard().emplaceBlock();
   EXPECT_TRUE(transition);
-  EXPECT_TRUE(GuaranteeOp::create(builder, loc, "ordering",
-                                  builder.getStringAttr("fifo")));
+  auto guarantee = GuaranteeOp::create(builder, loc, "ordering",
+                                       builder.getStringAttr("fifo"));
 
   builder.setInsertionPointAfter(protocol);
   auto interface = InterfaceOp::create(builder, loc, "I");
   builder.setInsertionPointToStart(&interface.getBody().emplaceBlock());
-  EXPECT_TRUE(RoleOp::create(builder, loc, "source", "sink", "exclusive"));
-  EXPECT_TRUE(RoleOp::create(builder, loc, "sink", "source", "exclusive"));
+  EXPECT_TRUE(RoleOp::create(builder, loc, "a", "b", "exclusive"));
+  EXPECT_TRUE(RoleOp::create(builder, loc, "b", "a", "exclusive"));
   auto channel = ChannelType::get(&context, builder.getI8Type(),
                                   mlir::FlatSymbolRefAttr::get(&context, "p"));
-  EXPECT_TRUE(PortOp::create(builder, loc, "data", channel, "source", "sink"));
+  auto port = PortOp::create(builder, loc, "data", channel, "a", "b");
+  EXPECT_TRUE(port);
   EXPECT_TRUE(mlir::isa<ProtocolContainerOpInterface>(protocol.getOperation()));
   EXPECT_TRUE(
       mlir::isa<InterfaceContainerOpInterface>(interface.getOperation()));
   EXPECT_TRUE(mlir::isa<mlir::RegionKindInterface>(protocol.getOperation()));
   EXPECT_TRUE(mlir::isa<mlir::RegionKindInterface>(interface.getOperation()));
+  EXPECT_TRUE(mlir::isa<mlir::SymbolOpInterface>(protocol.getOperation()));
+  EXPECT_TRUE(mlir::isa<mlir::SymbolOpInterface>(interface.getOperation()));
+  EXPECT_TRUE(mlir::isa<mlir::SymbolOpInterface>(roleA.getOperation()));
+  EXPECT_TRUE(mlir::isa<mlir::SymbolOpInterface>(roleB.getOperation()));
+  EXPECT_TRUE(mlir::isa<mlir::SymbolOpInterface>(state.getOperation()));
+  EXPECT_TRUE(mlir::isa<mlir::SymbolOpInterface>(event.getOperation()));
+  EXPECT_TRUE(mlir::isa<mlir::SymbolOpInterface>(port.getOperation()));
   EXPECT_TRUE(mlir::isMemoryEffectFree(roleA.getOperation()));
+  EXPECT_TRUE(mlir::isMemoryEffectFree(roleB.getOperation()));
+  EXPECT_TRUE(mlir::isMemoryEffectFree(state.getOperation()));
+  EXPECT_TRUE(mlir::isMemoryEffectFree(event.getOperation()));
+  EXPECT_TRUE(mlir::isMemoryEffectFree(guarantee.getOperation()));
+  EXPECT_TRUE(mlir::isMemoryEffectFree(port.getOperation()));
   EXPECT_TRUE(mlir::succeeded(mlir::verify(module)));
 }
 
@@ -226,6 +239,64 @@ TEST(ACIROpsTest, TaskFiveRegistryContainsExactlyTheRequiredNewOperations) {
         << name.str();
   EXPECT_FALSE(mlir::OperationName("ac.connect", &context).isRegistered());
   EXPECT_FALSE(mlir::OperationName("ac.ready_valid", &context).isRegistered());
+
+  std::vector<std::string> actual;
+  for (mlir::RegisteredOperationName operation :
+       context.getRegisteredOperationsByDialect("ac"))
+    actual.push_back(operation.getStringRef().str());
+  llvm::sort(actual);
+  std::vector<std::string> expected = {
+      "ac.enum",
+      "ac.event",
+      "ac.guarantee",
+      "ac.interface",
+      "ac.packet",
+      "ac.packet.deserialize",
+      "ac.packet.serialize",
+      "ac.port",
+      "ac.protocol",
+      "ac.record.create",
+      "ac.record.get",
+      "ac.record.with",
+      "ac.role",
+      "ac.state",
+      "ac.struct",
+      "ac.transaction",
+      "ac.transition",
+      "ac.type_alias",
+      "ac.type_scope",
+      "ac.union",
+  };
+  llvm::sort(expected);
+  EXPECT_EQ(actual, expected);
+}
+
+TEST(ACIROpsTest, TopologyVerifierWalksTypeAttributesAndLocations) {
+  mlir::MLIRContext context;
+  context.loadDialect<ACIRDialect>();
+  mlir::OpBuilder builder(&context);
+  auto protocol = mlir::FlatSymbolRefAttr::get(&context, "missing");
+  auto flow = FlowType::get(&context, builder.getI8Type(), protocol);
+  auto nested = OptionalType::get(&context, flow);
+
+  auto attributeModule = mlir::ModuleOp::create(builder.getUnknownLoc());
+  attributeModule->setAttr("metadata", mlir::TypeAttr::get(nested));
+  EXPECT_TRUE(mlir::failed(verifyTopologyTypeUses(attributeModule)));
+
+  auto operandModule = mlir::ModuleOp::create(builder.getUnknownLoc());
+  builder.setInsertionPointToStart(operandModule.getBody());
+  auto source = mlir::UnrealizedConversionCastOp::create(
+      builder, builder.getUnknownLoc(), mlir::TypeRange{nested},
+      mlir::ValueRange{});
+  auto consumer = mlir::UnrealizedConversionCastOp::create(
+      builder, builder.getUnknownLoc(), mlir::TypeRange{builder.getI1Type()},
+      source.getResults());
+  EXPECT_TRUE(mlir::failed(verifyTopologyTypeUses(consumer)));
+
+  auto location = mlir::FusedLoc::get(&context, {builder.getUnknownLoc()},
+                                      mlir::TypeAttr::get(nested));
+  auto locationModule = mlir::ModuleOp::create(location);
+  EXPECT_TRUE(mlir::failed(verifyTopologyTypeUses(locationModule)));
 }
 
 TEST(ACIROpsTest, TransitionTableRejectsAmbiguousRowsDeterministically) {

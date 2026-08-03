@@ -36,7 +36,7 @@
 // EVENT: unresolved transition event '@missing'
 // AMBIG: overlapping transitions require explicit priority
 // PRIORITY: overlapping transitions require unique priority
-// GUARD: protocol guard must be pure
+// GUARD: guard operation 'ac.type_scope' is not in the pure expression allowlist
 // BACKPRESSURE: unsupported backpressure value 'stall'
 // ORDERING: unsupported ordering value 'global'
 // DELIVERY: unsupported delivery value 'maybe'
@@ -45,19 +45,19 @@
 // STABLE: retained pending offer requires stable_pending = true
 // INFLIGHT: max_inflight requires a positive i64 value
 // CORRELATION: max_inflight greater than one requires correlation
-// LOST: offered packet must transfer, cancel, reject, or be retained for retry
+// LOST: offer transition must transfer or retain ownership
 // DUP-STATE: redefinition of symbol named 's'
 // DUP-EVENT: redefinition of symbol named 'e'
 // EVENT-ROLE: unresolved event source role '@missing'
 // EVENT-PAYLOAD: event payload type must be a normative ACIR value type
 // EVENT-ACTION: unsupported event action 'drop'
 // DUP-GUARANTEE: duplicate protocol guarantee 'ordering'
-// NO-RESOLUTION: retained offer has no transfer, cancel, reject, or retry transition
+// NO-RESOLUTION: pending ownership reaches state '@pending' with no outgoing transition
 // BAD-CORRELATION: correlation requires a non-empty field name
-// MISSING-CORRELATION: correlation field 'missing' does not resolve in any event payload
+// MISSING-CORRELATION: correlation field 'missing' is missing from reachable offer/response payload
 // CUSTOM: custom backpressure requires a custom_backpressure declaration
 // PER-KEY: per_key ordering requires correlation
-// TERMINAL: on_terminal_phase completion requires a terminal state
+// TERMINAL: on_terminal_phase completion requires a reachable terminal state
 // TARGET: unresolved transition target state '@missing'
 // NEGATIVE-PRIORITY: transition priority must be a non-negative i64 value
 
@@ -274,8 +274,9 @@ builtin.module attributes {ac.contract_epoch = "0.1"} {
     "ac.role"() <{sym_name = "a", dual = @b, cardinality = "exclusive"}> : () -> ()
     "ac.role"() <{sym_name = "b", dual = @a, cardinality = "exclusive"}> : () -> ()
     "ac.state"() <{sym_name = "s", initial = true, terminal = false}> : () -> ()
+    "ac.state"() <{sym_name = "pending", initial = false, terminal = false}> : () -> ()
     "ac.event"() <{sym_name = "e", from = @a, to = @b, payload = i8, action = "offer"}> : () -> ()
-    "ac.transition"() <{source = @s, target = @s, event = @e, retain = true}> ({}) : () -> ()
+    "ac.transition"() <{source = @s, target = @pending, event = @e, retain = true}> ({}) : () -> ()
     "ac.guarantee"() <{kind = "stable_pending", value = true}> : () -> ()
   }) : () -> ()
 }
@@ -297,7 +298,8 @@ builtin.module attributes {ac.contract_epoch = "0.1"} {
     "ac.role"() <{sym_name = "a", dual = @b, cardinality = "exclusive"}> : () -> ()
     "ac.role"() <{sym_name = "b", dual = @a, cardinality = "exclusive"}> : () -> ()
     "ac.state"() <{sym_name = "s", initial = true, terminal = true}> : () -> ()
-    "ac.event"() <{sym_name = "e", from = @a, to = @b, payload = !ac.transaction<@types::@T>, action = "notify"}> : () -> ()
+    "ac.event"() <{sym_name = "e", from = @a, to = @b, payload = !ac.transaction<@types::@T>, action = "offer"}> : () -> ()
+    "ac.transition"() <{source = @s, target = @s, event = @e, transfer = true}> ({}) : () -> ()
     "ac.guarantee"() <{kind = "correlation", value = "missing"}> : () -> ()
   }) : () -> ()
 }

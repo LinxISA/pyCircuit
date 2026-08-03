@@ -10,6 +10,8 @@ builtin.module attributes {ac.contract_epoch = "0.1"} {
     "ac.role"() <{sym_name = "producer", dual = @consumer, cardinality = "exclusive"}> : () -> ()
     "ac.role"() <{sym_name = "consumer", dual = @producer, cardinality = "exclusive"}> : () -> ()
     "ac.state"() <{sym_name = "idle", initial = true, terminal = true}> : () -> ()
+    "ac.event"() <{sym_name = "send", from = @producer, to = @consumer, payload = i8, action = "offer"}> : () -> ()
+    "ac.transition"() <{source = @idle, target = @idle, event = @send, transfer = true}> ({}) : () -> ()
   }) : () -> ()
   "ac.interface"() <{sym_name = "MemoryPort"}> ({
     "ac.role"() <{sym_name = "initiator", dual = @target, cardinality = "exclusive"}> : () -> ()

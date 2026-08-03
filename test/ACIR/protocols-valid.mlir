@@ -36,7 +36,12 @@ builtin.module attributes {ac.contract_epoch = "0.1"} {
     "ac.event"() <{sym_name = "request", from = @requester, to = @responder, payload = !ac.transaction<@types::@Message>, action = "offer"}> : () -> ()
     "ac.event"() <{sym_name = "response", from = @responder, to = @requester, payload = !ac.transaction<@types::@Message>, action = "response"}> : () -> ()
     "ac.transition"() <{source = @active, target = @active, event = @request, transfer = true}> ({}) : () -> ()
-    "ac.transition"() <{source = @active, target = @active, event = @response}> ({}) : () -> ()
+    "ac.transition"() <{source = @active, target = @active, event = @response}> ({
+      %zero = "arith.constant"() <{value = 0 : i16}> : () -> i16
+      %idx = "index.constant"() <{value = 0 : index}> : () -> index
+      %message = "ac.record.create"(%zero) <{field_names = ["tag"]}> : (i16) -> !ac.transaction<@types::@Message>
+      %tag = "ac.record.get"(%message) <{field = "tag"}> : (!ac.transaction<@types::@Message>) -> i16
+    }) : () -> ()
     "ac.guarantee"() <{kind = "backpressure", value = "credit"}> : () -> ()
     "ac.guarantee"() <{kind = "ordering", value = "per_key"}> : () -> ()
     "ac.guarantee"() <{kind = "delivery", value = "exactly_once"}> : () -> ()

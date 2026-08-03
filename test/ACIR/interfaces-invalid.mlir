@@ -41,7 +41,7 @@
 // FLOW-CARDINALITY: flow value has more than one functional use
 // PORT-TARGET: unresolved port target role '@missing'
 // PORT-DUAL: port source and target roles must be dual
-// PROTOCOL-PAYLOAD: channel payload 'i16' does not match protocol event '@send' payload 'i8'
+// PROTOCOL-PAYLOAD: channel payload 'i16' from '@a' to '@b' does not match any carrier event in protocol '@p'
 // DETERMINISTIC: unresolved port source role '@first_missing'
 
 //--- duplicate-role.mlir
@@ -133,7 +133,13 @@ builtin.module attributes {ac.contract_epoch = "0.1"} {
 
 //--- duplicate-port.mlir
 builtin.module attributes {ac.contract_epoch = "0.1"} {
-  "ac.protocol"() <{sym_name = "p"}> ({"ac.state"() <{sym_name = "s", initial = true, terminal = true}> : () -> ()}) : () -> ()
+  "ac.protocol"() <{sym_name = "p"}> ({
+    "ac.role"() <{sym_name = "a", dual = @b, cardinality = "exclusive"}> : () -> ()
+    "ac.role"() <{sym_name = "b", dual = @a, cardinality = "exclusive"}> : () -> ()
+    "ac.state"() <{sym_name = "s", initial = true, terminal = true}> : () -> ()
+    "ac.event"() <{sym_name = "forward", from = @a, to = @b, payload = i8, action = "notify"}> : () -> ()
+    "ac.event"() <{sym_name = "reverse", from = @b, to = @a, payload = i8, action = "notify"}> : () -> ()
+  }) : () -> ()
   "ac.interface"() <{sym_name = "I"}> ({
     "ac.role"() <{sym_name = "a", dual = @b, cardinality = "exclusive"}> : () -> ()
     "ac.role"() <{sym_name = "b", dual = @a, cardinality = "exclusive"}> : () -> ()
@@ -168,7 +174,12 @@ builtin.module attributes {ac.contract_epoch = "0.1"} {
 
 //--- flow-cardinality.mlir
 builtin.module attributes {ac.contract_epoch = "0.1"} {
-  "ac.protocol"() <{sym_name = "p"}> ({"ac.state"() <{sym_name = "s", initial = true, terminal = true}> : () -> ()}) : () -> ()
+  "ac.protocol"() <{sym_name = "p"}> ({
+    "ac.role"() <{sym_name = "a", dual = @b, cardinality = "exclusive"}> : () -> ()
+    "ac.role"() <{sym_name = "b", dual = @a, cardinality = "exclusive"}> : () -> ()
+    "ac.state"() <{sym_name = "s", initial = true, terminal = true}> : () -> ()
+    "ac.event"() <{sym_name = "send", from = @a, to = @b, payload = i8, action = "notify"}> : () -> ()
+  }) : () -> ()
   %x = "builtin.unrealized_conversion_cast"() : () -> !ac.flow<i8, @p>
   %a = "builtin.unrealized_conversion_cast"(%x) : (!ac.flow<i8, @p>) -> i1
   %b = "builtin.unrealized_conversion_cast"(%x) : (!ac.flow<i8, @p>) -> i1

@@ -7,6 +7,7 @@
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallSet.h"
+#include "llvm/ADT/StringSwitch.h"
 #include "llvm/ADT/TypeSwitch.h"
 
 using namespace mlir;
@@ -143,6 +144,24 @@ bool isProtocolPayloadType(Type type) {
   return isNormativeValueType(type) && !containsChannelType(type);
 }
 
+bool isTopologyLeaf(Type type) {
+  return isa<FlowType, EndpointType, ResourceRefType, ChannelType,
+             ResourceTokenType>(type);
+}
+
+Type findNestedTopologyLeaf(Type type) {
+  if (isTopologyLeaf(type))
+    return {};
+  Type found;
+  type.walk([&](Type nested) {
+    if (!isTopologyLeaf(nested))
+      return WalkResult::advance();
+    found = nested;
+    return WalkResult::interrupt();
+  });
+  return found;
+}
+
 template <typename OpTy>
 OpTy lookupChild(Operation *container, FlatSymbolRefAttr name) {
   return dyn_cast_or_null<OpTy>(SymbolTable::lookupSymbolIn(container, name));
@@ -153,6 +172,21 @@ ProtocolOp lookupProtocol(Operation *from, FlatSymbolRefAttr name) {
   return module ? dyn_cast_or_null<ProtocolOp>(
                       SymbolTable::lookupSymbolIn(module, name))
                 : ProtocolOp();
+}
+
+bool isCarrierAction(StringRef action) {
+  return action == "offer" || action == "response" || action == "notify";
+}
+
+bool matchesCarrierEvent(ProtocolOp protocol, Type payload,
+                         FlatSymbolRefAttr from = {},
+                         FlatSymbolRefAttr to = {}) {
+  return llvm::any_of(protocol.getBody().getOps<EventOp>(), [&](EventOp event) {
+    return isCarrierAction(event.getAction()) &&
+           event.getPayload() == payload &&
+           (!from || event.getFromAttr() == from) &&
+           (!to || event.getToAttr() == to);
+  });
 }
 
 LogicalResult verifyRoleReference(Operation *from, Operation *container,
@@ -208,6 +242,52 @@ LogicalResult verifyStringGuarantee(GuaranteeOp op,
            << "unsupported " << op.getKind() << " value '"
            << (value ? value.getValue() : StringRef("<non-string>")) << "'";
   return success();
+}
+
+bool isAllowedGuardExpression(Operation *operation) {
+  return llvm::StringSwitch<bool>(operation->getName().getStringRef())
+      .Cases({"arith.constant",
+              "arith.cmpi",
+              "arith.cmpf",
+              "arith.addi",
+              "arith.subi",
+              "arith.muli",
+              "arith.divui",
+              "arith.divsi",
+              "arith.remui",
+              "arith.remsi",
+              "arith.andi",
+              "arith.ori",
+              "arith.xori",
+              "arith.shli",
+              "arith.shrui",
+              "arith.shrsi",
+              "arith.select",
+              "arith.index_cast",
+              "arith.extui",
+              "arith.extsi",
+              "arith.trunci",
+              "arith.addf",
+              "arith.subf",
+              "arith.mulf",
+              "arith.divf",
+              "arith.negf",
+              "index.constant",
+              "index.add",
+              "index.sub",
+              "index.mul",
+              "index.divs",
+              "index.divu",
+              "index.rems",
+              "index.remu",
+              "index.cmp",
+              "index.casts",
+              "index.castu",
+              RecordCreateOp::getOperationName(),
+              RecordGetOp::getOperationName(),
+              RecordWithOp::getOperationName()},
+             true)
+      .Default(false);
 }
 
 LogicalResult verifyFields(Operation *op, ArrayAttr fields) {
@@ -615,32 +695,111 @@ LogicalResult ProtocolOp::verify() {
                 cast<BoolAttr>(stablePending.getValue()).getValue();
   for (TransitionOp transition : transitions) {
     EventOp event = lookupChild<EventOp>(*this, transition.getEventAttr());
-    if (event.getAction() != "offer")
-      continue;
-    if (transition.getTransfer())
-      continue;
-    if (!transition.getRetain())
-      return transition.emitOpError("offered packet must transfer, cancel, "
-                                    "reject, or be retained for retry");
-    if (!stable)
+    if (transition.getTransfer() && transition.getRetain())
+      return transition.emitOpError(
+          "transition cannot both transfer and retain ownership");
+    if (event.getAction() == "offer" && !transition.getTransfer() &&
+        !transition.getRetain())
+      return transition.emitOpError(
+          "offer transition must transfer or retain ownership");
+    if (event.getAction() == "offer" && transition.getRetain() && !stable)
       return transition.emitOpError(
           "retained pending offer requires stable_pending = true");
+    if (event.getAction() == "retry" && !transition.getRetain())
+      return transition.emitOpError(
+          "retry transition must retain the pending offer");
+    if (event.getAction() == "retry" && transition.getTransfer())
+      return transition.emitOpError(
+          "retry transition cannot transfer the pending offer");
+    if (transition.getRetain() && event.getAction() != "offer" &&
+        event.getAction() != "retry")
+      return transition.emitOpError(
+          "retain is only valid for offer and retry transitions");
+  }
 
-    bool resolved = false;
-    for (TransitionOp next : transitions) {
-      if (next.getSourceAttr() != transition.getTargetAttr())
+  enum class Ownership { NoPending, Pending };
+  SmallVector<StateOp> states(getBody().getOps<StateOp>());
+  SmallVector<std::optional<Ownership>> ownership(states.size());
+  auto stateIndex = [&](FlatSymbolRefAttr name) -> unsigned {
+    for (auto [index, state] : llvm::enumerate(states))
+      if (state.getSymName() == name.getValue())
+        return index;
+    llvm_unreachable("transition state references were verified");
+  };
+  for (auto [index, state] : llvm::enumerate(states))
+    if (state.getInitial())
+      ownership[index] = Ownership::NoPending;
+
+  bool changed;
+  do {
+    changed = false;
+    for (TransitionOp transition : transitions) {
+      unsigned source = stateIndex(transition.getSourceAttr());
+      if (!ownership[source])
         continue;
-      EventOp nextEvent = lookupChild<EventOp>(*this, next.getEventAttr());
-      if (next.getTransfer() || nextEvent.getAction() == "cancel" ||
-          nextEvent.getAction() == "reject" ||
-          nextEvent.getAction() == "retry") {
-        resolved = true;
-        break;
+      EventOp event = lookupChild<EventOp>(*this, transition.getEventAttr());
+      Ownership input = *ownership[source];
+      Ownership output = input;
+      if (event.getAction() == "offer") {
+        if (input == Ownership::Pending)
+          return transition.emitOpError(
+              "offer cannot begin while another offer is pending");
+        output = transition.getTransfer() ? Ownership::NoPending
+                                          : Ownership::Pending;
+      } else if (event.getAction() == "retry") {
+        if (input != Ownership::Pending)
+          return transition.emitOpError("retry requires a pending offer");
+        output = Ownership::Pending;
+      } else if (event.getAction() == "cancel" ||
+                 event.getAction() == "reject") {
+        if (input != Ownership::Pending)
+          return transition.emitOpError(
+              "ownership resolution requires a pending offer");
+        output = Ownership::NoPending;
+      } else if (transition.getTransfer()) {
+        if (input != Ownership::Pending)
+          return transition.emitOpError(
+              "ownership transfer requires a pending offer");
+        output = Ownership::NoPending;
+      }
+      unsigned target = stateIndex(transition.getTargetAttr());
+      if (!ownership[target]) {
+        ownership[target] = output;
+        changed = true;
+      } else if (*ownership[target] != output) {
+        return transition.emitOpError()
+               << "ownership state conflict at join state '@"
+               << states[target].getSymName() << "'";
       }
     }
-    if (!resolved)
-      return transition.emitOpError("retained offer has no transfer, cancel, "
-                                    "reject, or retry transition");
+  } while (changed);
+
+  for (TransitionOp transition : transitions) {
+    unsigned source = stateIndex(transition.getSourceAttr());
+    if (ownership[source])
+      continue;
+    EventOp event = lookupChild<EventOp>(*this, transition.getEventAttr());
+    if (transition.getTransfer())
+      return transition.emitOpError(
+          "ownership transfer requires a pending offer");
+    if (event.getAction() == "retry" || event.getAction() == "cancel" ||
+        event.getAction() == "reject")
+      return transition.emitOpError(
+          "ownership resolution is unreachable from the initial state");
+  }
+
+  for (auto [index, state] : llvm::enumerate(states)) {
+    if (ownership[index] != Ownership::Pending)
+      continue;
+    if (state.getTerminal())
+      return state.emitOpError() << "terminal state '@" << state.getSymName()
+                                 << "' is reachable with pending ownership";
+    if (llvm::none_of(transitions, [&](TransitionOp transition) {
+          return transition.getSourceAttr().getValue() == state.getSymName();
+        }))
+      return state.emitOpError()
+             << "pending ownership reaches state '@" << state.getSymName()
+             << "' with no outgoing transition";
   }
 
   GuaranteeOp maxInflight = findGuarantee(*this, "max_inflight");
@@ -673,35 +832,60 @@ LogicalResult ProtocolOp::verify() {
           !findGuarantee(*this, "correlation"))
         return completion.emitOpError(
             "on_response completion requires correlation");
-      if (value.getValue() == "on_response" &&
-          llvm::none_of(getBody().getOps<EventOp>(), [](EventOp event) {
-            return event.getAction() == "response";
+      auto hasReachableAction = [&](StringRef action) {
+        return llvm::any_of(transitions, [&](TransitionOp transition) {
+          return ownership[stateIndex(transition.getSourceAttr())] &&
+                 lookupChild<EventOp>(*this, transition.getEventAttr())
+                         .getAction() == action;
+        });
+      };
+      if (value.getValue() == "on_response" && !hasReachableAction("response"))
+        return completion.emitOpError(
+            "on_response completion requires a reachable response event");
+      if (value.getValue() == "on_accept" && !hasReachableAction("accept"))
+        return completion.emitOpError(
+            "on_accept completion requires a reachable accept event");
+      if (value.getValue() == "on_terminal_phase" &&
+          llvm::none_of(llvm::enumerate(states), [&](auto indexedState) {
+            return indexedState.value().getTerminal() &&
+                   ownership[indexedState.index()].has_value();
           }))
         return completion.emitOpError(
-            "on_response completion requires a response event");
-      if (value.getValue() == "on_terminal_phase" &&
-          llvm::none_of(getBody().getOps<StateOp>(),
-                        [](StateOp state) { return state.getTerminal(); }))
-        return completion.emitOpError(
-            "on_terminal_phase completion requires a terminal state");
+            "on_terminal_phase completion requires a reachable terminal state");
     }
   }
   GuaranteeOp correlation = findGuarantee(*this, "correlation");
   if (correlation) {
     auto field = dyn_cast<StringAttr>(correlation.getValue());
     if (field && !field.getValue().empty()) {
-      bool found = false;
-      for (EventOp event : getBody().getOps<EventOp>()) {
-        Operation *declaration = recordDecl(event, event.getPayload());
-        if (declaration && findField(declaration, field.getValue())) {
-          found = true;
-          break;
-        }
+      Type offerPayload;
+      for (TransitionOp transition : transitions) {
+        if (!ownership[stateIndex(transition.getSourceAttr())])
+          continue;
+        EventOp event = lookupChild<EventOp>(*this, transition.getEventAttr());
+        if (event.getAction() == "offer" && !offerPayload)
+          offerPayload = event.getPayload();
       }
-      if (!found)
+      if (!offerPayload)
         return correlation.emitOpError()
                << "correlation field '" << field.getValue()
-               << "' does not resolve in any event payload";
+               << "' requires a reachable offer event";
+      for (TransitionOp transition : transitions) {
+        if (!ownership[stateIndex(transition.getSourceAttr())])
+          continue;
+        EventOp event = lookupChild<EventOp>(*this, transition.getEventAttr());
+        if (event.getAction() != "offer" && event.getAction() != "response")
+          continue;
+        if (event.getPayload() != offerPayload)
+          return correlation.emitOpError(
+              "reachable offer and response events must use the same "
+              "correlation payload type");
+        Operation *declaration = recordDecl(event, event.getPayload());
+        if (!declaration || !findField(declaration, field.getValue()))
+          return correlation.emitOpError()
+                 << "correlation field '" << field.getValue()
+                 << "' is missing from reachable offer/response payload";
+      }
     }
   }
   return success();
@@ -751,11 +935,25 @@ LogicalResult TransitionOp::verify() {
   if (auto priority = getPriority(); priority && *priority > INT64_MAX)
     return emitOpError("transition priority must be a non-negative i64 value");
   WalkResult result = getGuard().walk([&](Operation *operation) {
-    if (isMemoryEffectFree(operation))
-      return WalkResult::advance();
-    emitOpError() << "protocol guard must be pure; found "
-                  << operation->getName();
-    return WalkResult::interrupt();
+    if (!isAllowedGuardExpression(operation)) {
+      emitOpError() << "guard operation '" << operation->getName()
+                    << "' is not in the pure expression allowlist";
+      return WalkResult::interrupt();
+    }
+    auto effects = dyn_cast<MemoryEffectOpInterface>(operation);
+    if (!effects) {
+      emitOpError() << "allowed guard operation '" << operation->getName()
+                    << "' must implement MemoryEffectOpInterface";
+      return WalkResult::interrupt();
+    }
+    SmallVector<MemoryEffects::EffectInstance> instances;
+    effects.getEffects(instances);
+    if (!instances.empty()) {
+      emitOpError() << "allowed guard operation '" << operation->getName()
+                    << "' must have no memory effects";
+      return WalkResult::interrupt();
+    }
+    return WalkResult::advance();
   });
   if (result.wasInterrupted())
     return failure();
@@ -826,26 +1024,36 @@ LogicalResult PortOp::verify() {
   if (!protocol)
     return emitOpError() << "unresolved channel protocol '@"
                          << channel.getProtocol().getValue() << "'";
-  for (EventOp event : protocol.getBody().getOps<EventOp>())
-    if (event.getPayload() != channel.getElementType())
-      return emitOpError() << "channel payload " << channel.getElementType()
-                           << " does not match protocol event '@"
-                           << event.getSymName() << "' payload "
-                           << event.getPayload();
+  if (!matchesCarrierEvent(protocol, channel.getElementType(), getFromAttr(),
+                           getToAttr()))
+    return emitOpError() << "channel payload " << channel.getElementType()
+                         << " from '@" << getFromAttr().getValue() << "' to '@"
+                         << getToAttr().getValue()
+                         << "' does not match any carrier event in protocol '@"
+                         << channel.getProtocol().getValue() << "'";
   return success();
 }
 
 LogicalResult verifyTopologyTypeUses(Operation *operation) {
   auto verifyType = [&](Type type, Value value) -> LogicalResult {
+    if (Type nested = findNestedTopologyLeaf(type))
+      return operation->emitOpError() << "topology type " << nested
+                                      << " cannot be nested inside " << type;
     if (auto flow = dyn_cast<FlowType>(type)) {
       if (!isProtocolPayloadType(flow.getElementType()))
         return operation->emitOpError(
             "flow payload type must be a normative ACIR value type");
       if (failed(verifyNamedTypes(operation, flow.getElementType())))
         return failure();
-      if (!lookupProtocol(operation, flow.getProtocol()))
+      ProtocolOp protocol = lookupProtocol(operation, flow.getProtocol());
+      if (!protocol)
         return operation->emitOpError() << "unresolved flow protocol '@"
                                         << flow.getProtocol().getValue() << "'";
+      if (!matchesCarrierEvent(protocol, flow.getElementType()))
+        return operation->emitOpError()
+               << "flow payload " << flow.getElementType()
+               << " does not match any carrier event in protocol '@"
+               << flow.getProtocol().getValue() << "'";
       if (value && !value.hasOneUse() && !value.use_empty())
         return operation->emitOpError(
             "flow value has more than one functional use");
@@ -874,14 +1082,46 @@ LogicalResult verifyTopologyTypeUses(Operation *operation) {
     return success();
   };
 
+  auto verifyAttribute = [&](Attribute attribute) -> LogicalResult {
+    if (!attribute)
+      return success();
+    LogicalResult result = success();
+    attribute.walk([&](TypeAttr type) {
+      if (failed(verifyType(type.getValue(), {}))) {
+        result = failure();
+        return WalkResult::interrupt();
+      }
+      return WalkResult::advance();
+    });
+    if (failed(result))
+      return failure();
+    attribute.walk([&](Type type) {
+      if (failed(verifyType(type, {}))) {
+        result = failure();
+        return WalkResult::interrupt();
+      }
+      return WalkResult::advance();
+    });
+    return result;
+  };
+
   for (Value result : operation->getResults())
     if (failed(verifyType(result.getType(), result)))
+      return failure();
+  for (OpOperand &operand : operation->getOpOperands())
+    if (failed(verifyType(operand.get().getType(), operand.get())))
       return failure();
   for (Region &region : operation->getRegions())
     for (Block &block : region)
       for (BlockArgument argument : block.getArguments())
         if (failed(verifyType(argument.getType(), argument)))
           return failure();
+  for (NamedAttribute attribute : operation->getAttrs())
+    if (failed(verifyAttribute(attribute.getValue())))
+      return failure();
+  if (failed(verifyAttribute(operation->getPropertiesAsAttribute())) ||
+      failed(verifyAttribute(LocationAttr(operation->getLoc()))))
+    return failure();
   return success();
 }
 
