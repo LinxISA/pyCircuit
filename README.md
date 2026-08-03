@@ -1,13 +1,27 @@
 # Agentic Circuit
 
-Agentic Circuit is a proposed Python and MLIR-based architecture construction
-system that generates a structured, pure C++ graph-flow simulator named
-`gfsim`.
+Agentic Circuit is a Python and MLIR-based architecture construction system
+that generates a structured, pure C++ graph-flow simulator named `gfsim`.
+Its public v0.1 contracts use exact global contract epoch `0.1`.
 
-The project is currently in specification phase. No implementation contract is
-approved yet.
+## Development baseline
 
-The current design is [Agentic Circuit v0.1](docs/superpowers/specs/2026-08-03-acir-v0.1-design.md).
+The repository is locked to LLVM/MLIR 22.1.8. On Apple Silicon, the default
+prefix is `/opt/homebrew/opt/llvm`. On another supported host, pass the
+equivalent package explicitly with
+`-DMLIR_DIR=/path/to/llvm/lib/cmake/mlir`.
+
+```sh
+scripts/bootstrap-dev.sh
+source .venv/bin/activate
+python -m unittest tests.contracts.test_contracts -v
+cmake --preset dev-llvm22
+cmake --build --preset dev-llvm22
+```
+
+Use `release-llvm22` for a release configuration. The exact upstream release,
+commit, archive digest, supported host triples, and version policy are recorded
+in `toolchains/llvm.lock.json`.
 
 Normative specifications:
 
@@ -30,3 +44,10 @@ Canonical machine-readable schemas:
 - [Run manifest](schemas/run-manifest.schema.json)
 - [Run result](schemas/run-result.schema.json)
 - [Diagnostic](schemas/diagnostic.schema.json)
+
+## Project policies
+
+Contributions are accepted under the [Apache License 2.0](LICENSE). See
+[Contributing](CONTRIBUTING.md), the [Code of Conduct](CODE_OF_CONDUCT.md),
+[Security policy](SECURITY.md), and [Support policy](SUPPORT.md) before opening
+a change or report.

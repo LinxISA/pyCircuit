@@ -1,0 +1,72 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  contracts-and-configure:
+    runs-on: ubuntu-24.04
+    env:
+      LLVM_RELEASE: "22.1.8"
+      LLVM_SOURCE_SHA256: "922f1817a0df7b1489272d18134ee0087a8b068828f87ac63b9861b1a9965888"
+      LLVM_SOURCE_URL: "https://github.com/llvm/llvm-project/releases/download/llvmorg-22.1.8/llvm-project-22.1.8.src.tar.xz"
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+
+      - name: Set up Python
+        uses: actions/setup-python@42375524e23c412d93fb67b49958b491fce71c38
+        with:
+          python-version: "3.12"
+          cache: "pip"
+          cache-dependency-path: requirements-dev.lock
+
+      - name: Install locked development requirements
+        run: python -m pip install --disable-pip-version-check -r requirements-dev.lock
+
+      - name: Run repository contracts
+        run: python -m unittest tests.contracts.test_contracts -v
+
+      - name: Cache content-addressed LLVM build
+        id: llvm-cache
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684
+        with:
+          path: |
+            .cache/llvm-project-22.1.8.src.tar.xz
+            .cache/llvm-project-22.1.8.src
+            .cache/llvm-build
+          key: llvm-${{ runner.os }}-${{ runner.arch }}-${{ env.LLVM_SOURCE_SHA256 }}-${{ hashFiles('toolchains/llvm.lock.json') }}
+
+      - name: Fetch and verify locked LLVM source
+        if: steps.llvm-cache.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p .cache
+          curl --fail --location --proto '=https' --tlsv1.2 \
+            --output .cache/llvm-project-${LLVM_RELEASE}.src.tar.xz \
+            "${LLVM_SOURCE_URL}"
+          echo "${LLVM_SOURCE_SHA256}  .cache/llvm-project-${LLVM_RELEASE}.src.tar.xz" | sha256sum --check --strict
+          tar -C .cache -xf .cache/llvm-project-${LLVM_RELEASE}.src.tar.xz
+
+      - name: Build locked MLIR package
+        if: steps.llvm-cache.outputs.cache-hit != 'true'
+        run: |
+          cmake -S .cache/llvm-project-${LLVM_RELEASE}.src/llvm -B .cache/llvm-build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DLLVM_ENABLE_PROJECTS=mlir \
+            -DLLVM_TARGETS_TO_BUILD=Native \
+            -DLLVM_INCLUDE_TESTS=OFF \
+            -DLLVM_INCLUDE_BENCHMARKS=OFF \
+            -DLLVM_INCLUDE_EXAMPLES=OFF
+          cmake --build .cache/llvm-build --target mlir-opt
+
+      - name: Configure development preset
+        env:
+          LLVM_PREFIX: "${{ github.workspace }}/.cache/llvm-build"
+        run: cmake --preset dev-llvm22 -DMLIR_DIR="${LLVM_PREFIX}/lib/cmake/mlir"
+
+      - name: Check whitespace
+        run: git diff --check

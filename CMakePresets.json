@@ -1,0 +1,54 @@
+{
+  "version": 7,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 25,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "llvm22-base",
+      "hidden": true,
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "cacheVariables": {
+        "CMAKE_EXPORT_COMPILE_COMMANDS": true,
+        "MLIR_DIR": "$env{LLVM_PREFIX}/lib/cmake/mlir"
+      }
+    },
+    {
+      "name": "dev-llvm22",
+      "displayName": "Development with LLVM 22.1.8",
+      "inherits": "llvm22-base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "ACIR_ENABLE_ASSERTIONS": true
+      },
+      "environment": {
+        "LLVM_PREFIX": "/opt/homebrew/opt/llvm"
+      }
+    },
+    {
+      "name": "release-llvm22",
+      "displayName": "Release with LLVM 22.1.8",
+      "inherits": "llvm22-base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "ACIR_ENABLE_ASSERTIONS": false
+      },
+      "environment": {
+        "LLVM_PREFIX": "/opt/homebrew/opt/llvm"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "dev-llvm22",
+      "configurePreset": "dev-llvm22"
+    },
+    {
+      "name": "release-llvm22",
+      "configurePreset": "release-llvm22"
+    }
+  ]
+}

@@ -1,0 +1,17 @@
+[project]
+name = "agentic-circuit"
+version = "0.1.0"
+description = "IR-first architecture construction and graph-flow simulation"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "Apache-2.0"
+authors = [{ name = "Agentic Circuit contributors" }]
+dependencies = []
+
+[project.urls]
+Repository = "https://github.com/PTO-ISA/agentic-circuit"
+Issues = "https://github.com/PTO-ISA/agentic-circuit/issues"
+
+[tool.agentic-circuit]
+contract-epoch = "0.1"
+llvm-release = "22.1.8"
