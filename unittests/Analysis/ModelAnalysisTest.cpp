@@ -1,12 +1,16 @@
 #include "acir/Analysis/ModelAnalysis.h"
+#include "Analysis/ModelAnalysisInternal.h"
 #include "Analysis/ModelAnalysisTestHooks.h"
 #include "acir/Dialect/ACIR/ACIROps.h"
 #include "acir/Dialect/ACIR/GraphRegion.h"
 #include "acir/InitAllDialects.h"
 #include "acir/Transforms/Passes.h"
 
+#include "mlir/Bytecode/BytecodeWriter.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/Diagnostics.h"
+#include "mlir/IR/OperationSupport.h"
 #include "mlir/Parser/Parser.h"
 #include "mlir/Pass/PassManager.h"
 #include "gtest/gtest.h"
@@ -141,6 +145,37 @@ std::string runFreeze(MLIRContext &context, mlir::ModuleOp model) {
   return diagnostic;
 }
 
+std::string moduleText(mlir::ModuleOp model) {
+  std::string storage;
+  llvm::raw_string_ostream stream(storage);
+  model.print(stream);
+  return storage;
+}
+
+std::string moduleBytecode(mlir::ModuleOp model) {
+  std::string storage;
+  llvm::raw_string_ostream stream(storage);
+  if (failed(writeBytecodeToFile(model, stream)))
+    return {};
+  return storage;
+}
+
+std::string runCanonicalize(MLIRContext &context, mlir::ModuleOp model) {
+  std::string diagnostic;
+  ScopedDiagnosticHandler handler(&context, [&](Diagnostic &value) {
+    llvm::raw_string_ostream(diagnostic) << value;
+    return success();
+  });
+  if (succeeded(canonicalizeModel(model)))
+    return "canonicalization unexpectedly succeeded";
+  return diagnostic;
+}
+
+void makeTopLevelNoncanonical(mlir::ModuleOp model) {
+  ac::ModuleOp graph = *model.getOps<ac::ModuleOp>().begin();
+  graph->moveBefore(&model.getBody()->front());
+}
+
 std::string
 verifyAfterMutation(MLIRContext &context,
                     const std::function<void(mlir::ModuleOp)> &mutate) {
@@ -254,6 +289,129 @@ OwningOpRef<mlir::ModuleOp> makeDeepProcessModel(MLIRContext &context,
     current = arith::XOrIOp::create(builder, loc, current, constant);
   WaitUntilOp::create(builder, loc, current);
   return model;
+}
+
+OwningOpRef<mlir::ModuleOp> makeNestedScfModel(MLIRContext &context,
+                                               uint64_t scfDepth) {
+  context.loadDialect<arith::ArithDialect, scf::SCFDialect>();
+  auto model = parseSourceString<mlir::ModuleOp>(R"mlir(
+    builtin.module attributes {ac.contract_epoch = "0.1"} {
+      ac.system @soc root @Top as "root" tick 0 "cycle"
+          workload @Top::@workload seed {kind = "fixed", value = 0 : i64}
+          instrumentation [] results {id = "default", format = "json"}
+          selected true
+      ac.module @Top() parameters {} graph {
+        ac.process @workload kind "workload" { ac.yield_sim }
+        ac.return
+      }
+    }
+  )mlir",
+                                                 &context);
+  if (!model)
+    return {};
+  ProcessOp process = one<ProcessOp>(*model);
+  Operation *processYield = &process.getBody().front().front();
+  OpBuilder builder(processYield);
+  Location loc = builder.getUnknownLoc();
+  Value condition =
+      arith::ConstantOp::create(builder, loc, builder.getBoolAttr(true));
+  for (uint64_t index = 0; index < scfDepth; ++index) {
+    auto branch = scf::IfOp::create(builder, loc, condition,
+                                    /*withElseRegion=*/false);
+    builder.setInsertionPoint(branch.getThenRegion().front().getTerminator());
+  }
+  AssertOp::create(builder, loc, condition, "nested effect");
+  return model;
+}
+
+class RawNestedRegionModel {
+public:
+  RawNestedRegionModel(MLIRContext &context, uint64_t depth)
+      : model(mlir::ModuleOp::create(UnknownLoc::get(&context))) {
+    context.allowUnregisteredDialects();
+    OpBuilder builder(&context);
+    (*model)->setAttr("ac.contract_epoch", builder.getStringAttr("0.1"));
+    Block *block = model->getBody();
+    for (uint64_t index = 0; index < depth; ++index) {
+      OperationState state(UnknownLoc::get(&context), "test.nested");
+      state.addRegion();
+      Operation *operation = Operation::create(state);
+      block->push_back(operation);
+      operations.push_back(operation);
+      block = &operation->getRegion(0).emplaceBlock();
+    }
+  }
+
+  ~RawNestedRegionModel() {
+    for (Operation *operation : llvm::reverse(operations)) {
+      operation->remove();
+      operation->destroy();
+    }
+  }
+
+  RawNestedRegionModel(const RawNestedRegionModel &) = delete;
+  RawNestedRegionModel &operator=(const RawNestedRegionModel &) = delete;
+
+  mlir::ModuleOp get() const { return *model; }
+
+private:
+  OwningOpRef<mlir::ModuleOp> model;
+  SmallVector<Operation *> operations;
+};
+
+OwningOpRef<mlir::ModuleOp> makeRawEmptyRegionModel(MLIRContext &context,
+                                                    bool addEmptyBlock) {
+  context.allowUnregisteredDialects();
+  auto model = mlir::ModuleOp::create(UnknownLoc::get(&context));
+  OperationState state(UnknownLoc::get(&context), "test.malformed_region");
+  state.addRegion();
+  Operation *operation = Operation::create(state);
+  model.getBody()->push_back(operation);
+  if (addEmptyBlock)
+    operation->getRegion(0).emplaceBlock();
+  return OwningOpRef<mlir::ModuleOp>(model);
+}
+
+enum class ModelEntryPath { Verify, Canonicalize, Freeze };
+
+const char *entryPathName(ModelEntryPath path) {
+  switch (path) {
+  case ModelEntryPath::Verify:
+    return "verify";
+  case ModelEntryPath::Canonicalize:
+    return "canonicalize";
+  case ModelEntryPath::Freeze:
+    return "freeze";
+  }
+  llvm_unreachable("unknown model entry path");
+}
+
+LogicalResult invokeModelEntry(MLIRContext &context, mlir::ModuleOp model,
+                               ModelEntryPath path) {
+  switch (path) {
+  case ModelEntryPath::Verify:
+    return verifyModel(model);
+  case ModelEntryPath::Canonicalize:
+    return canonicalizeModel(model);
+  case ModelEntryPath::Freeze: {
+    PassManager manager(&context);
+    manager.addPass(createFreezeTopologyPass());
+    return manager.run(model);
+  }
+  }
+  llvm_unreachable("unknown model entry path");
+}
+
+std::string runModelEntry(MLIRContext &context, mlir::ModuleOp model,
+                          ModelEntryPath path) {
+  std::string diagnostic;
+  ScopedDiagnosticHandler handler(&context, [&](Diagnostic &value) {
+    llvm::raw_string_ostream(diagnostic) << value;
+    return success();
+  });
+  if (succeeded(invokeModelEntry(context, model, path)))
+    return "model entry unexpectedly succeeded";
+  return diagnostic;
 }
 
 TEST(ModelAnalysisTest, FrozenProcessSkeletonRejectsEffectSemanticMutation) {
@@ -407,6 +565,113 @@ TEST(ModelAnalysisTest, FrozenMutationCannotBeResealedThroughPublicRoutes) {
   EXPECT_NE(
       runFreeze(context, *partial).find("malformed topology freeze marker"),
       std::string::npos);
+}
+
+TEST(ModelAnalysisTest,
+     CanonicalizationVerifiesEveryFreezeEvidenceFormBeforeWriting) {
+  DialectRegistry registry;
+  registerAllDialects(registry);
+  MLIRContext context(registry);
+  OwningOpRef<mlir::ModuleOp> frozen = parseAndFreeze(context, kProcessModel);
+  ASSERT_TRUE(frozen);
+
+  std::string validBefore = moduleText(*frozen);
+  std::string validBytecodeBefore = moduleBytecode(*frozen);
+  ASSERT_FALSE(validBytecodeBefore.empty());
+  EXPECT_TRUE(succeeded(canonicalizeModel(*frozen)));
+  EXPECT_EQ(moduleText(*frozen), validBefore);
+  EXPECT_EQ(moduleBytecode(*frozen), validBytecodeBefore);
+
+  enum class Evidence {
+    Full,
+    MissingMarker,
+    NestedOnly,
+    PartialEpoch,
+    PartialDigest,
+  };
+  struct Case {
+    const char *name;
+    Evidence evidence;
+    bool retarget;
+    const char *diagnostic;
+  };
+  const Case cases[] = {
+      {"full retarget", Evidence::Full, true,
+       "frozen process skeleton mismatch"},
+      {"marker removed", Evidence::MissingMarker, false,
+       "malformed topology freeze marker"},
+      {"marker removed retarget", Evidence::MissingMarker, true,
+       "malformed topology freeze marker"},
+      {"nested evidence only", Evidence::NestedOnly, false,
+       "malformed topology freeze marker"},
+      {"nested evidence only retarget", Evidence::NestedOnly, true,
+       "malformed topology freeze marker"},
+      {"partial epoch", Evidence::PartialEpoch, false,
+       "malformed topology freeze marker"},
+      {"partial epoch retarget", Evidence::PartialEpoch, true,
+       "malformed topology freeze marker"},
+      {"partial digest", Evidence::PartialDigest, false,
+       "malformed topology freeze marker"},
+      {"partial digest retarget", Evidence::PartialDigest, true,
+       "malformed topology freeze marker"},
+  };
+
+  auto buildCase = [&](const Case &testCase) {
+    OwningOpRef<mlir::ModuleOp> model;
+    if (testCase.evidence == Evidence::PartialEpoch ||
+        testCase.evidence == Evidence::PartialDigest) {
+      model = parseSourceString<mlir::ModuleOp>(kProcessModel, &context);
+      if (!model)
+        return model;
+      if (testCase.evidence == Evidence::PartialEpoch)
+        (*model)->setAttr("ac.freeze_epoch", StringAttr::get(&context, "0.1"));
+      else
+        (*model)->setAttr("ac.topology_digest",
+                          StringAttr::get(&context, std::string(64, '0')));
+    } else {
+      model =
+          OwningOpRef<mlir::ModuleOp>(cast<mlir::ModuleOp>(frozen->clone()));
+      if (testCase.evidence == Evidence::MissingMarker)
+        (*model)->removeAttr("ac.topology_frozen");
+      if (testCase.evidence == Evidence::NestedOnly)
+        for (StringRef name :
+             {"ac.freeze_epoch", "ac.frozen_system", "ac.frozen_owners",
+              "ac.frozen_primary_workload", "ac.frozen_instrumentation",
+              "ac.topology_frozen", "ac.topology_digest"})
+          (*model)->removeAttr(name);
+    }
+    if (testCase.retarget)
+      one<TrySendOp>(*model).setQueueAttr(
+          FlatSymbolRefAttr::get(&context, "q1"));
+    makeTopLevelNoncanonical(*model);
+    return model;
+  };
+
+  for (const Case &testCase : cases) {
+    OwningOpRef<mlir::ModuleOp> model = buildCase(testCase);
+    ASSERT_TRUE(model) << testCase.name;
+    std::string before = moduleText(*model);
+    std::string bytecodeBefore = moduleBytecode(*model);
+    ASSERT_FALSE(bytecodeBefore.empty()) << testCase.name;
+    std::string diagnostic = runCanonicalize(context, *model);
+    EXPECT_NE(diagnostic.find(testCase.diagnostic), std::string::npos)
+        << testCase.name << ": " << diagnostic;
+    EXPECT_EQ(moduleText(*model), before) << testCase.name;
+    EXPECT_EQ(moduleBytecode(*model), bytecodeBefore) << testCase.name;
+  }
+}
+
+TEST(ModelAnalysisTest, UnfrozenCanonicalizationRemainsDeterministic) {
+  DialectRegistry registry;
+  registerAllDialects(registry);
+  MLIRContext context(registry);
+  OwningOpRef<mlir::ModuleOp> model =
+      parseSourceString<mlir::ModuleOp>(kProcessModel, &context);
+  ASSERT_TRUE(model);
+  EXPECT_TRUE(succeeded(canonicalizeModel(*model)));
+  std::string first = moduleText(*model);
+  EXPECT_TRUE(succeeded(canonicalizeModel(*model)));
+  EXPECT_EQ(moduleText(*model), first);
 }
 
 TEST(ModelAnalysisTest, FrozenDigestCommitsNestedGuardParentage) {
@@ -633,6 +898,85 @@ TEST(ModelAnalysisTest, DeepProcessDependencyChainsFreezeWithoutStackGrowth) {
     PassManager manager(&context);
     manager.addPass(createFreezeTopologyPass());
     EXPECT_TRUE(succeeded(manager.run(*model))) << depth;
+  }
+}
+
+TEST(ModelAnalysisTest, ModelEntryPathsAcceptExactRegionNestingLimit) {
+  DialectRegistry registry;
+  registerAllDialects(registry);
+  MLIRContext context(registry);
+  constexpr uint64_t scfDepthAtLimit = 509;
+  for (ModelEntryPath path :
+       {ModelEntryPath::Verify, ModelEntryPath::Canonicalize,
+        ModelEntryPath::Freeze}) {
+    OwningOpRef<mlir::ModuleOp> model =
+        makeNestedScfModel(context, scfDepthAtLimit);
+    ASSERT_TRUE(model) << entryPathName(path);
+    std::string diagnostic;
+    ScopedDiagnosticHandler handler(&context, [&](Diagnostic &value) {
+      llvm::raw_string_ostream(diagnostic) << value;
+      return success();
+    });
+    EXPECT_TRUE(succeeded(invokeModelEntry(context, *model, path)))
+        << entryPathName(path) << ": " << diagnostic;
+  }
+}
+
+TEST(ModelAnalysisTest,
+     ModelEntryPathsRejectRegionNestingLimitPlusOneDeterministically) {
+  DialectRegistry registry;
+  registerAllDialects(registry);
+  MLIRContext context(registry);
+  constexpr uint64_t scfDepthOverLimit = 510;
+  constexpr StringLiteral expected =
+      "whole-model region nesting exceeds ACIR v0.1 capability limit 512";
+  std::string firstDiagnostic;
+  for (ModelEntryPath path :
+       {ModelEntryPath::Verify, ModelEntryPath::Canonicalize,
+        ModelEntryPath::Freeze}) {
+    OwningOpRef<mlir::ModuleOp> model =
+        makeNestedScfModel(context, scfDepthOverLimit);
+    ASSERT_TRUE(model) << entryPathName(path);
+    std::string diagnostic = runModelEntry(context, *model, path);
+    EXPECT_EQ(diagnostic, expected.str()) << entryPathName(path);
+    if (firstDiagnostic.empty())
+      firstDiagnostic = diagnostic;
+    else
+      EXPECT_EQ(diagnostic, firstDiagnostic) << entryPathName(path);
+  }
+}
+
+TEST(ModelAnalysisTest,
+     HostileRawRegionNestingRejectsWithoutStackGrowthOnEveryEntryPath) {
+  DialectRegistry registry;
+  registerAllDialects(registry);
+  MLIRContext context(registry);
+  constexpr StringLiteral expected =
+      "whole-model region nesting exceeds ACIR v0.1 capability limit 512";
+  std::string firstDiagnostic;
+  for (ModelEntryPath path :
+       {ModelEntryPath::Verify, ModelEntryPath::Canonicalize,
+        ModelEntryPath::Freeze}) {
+    RawNestedRegionModel model(context, 10000);
+    std::string diagnostic = runModelEntry(context, model.get(), path);
+    EXPECT_EQ(diagnostic, expected.str()) << entryPathName(path);
+    if (firstDiagnostic.empty())
+      firstDiagnostic = diagnostic;
+    else
+      EXPECT_EQ(diagnostic, firstDiagnostic) << entryPathName(path);
+  }
+}
+
+TEST(ModelAnalysisTest, StructuralPreflightHandlesEmptyRegionsAndBlocks) {
+  DialectRegistry registry;
+  registerAllDialects(registry);
+  MLIRContext context(registry);
+  for (bool addEmptyBlock : {false, true}) {
+    OwningOpRef<mlir::ModuleOp> model =
+        makeRawEmptyRegionModel(context, addEmptyBlock);
+    ASSERT_TRUE(model);
+    EXPECT_TRUE(succeeded(::acir::detail::preflightModelStructure(*model)))
+        << "add_empty_block=" << addEmptyBlock;
   }
 }
 

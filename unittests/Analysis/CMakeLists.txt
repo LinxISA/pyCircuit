@@ -10,6 +10,7 @@ target_link_libraries(ACIRModelAnalysisTests PRIVATE
   ACIRTransforms
   ACSimDialect
   MLIRAsmParser
+  MLIRBytecodeWriter
   MLIRFuncDialect
   MLIRIndexDialect
   MLIRIR

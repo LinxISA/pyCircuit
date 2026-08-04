@@ -11,6 +11,8 @@ namespace acir {
 /// make the whole-model analyses independent of allocator failure behavior.
 inline constexpr uint64_t kMaxModelAnalysisNodes = 1U << 20;
 inline constexpr uint64_t kMaxModelAnalysisEdges = 1U << 22;
+/// The top-level builtin.module has depth 0; each contained operation adds 1.
+inline constexpr uint64_t kMaxModelRegionNesting = 512;
 inline constexpr uint64_t kMaxPureCallFunctions = 1U << 16;
 inline constexpr uint64_t kMaxPureCallEdges = 1U << 18;
 inline constexpr uint64_t kMaxPureCallDepth = 1024;

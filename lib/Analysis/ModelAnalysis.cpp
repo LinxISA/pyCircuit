@@ -202,13 +202,7 @@ public:
       : process(process), builder(process.getContext()) {}
 
   FailureOr<ArrayAttr> run() {
-    WalkResult seeds = process.getBody().walk([&](Operation *operation) {
-      if (isProcessSkeletonOperation(operation) &&
-          failed(enqueue(operation, operation, /*dependency=*/false)))
-        return WalkResult::interrupt();
-      return WalkResult::advance();
-    });
-    if (seeds.wasInterrupted())
+    if (failed(enqueueSeeds()))
       return failure();
 
     for (size_t cursor = 0; cursor < worklist.size(); ++cursor) {
@@ -231,12 +225,48 @@ public:
             return failure();
     }
 
-    indexRegion(process.getBody(), "process/r0");
-    serializeRegion(process.getBody());
+    indexRegions();
+    serializeRegions();
     return builder.getArrayAttr(entries);
   }
 
 private:
+  LogicalResult enqueueSeeds() {
+    struct TraversalTask {
+      Operation *operation;
+      bool expanded;
+    };
+
+    SmallVector<Operation *> roots;
+    for (Block &block : process.getBody())
+      for (Operation &operation : block)
+        roots.push_back(&operation);
+    SmallVector<TraversalTask> pending;
+    for (Operation *operation : llvm::reverse(roots))
+      pending.push_back({operation, false});
+
+    while (!pending.empty()) {
+      TraversalTask task = pending.pop_back_val();
+      if (task.expanded) {
+        if (isProcessSkeletonOperation(task.operation) &&
+            failed(enqueue(task.operation, task.operation,
+                           /*dependency=*/false)))
+          return failure();
+        continue;
+      }
+
+      pending.push_back({task.operation, true});
+      SmallVector<Operation *> children;
+      for (Region &region : task.operation->getRegions())
+        for (Block &block : region)
+          for (Operation &child : block)
+            children.push_back(&child);
+      for (Operation *child : llvm::reverse(children))
+        pending.push_back({child, false});
+    }
+    return success();
+  }
+
   bool isInsideProcess(Operation *operation) {
     return operation && operation != process.getOperation() &&
            operation->getParentOfType<ac::ProcessOp>() == process;
@@ -268,40 +298,68 @@ private:
     return success();
   }
 
-  void indexRegion(Region &region, StringRef regionPath) {
-    for (auto [blockIndex, block] : llvm::enumerate(region)) {
-      std::string blockPath =
-          (regionPath + "/b" + llvm::Twine(blockIndex)).str();
-      for (auto [argumentIndex, argument] :
-           llvm::enumerate(block.getArguments()))
-        valueIds[argument] =
-            (blockPath + "/a" + llvm::Twine(argumentIndex)).str();
-      unsigned operationIndex = 0;
-      for (Operation &operation : block) {
-        if (!included.contains(&operation))
-          continue;
-        std::string path =
-            (blockPath + "/o" + llvm::Twine(operationIndex++)).str();
-        operationPaths[&operation] = path;
-        for (auto [resultIndex, result] :
-             llvm::enumerate(operation.getResults()))
-          valueIds[result] = (path + "/v" + llvm::Twine(resultIndex)).str();
-        for (auto [regionIndex, nested] :
-             llvm::enumerate(operation.getRegions()))
-          indexRegion(nested, (path + "/r" + llvm::Twine(regionIndex)).str());
+  void indexRegions() {
+    struct RegionTask {
+      Region *region;
+      std::string path;
+    };
+
+    SmallVector<RegionTask> pending{{&process.getBody(), "process/r0"}};
+    while (!pending.empty()) {
+      RegionTask task = pending.pop_back_val();
+      SmallVector<RegionTask> nestedRegions;
+      for (auto [blockIndex, block] : llvm::enumerate(*task.region)) {
+        std::string blockPath =
+            (task.path + "/b" + llvm::Twine(blockIndex)).str();
+        for (auto [argumentIndex, argument] :
+             llvm::enumerate(block.getArguments()))
+          valueIds[argument] =
+              (blockPath + "/a" + llvm::Twine(argumentIndex)).str();
+        unsigned operationIndex = 0;
+        for (Operation &operation : block) {
+          if (!included.contains(&operation))
+            continue;
+          std::string path =
+              (blockPath + "/o" + llvm::Twine(operationIndex++)).str();
+          operationPaths[&operation] = path;
+          for (auto [resultIndex, result] :
+               llvm::enumerate(operation.getResults()))
+            valueIds[result] = (path + "/v" + llvm::Twine(resultIndex)).str();
+          for (auto [regionIndex, nested] :
+               llvm::enumerate(operation.getRegions()))
+            nestedRegions.push_back(
+                {&nested, (path + "/r" + llvm::Twine(regionIndex)).str()});
+        }
       }
+      for (RegionTask &nested : llvm::reverse(nestedRegions))
+        pending.push_back(std::move(nested));
     }
   }
 
-  void serializeRegion(Region &region) {
-    for (Block &block : region) {
-      for (Operation &operation : block) {
-        if (!included.contains(&operation))
-          continue;
-        serializeOperation(&operation, operationPaths.lookup(&operation));
-        for (Region &nested : operation.getRegions())
-          serializeRegion(nested);
+  void serializeRegions() {
+    struct SerializationTask {
+      Region *region = nullptr;
+      Operation *operation = nullptr;
+    };
+
+    SmallVector<SerializationTask> pending{{&process.getBody(), nullptr}};
+    while (!pending.empty()) {
+      SerializationTask task = pending.pop_back_val();
+      if (task.operation) {
+        serializeOperation(task.operation,
+                           operationPaths.lookup(task.operation));
+        for (Region &nested : llvm::reverse(task.operation->getRegions()))
+          pending.push_back({&nested, nullptr});
+        continue;
       }
+
+      SmallVector<Operation *> operations;
+      for (Block &block : *task.region)
+        for (Operation &operation : block)
+          if (included.contains(&operation))
+            operations.push_back(&operation);
+      for (Operation *operation : llvm::reverse(operations))
+        pending.push_back({nullptr, operation});
     }
   }
 
@@ -377,6 +435,78 @@ std::optional<bool> constantBoolean(Value value) {
 }
 
 } // namespace
+
+LogicalResult detail::preflightModelStructure(ModuleOp model) {
+  struct TraversalFrame {
+    Operation *operation;
+    uint64_t depth;
+    unsigned nextRegion = 0;
+    Region::iterator nextBlock;
+    Block::iterator nextOperation;
+    bool regionInitialized = false;
+    bool blockInitialized = false;
+  };
+
+  uint64_t nodes = 0;
+  uint64_t edges = 0;
+  auto checkOperation = [&](Operation *operation,
+                            uint64_t depth) -> LogicalResult {
+    if (depth > kMaxModelRegionNesting)
+      return mlir::emitError(model.getLoc())
+             << "whole-model region nesting exceeds ACIR v0.1 capability "
+                "limit "
+             << kMaxModelRegionNesting;
+    if (nodes == kMaxModelAnalysisNodes ||
+        operation->getNumOperands() > kMaxModelAnalysisEdges - edges)
+      return mlir::emitError(model.getLoc())
+             << "whole-model indexed analysis exceeds ACIR v0.1 capability "
+                "limits (nodes "
+             << kMaxModelAnalysisNodes << ", edges " << kMaxModelAnalysisEdges
+             << ')';
+    ++nodes;
+    edges += operation->getNumOperands();
+    return success();
+  };
+
+  if (failed(checkOperation(model.getOperation(), 0)))
+    return failure();
+  SmallVector<TraversalFrame> pending{{model.getOperation(), 0}};
+  while (!pending.empty()) {
+    TraversalFrame &frame = pending.back();
+    if (frame.nextRegion == frame.operation->getNumRegions()) {
+      pending.pop_back();
+      continue;
+    }
+
+    Region &region = frame.operation->getRegion(frame.nextRegion);
+    if (!frame.regionInitialized) {
+      frame.nextBlock = region.begin();
+      frame.regionInitialized = true;
+    }
+    if (frame.nextBlock == region.end()) {
+      ++frame.nextRegion;
+      frame.regionInitialized = false;
+      frame.blockInitialized = false;
+      continue;
+    }
+    if (!frame.blockInitialized) {
+      frame.nextOperation = frame.nextBlock->begin();
+      frame.blockInitialized = true;
+    }
+    if (frame.nextOperation == frame.nextBlock->end()) {
+      ++frame.nextBlock;
+      frame.blockInitialized = false;
+      continue;
+    }
+
+    Operation *child = &*frame.nextOperation++;
+    uint64_t childDepth = frame.depth + 1;
+    if (failed(checkOperation(child, childDepth)))
+      return failure();
+    pending.push_back({child, childDepth});
+  }
+  return success();
+}
 
 FailureOr<ArrayAttr> detail::buildFrozenProcessSkeleton(ac::ProcessOp process) {
   return ProcessSkeletonSerializer(process).run();
@@ -867,27 +997,14 @@ LogicalResult ModelAnalysis::verifyFrozenIntegrity() {
 }
 
 LogicalResult ModelAnalysis::verify() {
+  if (failed(detail::preflightModelStructure(model)))
+    return failure();
+
   auto epoch = model->getAttrOfType<StringAttr>("ac.contract_epoch");
   if (!epoch || epoch.getValue() != "0.1")
     return model.emitError(
         "expected top-level 'ac.contract_epoch' string attribute equal to "
         "\"0.1\"");
-
-  uint64_t nodes = 0;
-  uint64_t edges = 0;
-  WalkResult budget = model.walk([&](Operation *operation) {
-    if (++nodes > kMaxModelAnalysisNodes ||
-        operation->getNumOperands() > kMaxModelAnalysisEdges - edges)
-      return WalkResult::interrupt();
-    edges += operation->getNumOperands();
-    return WalkResult::advance();
-  });
-  if (budget.wasInterrupted())
-    return model.emitError()
-           << "whole-model indexed analysis exceeds ACIR v0.1 capability "
-              "limits (nodes "
-           << kMaxModelAnalysisNodes << ", edges " << kMaxModelAnalysisEdges
-           << ')';
 
   if (failed(verifyPureProcessCalls()))
     return failure();

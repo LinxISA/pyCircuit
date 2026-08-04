@@ -9,6 +9,9 @@
 
 namespace acir::detail {
 
+/// Checks whole-file structural budgets without recursive or typed IR access.
+mlir::LogicalResult preflightModelStructure(mlir::ModuleOp model);
+
 /// Returns whether any top-level or nested reserved freeze attribute exists.
 bool hasTopologyFreezeEvidence(mlir::ModuleOp model);
 

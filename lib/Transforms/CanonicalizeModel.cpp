@@ -1,5 +1,6 @@
 #include "acir/Transforms/Passes.h"
 
+#include "Analysis/ModelAnalysisInternal.h"
 #include "acir/Analysis/ModelAnalysis.h"
 #include "acir/Dialect/ACIR/ACIROps.h"
 #include "acir/Dialect/ACIR/ACIRResources.h"
@@ -122,9 +123,11 @@ LogicalResult sortBlock(Block &block, bool topologyFrozen,
 } // namespace
 
 LogicalResult canonicalizeModel(ModuleOp model) {
-  bool frozen = isTopologyFrozen(model);
-  if (frozen && failed(verifyModel(model)))
+  if (failed(detail::preflightModelStructure(model)))
     return failure();
+  if (detail::hasTopologyFreezeEvidence(model))
+    return verifyModel(model);
+  bool frozen = false;
   ac::normalizeAddressMaps(model);
   if (failed(sortBlock(*model.getBody(), frozen, topLevelRank)))
     return failure();

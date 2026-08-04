@@ -89,6 +89,8 @@ private:
 };
 
 LogicalResult freezeTopology(ModuleOp model) {
+  if (failed(detail::preflightModelStructure(model)))
+    return failure();
   if (detail::hasTopologyFreezeEvidence(model))
     return verifyModel(model);
   if (failed(canonicalizeModel(model)))
