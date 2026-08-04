@@ -568,6 +568,27 @@ The verifier rejects ambiguous overlap unless priority is explicit. Routing
 through a bus, crossbar, router, memory controller, or adapter remains an
 explicit typed module operand/result binding.
 
+For interleave granularity `g`, bank count `n`, and selected bank `b`, an entry
+selects the intersection of `[base, base + size)` with every half-open block
+`[q * g * n + g * b, q * g * n + g * b + g)` for each non-negative integer
+`q`. The entry base and size need not align to a complete stripe. The target
+offset MUST align to `g`, and target range verification MUST use the exact
+number of selected addresses, including partial first and last blocks and the
+`2^64` endpoint.
+
+The ACIR v0.1 verifier MUST bound general mixed-geometry selector analysis to
+256 unique eligible relations per address map. A relation is eligible only
+when its address ranges and permission/class selectors overlap and either
+priority is absent or both explicit priorities are equal. Different explicit
+priorities, equal interleave geometries, and selections that materialize as
+zero or one finite interval MUST NOT consume this budget. The verifier MUST
+deduplicate a pair reached through multiple selector keys, count against the
+canonical normalized entry set, saturate at 257, and complete this preflight
+before invoking general integer-relation analysis. If the count exceeds 256,
+the verifier MUST emit the fixed diagnostic
+`general mixed interleave analysis exceeds ACIR v0.1 limit 256`. This
+capability diagnostic MUST NOT depend on input entry order.
+
 ## Processes and control flow
 
 ### `ac.process`
@@ -791,6 +812,8 @@ An ACIR verifier MUST diagnose:
 - contested resources without arbitration ownership;
 - unbalanced resource reservation paths detectable statically;
 - ambiguous address-map overlap;
+- an address map that exceeds the 256-relation general mixed-interleave
+  verification capability;
 - address width or address-space mismatch;
 - incompatible or ambiguous units;
 - unresolved template or generator bindings;

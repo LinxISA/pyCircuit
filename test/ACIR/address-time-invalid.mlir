@@ -284,11 +284,11 @@ builtin.module attributes {ac.contract_epoch = "0.1"} {
 builtin.module attributes {ac.contract_epoch = "0.1"} {
   "ac.module"() <{sym_name = "M", function_type = () -> (), static_params = {}}> ({
     "ac.address_space"() <{sym_name = "a", stable_id = "a", path = "a", address_width = 16 : i64, address_unit = "byte"}> : () -> ()
-    "ac.address_map"() <{sym_name = "m", source = @a, entries = [{base = 0 : i64, size = 255 : i64, target = @a, offset = 0 : i64, permissions = ["read"], classes = [], interleave = {granularity = 64 : i64, banks = 4 : i64, bank = 0 : i64}}], default_behavior = {kind = "unmapped"}}> : () -> ()
+    "ac.address_map"() <{sym_name = "m", source = @a, entries = [{base = 0 : i64, size = 255 : i64, target = @a, offset = 0 : i64, permissions = ["read"], classes = [], interleave = {granularity = 2 : i64, banks = -1 : i64, bank = 0 : i64}}], default_behavior = {kind = "unmapped"}}> : () -> ()
     "ac.return"() : () -> ()
   }) : () -> ()
 }
-// INTERLEAVE-STRIPE: interleave base/size/offset must satisfy stripe alignment and geometry
+// INTERLEAVE-STRIPE: interleave geometry exceeds unsigned i64
 
 //--- default-target.mlir
 builtin.module attributes {ac.contract_epoch = "0.1"} {
@@ -452,7 +452,7 @@ builtin.module attributes {ac.contract_epoch = "0.1"} {
     "ac.return"() : () -> ()
   }) : () -> ()
 }
-// INTERLEAVE-ALIGNMENT: interleave base/size/offset must satisfy stripe alignment and geometry
+// INTERLEAVE-ALIGNMENT: interleave offset must be aligned to granularity
 
 //--- mixed-interleave-overlap.mlir
 builtin.module attributes {ac.contract_epoch = "0.1"} {

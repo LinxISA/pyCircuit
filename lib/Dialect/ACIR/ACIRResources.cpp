@@ -676,25 +676,29 @@ struct InterleaveGeometry {
   auto operator<=>(const InterleaveGeometry &) const = default;
 };
 
-struct LaneEndIndex {
-  std::multiset<WideAddress> wildcardEnds;
-  std::map<InterleaveGeometry, std::map<uint64_t, std::multiset<WideAddress>>>
-      lanes;
-};
-
-struct SelectorIndex {
-  LaneEndIndex allPriorities;
-  LaneEndIndex withoutPriority;
-  std::map<uint64_t, LaneEndIndex> byPriority;
-};
-
 struct MapEntry {
   AddressInterval interval;
   AddressMapOrderKey order;
   std::optional<uint64_t> priority;
   std::optional<InterleaveLane> lane;
+  std::optional<AddressInterval> concreteSelection;
+  bool generalSelection = false;
   SmallVector<std::string> registrationKeys;
   SmallVector<std::string> queryKeys;
+};
+
+template <typename Value> struct PriorityPartitions {
+  Value all;
+  Value withoutPriority;
+  std::map<uint64_t, Value> byPriority;
+};
+
+using EntrySet = std::set<const MapEntry *>;
+using EndPartitions = PriorityPartitions<std::multiset<WideAddress>>;
+
+struct GeneralCandidateIndex {
+  std::map<InterleaveGeometry, std::map<uint64_t, PriorityPartitions<EntrySet>>>
+      lanes;
 };
 
 void appendUnique(SmallVectorImpl<std::string> &keys, std::string key) {
@@ -772,6 +776,42 @@ bool interleaveSetsIntersect(const InterleaveLane &left,
   return !set.isIntegerEmpty();
 }
 
+WideAddress selectedPrefix(const InterleaveLane &lane, WideAddress end) {
+  WideAddress cycle = static_cast<WideAddress>(lane.granularity) * lane.banks;
+  WideAddress residue = static_cast<WideAddress>(lane.granularity) * lane.bank;
+  WideAddress cycles = end / cycle;
+  WideAddress remainder = end % cycle;
+  WideAddress partial = 0;
+  if (remainder > residue)
+    partial = std::min<WideAddress>(remainder - residue, lane.granularity);
+  return cycles * lane.granularity + partial;
+}
+
+bool laneIntersectsInterval(const InterleaveLane &lane, WideAddress begin,
+                            WideAddress end) {
+  return selectedPrefix(lane, end) != selectedPrefix(lane, begin);
+}
+
+std::optional<AddressInterval>
+materializeSingleSelection(const InterleaveLane &lane, AddressInterval range,
+                           bool &isGeneral) {
+  WideAddress cycle = static_cast<WideAddress>(lane.granularity) * lane.banks;
+  WideAddress residue = static_cast<WideAddress>(lane.granularity) * lane.bank;
+  WideAddress blockStart = (range.begin / cycle) * cycle + residue;
+  if (blockStart + lane.granularity <= range.begin)
+    blockStart += cycle;
+  WideAddress selectedBegin = std::max(range.begin, blockStart);
+  WideAddress selectedEnd = std::min(range.end, blockStart + lane.granularity);
+  if (selectedBegin >= selectedEnd) {
+    isGeneral = false;
+    return std::nullopt;
+  }
+  isGeneral = blockStart + cycle < range.end;
+  if (isGeneral)
+    return std::nullopt;
+  return AddressInterval{selectedBegin, selectedEnd};
+}
+
 void updateEnds(std::multiset<WideAddress> &ends, WideAddress end, bool add) {
   if (add) {
     ends.insert(end);
@@ -782,13 +822,27 @@ void updateEnds(std::multiset<WideAddress> &ends, WideAddress end, bool add) {
   ends.erase(found);
 }
 
-void updateLaneIndex(LaneEndIndex &index, const MapEntry &entry, bool add) {
-  std::multiset<WideAddress> *ends = &index.wildcardEnds;
-  if (entry.lane) {
-    InterleaveGeometry geometry{entry.lane->granularity, entry.lane->banks};
-    ends = &index.lanes[geometry][entry.lane->bank];
-  }
-  updateEnds(*ends, entry.interval.end, add);
+template <typename Value, typename Update>
+void updatePartitions(PriorityPartitions<Value> &partitions,
+                      const MapEntry &entry, Update update) {
+  update(partitions.all);
+  if (entry.priority)
+    update(partitions.byPriority[*entry.priority]);
+  else
+    update(partitions.withoutPriority);
+}
+
+template <typename Value, typename Visit>
+bool visitEligible(const PriorityPartitions<Value> &partitions,
+                   const MapEntry &entry, Visit visit) {
+  if (!entry.priority)
+    return visit(partitions.all);
+  if (!visit(partitions.withoutPriority))
+    return false;
+  auto samePriority = partitions.byPriority.find(*entry.priority);
+  if (samePriority != partitions.byPriority.end())
+    return visit(samePriority->second);
+  return true;
 }
 
 WideAddress maximumEnd(const std::multiset<WideAddress> &ends) {
@@ -821,7 +875,7 @@ verifyAddressMap(AddressMapOp map,
         "default behavior requires exact unmapped or target schema");
   }
 
-  SmallVector<MapEntry> entries;
+  SmallVector<MapEntry, 0> entries;
   entries.reserve(map.getEntries().size());
   WideAddress sourceLimit = addressLimit(source.getAddressWidthAttr().getInt());
 
@@ -907,7 +961,7 @@ verifyAddressMap(AddressMapOp map,
       classTokens.push_back(attributeToken(classAttr));
     }
 
-    uint64_t targetSpan = size;
+    WideAddress targetSpan = size;
     std::optional<InterleaveLane> lane;
     if (auto interleave = dictionary.getAs<DictionaryAttr>("interleave")) {
       if (!hasExactKeys(interleave, {"granularity", "banks", "bank"}))
@@ -932,12 +986,11 @@ verifyAddressMap(AddressMapOp map,
       WideAddress stripeWide = static_cast<WideAddress>(granularity) * banks;
       if (stripeWide > std::numeric_limits<uint64_t>::max())
         return map.emitOpError("interleave geometry exceeds unsigned i64");
-      uint64_t stripe = static_cast<uint64_t>(stripeWide);
-      if (base % stripe || offset % granularity || size % stripe)
-        return map.emitOpError("interleave base/size/offset must satisfy "
-                               "stripe alignment and geometry");
-      targetSpan = size / banks;
       lane = InterleaveLane{granularity, banks, bank};
+      if (offset % granularity)
+        return map.emitOpError(
+            "interleave offset must be aligned to granularity");
+      targetSpan = selectedPrefix(*lane, end) - selectedPrefix(*lane, base);
     }
 
     WideAddress targetEnd = static_cast<WideAddress>(offset) + targetSpan;
@@ -958,6 +1011,11 @@ verifyAddressMap(AddressMapOp map,
     AddressMapOrderKey order{base, size, priority.has_value(),
                              priority.value_or(0)};
     entries.push_back({{base, end}, order, priority, lane});
+    if (lane)
+      entries.back().concreteSelection = materializeSingleSelection(
+          *lane, entries.back().interval, entries.back().generalSelection);
+    else
+      entries.back().concreteSelection = entries.back().interval;
     buildSelectorKeys(permissionIds, classTokens, entries.back());
   }
 
@@ -965,90 +1023,238 @@ verifyAddressMap(AddressMapOp map,
     return compareAddressMapOrder(left.order, right.order) < 0;
   });
 
-  std::map<std::string, SelectorIndex> selectorIndex;
-  std::multimap<WideAddress, const MapEntry *> activeByEnd;
-  auto update = [&](const MapEntry &entry, bool add) {
+  auto emitConflict = [&](const MapEntry &left,
+                          const MapEntry &right) -> LogicalResult {
+    if (!left.priority || !right.priority)
+      return map.emitOpError("overlapping selector intersections require "
+                             "explicit distinct priorities");
+    return map.emitOpError(
+        "overlapping selector intersections have equal priority");
+  };
+
+  // Entries with an empty selection need no overlap analysis. All other
+  // non-general selections are exact intervals and use an ordinary sweep.
+  SmallVector<const MapEntry *> concreteEntries;
+  for (const MapEntry &entry : entries)
+    if (entry.concreteSelection)
+      concreteEntries.push_back(&entry);
+  llvm::stable_sort(concreteEntries, [](const MapEntry *left,
+                                        const MapEntry *right) {
+    if (left->concreteSelection->begin != right->concreteSelection->begin)
+      return left->concreteSelection->begin < right->concreteSelection->begin;
+    return compareAddressMapOrder(left->order, right->order) < 0;
+  });
+  std::map<std::string, EndPartitions> concreteIndex;
+  std::multimap<WideAddress, const MapEntry *> activeConcrete;
+  auto updateConcrete = [&](const MapEntry &entry, bool add) {
     for (const std::string &key : entry.registrationKeys) {
-      SelectorIndex &index = selectorIndex[key];
-      updateLaneIndex(index.allPriorities, entry, add);
-      if (entry.priority)
-        updateLaneIndex(index.byPriority[*entry.priority], entry, add);
-      else
-        updateLaneIndex(index.withoutPriority, entry, add);
+      updatePartitions(concreteIndex[key], entry, [&](auto &ends) {
+        updateEnds(ends, entry.concreteSelection->end, add);
+      });
     }
   };
-  auto intersectsEnds = [&](const MapEntry &entry,
-                            const std::multiset<WideAddress> &ends,
-                            std::optional<InterleaveLane> otherLane) {
-    auto intersectsBefore = [&](WideAddress candidateEnd) {
-      WideAddress end = std::min(entry.interval.end, candidateEnd);
-      if (entry.interval.begin >= end)
-        return false;
-      if (!entry.lane || !otherLane)
-        return true;
-      return interleaveSetsIntersect(*entry.lane, *otherLane,
-                                     entry.interval.begin, end);
-    };
-    return intersectsBefore(maximumEnd(ends));
-  };
-  auto indexIntersects = [&](const MapEntry &entry, const LaneEndIndex &index) {
-    if (intersectsEnds(entry, index.wildcardEnds, std::nullopt))
-      return true;
-    if (!entry.lane) {
-      for (const auto &[geometry, banks] : index.lanes)
-        for (const auto &[bank, ends] : banks)
-          if (intersectsEnds(
-                  entry, ends,
-                  InterleaveLane{geometry.granularity, geometry.banks, bank}))
-            return true;
-      return false;
+  for (const MapEntry *entry : concreteEntries) {
+    WideAddress begin = entry->concreteSelection->begin;
+    while (!activeConcrete.empty() && activeConcrete.begin()->first <= begin) {
+      updateConcrete(*activeConcrete.begin()->second, false);
+      activeConcrete.erase(activeConcrete.begin());
     }
-    InterleaveGeometry currentGeometry{entry.lane->granularity,
-                                       entry.lane->banks};
-    for (const auto &[geometry, banks] : index.lanes) {
-      if (geometry == currentGeometry) {
-        auto sameBank = banks.find(entry.lane->bank);
-        if (sameBank != banks.end() &&
-            intersectsEnds(entry, sameBank->second, *entry.lane))
-          return true;
+    for (const std::string &key : entry->queryKeys) {
+      auto found = concreteIndex.find(key);
+      if (found == concreteIndex.end())
         continue;
-      }
-      for (const auto &[bank, ends] : banks)
-        if (intersectsEnds(
-                entry, ends,
-                InterleaveLane{geometry.granularity, geometry.banks, bank}))
-          return true;
-    }
-    return false;
-  };
-  for (const MapEntry &entry : entries) {
-    while (!activeByEnd.empty() &&
-           activeByEnd.begin()->first <= entry.interval.begin) {
-      update(*activeByEnd.begin()->second, false);
-      activeByEnd.erase(activeByEnd.begin());
-    }
-    for (const std::string &key : entry.queryKeys) {
-      auto found = selectorIndex.find(key);
-      if (found == selectorIndex.end())
-        continue;
-      SelectorIndex &index = found->second;
-      if (!entry.priority) {
-        if (indexIntersects(entry, index.allPriorities))
+      if (!entry->priority) {
+        if (maximumEnd(found->second.all) > begin)
           return map.emitOpError("overlapping selector intersections require "
                                  "explicit distinct priorities");
         continue;
       }
-      if (indexIntersects(entry, index.withoutPriority))
+      if (maximumEnd(found->second.withoutPriority) > begin)
         return map.emitOpError("overlapping selector intersections require "
                                "explicit distinct priorities");
-      auto samePriority = index.byPriority.find(*entry.priority);
-      if (samePriority != index.byPriority.end() &&
-          indexIntersects(entry, samePriority->second))
+      auto samePriority = found->second.byPriority.find(*entry->priority);
+      if (samePriority != found->second.byPriority.end() &&
+          maximumEnd(samePriority->second) > begin)
         return map.emitOpError(
             "overlapping selector intersections have equal priority");
     }
-    update(entry, true);
-    activeByEnd.emplace(entry.interval.end, &entry);
+    updateConcrete(*entry, true);
+    activeConcrete.emplace(entry->concreteSelection->end, entry);
+  }
+
+  using GeneralSelectorMap = std::map<std::string, GeneralCandidateIndex>;
+  auto updateGeneral = [&](GeneralSelectorMap &index, const MapEntry &entry,
+                           bool add) {
+    assert(entry.generalSelection && entry.lane);
+    InterleaveGeometry geometry{entry.lane->granularity, entry.lane->banks};
+    for (const std::string &key : entry.registrationKeys) {
+      auto &partitions = index[key].lanes[geometry][entry.lane->bank];
+      updatePartitions(partitions, entry, [&](EntrySet &set) {
+        if (add)
+          set.insert(&entry);
+        else
+          set.erase(&entry);
+      });
+    }
+  };
+  auto visitGeneral = [&](const GeneralSelectorMap &index,
+                          const MapEntry &entry, bool mixedOnly, auto visit) {
+    InterleaveGeometry current{entry.lane->granularity, entry.lane->banks};
+    llvm::SmallPtrSet<const MapEntry *, 16> visited;
+    for (const std::string &key : entry.queryKeys) {
+      auto found = index.find(key);
+      if (found == index.end())
+        continue;
+      for (const auto &[geometry, banks] : found->second.lanes) {
+        if (mixedOnly && geometry == current)
+          continue;
+        if (!mixedOnly && geometry != current)
+          continue;
+        for (const auto &[bank, partitions] : banks) {
+          if (!mixedOnly && bank != entry.lane->bank)
+            continue;
+          if (!visitEligible(partitions, entry, [&](const EntrySet &set) {
+                for (const MapEntry *candidate : set)
+                  if (visited.insert(candidate).second)
+                    if (!visit(*candidate))
+                      return false;
+                return true;
+              }))
+            return false;
+        }
+      }
+    }
+    return true;
+  };
+
+  // Preflight every relation that could reach Presburger. The fixed diagnostic
+  // is independent of which normalized relation crosses the saturated bound.
+  GeneralSelectorMap preflightIndex;
+  std::multimap<WideAddress, const MapEntry *> activeGeneral;
+  uint64_t generalRelationCount = 0;
+  for (const MapEntry &entry : entries) {
+    if (!entry.generalSelection)
+      continue;
+    while (!activeGeneral.empty() &&
+           activeGeneral.begin()->first <= entry.interval.begin) {
+      updateGeneral(preflightIndex, *activeGeneral.begin()->second, false);
+      activeGeneral.erase(activeGeneral.begin());
+    }
+    bool withinLimit =
+        visitGeneral(preflightIndex, entry, true, [&](const MapEntry &) {
+          if (generalRelationCount == kMaxGeneralSelectorIntersectionQueries)
+            return false;
+          ++generalRelationCount;
+          return true;
+        });
+    if (!withinLimit)
+      return map.emitOpError()
+             << "general mixed interleave analysis exceeds ACIR v0.1 limit "
+             << kMaxGeneralSelectorIntersectionQueries;
+    updateGeneral(preflightIndex, entry, true);
+    activeGeneral.emplace(entry.interval.end, &entry);
+  }
+
+  auto selectionsIntersect = [&](const MapEntry &left, const MapEntry &right) {
+    WideAddress begin = std::max(left.interval.begin, right.interval.begin);
+    WideAddress end = std::min(left.interval.end, right.interval.end);
+    if (begin >= end)
+      return false;
+    if (left.generalSelection && right.generalSelection) {
+      InterleaveGeometry leftGeometry{left.lane->granularity, left.lane->banks};
+      InterleaveGeometry rightGeometry{right.lane->granularity,
+                                       right.lane->banks};
+      if (leftGeometry == rightGeometry)
+        return left.lane->bank == right.lane->bank &&
+               laneIntersectsInterval(*left.lane, begin, end);
+      return interleaveSetsIntersect(*left.lane, *right.lane, begin, end);
+    }
+    const MapEntry &general = left.generalSelection ? left : right;
+    const MapEntry &concrete = left.generalSelection ? right : left;
+    if (!concrete.concreteSelection)
+      return false;
+    begin = std::max(begin, concrete.concreteSelection->begin);
+    end = std::min(end, concrete.concreteSelection->end);
+    return laneIntersectsInterval(*general.lane, begin, end);
+  };
+
+  GeneralSelectorMap generalIndex;
+  std::map<std::string, PriorityPartitions<EntrySet>> fastIndex;
+  std::multimap<WideAddress, const MapEntry *> activeEntries;
+  auto updateActive = [&](const MapEntry &entry, bool add) {
+    if (entry.generalSelection) {
+      updateGeneral(generalIndex, entry, add);
+      return;
+    }
+    if (!entry.concreteSelection)
+      return;
+    for (const std::string &key : entry.registrationKeys)
+      updatePartitions(fastIndex[key], entry, [&](EntrySet &set) {
+        if (add)
+          set.insert(&entry);
+        else
+          set.erase(&entry);
+      });
+  };
+  for (const MapEntry &entry : entries) {
+    while (!activeEntries.empty() &&
+           activeEntries.begin()->first <= entry.interval.begin) {
+      updateActive(*activeEntries.begin()->second, false);
+      activeEntries.erase(activeEntries.begin());
+    }
+    llvm::SmallPtrSet<const MapEntry *, 16> candidates;
+    auto check = [&](const MapEntry &candidate) -> LogicalResult {
+      if (!candidates.insert(&candidate).second)
+        return success();
+      if (selectionsIntersect(entry, candidate))
+        return emitConflict(entry, candidate);
+      return success();
+    };
+    if (entry.generalSelection) {
+      bool conflict = false;
+      visitGeneral(generalIndex, entry, false, [&](const MapEntry &candidate) {
+        if (!conflict && failed(check(candidate)))
+          conflict = true;
+        return !conflict;
+      });
+      visitGeneral(generalIndex, entry, true, [&](const MapEntry &candidate) {
+        if (!conflict && failed(check(candidate)))
+          conflict = true;
+        return !conflict;
+      });
+      for (const std::string &key : entry.queryKeys) {
+        auto found = fastIndex.find(key);
+        if (found == fastIndex.end())
+          continue;
+        visitEligible(found->second, entry, [&](const EntrySet &set) {
+          for (const MapEntry *candidate : set)
+            if (!conflict && failed(check(*candidate)))
+              conflict = true;
+          return !conflict;
+        });
+      }
+      if (conflict)
+        return failure();
+    } else if (entry.concreteSelection) {
+      bool conflict = false;
+      for (const std::string &key : entry.queryKeys) {
+        auto found = generalIndex.find(key);
+        if (found == generalIndex.end())
+          continue;
+        for (const auto &[geometry, banks] : found->second.lanes)
+          for (const auto &[bank, partitions] : banks)
+            visitEligible(partitions, entry, [&](const EntrySet &set) {
+              for (const MapEntry *candidate : set)
+                if (!conflict && failed(check(*candidate)))
+                  conflict = true;
+              return !conflict;
+            });
+      }
+      if (conflict)
+        return failure();
+    }
+    updateActive(entry, true);
+    activeEntries.emplace(entry.interval.end, &entry);
   }
   return success();
 }

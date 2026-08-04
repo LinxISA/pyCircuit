@@ -15,6 +15,7 @@
 #include "mlir/Parser/Parser.h"
 #include "gtest/gtest.h"
 
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <limits>
@@ -1275,6 +1276,236 @@ TEST(ACIRResourcesTest, MixedGeometryDistinctPrioritiesScaleNearLinearly) {
   RecordProperty("ten_thousand_ms", tenThousandMs);
   EXPECT_LT(tenThousandMs, 5000);
   EXPECT_LT(tenThousandMs, std::max<int64_t>(100, fiveThousandMs * 3));
+}
+
+TEST(ACIRResourcesTest, SingleSelectedStripeMixedGeometriesScaleNearLinearly) {
+  mlir::MLIRContext context;
+  context.loadDialect<ACIRDialect>();
+  mlir::OpBuilder builder(&context);
+  auto location = builder.getUnknownLoc();
+  auto verifyTimed = [&](unsigned entryCount) {
+    auto file = mlir::ModuleOp::create(location);
+    builder.setInsertionPointToStart(file.getBody());
+    auto module = ModuleOp::create(builder, location, "M",
+                                   builder.getFunctionType({}, {}),
+                                   builder.getDictionaryAttr({}));
+    builder.setInsertionPointToStart(module.addEntryBlock());
+    AddressSpaceOp::create(
+        builder, location, builder.getStringAttr("space"),
+        builder.getStringAttr("space"), builder.getStringAttr("space"),
+        builder.getI64IntegerAttr(32), builder.getStringAttr("byte"),
+        mlir::Attribute(), mlir::FlatSymbolRefAttr(), mlir::DictionaryAttr());
+    llvm::SmallVector<mlir::Attribute> entries;
+    entries.reserve(entryCount);
+    for (uint64_t index = 1; index <= entryCount; ++index) {
+      uint64_t size = 16384 * index;
+      entries.push_back(builder.getDictionaryAttr({
+          builder.getNamedAttr("base", builder.getI64IntegerAttr(0)),
+          builder.getNamedAttr("size", builder.getI64IntegerAttr(size)),
+          builder.getNamedAttr("target",
+                               mlir::FlatSymbolRefAttr::get(&context, "space")),
+          builder.getNamedAttr("offset", builder.getI64IntegerAttr(0)),
+          builder.getNamedAttr(
+              "permissions",
+              builder.getArrayAttr({builder.getStringAttr("read")})),
+          builder.getNamedAttr("classes", builder.getArrayAttr({})),
+          builder.getNamedAttr(
+              "interleave",
+              builder.getDictionaryAttr({
+                  builder.getNamedAttr("granularity",
+                                       builder.getI64IntegerAttr(1)),
+                  builder.getNamedAttr("banks",
+                                       builder.getI64IntegerAttr(size)),
+                  builder.getNamedAttr("bank",
+                                       builder.getI64IntegerAttr(index - 1)),
+              })),
+      }));
+    }
+    AddressMapOp::create(
+        builder, location, "map", "space", builder.getArrayAttr(entries),
+        builder.getDictionaryAttr(
+            {builder.getNamedAttr("kind", builder.getStringAttr("unmapped"))}));
+    ReturnOp::create(builder, location, mlir::ValueRange{});
+    auto start = std::chrono::steady_clock::now();
+    EXPECT_TRUE(mlir::succeeded(mlir::verify(file)));
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+               std::chrono::steady_clock::now() - start)
+        .count();
+  };
+
+  int64_t fiveThousandMs = verifyTimed(5000);
+  int64_t tenThousandMs = verifyTimed(10000);
+  RecordProperty("five_thousand_ms", fiveThousandMs);
+  RecordProperty("ten_thousand_ms", tenThousandMs);
+  EXPECT_LT(tenThousandMs, 5000);
+  EXPECT_LT(tenThousandMs, std::max<int64_t>(100, fiveThousandMs * 3));
+}
+
+TEST(ACIRResourcesTest,
+     SingleSelectionHandlesPartialEmptyAndFullWidthIntervals) {
+  mlir::MLIRContext context;
+  context.loadDialect<ACIRDialect>();
+  mlir::OpBuilder builder(&context);
+  auto location = builder.getUnknownLoc();
+  auto integer = [&](uint64_t value) {
+    return builder.getIntegerAttr(builder.getI64Type(), llvm::APInt(64, value));
+  };
+  auto entry = [&](uint64_t base, uint64_t size, uint64_t granularity,
+                   uint64_t banks, uint64_t bank) {
+    return builder.getDictionaryAttr({
+        builder.getNamedAttr("base", integer(base)),
+        builder.getNamedAttr("size", integer(size)),
+        builder.getNamedAttr("target",
+                             mlir::FlatSymbolRefAttr::get(&context, "space")),
+        builder.getNamedAttr("offset", integer(0)),
+        builder.getNamedAttr(
+            "permissions",
+            builder.getArrayAttr({builder.getStringAttr("read")})),
+        builder.getNamedAttr("classes", builder.getArrayAttr({})),
+        builder.getNamedAttr(
+            "interleave",
+            builder.getDictionaryAttr({
+                builder.getNamedAttr("granularity", integer(granularity)),
+                builder.getNamedAttr("banks", integer(banks)),
+                builder.getNamedAttr("bank", integer(bank)),
+            })),
+    });
+  };
+  auto buildMap = [&](llvm::ArrayRef<mlir::Attribute> entries) {
+    auto file = mlir::ModuleOp::create(location);
+    builder.setInsertionPointToStart(file.getBody());
+    auto module = ModuleOp::create(builder, location, "M",
+                                   builder.getFunctionType({}, {}),
+                                   builder.getDictionaryAttr({}));
+    builder.setInsertionPointToStart(module.addEntryBlock());
+    AddressSpaceOp::create(
+        builder, location, builder.getStringAttr("space"),
+        builder.getStringAttr("space"), builder.getStringAttr("space"),
+        builder.getI64IntegerAttr(64), builder.getStringAttr("byte"),
+        mlir::Attribute(), mlir::FlatSymbolRefAttr(), mlir::DictionaryAttr());
+    AddressMapOp::create(
+        builder, location, "map", "space", builder.getArrayAttr(entries),
+        builder.getDictionaryAttr(
+            {builder.getNamedAttr("kind", builder.getStringAttr("unmapped"))}));
+    ReturnOp::create(builder, location, mlir::ValueRange{});
+    return file;
+  };
+
+  auto valid = buildMap(
+      {entry(3, 2, 4, 8, 1), entry(3, 2, 1, 7, 3), entry(3, 1, 1, 8, 7),
+       entry(std::numeric_limits<uint64_t>::max(), 1, 1, 2, 1)});
+  std::string before;
+  llvm::raw_string_ostream(before) << valid;
+  EXPECT_TRUE(mlir::succeeded(mlir::verify(valid)));
+  std::string after;
+  llvm::raw_string_ostream(after) << valid;
+  EXPECT_EQ(before, after);
+  normalizeAddressMaps(valid);
+  std::string normalizedOnce;
+  llvm::raw_string_ostream(normalizedOnce) << valid;
+  normalizeAddressMaps(valid);
+  std::string normalizedTwice;
+  llvm::raw_string_ostream(normalizedTwice) << valid;
+  EXPECT_EQ(normalizedOnce, normalizedTwice);
+
+  auto generalFastDisjoint =
+      buildMap({entry(0, 16, 1, 2, 0), entry(3, 2, 1, 7, 3)});
+  EXPECT_TRUE(mlir::succeeded(mlir::verify(generalFastDisjoint)));
+
+  mlir::ScopedDiagnosticHandler suppress(
+      &context, [](mlir::Diagnostic &) { return mlir::success(); });
+  auto overlapping = buildMap({entry(3, 2, 4, 8, 1), entry(3, 2, 1, 7, 4)});
+  EXPECT_TRUE(mlir::failed(mlir::verify(overlapping)));
+  auto generalFastOverlap =
+      buildMap({entry(0, 16, 1, 2, 0), entry(3, 2, 1, 7, 4)});
+  EXPECT_TRUE(mlir::failed(mlir::verify(generalFastOverlap)));
+}
+
+TEST(ACIRResourcesTest,
+     GeneralMixedIntersectionCapabilityIsExactAndPermutationInvariant) {
+  mlir::MLIRContext context;
+  context.loadDialect<ACIRDialect>();
+  mlir::OpBuilder builder(&context);
+  auto location = builder.getUnknownLoc();
+  auto buildMap = [&](uint64_t relationCount, bool reverse) {
+    auto file = mlir::ModuleOp::create(location);
+    builder.setInsertionPointToStart(file.getBody());
+    auto module = ModuleOp::create(builder, location, "M",
+                                   builder.getFunctionType({}, {}),
+                                   builder.getDictionaryAttr({}));
+    builder.setInsertionPointToStart(module.addEntryBlock());
+    AddressSpaceOp::create(
+        builder, location, builder.getStringAttr("space"),
+        builder.getStringAttr("space"), builder.getStringAttr("space"),
+        builder.getI64IntegerAttr(32), builder.getStringAttr("byte"),
+        mlir::Attribute(), mlir::FlatSymbolRefAttr(), mlir::DictionaryAttr());
+    auto makeEntry = [&](uint64_t banks, uint64_t bank,
+                         std::optional<uint64_t> priority) {
+      llvm::SmallVector<mlir::NamedAttribute> attributes{
+          builder.getNamedAttr("base", builder.getI64IntegerAttr(0)),
+          builder.getNamedAttr("size", builder.getI64IntegerAttr(65536)),
+          builder.getNamedAttr("target",
+                               mlir::FlatSymbolRefAttr::get(&context, "space")),
+          builder.getNamedAttr("offset", builder.getI64IntegerAttr(0)),
+          builder.getNamedAttr(
+              "permissions",
+              builder.getArrayAttr({builder.getStringAttr("read")})),
+          builder.getNamedAttr("classes", builder.getArrayAttr({})),
+          builder.getNamedAttr(
+              "interleave",
+              builder.getDictionaryAttr({
+                  builder.getNamedAttr("granularity",
+                                       builder.getI64IntegerAttr(1)),
+                  builder.getNamedAttr("banks",
+                                       builder.getI64IntegerAttr(banks)),
+                  builder.getNamedAttr("bank", builder.getI64IntegerAttr(bank)),
+              })),
+      };
+      if (priority)
+        attributes.push_back(builder.getNamedAttr(
+            "priority", builder.getI64IntegerAttr(*priority)));
+      return builder.getDictionaryAttr(attributes);
+    };
+    llvm::SmallVector<mlir::Attribute> entries;
+    entries.push_back(makeEntry(2, 0, std::nullopt));
+    for (uint64_t index = 0; index < relationCount; ++index)
+      entries.push_back(makeEntry(2 * (index + 2), 1, index + 1));
+    if (reverse)
+      std::reverse(entries.begin(), entries.end());
+    AddressMapOp::create(
+        builder, location, "map", "space", builder.getArrayAttr(entries),
+        builder.getDictionaryAttr(
+            {builder.getNamedAttr("kind", builder.getStringAttr("unmapped"))}));
+    ReturnOp::create(builder, location, mlir::ValueRange{});
+    return file;
+  };
+  auto verify = [&](mlir::ModuleOp file) {
+    std::string diagnostic;
+    mlir::ScopedDiagnosticHandler handler(
+        &context, [&](mlir::Diagnostic &value) {
+          llvm::raw_string_ostream(diagnostic) << value;
+          return mlir::success();
+        });
+    bool succeeded = mlir::succeeded(mlir::verify(file));
+    return std::pair{succeeded, diagnostic};
+  };
+
+  EXPECT_TRUE(
+      verify(buildMap(kMaxGeneralSelectorIntersectionQueries - 1, false))
+          .first);
+  EXPECT_TRUE(
+      verify(buildMap(kMaxGeneralSelectorIntersectionQueries, false)).first);
+  auto forward =
+      verify(buildMap(kMaxGeneralSelectorIntersectionQueries + 1, false));
+  auto reverse =
+      verify(buildMap(kMaxGeneralSelectorIntersectionQueries + 1, true));
+  EXPECT_FALSE(forward.first);
+  EXPECT_FALSE(reverse.first);
+  EXPECT_EQ(forward.second, reverse.second);
+  EXPECT_NE(
+      forward.second.find(
+          "general mixed interleave analysis exceeds ACIR v0.1 limit 256"),
+      std::string::npos);
 }
 
 } // namespace

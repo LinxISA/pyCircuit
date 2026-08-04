@@ -15,6 +15,8 @@ class Operation;
 namespace acir::ac {
 
 inline constexpr uint64_t kMaxTickScale = uint64_t{1} << 32;
+/// ACIR v0.1 capability bound for exact general mixed-interleave relations.
+inline constexpr uint64_t kMaxGeneralSelectorIntersectionQueries = 256;
 
 /// Wide half-open address endpoint type. A 64-bit address space needs the
 /// representable endpoint 2^64 even though its largest address is 2^64-1.
