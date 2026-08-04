@@ -116,7 +116,7 @@ builtin.module attributes {ac.contract_epoch = "0.1"} {
       construction = {arguments = [], kind = "constructor"}, contract_epoch = "0.1",
       cpp = {concept = "Model", entry_points = {pure = "", reset = "reset", validate = "validate", work = "work", xfer = "xfer"}, header = "model.hpp", symbol = "Model", target = "model"},
       cpp_type = @value, effect = "stateful", fingerprint = "sha256:0000000000000000000000000000000000000000000000000000000000000000",
-      implementation = @impl, ownership = {kind = "unique", placement = "root"},
+      implementation = @impl, ownership = {kind = "unique", placement = "root_or_process"},
       parameters = [], ports = [], provider = @provider,
       provider_implementation_fingerprint = "sha256:0000000000000000000000000000000000000000000000000000000000000000",
       resources = [], results = []
@@ -251,7 +251,7 @@ TEST(ACSimOpsTest, CanonicalFixtureCoversInventoryEffectsAndPerPcRoundTrip) {
     EXPECT_GT(counts.lookup(operation.getStringRef()), 0u)
         << operation.getStringRef().str();
   const std::array<std::pair<llvm::StringLiteral, unsigned>, 22> exact = {{
-      {"acsim.model", 1},     {"acsim.type", 21},      {"acsim.binding", 3},
+      {"acsim.model", 1},     {"acsim.type", 26},      {"acsim.binding", 3},
       {"acsim.module", 1},    {"acsim.instance", 1},   {"acsim.array", 1},
       {"acsim.element", 2},   {"acsim.port", 2},       {"acsim.resource", 2},
       {"acsim.bind", 3},      {"acsim.inline", 2},     {"acsim.process", 1},
@@ -807,31 +807,33 @@ TEST(ACSimOpsTest, BindingLockNestedDomainsAreClosedAndDeclarative) {
 
   struct MutationCase {
     llvm::StringLiteral name;
+    llvm::StringLiteral bindingName;
     std::function<void(BindingOp)> mutate;
     llvm::StringLiteral expected;
   };
-  const std::array<MutationCase, 11> cases = {{
-      {"cpp-header",
+  const std::array<MutationCase, 16> cases = {{
+      {"cpp-header", "stateful",
        [&](BindingOp binding) {
          replaceNestedDictionaryField(
              binding, "cpp", "header",
              mlir::StringAttr::get(&context, "../escape.hpp"));
        },
        "cpp.header must be a repository-relative header path"},
-      {"cpp-symbol",
+      {"cpp-symbol", "stateful",
        [&](BindingOp binding) {
          replaceNestedDictionaryField(
              binding, "cpp", "symbol",
              mlir::StringAttr::get(&context, "gfsim::make()"));
        },
        "must be declarative qualified names"},
-      {"construction-kind",
+      {"construction-kind", "stateful",
        [&](BindingOp binding) {
-         replaceNestedDictionaryField(binding, "construction", "kind",
-                                      mlir::StringAttr::get(&context, ""));
+         replaceNestedDictionaryField(
+             binding, "construction", "kind",
+             mlir::StringAttr::get(&context, "factory"));
        },
-       "construction kind must be non-empty"},
-      {"construction-raw-argument",
+       "construction kind must be exactly 'constructor'"},
+      {"construction-raw-argument", "stateful",
        [&](BindingOp binding) {
          replaceNestedDictionaryField(
              binding, "construction", "arguments",
@@ -839,45 +841,81 @@ TEST(ACSimOpsTest, BindingLockNestedDomainsAreClosedAndDeclarative) {
                  &context, {mlir::StringAttr::get(&context, "make();")}));
        },
        "construction arguments must be canonical static data"},
-      {"effect-ownership",
+      {"pure-ownership-kind", "pure",
        [&](BindingOp binding) {
          replaceNestedDictionaryField(
              binding, "ownership", "kind",
              mlir::StringAttr::get(&context, "unique"));
        },
-       "binding ownership is inconsistent with effect"},
-      {"cardinality",
+       "pure binding ownership must be exactly none/inline"},
+      {"pure-ownership-placement", "pure",
+       [&](BindingOp binding) {
+         replaceNestedDictionaryField(
+             binding, "ownership", "placement",
+             mlir::StringAttr::get(&context, "member_or_array"));
+       },
+       "pure binding ownership must be exactly none/inline"},
+      {"stateful-ownership-kind", "stateful",
+       [&](BindingOp binding) {
+         replaceNestedDictionaryField(
+             binding, "ownership", "kind",
+             mlir::StringAttr::get(&context, "shared"));
+       },
+       "stateful binding ownership must be exactly unique/member_or_array or "
+       "unique/root_or_process"},
+      {"stateful-ownership-placement", "stateful",
+       [&](BindingOp binding) {
+         replaceNestedDictionaryField(binding, "ownership", "placement",
+                                      mlir::StringAttr::get(&context, "root"));
+       },
+       "stateful binding ownership must be exactly unique/member_or_array or "
+       "unique/root_or_process"},
+      {"cardinality-string", "stateful",
        [&](BindingOp binding) {
          replaceRecordArrayField(binding, "ports", 0, "cardinality",
-                                 mlir::StringAttr::get(&context, ""));
+                                 mlir::StringAttr::get(&context, "many"));
        },
-       "cardinality must be a non-negative integer or non-empty normalized "
-       "static expression"},
-      {"delegation",
+       "cardinality must be exactly 'exclusive' or 'shared'"},
+      {"cardinality-integer", "stateful",
+       [&](BindingOp binding) {
+         replaceRecordArrayField(
+             binding, "ports", 0, "cardinality",
+             mlir::IntegerAttr::get(mlir::IntegerType::get(&context, 64), 1));
+       },
+       "cardinality must be exactly 'exclusive' or 'shared'"},
+      {"delegation", "stateful",
        [&](BindingOp binding) {
          replaceRecordArrayField(binding, "ports", 0, "delegation",
                                  mlir::StringAttr::get(&context, "optional"));
        },
        "delegation must be forbidden, allowed, or required"},
-      {"endpoint-ownership",
+      {"endpoint-ownership", "stateful",
        [&](BindingOp binding) {
          replaceRecordArrayField(binding, "ports", 0, "ownership",
                                  mlir::StringAttr::get(&context, "temporary"));
        },
        "endpoint ownership must be owned, borrowed, or shared"},
-      {"time-domain",
+      {"time-domain-string", "stateful",
        [&](BindingOp binding) {
-         replaceRecordArrayField(binding, "ports", 0, "time_domain",
-                                 mlir::StringAttr::get(&context, "clock();"));
+         replaceRecordArrayField(
+             binding, "ports", 0, "time_domain",
+             mlir::StringAttr::get(&context, "combinational"));
        },
-       "time domain must be a canonical identifier"},
-      {"result-name",
+       "time_domain must be a flat symbol reference"},
+      {"resource-time-domain-string", "stateful",
+       [&](BindingOp binding) {
+         replaceRecordArrayField(
+             binding, "resources", 0, "time_domain",
+             mlir::StringAttr::get(&context, "combinational"));
+       },
+       "time_domain must be a flat symbol reference"},
+      {"result-name", "pure",
        [&](BindingOp binding) {
          replaceRecordArrayField(binding, "results", 0, "name",
                                  mlir::StringAttr::get(&context, "bad.name"));
        },
        "result name must be a canonical identifier"},
-      {"activation-name",
+      {"activation-name", "top",
        [&](BindingOp binding) {
          replaceRecordArrayField(binding, "activation_sources", 0, "name",
                                  mlir::StringAttr::get(&context, "wake()"));
@@ -891,20 +929,52 @@ TEST(ACSimOpsTest, BindingLockNestedDomainsAreClosedAndDeclarative) {
     ASSERT_TRUE(file);
     BindingOp binding;
     file->walk([&](BindingOp candidate) {
-      if ((testCase.name == "effect-ownership" ||
-           testCase.name == "result-name") &&
-          candidate.getSymName() == "pure")
-        binding = candidate;
-      else if (testCase.name == "activation-name" &&
-               candidate.getSymName() == "top")
-        binding = candidate;
-      else if (!binding && candidate.getSymName() == "stateful")
+      if (candidate.getSymName() == testCase.bindingName)
         binding = candidate;
     });
     ASSERT_TRUE(binding);
     testCase.mutate(binding);
     std::string diagnostic = expectDirectVerificationFailure(
         context, [&] { return binding.verify(); });
+    EXPECT_TRUE(llvm::StringRef(diagnostic).contains(testCase.expected))
+        << diagnostic;
+  }
+}
+
+TEST(ACSimOpsTest, BindingTimeDomainReferencesMustResolveToTimeDomainTypes) {
+  mlir::MLIRContext context;
+  loadTestDialects(context);
+
+  struct ReferenceCase {
+    llvm::StringLiteral name;
+    llvm::StringLiteral reference;
+    llvm::StringLiteral expected;
+  };
+  const std::array<ReferenceCase, 2> cases = {{
+      {"unresolved", "missing_domain",
+       "time-domain reference '@missing_domain' is unresolved"},
+      {"wrong-kind", "protocol",
+       "time-domain reference '@protocol' has incompatible acsim.type kind "
+       "'protocol'"},
+  }};
+
+  for (const ReferenceCase &testCase : cases) {
+    SCOPED_TRACE(testCase.name.str());
+    auto file = parseValidModel(context);
+    ASSERT_TRUE(file);
+    BindingOp binding;
+    file->walk([&](BindingOp candidate) {
+      if (candidate.getSymName() == "stateful")
+        binding = candidate;
+    });
+    ASSERT_TRUE(binding);
+    replaceRecordArrayField(
+        binding, "ports", 0, "time_domain",
+        mlir::FlatSymbolRefAttr::get(&context, testCase.reference));
+    replaceRecordArrayField(
+        binding, "ports", 1, "time_domain",
+        mlir::FlatSymbolRefAttr::get(&context, testCase.reference));
+    std::string diagnostic = expectVerificationFailure(*file);
     EXPECT_TRUE(llvm::StringRef(diagnostic).contains(testCase.expected))
         << diagnostic;
   }
@@ -1005,6 +1075,112 @@ TEST(ACSimOpsTest, BindLocalVerifierUsesExactAccessorRoleRecords) {
       << resourceDiagnostic;
 }
 
+TEST(ACSimOpsTest, BindLocalVerifierRejectsMutuallyIncompatibleEndpoints) {
+  mlir::MLIRContext context;
+  loadTestDialects(context);
+
+  struct PortCase {
+    llvm::StringLiteral name;
+    std::function<PortType(PortType)> replacementType;
+    mlir::FlatSymbolRefAttr replacementReference;
+  };
+  const std::array<PortCase, 3> portCases = {{
+      {"interface",
+       [&](PortType type) {
+         return PortType::get(
+             &context, mlir::FlatSymbolRefAttr::get(&context, "interface_alt"),
+             type.getRole(), type.getPayload(), type.getProtocol());
+       },
+       mlir::FlatSymbolRefAttr::get(&context, "interface_alt")},
+      {"payload",
+       [&](PortType type) {
+         return PortType::get(
+             &context, type.getInterface(), type.getRole(),
+             mlir::FlatSymbolRefAttr::get(&context, "payload_alt"),
+             type.getProtocol());
+       },
+       mlir::FlatSymbolRefAttr::get(&context, "payload_alt")},
+      {"protocol",
+       [&](PortType type) {
+         return PortType::get(
+             &context, type.getInterface(), type.getRole(), type.getPayload(),
+             mlir::FlatSymbolRefAttr::get(&context, "protocol_alt"));
+       },
+       mlir::FlatSymbolRefAttr::get(&context, "protocol_alt")},
+  }};
+
+  for (const PortCase &testCase : portCases) {
+    SCOPED_TRACE(testCase.name.str());
+    auto file = parseValidModel(context);
+    ASSERT_TRUE(file);
+    BindingOp binding;
+    PortOp targetPort;
+    BindOp portBind;
+    file->walk([&](BindingOp candidate) {
+      if (candidate.getSymName() == "stateful")
+        binding = candidate;
+    });
+    file->walk([&](PortOp candidate) {
+      if (candidate.getAccessor() == "port_in_accessor")
+        targetPort = candidate;
+    });
+    file->walk([&](BindOp candidate) {
+      if (candidate.getKind() == "port")
+        portBind = candidate;
+    });
+    ASSERT_TRUE(binding);
+    ASSERT_TRUE(targetPort);
+    ASSERT_TRUE(portBind);
+    replaceRecordArrayField(binding, "ports", 1, testCase.name,
+                            testCase.replacementReference);
+    auto type = mlir::cast<PortType>(targetPort.getResult().getType());
+    targetPort.getResult().setType(testCase.replacementType(type));
+    std::string diagnostic = expectDirectVerificationFailure(
+        context, [&] { return portBind.verify(); });
+    EXPECT_TRUE(llvm::StringRef(diagnostic)
+                    .contains("port bind endpoints must have identical "
+                              "interface, payload, protocol, cardinality, "
+                              "delegation, ownership, and time domain"))
+        << diagnostic;
+  }
+
+  auto file = parseValidModel(context);
+  ASSERT_TRUE(file);
+  BindingOp binding;
+  ResourceOp targetResource;
+  BindOp resourceBind;
+  file->walk([&](BindingOp candidate) {
+    if (candidate.getSymName() == "stateful")
+      binding = candidate;
+  });
+  file->walk([&](ResourceOp candidate) {
+    if (candidate.getAccessor() == "resource_in_accessor")
+      targetResource = candidate;
+  });
+  file->walk([&](BindOp candidate) {
+    if (candidate.getKind() == "resource")
+      resourceBind = candidate;
+  });
+  ASSERT_TRUE(binding);
+  ASSERT_TRUE(targetResource);
+  ASSERT_TRUE(resourceBind);
+  replaceRecordArrayField(
+      binding, "resources", 1, "resource",
+      mlir::FlatSymbolRefAttr::get(&context, "resource_alt"));
+  auto resourceType =
+      mlir::cast<ResourceType>(targetResource.getResult().getType());
+  targetResource.getResult().setType(ResourceType::get(
+      &context, mlir::FlatSymbolRefAttr::get(&context, "resource_alt"),
+      resourceType.getRole()));
+  std::string diagnostic = expectDirectVerificationFailure(
+      context, [&] { return resourceBind.verify(); });
+  EXPECT_TRUE(llvm::StringRef(diagnostic)
+                  .contains("resource bind endpoints must have identical "
+                            "resource kind, delegation, ownership, and time "
+                            "domain"))
+      << diagnostic;
+}
+
 TEST(ACSimOpsTest, ExportBindIsACanonicalTypedConstructionRelation) {
   mlir::MLIRContext context;
   loadTestDialects(context);
@@ -1018,6 +1194,33 @@ TEST(ACSimOpsTest, ExportBindIsACanonicalTypedConstructionRelation) {
   BindOp::create(builder, exportOp.getLoc(), exportOp.getValue(),
                  exportOp.getResult(), builder.getStringAttr("export"));
   EXPECT_TRUE(mlir::succeeded(mlir::verify(*file)));
+}
+
+TEST(ACSimOpsTest, ExportBindRejectsUnrelatedEqualTypedSource) {
+  mlir::MLIRContext context;
+  loadTestDialects(context);
+  auto file = parseValidModel(context);
+  ASSERT_TRUE(file);
+  ExportOp exportOp;
+  InlineOp unrelated;
+  file->walk([&](ExportOp candidate) { exportOp = candidate; });
+  file->walk([&](InlineOp candidate) {
+    if (!unrelated)
+      unrelated = candidate;
+  });
+  ASSERT_TRUE(exportOp);
+  ASSERT_TRUE(unrelated);
+  ASSERT_NE(unrelated.getResult(), exportOp.getValue());
+  ASSERT_EQ(unrelated.getResult().getType(), exportOp.getResult().getType());
+  mlir::OpBuilder builder(exportOp);
+  builder.setInsertionPointAfter(exportOp);
+  BindOp::create(builder, exportOp.getLoc(), unrelated.getResult(),
+                 exportOp.getResult(), builder.getStringAttr("export"));
+  std::string diagnostic = expectVerificationFailure(*file);
+  EXPECT_TRUE(llvm::StringRef(diagnostic)
+                  .contains("export bind source must be the exact input of its "
+                            "target acsim.export"))
+      << diagnostic;
 }
 
 TEST(ACSimOpsTest, CapabilityPreflightUsesExactPrivateLimits) {

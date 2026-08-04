@@ -18,19 +18,24 @@ builtin.module attributes {ac.contract_epoch = "0.1"} {
         toolchain = "sha256:0000000000000000000000000000000000000000000000000000000000000005",
         schema_set = "sha256:0000000000000000000000000000000000000000000000000000000000000006"
       } {
+    acsim.type @comb_domain cpp "gfsim::CombinationalDomain" kind "time_domain" fingerprint "sha256:0e00000000000000000000000000000000000000000000000000000000000000"
     acsim.type @consumer cpp "gfsim::Consumer" kind "role" fingerprint "sha256:0f00000000000000000000000000000000000000000000000000000000000000"
     acsim.type @cpp_bool cpp "bool" kind "value" fingerprint "sha256:1000000000000000000000000000000000000000000000000000000000000000"
     acsim.type @event_kind cpp "gfsim::EventWake" kind "wake" fingerprint "sha256:2000000000000000000000000000000000000000000000000000000000000000"
     acsim.type @gfsim cpp "gfsim" kind "provider" fingerprint "sha256:3000000000000000000000000000000000000000000000000000000000000000"
     acsim.type @initiator cpp "gfsim::Initiator" kind "role" fingerprint "sha256:3f00000000000000000000000000000000000000000000000000000000000000"
     acsim.type @interface cpp "gfsim::Stream" kind "interface" fingerprint "sha256:4000000000000000000000000000000000000000000000000000000000000000"
+    acsim.type @interface_alt cpp "gfsim::AlternateStream" kind "interface" fingerprint "sha256:4100000000000000000000000000000000000000000000000000000000000000"
     acsim.type @payload cpp "Packet" kind "packet" fingerprint "sha256:5000000000000000000000000000000000000000000000000000000000000000"
+    acsim.type @payload_alt cpp "AlternatePacket" kind "packet" fingerprint "sha256:5100000000000000000000000000000000000000000000000000000000000000"
     acsim.type @port_accessor cpp "output" kind "accessor" fingerprint "sha256:6000000000000000000000000000000000000000000000000000000000000000"
     acsim.type @port_in_accessor cpp "input" kind "accessor" fingerprint "sha256:6f00000000000000000000000000000000000000000000000000000000000000"
     acsim.type @protocol cpp "gfsim::ReadyValid" kind "protocol" fingerprint "sha256:7000000000000000000000000000000000000000000000000000000000000000"
+    acsim.type @protocol_alt cpp "gfsim::AlternateProtocol" kind "protocol" fingerprint "sha256:7100000000000000000000000000000000000000000000000000000000000000"
     acsim.type @pure_impl cpp "gfsim::is_ready" kind "implementation" fingerprint "sha256:8000000000000000000000000000000000000000000000000000000000000000"
     acsim.type @pure_schema cpp "pure.schema" kind "schema" fingerprint "sha256:9000000000000000000000000000000000000000000000000000000000000000"
     acsim.type @resource_accessor cpp "initiator" kind "accessor" fingerprint "sha256:a000000000000000000000000000000000000000000000000000000000000000"
+    acsim.type @resource_alt cpp "gfsim::AlternateMemory" kind "resource" fingerprint "sha256:a100000000000000000000000000000000000000000000000000000000000000"
     acsim.type @resource_in_accessor cpp "target" kind "accessor" fingerprint "sha256:af00000000000000000000000000000000000000000000000000000000000000"
     acsim.type @resource_kind cpp "gfsim::Memory" kind "resource" fingerprint "sha256:b000000000000000000000000000000000000000000000000000000000000000"
     acsim.type @role cpp "gfsim::Producer" kind "role" fingerprint "sha256:c000000000000000000000000000000000000000000000000000000000000000"
@@ -62,13 +67,13 @@ builtin.module attributes {ac.contract_epoch = "0.1"} {
       implementation = @stateful_impl, ownership = {kind = "unique", placement = "member_or_array"},
       parameters = [],
       ports = [
-        {accessor = @port_accessor, cardinality = "exclusive", delegation = "forbidden", direction = "output", interface = @interface, ownership = "borrowed", payload = @payload, protocol = @protocol, role = @role, time_domain = "combinational"},
-        {accessor = @port_in_accessor, cardinality = "exclusive", delegation = "forbidden", direction = "input", interface = @interface, ownership = "borrowed", payload = @payload, protocol = @protocol, role = @consumer, time_domain = "combinational"}
+        {accessor = @port_accessor, cardinality = "exclusive", delegation = "forbidden", direction = "output", interface = @interface, ownership = "borrowed", payload = @payload, protocol = @protocol, role = @role, time_domain = @comb_domain},
+        {accessor = @port_in_accessor, cardinality = "exclusive", delegation = "forbidden", direction = "input", interface = @interface, ownership = "borrowed", payload = @payload, protocol = @protocol, role = @consumer, time_domain = @comb_domain}
       ], provider = @gfsim,
       provider_implementation_fingerprint = "sha256:d000000000000000000000000000000000000000000000000000000000000000",
       resources = [
-        {accessor = @resource_accessor, delegation = "forbidden", mode = "initiator", ownership = "borrowed", resource = @resource_kind, role = @initiator, time_domain = "combinational"},
-        {accessor = @resource_in_accessor, delegation = "forbidden", mode = "target", ownership = "borrowed", resource = @resource_kind, role = @target, time_domain = "combinational"}
+        {accessor = @resource_accessor, delegation = "forbidden", mode = "initiator", ownership = "borrowed", resource = @resource_kind, role = @initiator, time_domain = @comb_domain},
+        {accessor = @resource_in_accessor, delegation = "forbidden", mode = "target", ownership = "borrowed", resource = @resource_kind, role = @target, time_domain = @comb_domain}
       ], results = []
     }
     acsim.binding @top record {

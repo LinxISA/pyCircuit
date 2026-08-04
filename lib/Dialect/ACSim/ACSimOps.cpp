@@ -270,26 +270,28 @@ LogicalResult verifyBindingLockShape(BindingOp binding) {
     return binding.emitOpError(
         "binding construction and ownership records must be exact");
   auto constructionKind = construction.getAs<StringAttr>("kind");
-  if (!isCanonicalIdentifier(constructionKind.getValue()))
-    return binding.emitOpError("construction kind must be non-empty and "
-                               "canonical");
+  if (constructionKind.getValue() != "constructor")
+    return binding.emitOpError(
+        "construction kind must be exactly 'constructor'");
   for (Attribute argument : construction.getAs<ArrayAttr>("arguments"))
     if (!isCanonicalStaticData(argument))
       return binding.emitOpError(
           "construction arguments must be canonical static data");
   auto ownershipKind = ownership.getAs<StringAttr>("kind");
   auto ownershipPlacement = ownership.getAs<StringAttr>("placement");
-  if (!isCanonicalIdentifier(ownershipKind.getValue()) ||
-      !isCanonicalIdentifier(ownershipPlacement.getValue()))
+  if (binding.getEffect() == "pure" &&
+      (ownershipKind.getValue() != "none" ||
+       ownershipPlacement.getValue() != "inline"))
     return binding.emitOpError(
-        "binding ownership kind and placement must be canonical identifiers");
-  if ((binding.getEffect() == "pure" &&
-       (ownershipKind.getValue() != "none" ||
-        ownershipPlacement.getValue() != "inline")) ||
-      (binding.getEffect() == "stateful" &&
-       (ownershipKind.getValue() == "none" ||
-        ownershipPlacement.getValue() == "inline")))
-    return binding.emitOpError("binding ownership is inconsistent with effect");
+        "pure binding ownership must be exactly none/inline");
+  if (binding.getEffect() == "stateful" &&
+      (ownershipKind.getValue() != "unique" ||
+       !llvm::is_contained(
+           {StringRef("member_or_array"), StringRef("root_or_process")},
+           ownershipPlacement.getValue())))
+    return binding.emitOpError(
+        "stateful binding ownership must be exactly unique/member_or_array or "
+        "unique/root_or_process");
 
   constexpr std::array<StringLiteral, 6> parameterKeys = {
       "acir_type", "cpp_type", "mapping", "name", "ordinal", "value"};
@@ -370,19 +372,17 @@ LogicalResult verifyBindingLockShape(BindingOp binding) {
         !llvm::is_contained({StringRef("input"), StringRef("output")},
                             direction.getValue()) ||
         !port.get("cardinality") || !port.getAs<StringAttr>("delegation") ||
-        !port.getAs<StringAttr>("ownership") ||
-        !port.getAs<StringAttr>("time_domain"))
+        !port.getAs<StringAttr>("ownership") || !port.get("time_domain"))
       return binding.emitOpError(
           "binding port records require exact typed endpoint metadata");
-    Attribute cardinality = port.get("cardinality");
-    auto cardinalityInteger = dyn_cast<IntegerAttr>(cardinality);
-    auto cardinalityExpression = dyn_cast<StringAttr>(cardinality);
-    if ((!cardinalityInteger || cardinalityInteger.getInt() < 0) &&
-        (!cardinalityExpression || cardinalityExpression.getValue().empty() ||
-         !isCanonicalStaticData(cardinalityExpression)))
+    if (!port.getAs<FlatSymbolRefAttr>("time_domain"))
+      return binding.emitOpError("time_domain must be a flat symbol reference");
+    auto cardinality = port.getAs<StringAttr>("cardinality");
+    if (!cardinality ||
+        !llvm::is_contained({StringRef("exclusive"), StringRef("shared")},
+                            cardinality.getValue()))
       return binding.emitOpError(
-          "cardinality must be a non-negative integer or non-empty normalized "
-          "static expression");
+          "cardinality must be exactly 'exclusive' or 'shared'");
     auto delegation = port.getAs<StringAttr>("delegation");
     if (!llvm::is_contained({StringRef("forbidden"), StringRef("allowed"),
                              StringRef("required")},
@@ -395,9 +395,6 @@ LogicalResult verifyBindingLockShape(BindingOp binding) {
             endpointOwnership.getValue()))
       return binding.emitOpError(
           "endpoint ownership must be owned, borrowed, or shared");
-    if (!isCanonicalIdentifier(
-            port.getAs<StringAttr>("time_domain").getValue()))
-      return binding.emitOpError("time domain must be a canonical identifier");
   }
   llvm::StringSet<> resourceAccessors;
   for (Attribute attribute : record.getAs<ArrayAttr>("resources")) {
@@ -411,9 +408,11 @@ LogicalResult verifyBindingLockShape(BindingOp binding) {
                             mode.getValue()) ||
         !resource.getAs<StringAttr>("delegation") ||
         !resource.getAs<StringAttr>("ownership") ||
-        !resource.getAs<StringAttr>("time_domain"))
+        !resource.get("time_domain"))
       return binding.emitOpError(
           "binding resource records require exact typed endpoint metadata");
+    if (!resource.getAs<FlatSymbolRefAttr>("time_domain"))
+      return binding.emitOpError("time_domain must be a flat symbol reference");
     auto delegation = resource.getAs<StringAttr>("delegation");
     if (!llvm::is_contained({StringRef("forbidden"), StringRef("allowed"),
                              StringRef("required")},
@@ -426,9 +425,6 @@ LogicalResult verifyBindingLockShape(BindingOp binding) {
             endpointOwnership.getValue()))
       return binding.emitOpError(
           "endpoint ownership must be owned, borrowed, or shared");
-    if (!isCanonicalIdentifier(
-            resource.getAs<StringAttr>("time_domain").getValue()))
-      return binding.emitOpError("time domain must be a canonical identifier");
   }
   llvm::StringSet<> resultNames;
   for (Attribute attribute : record.getAs<ArrayAttr>("results")) {
@@ -1658,12 +1654,17 @@ LogicalResult verifyModulesAndTypedGraph(ModelOp model,
           auto endpoint = cast<DictionaryAttr>(item);
           const std::array<StringRef, 1> accessorKinds = {"accessor"};
           const std::array<StringRef, 1> roleKinds = {"role"};
+          const std::array<StringRef, 1> timeDomainKinds = {"time_domain"};
           if (failed(requireTypeKind(
                   index, binding, endpoint.getAs<FlatSymbolRefAttr>("accessor"),
                   accessorKinds, "endpoint accessor")) ||
               failed(requireTypeKind(index, binding,
                                      endpoint.getAs<FlatSymbolRefAttr>("role"),
-                                     roleKinds, "endpoint role")))
+                                     roleKinds, "endpoint role")) ||
+              failed(requireTypeKind(
+                  index, binding,
+                  endpoint.getAs<FlatSymbolRefAttr>("time_domain"),
+                  timeDomainKinds, "time-domain")))
             return failure();
         }
       for (Attribute item : binding.getRecord().getAs<ArrayAttr>("ports")) {
@@ -1827,14 +1828,20 @@ LogicalResult verifyModulesAndTypedGraph(ModelOp model,
         if (!sourceRecord || !targetRecord ||
             sourceRecord.getAs<StringAttr>("direction").getValue() !=
                 "output" ||
-            targetRecord.getAs<StringAttr>("direction").getValue() != "input" ||
+            targetRecord.getAs<StringAttr>("direction").getValue() != "input")
+          return bind.emitOpError("port binding must connect exact output and "
+                                  "input endpoint records");
+        if (sourceRecord.get("interface") != targetRecord.get("interface") ||
+            sourceRecord.get("payload") != targetRecord.get("payload") ||
+            sourceRecord.get("protocol") != targetRecord.get("protocol") ||
             sourceRecord.get("cardinality") !=
                 targetRecord.get("cardinality") ||
             sourceRecord.get("delegation") != targetRecord.get("delegation") ||
             sourceRecord.get("ownership") != targetRecord.get("ownership") ||
             sourceRecord.get("time_domain") != targetRecord.get("time_domain"))
-          return bind.emitOpError("port binding must connect exact output and "
-                                  "input endpoint records");
+          return bind.emitOpError(
+              "port bind endpoints must have identical interface, payload, "
+              "protocol, cardinality, delegation, ownership, and time domain");
       } else if (bind.getKind() == "resource") {
         auto source = bind.getSource().getDefiningOp<ResourceOp>();
         auto target = bind.getTarget().getDefiningOp<ResourceOp>();
@@ -1848,20 +1855,33 @@ LogicalResult verifyModulesAndTypedGraph(ModelOp model,
                    : DictionaryAttr();
         if (!sourceRecord || !targetRecord ||
             sourceRecord.getAs<StringAttr>("mode").getValue() != "initiator" ||
-            targetRecord.getAs<StringAttr>("mode").getValue() != "target" ||
+            targetRecord.getAs<StringAttr>("mode").getValue() != "target")
+          return bind.emitOpError("resource binding must connect exact "
+                                  "initiator and target endpoint records");
+        if (sourceRecord.get("resource") != targetRecord.get("resource") ||
             sourceRecord.get("delegation") != targetRecord.get("delegation") ||
             sourceRecord.get("ownership") != targetRecord.get("ownership") ||
             sourceRecord.get("time_domain") != targetRecord.get("time_domain"))
-          return bind.emitOpError("resource binding must connect exact "
-                                  "initiator and target endpoint records");
+          return bind.emitOpError(
+              "resource bind endpoints must have identical resource kind, "
+              "delegation, ownership, and time domain");
       } else if (bind.getKind() == "pure_view") {
         auto target = bind.getTarget().getDefiningOp<InlineOp>();
         if (!target || !llvm::is_contained(target.getArgs(), bind.getSource()))
           return bind.emitOpError(
               "pure_view target must directly consume the source expression");
-      } else if (bind.getSource().getType() != bind.getTarget().getType()) {
-        return bind.emitOpError(
-            "export binding endpoints must have exactly equal types");
+      } else {
+        auto target = bind.getTarget().getDefiningOp<ExportOp>();
+        if (!target || bind.getTarget() != target.getResult())
+          return bind.emitOpError(
+              "export bind target must be the exact result of acsim.export");
+        if (bind.getSource() != target.getValue())
+          return bind.emitOpError(
+              "export bind source must be the exact input of its target "
+              "acsim.export");
+        if (bind.getSource().getType() != bind.getTarget().getType())
+          return bind.emitOpError(
+              "export binding endpoints must have exactly equal types");
       }
       std::pair<void *, void *> key{bind.getSource().getAsOpaquePointer(),
                                     bind.getTarget().getAsOpaquePointer()};
@@ -2281,10 +2301,10 @@ LogicalResult ModelOp::verify() {
 }
 
 LogicalResult TypeOp::verify() {
-  constexpr std::array<StringLiteral, 13> kinds = {
-      "accessor", "implementation", "interface", "packet", "policy",
-      "protocol", "provider",       "resource",  "role",   "schema",
-      "value",    "wake",           "payload"};
+  constexpr std::array<StringLiteral, 14> kinds = {
+      "accessor",    "implementation", "interface", "packet", "policy",
+      "protocol",    "provider",       "resource",  "role",   "schema",
+      "time_domain", "value",          "wake",      "payload"};
   if (!llvm::is_contained(kinds, getKind()))
     return emitOpError("kind is not a closed ACSim C++ realization kind");
   if (getCppName().empty() || hasRawCppFragment(getCppName()))
@@ -2377,30 +2397,36 @@ LogicalResult BindOp::verify() {
         targetOp ? findEndpoint(findBinding(targetOp.getBase()), "ports",
                                 targetOp.getAccessorAttr())
                  : DictionaryAttr();
-    if (source && target && sourceRecord && targetRecord &&
-        sourceRecord.getAs<StringAttr>("direction").getValue() == "output" &&
-        targetRecord.getAs<StringAttr>("direction").getValue() == "input" &&
-        sourceRecord.getAs<FlatSymbolRefAttr>("interface") ==
-            source.getInterface() &&
-        sourceRecord.getAs<FlatSymbolRefAttr>("role") == source.getRole() &&
-        sourceRecord.getAs<FlatSymbolRefAttr>("payload") ==
-            source.getPayload() &&
-        sourceRecord.getAs<FlatSymbolRefAttr>("protocol") ==
-            source.getProtocol() &&
-        targetRecord.getAs<FlatSymbolRefAttr>("interface") ==
-            target.getInterface() &&
-        targetRecord.getAs<FlatSymbolRefAttr>("role") == target.getRole() &&
-        targetRecord.getAs<FlatSymbolRefAttr>("payload") ==
-            target.getPayload() &&
-        targetRecord.getAs<FlatSymbolRefAttr>("protocol") ==
-            target.getProtocol() &&
-        sourceRecord.get("cardinality") == targetRecord.get("cardinality") &&
-        sourceRecord.get("delegation") == targetRecord.get("delegation") &&
-        sourceRecord.get("ownership") == targetRecord.get("ownership") &&
-        sourceRecord.get("time_domain") == targetRecord.get("time_domain"))
-      return success();
-    return emitOpError("port bind endpoints must match exact output/input "
-                       "binding-lock records");
+    if (!source || !target || !sourceRecord || !targetRecord ||
+        sourceRecord.getAs<StringAttr>("direction").getValue() != "output" ||
+        targetRecord.getAs<StringAttr>("direction").getValue() != "input" ||
+        sourceRecord.getAs<FlatSymbolRefAttr>("interface") !=
+            source.getInterface() ||
+        sourceRecord.getAs<FlatSymbolRefAttr>("role") != source.getRole() ||
+        sourceRecord.getAs<FlatSymbolRefAttr>("payload") !=
+            source.getPayload() ||
+        sourceRecord.getAs<FlatSymbolRefAttr>("protocol") !=
+            source.getProtocol() ||
+        targetRecord.getAs<FlatSymbolRefAttr>("interface") !=
+            target.getInterface() ||
+        targetRecord.getAs<FlatSymbolRefAttr>("role") != target.getRole() ||
+        targetRecord.getAs<FlatSymbolRefAttr>("payload") !=
+            target.getPayload() ||
+        targetRecord.getAs<FlatSymbolRefAttr>("protocol") !=
+            target.getProtocol())
+      return emitOpError("port bind endpoints must match exact output/input "
+                         "binding-lock records");
+    if (sourceRecord.get("interface") != targetRecord.get("interface") ||
+        sourceRecord.get("payload") != targetRecord.get("payload") ||
+        sourceRecord.get("protocol") != targetRecord.get("protocol") ||
+        sourceRecord.get("cardinality") != targetRecord.get("cardinality") ||
+        sourceRecord.get("delegation") != targetRecord.get("delegation") ||
+        sourceRecord.get("ownership") != targetRecord.get("ownership") ||
+        sourceRecord.get("time_domain") != targetRecord.get("time_domain"))
+      return emitOpError(
+          "port bind endpoints must have identical interface, payload, "
+          "protocol, cardinality, delegation, ownership, and time domain");
+    return success();
   } else if (getKind() == "resource") {
     auto sourceOp = getSource().getDefiningOp<ResourceOp>();
     auto targetOp = getTarget().getDefiningOp<ResourceOp>();
@@ -2414,29 +2440,40 @@ LogicalResult BindOp::verify() {
         targetOp ? findEndpoint(findBinding(targetOp.getBase()), "resources",
                                 targetOp.getAccessorAttr())
                  : DictionaryAttr();
-    if (source && target && sourceRecord && targetRecord &&
-        sourceRecord.getAs<StringAttr>("mode").getValue() == "initiator" &&
-        targetRecord.getAs<StringAttr>("mode").getValue() == "target" &&
-        sourceRecord.getAs<FlatSymbolRefAttr>("resource") ==
-            source.getResource() &&
-        sourceRecord.getAs<FlatSymbolRefAttr>("role") == source.getRole() &&
-        targetRecord.getAs<FlatSymbolRefAttr>("resource") ==
-            target.getResource() &&
-        targetRecord.getAs<FlatSymbolRefAttr>("role") == target.getRole() &&
-        sourceRecord.get("delegation") == targetRecord.get("delegation") &&
-        sourceRecord.get("ownership") == targetRecord.get("ownership") &&
-        sourceRecord.get("time_domain") == targetRecord.get("time_domain"))
-      return success();
-    return emitOpError("resource bind endpoints must match exact "
-                       "initiator/target binding-lock records");
+    if (!source || !target || !sourceRecord || !targetRecord ||
+        sourceRecord.getAs<StringAttr>("mode").getValue() != "initiator" ||
+        targetRecord.getAs<StringAttr>("mode").getValue() != "target" ||
+        sourceRecord.getAs<FlatSymbolRefAttr>("resource") !=
+            source.getResource() ||
+        sourceRecord.getAs<FlatSymbolRefAttr>("role") != source.getRole() ||
+        targetRecord.getAs<FlatSymbolRefAttr>("resource") !=
+            target.getResource() ||
+        targetRecord.getAs<FlatSymbolRefAttr>("role") != target.getRole())
+      return emitOpError("resource bind endpoints must match exact "
+                         "initiator/target binding-lock records");
+    if (sourceRecord.get("resource") != targetRecord.get("resource") ||
+        sourceRecord.get("delegation") != targetRecord.get("delegation") ||
+        sourceRecord.get("ownership") != targetRecord.get("ownership") ||
+        sourceRecord.get("time_domain") != targetRecord.get("time_domain"))
+      return emitOpError(
+          "resource bind endpoints must have identical resource kind, "
+          "delegation, ownership, and time domain");
+    return success();
   } else if (getKind() == "pure_view") {
     if (getSource() != getTarget() &&
         getSource().getType() == getTarget().getType() &&
         isa<ExprType>(getSource().getType()))
       return success();
   } else if (getKind() == "export") {
-    if (getSource() != getTarget() &&
-        getSource().getType() == getTarget().getType())
+    auto target = getTarget().getDefiningOp<ExportOp>();
+    if (!target || getTarget() != target.getResult())
+      return emitOpError(
+          "export bind target must be the exact result of acsim.export");
+    if (getSource() != target.getValue())
+      return emitOpError(
+          "export bind source must be the exact input of its target "
+          "acsim.export");
+    if (getSource().getType() == getTarget().getType())
       return success();
   }
   return emitOpError("typed binding endpoints are not exactly compatible");
