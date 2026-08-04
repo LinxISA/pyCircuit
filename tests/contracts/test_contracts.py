@@ -296,6 +296,29 @@ class RepositoryContractsTest(unittest.TestCase):
         }
         validator.validate(unit_record)
 
+        stateful_duplicate_name = json.loads(json.dumps(record))
+        stateful_duplicate_name["effect"] = "stateful"
+        stateful_duplicate_name["cpp"]["entry_points"].update(
+            {"pure": "", "work": "gfsim::work", "xfer": "gfsim::xfer"}
+        )
+        stateful_duplicate_name["ownership"] = {
+            "kind": "unique",
+            "placement": "member_or_array",
+        }
+        stateful_duplicate_name["activation_sources"] = [
+            {"kind": "ac.std.Clock", "name": "wake"},
+            {"kind": "ac.std.Reset", "name": "wake"},
+        ]
+        # Draft 2020-12 cannot state unique-by-name. The schema accepts this
+        # structurally; BindingRecord semantic validation rejects it.
+        validator.validate(stateful_duplicate_name)
+        identical_activation = json.loads(json.dumps(stateful_duplicate_name))
+        identical_activation["activation_sources"][1] = dict(
+            identical_activation["activation_sources"][0]
+        )
+        with self.assertRaises(ValidationError):
+            validator.validate(identical_activation)
+
         def assert_closed_objects(fragment, path="#"):
             if isinstance(fragment, list):
                 for index, value in enumerate(fragment):

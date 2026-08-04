@@ -1,14 +1,18 @@
 #include "acir/Bindings/Registry.h"
 
+#include "BindingTestHooks.h"
+
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/StringMap.h"
+#include "llvm/ADT/StringSet.h"
 #include "llvm/Support/Errc.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/raw_ostream.h"
 
 #include <algorithm>
 #include <array>
+#include <optional>
 #include <tuple>
 
 namespace acir::bindings {
@@ -56,6 +60,47 @@ bool isSha256(llvm::StringRef value) {
            return llvm::isDigit(character) ||
                   (character >= 'a' && character <= 'f');
          });
+}
+
+bool isName(llvm::StringRef value) {
+  if (value.empty() || !(llvm::isAlpha(value.front()) || value.front() == '_'))
+    return false;
+  return llvm::all_of(value.drop_front(), [](char character) {
+    return llvm::isAlnum(character) || character == '_';
+  });
+}
+
+bool isIdentity(llvm::StringRef value) {
+  if (value.empty())
+    return false;
+  while (true) {
+    auto [segment, remainder] = value.split('.');
+    if (!isName(segment))
+      return false;
+    if (remainder.empty())
+      return true;
+    value = remainder;
+  }
+}
+
+bool isResolutionKey(llvm::StringRef value) {
+  while (true) {
+    if (!value.consume_front("@"))
+      return false;
+    auto [segment, remainder] = value.split("::");
+    if (!isName(segment))
+      return false;
+    if (remainder.empty())
+      return true;
+    value = remainder;
+  }
+}
+
+bool isSelectionToken(llvm::StringRef value) {
+  return !value.empty() && llvm::all_of(value, [](char character) {
+    return llvm::isAlnum(character) || character == '_' || character == '.' ||
+           character == '+' || character == '-';
+  });
 }
 
 template <typename Record, typename Parser>
@@ -156,6 +201,58 @@ bool matchesMetadata(const BindingRecord &record,
          matchesResources(record, request) && matchesResults(record, request) &&
          record.activationSources() ==
              llvm::ArrayRef<ActivationSourceBinding>(request.activationSources);
+}
+
+llvm::Error validateRequest(const BindingRequest &request,
+                            llvm::StringRef profile, llvm::StringRef target) {
+  if (request.contractEpoch != ContractEpoch)
+    return resolutionError("ACLOWER-EPOCH-MISMATCH", request,
+                           llvm::Twine("expected=") + ContractEpoch);
+  if (request.bindingSchema != BindingSchema)
+    return resolutionError("ACLOWER-SCHEMA-MISMATCH", request,
+                           llvm::Twine("expected=") + BindingSchema);
+  if (request.effect != "pure" && request.effect != "stateful")
+    return resolutionError("ACLOWER-INLINE-EFFECT", request,
+                           "effect must be pure or stateful");
+  if (!isSha256(request.componentSchemaFingerprint) ||
+      !isSha256(request.providerImplementationFingerprint))
+    return resolutionError("ACLOWER-FINGERPRINT", request,
+                           "request fingerprints are malformed");
+  if (!isSelectionToken(profile) || !isSelectionToken(target))
+    return resolutionError("ACLOWER-PROFILE", request,
+                           "profile or target syntax is invalid");
+  if (!isResolutionKey(request.resolutionKey) || !isName(request.binding) ||
+      !isIdentity(request.componentSchema) || !isIdentity(request.provider) ||
+      request.functionType.empty())
+    return resolutionError("ACLOWER-BINDING-MISSING", request,
+                           "request identity is malformed");
+
+  llvm::StringSet<> parameterNames;
+  for (size_t index = 0; index < request.parameters.size(); ++index) {
+    const ParameterRequirement &parameter = request.parameters[index];
+    if (parameter.ordinal != static_cast<int64_t>(index) ||
+        !isName(parameter.name) || parameter.acirType.empty() ||
+        !parameterNames.insert(parameter.name).second)
+      return resolutionError("ACLOWER-PARAM-PHASE", request,
+                             "request parameter metadata is malformed");
+    if (auto canonical = canonicalizeJson(parameter.value); !canonical)
+      return resolutionError("ACLOWER-PARAM-PHASE", request,
+                             llvm::toString(canonical.takeError()));
+  }
+
+  llvm::StringSet<> resultNames;
+  for (const ResultRequirement &result : request.results)
+    if (result.acirType.empty() || !isName(result.name) ||
+        !resultNames.insert(result.name).second)
+      return resolutionError("ACLOWER-TYPE-MISMATCH", request,
+                             "request result metadata is malformed");
+  llvm::StringSet<> activationNames;
+  for (const ActivationSourceBinding &activation : request.activationSources)
+    if (!isIdentity(activation.kind) || !isName(activation.name) ||
+        !activationNames.insert(activation.name).second)
+      return resolutionError("ACLOWER-TYPE-MISMATCH", request,
+                             "request activation metadata is malformed");
+  return llvm::Error::success();
 }
 
 llvm::Expected<BindingRequest>
@@ -358,7 +455,8 @@ BindingCandidate::BindingCandidate(std::shared_ptr<const Storage> storage)
 BindingCandidate::~BindingCandidate() = default;
 
 llvm::Expected<BindingCandidate>
-BindingCandidate::parse(const llvm::json::Object &object) {
+BindingCandidate::parse(const llvm::json::Object &object,
+                        const JsonParseLimits &limits) {
   static constexpr std::array<llvm::StringRef, 4> Keys = {
       "available", "profile", "record", "target"};
   if (object.size() != Keys.size() ||
@@ -372,7 +470,7 @@ BindingCandidate::parse(const llvm::json::Object &object) {
   if (!available || !profile || profile->empty() || !target ||
       target->empty() || !recordObject)
     return registryError("candidate selection metadata has invalid types");
-  auto record = BindingRecord::parse(*recordObject);
+  auto record = BindingRecord::parse(*recordObject, limits);
   if (!record)
     return record.takeError();
   return BindingCandidate(std::make_shared<Storage>(
@@ -416,7 +514,7 @@ parseBindingRegistry(llvm::StringRef input, const JsonParseLimits &limits) {
     const auto *object = value.getAsObject();
     if (!object)
       return registryError("registry candidate must be an object");
-    auto candidate = BindingCandidate::parse(*object);
+    auto candidate = BindingCandidate::parse(*object, limits);
     if (!candidate)
       return candidate.takeError();
     result.candidates.push_back(std::move(*candidate));
@@ -471,89 +569,19 @@ BindingRegistry::create(std::vector<BindingCandidate> candidates) {
 llvm::Expected<ResolvedBinding>
 BindingRegistry::resolve(const BindingRequest &request, llvm::StringRef profile,
                          llvm::StringRef target) const {
-  std::vector<const BindingCandidate *> identityCandidates;
+  if (llvm::Error error = validateRequest(request, profile, target))
+    return std::move(error);
+
+  std::vector<const BindingCandidate *> exactMatches;
   for (const BindingCandidate &candidate : orderedCandidates)
-    if (candidate.record().binding() == request.binding)
-      identityCandidates.push_back(&candidate);
-  if (identityCandidates.empty())
-    return resolutionError("ACLOWER-BINDING-MISSING", request,
-                           "no candidate has the exact binding identity");
-
-  auto narrow = [&](auto predicate) {
-    std::vector<const BindingCandidate *> matches;
-    for (const BindingCandidate *candidate : identityCandidates)
-      if (predicate(*candidate))
-        matches.push_back(candidate);
-    identityCandidates = std::move(matches);
-    return !identityCandidates.empty();
-  };
-
-  if (!narrow([&](const BindingCandidate &candidate) {
-        return candidate.record().contractEpoch() == request.contractEpoch;
-      }))
-    return resolutionError("ACLOWER-EPOCH-MISMATCH", request,
-                           llvm::Twine("expected=") + request.contractEpoch);
-
-  if (!narrow([&](const BindingCandidate &candidate) {
-        return candidate.record().bindingSchema() == request.bindingSchema &&
-               candidate.record().componentSchema() ==
-                   request.componentSchema &&
-               candidate.record().componentSchemaFingerprint() ==
-                   request.componentSchemaFingerprint;
-      }))
-    return resolutionError(
-        "ACLOWER-SCHEMA-MISMATCH", request,
-        llvm::Twine("schema=") + request.componentSchema +
-            " fingerprint=" + request.componentSchemaFingerprint);
-
-  if (!narrow([&](const BindingCandidate &candidate) {
-        return candidate.record().effect() == request.effect;
-      }))
-    return resolutionError("ACLOWER-INLINE-EFFECT", request,
-                           llvm::Twine("effect=") + request.effect);
-
-  if (!narrow([&](const BindingCandidate &candidate) {
-        return candidate.profile() == profile && candidate.target() == target;
-      }))
-    return resolutionError("ACLOWER-PROFILE", request,
-                           llvm::Twine("profile=") + profile +
-                               " target=" + target);
-
-  if (!narrow([&](const BindingCandidate &candidate) {
-        return matchesParameters(candidate.record(), request);
-      }))
-    return resolutionError("ACLOWER-PARAM-PHASE", request,
-                           "normalized static parameters differ");
-
-  if (!narrow([&](const BindingCandidate &candidate) {
-        return matchesPorts(candidate.record(), request) &&
-               matchesResources(candidate.record(), request) &&
-               matchesResults(candidate.record(), request) &&
-               candidate.record().activationSources() ==
-                   llvm::ArrayRef<ActivationSourceBinding>(
-                       request.activationSources);
-      }))
-    return resolutionError("ACLOWER-TYPE-MISMATCH", request,
-                           "concrete type or interface contract differs");
-
-  if (!narrow([&](const BindingCandidate &candidate) {
-        return candidate.record().provider() == request.provider &&
-               candidate.record().providerImplementationFingerprint() ==
-                   request.providerImplementationFingerprint;
-      }))
-    return resolutionError(
-        "ACLOWER-FINGERPRINT", request,
-        "provider identity or implementation fingerprint differs");
-
-  if (!narrow([&](const BindingCandidate &candidate) {
-        return candidate.available() &&
-               matchesMetadata(candidate.record(), request);
-      }))
-    return resolutionError("ACLOWER-BINDING-MISSING", request,
-                           "exact candidate is unavailable");
-  if (identityCandidates.size() != 1) {
+    if (candidate.profile() == profile && candidate.target() == target &&
+        candidate.available() && matchesMetadata(candidate.record(), request))
+      exactMatches.push_back(&candidate);
+  if (exactMatches.size() == 1)
+    return ResolvedBinding(request.resolutionKey, *exactMatches.front());
+  if (exactMatches.size() > 1) {
     std::string candidates;
-    for (const BindingCandidate *candidate : identityCandidates) {
+    for (const BindingCandidate *candidate : exactMatches) {
       if (!candidates.empty())
         candidates.push_back(',');
       candidates.append(candidate->record().fingerprint());
@@ -561,7 +589,74 @@ BindingRegistry::resolve(const BindingRequest &request, llvm::StringRef profile,
     return resolutionError("ACLOWER-BINDING-AMBIGUOUS", request,
                            llvm::Twine("candidates=") + candidates);
   }
-  return ResolvedBinding(request.resolutionKey, *identityCandidates.front());
+
+  std::vector<const BindingCandidate *> diagnosticCandidates;
+  for (const BindingCandidate &candidate : orderedCandidates)
+    if (candidate.record().binding() == request.binding)
+      diagnosticCandidates.push_back(&candidate);
+  if (diagnosticCandidates.empty())
+    return resolutionError("ACLOWER-BINDING-MISSING", request,
+                           "no candidate has the exact binding identity");
+
+  auto reasonIfEmpty = [&](llvm::StringRef reason,
+                           auto predicate) -> std::optional<std::string> {
+    std::vector<const BindingCandidate *> matches;
+    for (const BindingCandidate *candidate : diagnosticCandidates)
+      if (predicate(*candidate))
+        matches.push_back(candidate);
+    diagnosticCandidates = std::move(matches);
+    if (diagnosticCandidates.empty())
+      return (llvm::Twine("reason=") + reason).str();
+    return std::nullopt;
+  };
+
+#define ACIR_RETURN_MISSING_REASON(code, predicate)                            \
+  do {                                                                         \
+    if (auto reason = reasonIfEmpty(code, predicate))                          \
+      return resolutionError("ACLOWER-BINDING-MISSING", request, *reason);     \
+  } while (false)
+  ACIR_RETURN_MISSING_REASON(
+      "ACLOWER-EPOCH-MISMATCH", [&](const BindingCandidate &candidate) {
+        return candidate.record().contractEpoch() == request.contractEpoch;
+      });
+  ACIR_RETURN_MISSING_REASON(
+      "ACLOWER-SCHEMA-MISMATCH", [&](const BindingCandidate &candidate) {
+        return candidate.record().bindingSchema() == request.bindingSchema &&
+               candidate.record().componentSchema() ==
+                   request.componentSchema &&
+               candidate.record().componentSchemaFingerprint() ==
+                   request.componentSchemaFingerprint;
+      });
+  ACIR_RETURN_MISSING_REASON(
+      "ACLOWER-INLINE-EFFECT", [&](const BindingCandidate &candidate) {
+        return candidate.record().effect() == request.effect;
+      });
+  ACIR_RETURN_MISSING_REASON(
+      "ACLOWER-PROFILE", [&](const BindingCandidate &candidate) {
+        return candidate.profile() == profile && candidate.target() == target;
+      });
+  ACIR_RETURN_MISSING_REASON(
+      "ACLOWER-PARAM-PHASE", [&](const BindingCandidate &candidate) {
+        return matchesParameters(candidate.record(), request);
+      });
+  ACIR_RETURN_MISSING_REASON(
+      "ACLOWER-TYPE-MISMATCH", [&](const BindingCandidate &candidate) {
+        return matchesPorts(candidate.record(), request) &&
+               matchesResources(candidate.record(), request) &&
+               matchesResults(candidate.record(), request) &&
+               candidate.record().activationSources() ==
+                   llvm::ArrayRef<ActivationSourceBinding>(
+                       request.activationSources);
+      });
+  ACIR_RETURN_MISSING_REASON(
+      "ACLOWER-FINGERPRINT", [&](const BindingCandidate &candidate) {
+        return candidate.record().provider() == request.provider &&
+               candidate.record().providerImplementationFingerprint() ==
+                   request.providerImplementationFingerprint;
+      });
+#undef ACIR_RETURN_MISSING_REASON
+  return resolutionError("ACLOWER-BINDING-MISSING", request,
+                         "exact candidate is unavailable");
 }
 
 llvm::ArrayRef<BindingCandidate> BindingRegistry::candidates() const {
@@ -672,6 +767,10 @@ llvm::Error emitBindingLockAtomically(const BindingResolutionResult &result,
       llvm::consumeError(temporary->discard());
       return outputError("failed to flush canonical binding lock bytes");
     }
+  }
+  if (detail::shouldFailBindingPublish()) {
+    llvm::consumeError(temporary->discard());
+    return outputError("binding lock publication failed");
   }
   if (llvm::Error error = temporary->keep(outputPath))
     return outputError(llvm::Twine("cannot publish binding lock: ") +

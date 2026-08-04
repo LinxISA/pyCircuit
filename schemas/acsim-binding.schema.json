@@ -29,7 +29,9 @@
   "properties": {
     "activation_sources": {
       "type": "array",
-      "items": {"$ref": "#/$defs/activationSource"}
+      "items": {"$ref": "#/$defs/activationSource"},
+      "uniqueItems": true,
+      "$comment": "BindingRecord semantic validation additionally requires unique activation-source names, which JSON Schema cannot express."
     },
     "availability": {"const": "available"},
     "binding": {"$ref": "#/$defs/name"},

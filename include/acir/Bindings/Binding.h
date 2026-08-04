@@ -34,8 +34,11 @@ parseIJson(llvm::StringRef input,
            const JsonParseLimits &limits = JsonParseLimits());
 
 /// Emits RFC 8785 canonical UTF-8 bytes. Object names are ordered by unsigned
-/// UTF-16 code units recursively; arrays retain their input order.
-llvm::Expected<std::string> canonicalizeJson(const llvm::json::Value &value);
+/// UTF-16 code units recursively; arrays retain their input order. Constructed
+/// DOMs are preflighted against the same deterministic resource limits as text.
+llvm::Expected<std::string>
+canonicalizeJson(const llvm::json::Value &value,
+                 const JsonParseLimits &limits = JsonParseLimits());
 llvm::Expected<std::string>
 canonicalizeJsonText(llvm::StringRef input,
                      const JsonParseLimits &limits = JsonParseLimits());
@@ -137,7 +140,9 @@ public:
   BindingRecord &operator=(BindingRecord &&) noexcept = default;
   ~BindingRecord();
 
-  static llvm::Expected<BindingRecord> parse(const llvm::json::Object &object);
+  static llvm::Expected<BindingRecord>
+  parse(const llvm::json::Object &object,
+        const JsonParseLimits &limits = JsonParseLimits());
 
   llvm::StringRef bindingSchema() const;
   llvm::StringRef contractEpoch() const;

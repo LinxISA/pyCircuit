@@ -25,7 +25,8 @@ public:
   ~BindingCandidate();
 
   static llvm::Expected<BindingCandidate>
-  parse(const llvm::json::Object &object);
+  parse(const llvm::json::Object &object,
+        const JsonParseLimits &limits = JsonParseLimits());
 
   llvm::StringRef profile() const;
   llvm::StringRef target() const;

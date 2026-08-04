@@ -257,9 +257,7 @@ private:
       while (position < input.size() && llvm::isDigit(input[position]))
         ++position;
     }
-    bool integerLexeme = true;
     if (position < input.size() && input[position] == '.') {
-      integerLexeme = false;
       ++position;
       size_t fraction = position;
       while (position < input.size() && llvm::isDigit(input[position]))
@@ -269,7 +267,6 @@ private:
     }
     if (position < input.size() &&
         (input[position] == 'e' || input[position] == 'E')) {
-      integerLexeme = false;
       ++position;
       if (position < input.size() &&
           (input[position] == '+' || input[position] == '-'))
@@ -289,20 +286,103 @@ private:
       return jsonError("number is not a finite IEEE-754 binary64 value");
     if (negative && value == 0.0)
       return jsonError("negative zero is forbidden by RFC 8785 errata 7920");
-    if (integerLexeme) {
-      llvm::StringRef digits = token.drop_front(negative ? 1 : 0);
-      digits = digits.ltrim('0');
-      llvm::StringRef maximum = "9007199254740991";
-      if (digits.size() > maximum.size() ||
-          (digits.size() == maximum.size() && digits > maximum))
-        return jsonError("unsafe integer exceeds the exact I-JSON range");
-    }
     return llvm::Error::success();
   }
 
   llvm::StringRef input;
   const JsonParseLimits &limits;
   size_t position = 0;
+  size_t structuralWork = 0;
+  size_t totalStringBytes = 0;
+};
+
+class ConstructedJsonPreflight {
+public:
+  explicit ConstructedJsonPreflight(const JsonParseLimits &limits)
+      : limits(limits) {}
+
+  llvm::Error run(const llvm::json::Value &value) {
+    pending.push_back({&value, 1});
+    return drain();
+  }
+
+  llvm::Error run(const llvm::json::Object &object) {
+    if (llvm::Error error = enter(1))
+      return error;
+    if (llvm::Error error = visitObject(object, 1))
+      return error;
+    return drain();
+  }
+
+private:
+  struct Frame {
+    const llvm::json::Value *value;
+    size_t depth;
+  };
+
+  llvm::Error enter(size_t depth) {
+    if (depth > limits.maxDepth)
+      return jsonError("maximum depth exceeded");
+    if (++structuralWork > limits.maxStructuralWork)
+      return jsonError("structural work limit exceeded");
+    return llvm::Error::success();
+  }
+
+  llvm::Error accountString(llvm::StringRef string) {
+    if (string.size() > limits.maxStringBytes)
+      return jsonError("string byte limit exceeded");
+    totalStringBytes += string.size();
+    if (totalStringBytes > limits.maxTotalStringBytes)
+      return jsonError("total string byte limit exceeded");
+    return llvm::Error::success();
+  }
+
+  llvm::Error visitObject(const llvm::json::Object &object, size_t depth) {
+    if (object.size() > limits.maxObjectMembers)
+      return jsonError("object member limit exceeded");
+    for (const auto &entry : object) {
+      if (llvm::Error error = accountString(entry.first))
+        return error;
+      pending.push_back({&entry.second, depth + 1});
+    }
+    return llvm::Error::success();
+  }
+
+  llvm::Error drain() {
+    while (!pending.empty()) {
+      Frame frame = pending.pop_back_val();
+      if (llvm::Error error = enter(frame.depth))
+        return error;
+      const llvm::json::Value &value = *frame.value;
+      if (value.getAsNull() || value.getAsBoolean())
+        continue;
+      if (auto string = value.getAsString()) {
+        if (llvm::Error error = accountString(*string))
+          return error;
+        continue;
+      }
+      if (const auto *array = value.getAsArray()) {
+        if (array->size() > limits.maxArrayElements)
+          return jsonError("array element limit exceeded");
+        for (const llvm::json::Value &element : *array)
+          pending.push_back({&element, frame.depth + 1});
+        continue;
+      }
+      if (const auto *object = value.getAsObject()) {
+        if (llvm::Error error = visitObject(*object, frame.depth))
+          return error;
+        continue;
+      }
+      auto number = value.getAsNumber();
+      if (!number || !std::isfinite(*number) ||
+          (std::signbit(*number) && *number == 0.0))
+        return jsonError("constructed number is not canonical I-JSON");
+    }
+    return llvm::Error::success();
+  }
+
+  const JsonParseLimits &limits;
+  llvm::SmallVector<Frame, 64> pending;
   size_t structuralWork = 0;
   size_t totalStringBytes = 0;
 };
@@ -541,12 +621,6 @@ llvm::Error writeCanonical(const llvm::json::Value &value,
     return jsonError("unsupported JSON value kind");
   if (std::signbit(*number) && *number == 0.0)
     return jsonError("negative zero cannot be canonicalized");
-  if (auto integer = value.getAsInteger()) {
-    if (*integer < -MaxSafeInteger || *integer > MaxSafeInteger)
-      return jsonError("unsafe integer cannot be canonicalized");
-    output << *integer;
-    return llvm::Error::success();
-  }
   auto serialized = ecmascriptNumber(*number);
   if (!serialized)
     return serialized.takeError();
@@ -713,12 +787,18 @@ llvm::Expected<llvm::json::Value> parseIJson(llvm::StringRef input,
   return std::move(*parsed);
 }
 
-llvm::Expected<std::string> canonicalizeJson(const llvm::json::Value &value) {
+llvm::Expected<std::string> canonicalizeJson(const llvm::json::Value &value,
+                                             const JsonParseLimits &limits) {
+  ConstructedJsonPreflight preflight(limits);
+  if (llvm::Error error = preflight.run(value))
+    return std::move(error);
   std::string storage;
   llvm::raw_string_ostream output(storage);
   if (llvm::Error error = writeCanonical(value, output))
     return std::move(error);
   output.flush();
+  if (storage.size() > limits.maxInputBytes)
+    return jsonError("canonical output byte limit exceeded");
   return storage;
 }
 
@@ -727,7 +807,7 @@ canonicalizeJsonText(llvm::StringRef input, const JsonParseLimits &limits) {
   auto parsed = parseIJson(input, limits);
   if (!parsed)
     return parsed.takeError();
-  return canonicalizeJson(*parsed);
+  return canonicalizeJson(*parsed, limits);
 }
 
 std::string sha256Fingerprint(llvm::StringRef canonicalBytes) {
@@ -742,7 +822,11 @@ BindingRecord::BindingRecord(std::shared_ptr<const Storage> storage)
 BindingRecord::~BindingRecord() = default;
 
 llvm::Expected<BindingRecord>
-BindingRecord::parse(const llvm::json::Object &object) {
+BindingRecord::parse(const llvm::json::Object &object,
+                     const JsonParseLimits &limits) {
+  ConstructedJsonPreflight preflight(limits);
+  if (llvm::Error error = preflight.run(object))
+    return std::move(error);
   static constexpr std::array<llvm::StringRef, 20> TopKeys = {
       "activation_sources",
       "availability",
@@ -1115,6 +1199,10 @@ BindingRecord::parse(const llvm::json::Object &object) {
   if (result->effect == "pure" && !activations->empty())
     return metadataError(
         "pure binding cannot contain activation or wakeup metadata");
+  llvm::StringSet<> activationNames;
+  for (const ActivationSourceBinding &activation : *activations)
+    if (!activationNames.insert(activation.name).second)
+      return metadataError("binding activation-source names must be unique");
   result->activationSources = std::move(*activations);
 
   return BindingRecord(std::move(result));

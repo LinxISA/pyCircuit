@@ -1,3 +1,4 @@
+#include "Bindings/BindingTestHooks.h"
 #include "acir/Bindings/Binding.h"
 #include "acir/Bindings/Registry.h"
 #include "acir/Dialect/ACIR/GraphRegion.h"
@@ -11,6 +12,7 @@
 #include "llvm/Support/Error.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/JSON.h"
+#include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/Path.h"
 #include "llvm/Support/raw_ostream.h"
 #include "gmock/gmock.h"
@@ -244,6 +246,31 @@ BindingRequest exactRequest() {
   return requests.empty() ? BindingRequest() : std::move(requests.front());
 }
 
+void writeTestFile(llvm::StringRef path, llvm::StringRef bytes) {
+  std::error_code error;
+  llvm::raw_fd_ostream output(path, error);
+  ASSERT_FALSE(error) << error.message();
+  output << bytes;
+  output.flush();
+  ASSERT_FALSE(output.has_error());
+}
+
+std::string readTestFile(llvm::StringRef path) {
+  auto buffer = llvm::MemoryBuffer::getFile(path, false, false);
+  EXPECT_TRUE(static_cast<bool>(buffer))
+      << (buffer ? "" : buffer.getError().message());
+  return buffer ? (*buffer)->getBuffer().str() : std::string();
+}
+
+void expectNoBindingTemporaries(llvm::StringRef directory) {
+  std::error_code error;
+  for (llvm::sys::fs::directory_iterator iterator(directory, error), end;
+       iterator != end && !error; iterator.increment(error))
+    EXPECT_EQ(llvm::StringRef::npos,
+              llvm::sys::path::filename(iterator->path()).find(".tmp-"));
+  EXPECT_FALSE(error) << error.message();
+}
+
 TEST(CanonicalJsonTest, ImplementsTheAuthoritativeRfc8785Vector) {
   constexpr llvm::StringLiteral input = R"json({
     "numbers": [333333333.33333329, 1E30, 4.50, 2e-3, 0.000000000000000000000000001],
@@ -270,10 +297,26 @@ TEST(CanonicalJsonTest, ImplementsAuthoritativeRfc8785AppendixBNumbers) {
       {0x0000000000000000ULL, "0"},
       {0x0000000000000001ULL, "5e-324"},
       {0x8000000000000001ULL, "-5e-324"},
-      {0x433fffffffffffffULL, "9007199254740991"},
+      {0x7fefffffffffffffULL, "1.7976931348623157e+308"},
+      {0xffefffffffffffffULL, "-1.7976931348623157e+308"},
+      {0x4340000000000000ULL, "9007199254740992"},
+      {0xc340000000000000ULL, "-9007199254740992"},
+      {0x4430000000000000ULL, "295147905179352830000"},
+      {0x44b52d02c7e14af5ULL, "9.999999999999997e+22"},
       {0x44b52d02c7e14af6ULL, "1e+23"},
+      {0x44b52d02c7e14af7ULL, "1.0000000000000001e+23"},
+      {0x444b1ae4d6e2ef4eULL, "999999999999999700000"},
+      {0x444b1ae4d6e2ef4fULL, "999999999999999900000"},
       {0x444b1ae4d6e2ef50ULL, "1e+21"},
+      {0x3eb0c6f7a0b5ed8cULL, "9.999999999999997e-7"},
       {0x3eb0c6f7a0b5ed8dULL, "0.000001"},
+      {0x41b3de4355555553ULL, "333333333.3333332"},
+      {0x41b3de4355555554ULL, "333333333.33333325"},
+      {0x41b3de4355555555ULL, "333333333.3333333"},
+      {0x41b3de4355555556ULL, "333333333.3333334"},
+      {0x41b3de4355555557ULL, "333333333.33333343"},
+      {0xbecbf647612f3696ULL, "-0.0000033333333333333333"},
+      {0x43143ff3c1cb0959ULL, "1424953923781206.2"},
   };
   for (const Vector &vector : vectors) {
     double value = std::bit_cast<double>(vector.bits);
@@ -283,11 +326,25 @@ TEST(CanonicalJsonTest, ImplementsAuthoritativeRfc8785AppendixBNumbers) {
     EXPECT_EQ(vector.expected, *canonical) << vector.bits;
   }
 
-  auto unsafe = canonicalizeJson(
-      llvm::json::Value(std::bit_cast<double>(0x4340000000000000ULL)));
-  ASSERT_FALSE(static_cast<bool>(unsafe));
-  EXPECT_THAT(takeError(unsafe.takeError()),
-              testing::HasSubstr("unsafe integer"));
+  for (uint64_t bits :
+       {0x8000000000000000ULL, 0x7fffffffffffffffULL, 0x7ff0000000000000ULL}) {
+    auto rejected =
+        canonicalizeJson(llvm::json::Value(std::bit_cast<double>(bits)));
+    ASSERT_FALSE(static_cast<bool>(rejected)) << bits;
+    EXPECT_THAT(takeError(rejected.takeError()),
+                testing::HasSubstr("ACLOWER-BINDING-JSON"));
+  }
+
+  for (const auto &[input, expected] :
+       std::array<std::pair<llvm::StringLiteral, llvm::StringLiteral>, 2>{
+           std::pair{llvm::StringLiteral("9007199254740992"),
+                     llvm::StringLiteral("9007199254740992")},
+           std::pair{llvm::StringLiteral("9007199254740993"),
+                     llvm::StringLiteral("9007199254740992")}}) {
+    auto text = canonicalizeJsonText(input);
+    ASSERT_TRUE(static_cast<bool>(text)) << takeError(text.takeError());
+    EXPECT_EQ(expected, *text);
+  }
 }
 
 TEST(CanonicalJsonTest, SortsObjectPropertiesByUtf16CodeUnitsRecursively) {
@@ -302,8 +359,8 @@ TEST(CanonicalJsonTest, SortsObjectPropertiesByUtf16CodeUnitsRecursively) {
 }
 
 TEST(CanonicalJsonTest, RejectsDuplicateInvalidUnsafeAndNegativeZeroInputs) {
-  for (llvm::StringRef input : {R"({"x":1,"x":2})", R"("\udead")",
-                                "9007199254740992", "-0", "-0.0", "1e999"}) {
+  for (llvm::StringRef input :
+       {R"({"x":1,"x":2})", R"("\udead")", "-0", "-0.0", "1e999"}) {
     auto parsed = parseIJson(input);
     EXPECT_FALSE(static_cast<bool>(parsed)) << input.str();
     EXPECT_THAT(takeError(parsed.takeError()),
@@ -373,6 +430,92 @@ TEST(CanonicalJsonTest, AppliesEveryDeterministicResourceCap) {
               testing::HasSubstr("object member limit"));
 }
 
+TEST(CanonicalJsonTest, BoundsEveryConstructedDomBeforeCanonicalization) {
+  auto expectLimit = [](llvm::json::Value value, JsonParseLimits limits,
+                        llvm::StringRef message) {
+    auto canonical = canonicalizeJson(value, limits);
+    ASSERT_FALSE(static_cast<bool>(canonical));
+    EXPECT_THAT(takeError(canonical.takeError()),
+                testing::HasSubstr(message.str()));
+  };
+
+  JsonParseLimits depth;
+  depth.maxDepth = 3;
+  llvm::json::Value nested = nullptr;
+  for (size_t index = 0; index < 3; ++index) {
+    llvm::json::Array wrapper;
+    wrapper.push_back(std::move(nested));
+    nested = llvm::json::Value(std::move(wrapper));
+  }
+  expectLimit(std::move(nested), depth, "maximum depth");
+
+  JsonParseLimits work;
+  work.maxStructuralWork = 3;
+  expectLimit(llvm::json::Array({nullptr, nullptr, nullptr}), work,
+              "structural work");
+
+  JsonParseLimits string;
+  string.maxStringBytes = 1;
+  expectLimit("ab", string, "string byte limit");
+
+  JsonParseLimits totalStrings;
+  totalStrings.maxStringBytes = 8;
+  totalStrings.maxTotalStringBytes = 3;
+  expectLimit(llvm::json::Array({"ab", "cd"}), totalStrings,
+              "total string byte limit");
+
+  JsonParseLimits array;
+  array.maxArrayElements = 2;
+  expectLimit(llvm::json::Array({0, 1, 2}), array, "array element limit");
+
+  JsonParseLimits object;
+  object.maxObjectMembers = 1;
+  llvm::json::Object members;
+  members["a"] = 0;
+  members["b"] = 1;
+  expectLimit(std::move(members), object, "object member limit");
+
+  JsonParseLimits output;
+  output.maxInputBytes = 3;
+  expectLimit("ab", output, "canonical output byte limit");
+}
+
+TEST(BindingRecordTest, BoundsConstructedStaticValuesBeforeSemanticRecursion) {
+  auto parsed = parseIJson(recordJson());
+  ASSERT_TRUE(static_cast<bool>(parsed)) << takeError(parsed.takeError());
+  auto *object = parsed->getAsObject();
+  ASSERT_NE(nullptr, object);
+  auto *parameters = object->getArray("parameters");
+  ASSERT_NE(nullptr, parameters);
+  auto *parameter = (*parameters)[0].getAsObject();
+  ASSERT_NE(nullptr, parameter);
+  (*parameter)["value"] = llvm::json::Array({0, 1, 2});
+
+  JsonParseLimits limits;
+  limits.maxArrayElements = 2;
+  auto record = BindingRecord::parse(*object, limits);
+  ASSERT_FALSE(static_cast<bool>(record));
+  EXPECT_THAT(takeError(record.takeError()),
+              testing::HasSubstr("array element limit"));
+}
+
+TEST(BindingRecordTest, RestrictsSafeIntegerRangeOnlyForStaticMetadata) {
+  auto parsed = parseIJson(recordJson());
+  ASSERT_TRUE(static_cast<bool>(parsed)) << takeError(parsed.takeError());
+  auto *object = parsed->getAsObject();
+  ASSERT_NE(nullptr, object);
+  auto *parameters = object->getArray("parameters");
+  ASSERT_NE(nullptr, parameters);
+  auto *parameter = (*parameters)[0].getAsObject();
+  ASSERT_NE(nullptr, parameter);
+  (*parameter)["value"] = INT64_C(9007199254740992);
+
+  auto record = BindingRecord::parse(*object);
+  ASSERT_FALSE(static_cast<bool>(record));
+  EXPECT_THAT(takeError(record.takeError()),
+              testing::HasSubstr("safe exact range"));
+}
+
 TEST(BindingRecordTest, ParsesTheClosedTypedMetadataRecord) {
   auto candidates = parseCandidates(registryJson({candidateJson()}));
   ASSERT_EQ(1U, candidates.size());
@@ -435,6 +578,43 @@ TEST(BindingRecordTest, RejectsUnknownFieldsAndBehavioralCppFragments) {
   ASSERT_FALSE(static_cast<bool>(parsedParameterType));
   EXPECT_THAT(takeError(parsedParameterType.takeError()),
               testing::HasSubstr("raw C++ or emitter behavior"));
+}
+
+TEST(BindingRecordTest, RejectsDuplicateStatefulActivationSourceNames) {
+  auto parsed = parseIJson(recordJson());
+  ASSERT_TRUE(static_cast<bool>(parsed)) << takeError(parsed.takeError());
+  auto *object = parsed->getAsObject();
+  ASSERT_NE(nullptr, object);
+  (*object)["effect"] = "stateful";
+  auto *cpp = object->getObject("cpp");
+  auto *entryPoints = cpp ? cpp->getObject("entry_points") : nullptr;
+  auto *ownership = object->getObject("ownership");
+  ASSERT_NE(nullptr, entryPoints);
+  ASSERT_NE(nullptr, ownership);
+  (*entryPoints)["pure"] = "";
+  (*entryPoints)["work"] = "gfsim::work";
+  (*entryPoints)["xfer"] = "gfsim::xfer";
+  (*ownership)["kind"] = "unique";
+  (*ownership)["placement"] = "member_or_array";
+  llvm::json::Array activations;
+  activations.push_back(
+      llvm::json::Object({{"kind", "ac.std.Clock"}, {"name", "wake"}}));
+  activations.push_back(
+      llvm::json::Object({{"kind", "ac.std.Reset"}, {"name", "wake"}}));
+  (*object)["activation_sources"] = std::move(activations);
+
+  auto duplicate = BindingRecord::parse(*object);
+  ASSERT_FALSE(static_cast<bool>(duplicate));
+  EXPECT_THAT(takeError(duplicate.takeError()),
+              testing::HasSubstr("activation-source names must be unique"));
+
+  auto *sources = object->getArray("activation_sources");
+  ASSERT_NE(nullptr, sources);
+  auto *reset = (*sources)[1].getAsObject();
+  ASSERT_NE(nullptr, reset);
+  (*reset)["name"] = "reset";
+  auto unique = BindingRecord::parse(*object);
+  ASSERT_TRUE(static_cast<bool>(unique)) << takeError(unique.takeError());
 }
 
 TEST(BindingRecordTest, RejectsMalformedRegistryEnvelopeAndResourceCaps) {
@@ -516,16 +696,54 @@ TEST(BindingRegistryTest, MissingUnavailableAndAmbiguousAreHardFailures) {
               testing::HasSubstr("ACLOWER-BINDING-AMBIGUOUS"));
 }
 
-TEST(BindingRegistryTest, ReportsEveryExactMismatchClassDeterministically) {
+TEST(BindingRegistryTest,
+     ClassifiesMalformedInputsBeforeExactMatchCardinality) {
   auto candidates = parseCandidates(registryJson({candidateJson()}));
   BindingRequest exact = exactRequest();
-  struct Mismatch {
+  struct Malformed {
     llvm::StringLiteral code;
     void (*mutate)(BindingRequest &);
   };
-  const Mismatch mismatches[] = {
+  const Malformed malformed[] = {
       {"ACLOWER-EPOCH-MISMATCH",
        [](BindingRequest &request) { request.contractEpoch = "0.2"; }},
+      {"ACLOWER-SCHEMA-MISMATCH",
+       [](BindingRequest &request) {
+         request.bindingSchema = "acsim-binding-0.2";
+       }},
+      {"ACLOWER-INLINE-EFFECT",
+       [](BindingRequest &request) { request.effect = "invalid"; }},
+      {"ACLOWER-FINGERPRINT",
+       [](BindingRequest &request) {
+         request.providerImplementationFingerprint = "not-a-fingerprint";
+       }},
+  };
+
+  for (const Malformed &input : malformed) {
+    BindingRequest request = exact;
+    input.mutate(request);
+    auto result =
+        resolveBindings(candidates, {request}, "fast", "arm64-apple-darwin");
+    ASSERT_FALSE(static_cast<bool>(result)) << input.code.str();
+    EXPECT_THAT(takeError(result.takeError()),
+                testing::StartsWith(input.code.str()));
+  }
+
+  auto invalidProfile =
+      resolveBindings(candidates, {exact}, "fast debug", "arm64-apple-darwin");
+  ASSERT_FALSE(static_cast<bool>(invalidProfile));
+  EXPECT_THAT(takeError(invalidProfile.takeError()),
+              testing::StartsWith("ACLOWER-PROFILE"));
+}
+
+TEST(BindingRegistryTest, ZeroExactMatchesAreMissingWithSubordinateReason) {
+  auto candidates = parseCandidates(registryJson({candidateJson()}));
+  BindingRequest exact = exactRequest();
+  struct Mismatch {
+    llvm::StringLiteral reason;
+    void (*mutate)(BindingRequest &);
+  };
+  const Mismatch mismatches[] = {
       {"ACLOWER-SCHEMA-MISMATCH",
        [](BindingRequest &request) {
          request.componentSchema = "ac.std.Other";
@@ -551,9 +769,11 @@ TEST(BindingRegistryTest, ReportsEveryExactMismatchClassDeterministically) {
     mismatch.mutate(request);
     auto result =
         resolveBindings(candidates, {request}, "fast", "arm64-apple-darwin");
-    ASSERT_FALSE(static_cast<bool>(result)) << mismatch.code.str();
+    ASSERT_FALSE(static_cast<bool>(result)) << mismatch.reason.str();
     std::string message = takeError(result.takeError());
-    EXPECT_THAT(message, testing::HasSubstr(mismatch.code.str()));
+    EXPECT_THAT(message, testing::StartsWith("ACLOWER-BINDING-MISSING"));
+    EXPECT_THAT(message, testing::HasSubstr(
+                             (llvm::Twine("reason=") + mismatch.reason).str()));
     EXPECT_THAT(message, testing::HasSubstr("key=@Leaf"));
   }
 
@@ -562,8 +782,9 @@ TEST(BindingRegistryTest, ReportsEveryExactMismatchClassDeterministically) {
                                  {"fast", "x86_64-linux-gnu"}}) {
     auto result = resolveBindings(candidates, {exact}, profile, target);
     ASSERT_FALSE(static_cast<bool>(result));
-    EXPECT_THAT(takeError(result.takeError()),
-                testing::HasSubstr("ACLOWER-PROFILE"));
+    std::string message = takeError(result.takeError());
+    EXPECT_THAT(message, testing::StartsWith("ACLOWER-BINDING-MISSING"));
+    EXPECT_THAT(message, testing::HasSubstr("reason=ACLOWER-PROFILE"));
   }
 }
 
@@ -622,6 +843,8 @@ TEST(BindingLockTest, PublishesAtomicallyOnlyAfterCompleteResolution) {
   llvm::sys::path::append(successPath, "acsim-bindings.lock.json");
   llvm::SmallString<160> failurePath(directory);
   llvm::sys::path::append(failurePath, "failed.lock.json");
+  llvm::SmallString<160> existingPath(directory);
+  llvm::sys::path::append(existingPath, "existing.lock.json");
 
   auto candidates = parseCandidates(registryJson({candidateJson()}));
   BindingRequest request = exactRequest();
@@ -638,6 +861,16 @@ TEST(BindingLockTest, PublishesAtomicallyOnlyAfterCompleteResolution) {
               testing::HasSubstr("ACLOWER-BINDING-MISSING"));
   EXPECT_FALSE(llvm::sys::fs::exists(failurePath));
 
+  constexpr llvm::StringLiteral sentinel = "existing-lock-sentinel\n";
+  writeTestFile(existingPath, sentinel);
+  llvm::Error existingResolutionFailure = resolveAndWriteBindingLock(
+      candidates, {missing}, "fast", "arm64-apple-darwin", existingPath);
+  ASSERT_TRUE(static_cast<bool>(existingResolutionFailure));
+  EXPECT_THAT(takeError(std::move(existingResolutionFailure)),
+              testing::HasSubstr("ACLOWER-BINDING-MISSING"));
+  EXPECT_EQ(sentinel, readTestFile(existingPath));
+  expectNoBindingTemporaries(directory);
+
   llvm::SmallString<160> invalidParent(directory);
   llvm::sys::path::append(invalidParent, "missing", "lock.json");
   auto result =
@@ -647,6 +880,17 @@ TEST(BindingLockTest, PublishesAtomicallyOnlyAfterCompleteResolution) {
   ASSERT_TRUE(static_cast<bool>(writeFailure));
   EXPECT_THAT(takeError(std::move(writeFailure)),
               testing::HasSubstr("ACLOWER-BINDING-OUTPUT"));
+
+  {
+    detail::ScopedBindingPublishFailure failure;
+    llvm::Error publishFailure =
+        emitBindingLockAtomically(*result, existingPath);
+    ASSERT_TRUE(static_cast<bool>(publishFailure));
+    EXPECT_THAT(takeError(std::move(publishFailure)),
+                testing::HasSubstr("ACLOWER-BINDING-OUTPUT"));
+  }
+  EXPECT_EQ(sentinel, readTestFile(existingPath));
+  expectNoBindingTemporaries(directory);
 }
 
 TEST(ResolveBindingsApiTest, ReturnsTypedResultWithoutMutatingFrozenTopology) {
