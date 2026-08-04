@@ -69,6 +69,36 @@ struct ReservationStateResource
   llvm::StringRef getName() final { return "ac.resource.reservation"; }
 };
 
+struct ModuleStateResource
+    : public mlir::SideEffects::Resource::Base<ModuleStateResource> {
+  llvm::StringRef getName() final { return "ac.module.state"; }
+};
+
+struct StorageStateResource
+    : public mlir::SideEffects::Resource::Base<StorageStateResource> {
+  llvm::StringRef getName() final { return "ac.storage.state"; }
+};
+
+struct ProtocolStateResource
+    : public mlir::SideEffects::Resource::Base<ProtocolStateResource> {
+  llvm::StringRef getName() final { return "ac.protocol.state"; }
+};
+
+struct TracePositionResource
+    : public mlir::SideEffects::Resource::Base<TracePositionResource> {
+  llvm::StringRef getName() final { return "ac.trace.position"; }
+};
+
+struct ExternalIOResource
+    : public mlir::SideEffects::Resource::Base<ExternalIOResource> {
+  llvm::StringRef getName() final { return "ac.external_io"; }
+};
+
+struct StatisticsResource
+    : public mlir::SideEffects::Resource::Base<StatisticsResource> {
+  llvm::StringRef getName() final { return "ac.statistics"; }
+};
+
 /// Resolves all Task7 cross-operation references from the ac.module producer
 /// index and verifies address/time parent graphs exactly once per module.
 mlir::LogicalResult verifyModuleResourceReferences(

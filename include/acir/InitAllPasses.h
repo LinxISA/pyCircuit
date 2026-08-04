@@ -6,6 +6,7 @@
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Pass/PassRegistry.h"
+#include "mlir/Transforms/Passes.h"
 
 #include <memory>
 
@@ -111,6 +112,7 @@ public:
 };
 
 inline void registerAllPasses() {
+  mlir::registerTransformsPasses();
   mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
     return std::make_unique<NormalizeACIRFilePass>();
   });

@@ -1,7 +1,7 @@
 add_executable(acir-opt acir-opt.cpp)
 set(ACIR_OPT_LIBRARIES
     AgenticCircuit::ProjectOptions ACIRDialect ACSimDialect MLIRIndexDialect
-    MLIRSCFDialect MLIROptLib)
+    MLIRSCFDialect MLIRTransforms MLIROptLib)
 target_link_libraries(acir-opt PRIVATE ${ACIR_OPT_LIBRARIES})
 
 if(BUILD_TESTING)

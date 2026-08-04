@@ -33,4 +33,26 @@ def ACIR_ProtocolContainer : OpInterface<"ProtocolContainerOpInterface"> {
   ];
 }
 
+def ACIR_ProcessRegion : OpInterface<"ProcessRegionOpInterface"> {
+  let cppNamespace = "::acir::ac";
+  let methods = [
+    InterfaceMethod<"Returns the resumable SSACFG process region.",
+                    "::mlir::Region &", "getProcessBody", (ins), [{
+      return $_op.getBody();
+    }]>,
+    InterfaceMethod<"Returns the process execution kind.",
+                    "::llvm::StringRef", "getProcessKind", (ins), [{
+      return $_op.getKind();
+    }]>
+  ];
+}
+
+def ACIR_Observation : OpInterface<"ObservationOpInterface"> {
+  let cppNamespace = "::acir::ac";
+  let methods = [
+    InterfaceMethod<"Returns true for operations barred from functional dataflow.",
+                    "bool", "isObservationOnly", (ins), [{ return true; }]>
+  ];
+}
+
 #endif

@@ -1254,8 +1254,8 @@ LogicalResult verifyStaticArgumentSet(Operation *op, DictionaryAttr arguments,
 
 bool isStructuralGraphChild(Operation &child) {
   return isa<InstanceOp, ArrayOp, InstancesOp, ViewOp, QueueOp, EventQueueOp,
-             ResourceOp, AddressSpaceOp, AddressMapOp, TimeDomainOp, ReturnOp>(
-      child);
+             ResourceOp, AddressSpaceOp, AddressMapOp, TimeDomainOp, ProcessOp,
+             RequireOp, EnsureOp, StatOp, ReturnOp>(child);
 }
 
 bool isStableHierarchySegment(StringRef segment) {
@@ -1439,6 +1439,10 @@ LogicalResult ModuleOp::verify() {
       localName = addressMap.getSymNameAttr();
     } else if (auto timeDomain = dyn_cast<TimeDomainOp>(child)) {
       localName = timeDomain.getSymNameAttr();
+    } else if (auto process = dyn_cast<ProcessOp>(child)) {
+      localName = process.getSymNameAttr();
+    } else if (auto stat = dyn_cast<StatOp>(child)) {
+      localName = stat.getSymNameAttr();
     }
     if (localName && !localNames.insert(localName.getValue()).second)
       return child.emitOpError() << "duplicate local structural name '"
@@ -1454,6 +1458,19 @@ LogicalResult ModuleOp::verify() {
   }
   if (entry.empty() || !isa<ReturnOp>(entry.back()))
     return emitOpError("module Graph region must end with ac.return");
+  llvm::StringMap<Operation *> traceSources;
+  for (ProcessOp process : entry.getOps<ProcessOp>()) {
+    WalkResult result = process.getBody().walk([&](TraceOpenOp trace) {
+      if (!traceSources.try_emplace(trace.getSource(), trace).second) {
+        trace.emitOpError() << "trace source '" << trace.getSource()
+                            << "' must have exactly one cursor owner";
+        return WalkResult::interrupt();
+      }
+      return WalkResult::advance();
+    });
+    if (result.wasInterrupted())
+      return failure();
+  }
   for (Operation &child : entry) {
     LogicalResult local = TypeSwitch<Operation *, LogicalResult>(&child)
                               .Case<QueueOp, EventQueueOp, ResourceOp,
@@ -1987,6 +2004,557 @@ LogicalResult verifyTopologyTypeUses(Operation *operation) {
       failed(verifyAttribute(LocationAttr(operation->getLoc()))))
     return failure();
   return success();
+}
+
+namespace {
+
+SymbolRefAttr qualifiedRuntimeOwner(Operation *operation, StringRef local) {
+  if (auto definition = operation->getParentOfType<ModuleOp>())
+    return SymbolRefAttr::get(
+        operation->getContext(), definition.getSymName(),
+        {FlatSymbolRefAttr::get(operation->getContext(), local)});
+  return SymbolRefAttr::get(operation->getContext(), local);
+}
+
+DictionaryAttr runtimeEffectParameters(Operation *operation, StringRef kind,
+                                       StringRef identity) {
+  Builder builder(operation->getContext());
+  return builder.getDictionaryAttr({
+      builder.getNamedAttr("identity_phase",
+                           builder.getStringAttr("definition_pre_freeze")),
+      builder.getNamedAttr("owner_kind", builder.getStringAttr(kind)),
+      builder.getNamedAttr("identity", builder.getStringAttr(identity)),
+  });
+}
+
+void addEffect(SmallVectorImpl<MemoryEffects::EffectInstance> &effects,
+               Operation *operation, MemoryEffects::Effect *effect,
+               StringRef identity, StringRef kind,
+               SideEffects::Resource *resource) {
+  effects.emplace_back(effect, qualifiedRuntimeOwner(operation, identity),
+                       runtimeEffectParameters(operation, kind, identity),
+                       resource);
+}
+
+DictionaryAttr contractEffectParameters(Operation *operation, StringRef phase,
+                                        StringRef identity) {
+  Builder builder(operation->getContext());
+  return builder.getDictionaryAttr({
+      builder.getNamedAttr("identity_phase",
+                           builder.getStringAttr("definition_pre_freeze")),
+      builder.getNamedAttr("owner_kind", builder.getStringAttr("contract")),
+      builder.getNamedAttr("identity", builder.getStringAttr(identity)),
+      builder.getNamedAttr("contract_phase", builder.getStringAttr(phase)),
+  });
+}
+
+ProcessOp enclosingProcess(Operation *operation) {
+  return operation->getParentOfType<ProcessOp>();
+}
+
+LogicalResult requireProcess(Operation *operation) {
+  if (enclosingProcess(operation))
+    return success();
+  return operation->emitOpError("must be nested in ac.process");
+}
+
+StringRef processIdentity(Operation *operation) {
+  ProcessOp process = enclosingProcess(operation);
+  return process ? process.getSymName() : StringRef("invalid_process");
+}
+
+void addContractEffect(
+    SmallVectorImpl<MemoryEffects::EffectInstance> &effects,
+    Operation *operation) {
+  if (!isa<AssertOp>(operation) &&
+      isa_and_nonnull<ModuleOp>(operation->getParentOp())) {
+    constexpr StringLiteral identity = "contracts";
+    effects.emplace_back(
+        MemoryEffects::Read::get(), qualifiedRuntimeOwner(operation, identity),
+        contractEffectParameters(operation, "topology_freeze", identity),
+        ModuleStateResource::get());
+    return;
+  }
+  StringRef identity = processIdentity(operation);
+  effects.emplace_back(
+      MemoryEffects::Write::get(), qualifiedRuntimeOwner(operation, identity),
+      contractEffectParameters(operation, "runtime", identity),
+      ExternalIOResource::get());
+}
+
+std::string traceOwnerIdentity(Operation *operation, StringRef trace) {
+  return (processIdentity(operation) + "/" + trace).str();
+}
+
+FailureOr<StringAttr> traceIdentity(Value cursor) {
+  Operation *definition = cursor.getDefiningOp();
+  if (auto open = dyn_cast_or_null<TraceOpenOp>(definition))
+    return open.getSourceAttr();
+  if (auto next = dyn_cast_or_null<TraceNextOp>(definition);
+      next && cursor == next.getCursor())
+    return next.getSourceAttr();
+  return failure();
+}
+
+LogicalResult verifyTraceCursor(Operation *operation, Value cursor) {
+  if (!cursor.getType().isIndex())
+    return operation->emitOpError("trace cursor operand must have index type");
+  if (failed(traceIdentity(cursor)))
+    return operation->emitOpError(
+        "trace cursor must originate from ac.trace.open or ac.trace.next");
+  return success();
+}
+
+bool isSuspension(Operation *operation) {
+  return isa<WaitUntilOp, WaitForOp, AwaitEventOp, YieldSimOp>(operation);
+}
+
+bool isLinearAcrossSuspension(Type type) {
+  return isa<FlowType, ResourceTokenType>(type);
+}
+
+bool isAllowedProcessOperation(Operation *operation) {
+  StringRef name = operation->getName().getStringRef();
+  if (name.starts_with("arith.") || name.starts_with("index.") ||
+      name.starts_with("scf."))
+    return true;
+  return isa<RecordCreateOp, RecordGetOp, RecordWithOp, PacketSerializeOp,
+             PacketDeserializeOp, TrySendOp, TryRecvOp, ScheduleOp,
+             WaitUntilOp, WaitForOp, AwaitEventOp, YieldSimOp, TraceOpenOp,
+             TraceNextOp, TraceDecodeOp, TraceEofOp, TracePositionOp,
+             RequireOp, EnsureOp, AssertOp, ProbeOp, StatAddOp,
+             InstrumentationOp>(operation);
+}
+
+template <typename Callback>
+WalkResult walkOperationsIterative(Region &region, Callback callback) {
+  SmallVector<Operation *> worklist;
+  for (Block &block : llvm::reverse(region))
+    for (Operation &operation : llvm::reverse(block))
+      worklist.push_back(&operation);
+  while (!worklist.empty()) {
+    Operation *operation = worklist.pop_back_val();
+    if (callback(operation).wasInterrupted())
+      return WalkResult::interrupt();
+    for (Region &nested : llvm::reverse(operation->getRegions()))
+      for (Block &block : llvm::reverse(nested))
+        for (Operation &child : llvm::reverse(block))
+          worklist.push_back(&child);
+  }
+  return WalkResult::advance();
+}
+
+bool isObservationConsumer(Operation *operation) {
+  return isa<ObservationOpInterface>(operation) ||
+         operation->getParentOfType<InstrumentationOp>();
+}
+
+SideEffects::Resource *probeResource(StringRef kind) {
+  return llvm::StringSwitch<SideEffects::Resource *>(kind)
+      .Case("queue", QueueStateResource::get())
+      .Case("resource", ReservationStateResource::get())
+      .Case("module", ModuleStateResource::get())
+      .Case("storage", StorageStateResource::get())
+      .Case("protocol", ProtocolStateResource::get())
+      .Case("trace", TracePositionResource::get())
+      .Case("event_queue", EventQueueStateResource::get())
+      .Case("external_io", ExternalIOResource::get())
+      .Case("statistics", StatisticsResource::get())
+      .Default(ExternalIOResource::get());
+}
+
+} // namespace
+
+LogicalResult ProcessOp::verify() {
+  if (!isa_and_nonnull<ModuleOp>((*this)->getParentOp()))
+    return emitOpError("must be a direct child of ac.module");
+  if (!isStableHierarchySegment(getSymName()))
+    return emitOpError(
+        "symbol name must be one stable hierarchy owner segment");
+  if (getKind() != "control" && getKind() != "workload" &&
+      getKind() != "monitor")
+    return emitOpError(
+        "kind must be 'control', 'workload', or 'monitor'");
+  if (getBody().empty())
+    return emitOpError("requires one non-empty body block");
+  if (!llvm::equal(getBody().front().getArgumentTypes(),
+                   getCaptures().getTypes()))
+    return emitOpError("body arguments must exactly match capture types");
+  if (!isa<YieldSimOp>(getBody().front().back()))
+    return emitOpError("body must terminate with ac.yield_sim");
+
+  LogicalResult result = success();
+  walkOperationsIterative(getBody(), [&](Operation *operation) {
+    if (!isAllowedProcessOperation(operation)) {
+      operation->emitOpError() << "ac.process contains unsupported operation "
+                               << operation->getName();
+      result = failure();
+      return WalkResult::interrupt();
+    }
+    StringRef name = operation->getName().getStringRef();
+    if ((name.starts_with("arith.") || name.starts_with("index.")) &&
+        !isMemoryEffectFree(operation)) {
+      operation->emitOpError(
+          "arith/index operation in ac.process must be memory-effect free");
+      result = failure();
+      return WalkResult::interrupt();
+    }
+    if (getKind() == "monitor" &&
+        isa<TrySendOp, TryRecvOp, ScheduleOp, WaitForOp>(operation)) {
+      operation->emitOpError(
+          "monitor process cannot perform functional state effects");
+      result = failure();
+      return WalkResult::interrupt();
+    }
+    if (name == "scf.while") {
+      bool hasSuspension = false;
+      for (Region &region : operation->getRegions())
+        walkOperationsIterative(region, [&](Operation *nested) {
+          hasSuspension |= isSuspension(nested);
+          return hasSuspension ? WalkResult::interrupt()
+                               : WalkResult::advance();
+        });
+      if (!hasSuspension) {
+        operation->emitOpError(
+            "scf.while in ac.process must contain an explicit suspension point");
+        result = failure();
+        return WalkResult::interrupt();
+      }
+    }
+    return WalkResult::advance();
+  });
+  if (failed(result))
+    return failure();
+
+  llvm::DenseMap<Operation *, unsigned> order;
+  SmallVector<Operation *> orderedOperations;
+  unsigned ordinal = 0;
+  walkOperationsIterative(getBody(), [&](Operation *operation) {
+    order.try_emplace(operation, ordinal++);
+    orderedOperations.push_back(operation);
+    return WalkResult::advance();
+  });
+  SmallVector<unsigned> suspensions;
+  for (Operation *operation : orderedOperations)
+    if (isSuspension(operation))
+      suspensions.push_back(order.lookup(operation));
+  llvm::sort(suspensions);
+  auto verifyLiveValue = [&](Value value,
+                             int64_t definitionOrder) -> LogicalResult {
+    if (!isLinearAcrossSuspension(value.getType()))
+      return success();
+    auto firstLater = llvm::upper_bound(suspensions, definitionOrder);
+    if (firstLater == suspensions.end())
+      return success();
+    for (OpOperand &use : value.getUses()) {
+      auto found = order.find(use.getOwner());
+      if (found != order.end() && *firstLater < found->second)
+        return emitOpError()
+               << "value of type " << value.getType()
+               << " cannot remain live across suspension";
+    }
+    return success();
+  };
+  for (BlockArgument capture : getBody().front().getArguments())
+    if (failed(verifyLiveValue(capture, -1)))
+      return failure();
+  for (Operation *operation : orderedOperations)
+    for (Value value : operation->getResults())
+      if (failed(verifyLiveValue(value, order.lookup(operation))))
+        return failure();
+
+  walkOperationsIterative(getBody(), [&](Operation *operation) {
+    for (Value value : operation->getResults()) {
+      bool isCursor = false;
+      if (auto open = dyn_cast<TraceOpenOp>(operation))
+        isCursor = value == open.getCursor();
+      else if (auto next = dyn_cast<TraceNextOp>(operation))
+        isCursor = value == next.getCursor();
+      if (!isCursor)
+        continue;
+      unsigned advancingUses = 0;
+      for (Operation *user : value.getUsers()) {
+        if (isa<TraceNextOp>(user))
+          ++advancingUses;
+        else if (!isa<TraceEofOp, TracePositionOp>(user)) {
+          user->emitOpError("trace cursor may only feed trace cursor operations");
+          result = failure();
+          return WalkResult::interrupt();
+        }
+      }
+      if (advancingUses > 1) {
+        operation->emitOpError(
+            "trace cursor must have at most one consuming use");
+        result = failure();
+        return WalkResult::interrupt();
+      }
+    }
+    return WalkResult::advance();
+  });
+  return result;
+}
+
+LogicalResult TrySendOp::verify() { return requireProcess(*this); }
+LogicalResult TryRecvOp::verify() { return requireProcess(*this); }
+
+LogicalResult ScheduleOp::verify() {
+  if (Operation *definition = getDelay().getDefiningOp();
+      definition && definition->getName().getStringRef() == "arith.constant") {
+    auto value = definition->getAttrOfType<IntegerAttr>("value");
+    if (value && value.getInt() < 0)
+      return emitOpError("schedule delay must be non-negative");
+  }
+  return requireProcess(*this);
+}
+
+LogicalResult WaitUntilOp::verify() { return requireProcess(*this); }
+LogicalResult WaitForOp::verify() { return requireProcess(*this); }
+LogicalResult AwaitEventOp::verify() { return requireProcess(*this); }
+
+LogicalResult YieldSimOp::verify() {
+  ProcessOp process = enclosingProcess(*this);
+  if (!process || (*this)->getParentOp() != process)
+    return emitOpError("must directly terminate an ac.process body");
+  if (&(*this)->getBlock()->back() != getOperation())
+    return emitOpError("must be the final operation in ac.process");
+  return success();
+}
+
+LogicalResult TraceOpenOp::verify() {
+  if (!isStableHierarchySegment(getSource()))
+    return emitOpError(
+        "trace source must be one stable logical identifier segment");
+  return requireProcess(*this);
+}
+
+LogicalResult TraceNextOp::verify() {
+  if (failed(requireProcess(*this)))
+    return failure();
+  FailureOr<StringAttr> owner = traceIdentity(getInputCursor());
+  if (failed(owner))
+    return emitOpError(
+        "trace cursor must originate from ac.trace.open or ac.trace.next");
+  if ((*owner).getValue() != getSource())
+    return emitOpError("trace cursor owner does not match 'from source'");
+  return success();
+}
+
+LogicalResult TraceDecodeOp::verify() {
+  auto next = getEntry().getDefiningOp<TraceNextOp>();
+  if (!next || getEntry() != next.getEntry())
+    return emitOpError("trace.decode input must be an ac.trace.next entry");
+  return requireProcess(*this);
+}
+
+LogicalResult TraceEofOp::verify() {
+  if (failed(requireProcess(*this)))
+    return failure();
+  if (failed(verifyTraceCursor(*this, getInputCursor())))
+    return failure();
+  if ((*traceIdentity(getInputCursor())).getValue() != getSource())
+    return emitOpError("trace cursor owner does not match 'from source'");
+  return success();
+}
+
+LogicalResult TracePositionOp::verify() {
+  if (failed(requireProcess(*this)))
+    return failure();
+  if (failed(verifyTraceCursor(*this, getInputCursor())))
+    return failure();
+  if ((*traceIdentity(getInputCursor())).getValue() != getSource())
+    return emitOpError("trace cursor owner does not match 'from source'");
+  return success();
+}
+
+LogicalResult RequireOp::verify() {
+  if (isa_and_nonnull<ModuleOp>((*this)->getParentOp()))
+    return success();
+  return requireProcess(*this);
+}
+
+LogicalResult EnsureOp::verify() {
+  if (isa_and_nonnull<ModuleOp>((*this)->getParentOp()))
+    return success();
+  return requireProcess(*this);
+}
+
+LogicalResult AssertOp::verify() { return requireProcess(*this); }
+
+LogicalResult ProbeOp::verify() {
+  if (!probeResource(getKind()) ||
+      !hasStringValue(getKind(), {"queue", "resource", "module", "storage",
+                                  "protocol", "trace", "event_queue",
+                                  "external_io", "statistics"}))
+    return emitOpError("unsupported probe resource kind '")
+           << getKind() << "'";
+  if (failed(requireProcess(*this)))
+    return failure();
+  for (Operation *user : getValue().getUsers())
+    if (!isObservationConsumer(user))
+      return emitOpError(
+          "probe result may only feed observation operations");
+  return success();
+}
+
+LogicalResult StatOp::verify() {
+  if (!isa_and_nonnull<ModuleOp>((*this)->getParentOp()))
+    return emitOpError("must be a direct child of ac.module");
+  if (!isStableHierarchySegment(getSymName()))
+    return emitOpError(
+        "symbol name must be one stable hierarchy owner segment");
+  if (!hasStringValue(getKind(),
+                      {"counter", "gauge", "histogram", "event_log"}))
+    return emitOpError(
+        "kind must be 'counter', 'gauge', 'histogram', or 'event_log'");
+  return success();
+}
+
+LogicalResult StatAddOp::verify() { return requireProcess(*this); }
+
+LogicalResult InstrumentationOp::verify() {
+  if (!enclosingProcess(*this))
+    return emitOpError("must be nested in ac.process");
+  LogicalResult result = success();
+  walkOperationsIterative(getBody(), [&](Operation *operation) {
+    if (isa<ObservationOpInterface>(operation) || isMemoryEffectFree(operation))
+      return WalkResult::advance();
+    operation->emitOpError(
+        "instrumentation may contain only removable observation operations");
+    result = failure();
+    return WalkResult::interrupt();
+  });
+  return result;
+}
+
+void TrySendOp::getEffects(
+    SmallVectorImpl<MemoryEffects::EffectInstance> &effects) {
+  addEffect(effects, *this, MemoryEffects::Read::get(), getQueue(), "queue",
+            QueueStateResource::get());
+  addEffect(effects, *this, MemoryEffects::Write::get(), getQueue(), "queue",
+            QueueStateResource::get());
+  addEffect(effects, *this, MemoryEffects::Read::get(), getQueue(), "protocol",
+            ProtocolStateResource::get());
+  addEffect(effects, *this, MemoryEffects::Write::get(), getQueue(), "protocol",
+            ProtocolStateResource::get());
+}
+
+void TryRecvOp::getEffects(
+    SmallVectorImpl<MemoryEffects::EffectInstance> &effects) {
+  addEffect(effects, *this, MemoryEffects::Read::get(), getQueue(), "queue",
+            QueueStateResource::get());
+  addEffect(effects, *this, MemoryEffects::Write::get(), getQueue(), "queue",
+            QueueStateResource::get());
+  addEffect(effects, *this, MemoryEffects::Read::get(), getQueue(), "protocol",
+            ProtocolStateResource::get());
+  addEffect(effects, *this, MemoryEffects::Write::get(), getQueue(), "protocol",
+            ProtocolStateResource::get());
+}
+
+void ScheduleOp::getEffects(
+    SmallVectorImpl<MemoryEffects::EffectInstance> &effects) {
+  addEffect(effects, *this, MemoryEffects::Write::get(), getTarget(), "module",
+            ModuleStateResource::get());
+  addEffect(effects, *this, MemoryEffects::Write::get(), getTarget(),
+            "event_queue", EventQueueStateResource::get());
+}
+
+void WaitUntilOp::getEffects(
+    SmallVectorImpl<MemoryEffects::EffectInstance> &effects) {
+  addEffect(effects, *this, MemoryEffects::Read::get(), processIdentity(*this),
+            "event_queue", EventQueueStateResource::get());
+  addEffect(effects, *this, MemoryEffects::Write::get(), processIdentity(*this),
+            "module", ModuleStateResource::get());
+}
+
+void WaitForOp::getEffects(
+    SmallVectorImpl<MemoryEffects::EffectInstance> &effects) {
+  addEffect(effects, *this, MemoryEffects::Read::get(), getResource(),
+            "resource", ReservationStateResource::get());
+  addEffect(effects, *this, MemoryEffects::Write::get(), processIdentity(*this),
+            "module", ModuleStateResource::get());
+}
+
+void AwaitEventOp::getEffects(
+    SmallVectorImpl<MemoryEffects::EffectInstance> &effects) {
+  addEffect(effects, *this, MemoryEffects::Read::get(), getEventQueue(),
+            "event_queue", EventQueueStateResource::get());
+  addEffect(effects, *this, MemoryEffects::Write::get(), processIdentity(*this),
+            "module", ModuleStateResource::get());
+}
+
+void YieldSimOp::getEffects(
+    SmallVectorImpl<MemoryEffects::EffectInstance> &effects) {
+  addEffect(effects, *this, MemoryEffects::Write::get(), processIdentity(*this),
+            "module", ModuleStateResource::get());
+}
+
+void TraceOpenOp::getEffects(
+    SmallVectorImpl<MemoryEffects::EffectInstance> &effects) {
+  std::string identity = traceOwnerIdentity(*this, getSource());
+  addEffect(effects, *this, MemoryEffects::Read::get(), identity,
+            "external_io", ExternalIOResource::get());
+  addEffect(effects, *this, MemoryEffects::Write::get(), identity, "trace",
+            TracePositionResource::get());
+}
+
+void TraceNextOp::getEffects(
+    SmallVectorImpl<MemoryEffects::EffectInstance> &effects) {
+  std::string identity = traceOwnerIdentity(*this, getSource());
+  addEffect(effects, *this, MemoryEffects::Read::get(), identity, "trace",
+            TracePositionResource::get());
+  addEffect(effects, *this, MemoryEffects::Write::get(), identity, "trace",
+            TracePositionResource::get());
+  addEffect(effects, *this, MemoryEffects::Read::get(), identity,
+            "external_io", ExternalIOResource::get());
+}
+
+void TraceEofOp::getEffects(
+    SmallVectorImpl<MemoryEffects::EffectInstance> &effects) {
+  std::string identity = traceOwnerIdentity(*this, getSource());
+  addEffect(effects, *this, MemoryEffects::Read::get(), identity, "trace",
+            TracePositionResource::get());
+}
+
+void TracePositionOp::getEffects(
+    SmallVectorImpl<MemoryEffects::EffectInstance> &effects) {
+  std::string identity = traceOwnerIdentity(*this, getSource());
+  addEffect(effects, *this, MemoryEffects::Read::get(), identity, "trace",
+            TracePositionResource::get());
+}
+
+void RequireOp::getEffects(
+    SmallVectorImpl<MemoryEffects::EffectInstance> &effects) {
+  addContractEffect(effects, *this);
+}
+
+void EnsureOp::getEffects(
+    SmallVectorImpl<MemoryEffects::EffectInstance> &effects) {
+  addContractEffect(effects, *this);
+}
+
+void AssertOp::getEffects(
+    SmallVectorImpl<MemoryEffects::EffectInstance> &effects) {
+  addContractEffect(effects, *this);
+}
+
+void ProbeOp::getEffects(
+    SmallVectorImpl<MemoryEffects::EffectInstance> &effects) {
+  addEffect(effects, *this, MemoryEffects::Read::get(), getTarget(), getKind(),
+            probeResource(getKind()));
+}
+
+void StatOp::getEffects(
+    SmallVectorImpl<MemoryEffects::EffectInstance> &effects) {
+  addEffect(effects, *this, MemoryEffects::Write::get(), getSymName(),
+            "statistics", StatisticsResource::get());
+}
+
+void StatAddOp::getEffects(
+    SmallVectorImpl<MemoryEffects::EffectInstance> &effects) {
+  addEffect(effects, *this, MemoryEffects::Read::get(), getStat(),
+            "statistics", StatisticsResource::get());
+  addEffect(effects, *this, MemoryEffects::Write::get(), getStat(),
+            "statistics", StatisticsResource::get());
 }
 
 } // namespace acir::ac

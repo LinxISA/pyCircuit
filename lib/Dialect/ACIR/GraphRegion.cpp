@@ -285,15 +285,46 @@ static LogicalResult verifyGraphStructureImpl(
   }
 
   llvm::DenseMap<Operation *, ExpansionStats> expansionMemo;
+  llvm::DenseMap<Operation *, SmallVector<std::pair<std::string, Operation *>>>
+      traceSourceMemo;
   for (ModuleOp module : postorder) {
     ExpansionStats stats;
+    SmallVector<std::pair<std::string, Operation *>> traceSources;
+    llvm::StringMap<Operation *> traceSourceIndex;
+    auto addTraceSource = [&](StringRef source,
+                              Operation *owner) -> LogicalResult {
+      if (!traceSourceIndex.try_emplace(source, owner).second)
+        return owner->emitOpError()
+               << "trace source '" << source
+               << "' has multiple elaborated cursor owners";
+      traceSources.push_back({source.str(), owner});
+      return success();
+    };
+    auto mergeTraceSources = [&](Operation *definition, uint64_t multiplicity,
+                                 Operation *owner) -> LogicalResult {
+      auto found = traceSourceMemo.find(definition);
+      if (found == traceSourceMemo.end() || found->second.empty() ||
+          multiplicity == 0)
+        return success();
+      if (multiplicity > 1)
+        return owner->emitOpError()
+               << "trace source '" << found->second.front().first
+               << "' has multiple elaborated cursor owners";
+      for (const auto &[source, declaration] : found->second)
+        if (failed(addTraceSource(source, declaration)))
+          return failure();
+      return success();
+    };
     for (Operation &child : module.getBody().front()) {
       ExpansionStats childStats;
       uint64_t localOwners = 0;
       uint64_t localDepth = 0;
       if (auto instance = dyn_cast<InstanceOp>(child)) {
-        childStats = expansionMemo.lookup(
-            lookupDefinition(symbols, instance.getDefinitionAttr()));
+        Operation *definition =
+            lookupDefinition(symbols, instance.getDefinitionAttr());
+        childStats = expansionMemo.lookup(definition);
+        if (failed(mergeTraceSources(definition, 1, &child)))
+          return failure();
         localOwners =
             saturatedAdd(1, childStats.owners, maxHierarchyOwners + 1);
         localDepth = saturatedAdd(1, childStats.depth, maxHierarchyDepth + 1);
@@ -302,8 +333,11 @@ static LogicalResult verifyGraphStructureImpl(
         for (int64_t extent : array.getShape())
           count = saturatedMultiply(count, static_cast<uint64_t>(extent),
                                     maxHierarchyOwners + 1);
-        childStats = expansionMemo.lookup(
-            lookupDefinition(symbols, array.getDefinitionAttr()));
+        Operation *definition =
+            lookupDefinition(symbols, array.getDefinitionAttr());
+        childStats = expansionMemo.lookup(definition);
+        if (failed(mergeTraceSources(definition, count, &child)))
+          return failure();
         uint64_t perElement =
             saturatedAdd(1, childStats.owners, maxHierarchyOwners + 1);
         localOwners = saturatedAdd(
@@ -316,8 +350,11 @@ static LogicalResult verifyGraphStructureImpl(
         localOwners = 1;
         localDepth = 1;
         for (Attribute reference : instances.getDefinitions()) {
-          childStats = expansionMemo.lookup(
-              lookupDefinition(symbols, cast<FlatSymbolRefAttr>(reference)));
+          Operation *definition = lookupDefinition(
+              symbols, cast<FlatSymbolRefAttr>(reference));
+          childStats = expansionMemo.lookup(definition);
+          if (failed(mergeTraceSources(definition, 1, &child)))
+            return failure();
           localOwners = saturatedAdd(
               localOwners,
               saturatedAdd(1, childStats.owners, maxHierarchyOwners + 1),
@@ -326,15 +363,26 @@ static LogicalResult verifyGraphStructureImpl(
               std::max(localDepth, saturatedAdd(2, childStats.depth,
                                                 maxHierarchyDepth + 1));
         }
-      } else if (isa<QueueOp, EventQueueOp, ResourceOp>(child)) {
+      } else if (isa<QueueOp, EventQueueOp, ResourceOp, ProcessOp, StatOp>(
+                     child)) {
         localOwners = 1;
         localDepth = 1;
+      }
+      if (auto process = dyn_cast<ProcessOp>(child)) {
+        WalkResult result = process.getBody().walk([&](TraceOpenOp trace) {
+          if (failed(addTraceSource(trace.getSource(), trace)))
+            return WalkResult::interrupt();
+          return WalkResult::advance();
+        });
+        if (result.wasInterrupted())
+          return failure();
       }
       stats.owners =
           saturatedAdd(stats.owners, localOwners, maxHierarchyOwners + 1);
       stats.depth = std::max(stats.depth, localDepth);
     }
     expansionMemo[module] = stats;
+    traceSourceMemo[module] = std::move(traceSources);
   }
   ExpansionStats selectedStats = expansionMemo.lookup(selectedRoot);
   if (selectedStats.depth > maxHierarchyDepth)
@@ -437,6 +485,26 @@ static LogicalResult verifyGraphStructureImpl(
       } else if (auto resource = dyn_cast<ResourceOp>(child)) {
         std::string path = (parentPath + "." + resource.getPath()).str();
         std::string id = (parentId + "/" + resource.getStableId()).str();
+        if (failed(registerOwner(&child, path, id)))
+          return failure();
+        if (elaboratedStateOwners)
+          elaboratedStateOwners->push_back({&child, path, id});
+      } else if (auto process = dyn_cast<ProcessOp>(child)) {
+        std::string path = (parentPath + "." + process.getSymName()).str();
+        std::string id = (parentId + "/" + process.getSymName()).str();
+        if (failed(registerOwner(&child, path, id)))
+          return failure();
+        if (elaboratedStateOwners) {
+          SmallVector<std::string> sources;
+          process.getBody().walk([&](TraceOpenOp trace) {
+            sources.push_back(trace.getSource().str());
+          });
+          elaboratedStateOwners->push_back(
+              {&child, path, id, std::move(sources)});
+        }
+      } else if (auto stat = dyn_cast<StatOp>(child)) {
+        std::string path = (parentPath + "." + stat.getSymName()).str();
+        std::string id = (parentId + "/" + stat.getSymName()).str();
         if (failed(registerOwner(&child, path, id)))
           return failure();
         if (elaboratedStateOwners)

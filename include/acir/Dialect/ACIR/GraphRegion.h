@@ -19,13 +19,15 @@ namespace acir::ac {
 
 class ACIRDialect;
 
-/// Absolute identity assigned to a Task 7 state owner by static hierarchy
+/// Absolute identity assigned to a Task 7/8 state owner by static hierarchy
 /// elaboration. This is intentionally distinct from the pre-freeze,
 /// definition-qualified identity exposed by the declaration's effect.
 struct ElaboratedStateOwner {
   mlir::Operation *declaration;
   std::string path;
   std::string stableId;
+  /// Logical harness-bound trace sources owned by this process instance.
+  llvm::SmallVector<std::string> traceSources;
 };
 
 /// Context-owned registry of exact build-time structural providers. The
@@ -61,8 +63,8 @@ getStructuralProviderRegistry(mlir::MLIRContext *context);
 /// the statically-resolved subset of topology freeze implemented by ACIR v0.1.
 mlir::LogicalResult verifyGraphStructure(mlir::Operation *topLevel);
 
-/// Verifies the graph and returns every elaborated queue/event/resource owner
-/// in deterministic hierarchy order.
+/// Verifies the graph and returns every elaborated queue/event/resource,
+/// process, and statistics owner in deterministic hierarchy order.
 mlir::LogicalResult collectElaboratedStateOwners(
     mlir::Operation *topLevel,
     llvm::SmallVectorImpl<ElaboratedStateOwner> &owners);

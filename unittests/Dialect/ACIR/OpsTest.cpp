@@ -5,6 +5,7 @@
 #include "acir/InitAllDialects.h"
 
 #include "mlir/AsmParser/AsmParser.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/DLTI/DLTI.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
@@ -257,13 +258,16 @@ TEST(ACIROpsTest, TaskFiveRegistryContainsExactlyTheRequiredNewOperations) {
       "ac.array",
       "ac.address_map",
       "ac.address_space",
+      "ac.assert",
       "ac.enum",
+      "ac.ensure",
       "ac.event",
       "ac.event_queue",
       "ac.guarantee",
       "ac.interface",
       "ac.instance",
       "ac.instances",
+      "ac.instrumentation",
       "ac.module",
       "ac.module.extern",
       "ac.module.generated",
@@ -271,24 +275,41 @@ TEST(ACIROpsTest, TaskFiveRegistryContainsExactlyTheRequiredNewOperations) {
       "ac.packet.deserialize",
       "ac.packet.serialize",
       "ac.port",
+      "ac.probe",
+      "ac.process",
       "ac.protocol",
       "ac.queue",
       "ac.record.create",
       "ac.record.get",
       "ac.record.with",
+      "ac.require",
       "ac.return",
       "ac.resource",
       "ac.role",
       "ac.state",
+      "ac.stat",
+      "ac.stat.add",
       "ac.struct",
       "ac.system",
       "ac.time_domain",
       "ac.transaction",
       "ac.transition",
+      "ac.trace.decode",
+      "ac.trace.eof",
+      "ac.trace.next",
+      "ac.trace.open",
+      "ac.trace.position",
+      "ac.try_recv",
+      "ac.try_send",
       "ac.type_alias",
       "ac.type_scope",
       "ac.union",
       "ac.view",
+      "ac.await_event",
+      "ac.schedule",
+      "ac.wait_for",
+      "ac.wait_until",
+      "ac.yield_sim",
   };
   llvm::sort(expected);
   EXPECT_EQ(actual, expected);
@@ -388,7 +409,149 @@ TEST(ACIROpsTest, TaskSixRegistryDeltaIsExactlyNineGraphOperations) {
     EXPECT_TRUE(mlir::OperationName(name, &context).isRegistered())
         << name.str();
   EXPECT_FALSE(mlir::OperationName("ac.connect", &context).isRegistered());
-  EXPECT_FALSE(mlir::OperationName("ac.process", &context).isRegistered());
+  EXPECT_FALSE(mlir::OperationName("ac.freeze", &context).isRegistered());
+}
+
+TEST(ACIROpsTest, PublicBuildersConstructEveryTaskEightOperation) {
+  mlir::MLIRContext context;
+  context.loadDialect<ACIRDialect, mlir::arith::ArithDialect>();
+  mlir::OpBuilder builder(&context);
+  auto loc = builder.getUnknownLoc();
+  auto file = mlir::ModuleOp::create(loc);
+  builder.setInsertionPointToStart(file.getBody());
+  auto module = ModuleOp::create(builder, loc, "M",
+                                 builder.getFunctionType({}, {}),
+                                 builder.getDictionaryAttr({}));
+  builder.setInsertionPointToStart(module.addEntryBlock());
+
+  auto stat = StatOp::create(builder, loc, "count", "counter");
+  EXPECT_TRUE(stat);
+  auto process = ProcessOp::create(builder, loc, "p", "control",
+                                   mlir::ValueRange{});
+  auto *body = &process.getBody().emplaceBlock();
+  builder.setInsertionPointToStart(body);
+  auto i1 = mlir::arith::ConstantOp::create(builder, loc,
+                                            builder.getBoolAttr(true));
+  auto i32 = mlir::arith::ConstantOp::create(builder, loc,
+                                             builder.getI32IntegerAttr(7));
+  auto i64 = mlir::arith::ConstantOp::create(builder, loc,
+                                             builder.getI64IntegerAttr(1));
+  auto send = TrySendOp::create(builder, loc, builder.getI1Type(), i32, "q");
+  auto recv = TryRecvOp::create(builder, loc, builder.getI32Type(),
+                                builder.getI1Type(), "q");
+  EXPECT_TRUE(send && recv);
+  auto schedule = ScheduleOp::create(builder, loc, i32, i64, "worker");
+  auto waitUntil = WaitUntilOp::create(builder, loc, i1);
+  auto waitFor = WaitForOp::create(builder, loc, "resource");
+  auto awaitEvent = AwaitEventOp::create(builder, loc, "events");
+  EXPECT_TRUE(schedule && waitUntil && waitFor && awaitEvent);
+  auto cursor = TraceOpenOp::create(builder, loc, builder.getIndexType(),
+                                    "pto");
+  EXPECT_EQ(cursor.getSource(), "pto");
+  auto next = TraceNextOp::create(builder, loc, builder.getIndexType(),
+                                  builder.getI32Type(), builder.getI1Type(),
+                                  cursor, "pto");
+  auto decoded = TraceDecodeOp::create(builder, loc, builder.getI64Type(),
+                                       next.getEntry());
+  auto position = TracePositionOp::create(builder, loc, builder.getIndexType(),
+                                          next.getCursor(), "pto");
+  auto eof = TraceEofOp::create(builder, loc, builder.getI1Type(),
+                                next.getCursor(), "pto");
+  EXPECT_TRUE(decoded && eof);
+  auto runtimeRequire = RequireOp::create(builder, loc, i1, "require");
+  EXPECT_TRUE(runtimeRequire);
+  EXPECT_TRUE(EnsureOp::create(builder, loc, i1, "ensure"));
+  EXPECT_TRUE(AssertOp::create(builder, loc, i1, "assert"));
+  auto probe = ProbeOp::create(builder, loc, builder.getI64Type(), "q",
+                               "queue");
+  auto storageProbe = ProbeOp::create(builder, loc, builder.getI64Type(),
+                                      "memory", "storage");
+  auto statAdd = StatAddOp::create(builder, loc, probe, "count");
+  EXPECT_TRUE(statAdd && storageProbe);
+  auto instrumentation =
+      InstrumentationOp::create(builder, loc, "debug");
+  instrumentation.getBody().emplaceBlock();
+  auto yield = YieldSimOp::create(builder, loc);
+  EXPECT_TRUE(yield);
+
+  auto effectsOf = [](mlir::Operation *operation) {
+    llvm::SmallVector<mlir::MemoryEffects::EffectInstance> effects;
+    mlir::cast<mlir::MemoryEffectOpInterface>(operation).getEffects(effects);
+    return effects;
+  };
+  auto hasResource = [&](mlir::Operation *operation,
+                         mlir::SideEffects::Resource *resource) {
+    return llvm::any_of(effectsOf(operation), [&](const auto &effect) {
+      return effect.getResource() == resource && effect.getSymbolRef();
+    });
+  };
+  EXPECT_TRUE(hasResource(send, QueueStateResource::get()));
+  EXPECT_TRUE(hasResource(send, ProtocolStateResource::get()));
+  EXPECT_TRUE(hasResource(waitFor, ReservationStateResource::get()));
+  EXPECT_TRUE(hasResource(schedule, ModuleStateResource::get()));
+  EXPECT_TRUE(hasResource(storageProbe, StorageStateResource::get()));
+  EXPECT_TRUE(hasResource(awaitEvent, EventQueueStateResource::get()));
+  EXPECT_TRUE(hasResource(cursor, TracePositionResource::get()));
+  EXPECT_TRUE(hasResource(cursor, ExternalIOResource::get()));
+  EXPECT_TRUE(hasResource(stat, StatisticsResource::get()));
+  auto runtimeContractEffects = effectsOf(runtimeRequire);
+  ASSERT_EQ(runtimeContractEffects.size(), 1u);
+  auto runtimeContractParameters = mlir::cast<mlir::DictionaryAttr>(
+      runtimeContractEffects.front().getParameters());
+  EXPECT_EQ(runtimeContractParameters
+                .getAs<mlir::StringAttr>("contract_phase")
+                .getValue(),
+            "runtime");
+  EXPECT_FALSE(mlir::isMemoryEffectFree(send));
+  EXPECT_FALSE(mlir::isMemoryEffectFree(next));
+  EXPECT_FALSE(mlir::isMemoryEffectFree(position));
+  EXPECT_FALSE(mlir::isMemoryEffectFree(eof));
+  EXPECT_FALSE(mlir::isMemoryEffectFree(statAdd));
+
+  auto traceSymbol = [&](mlir::Operation *operation) {
+    for (const auto &effect : effectsOf(operation))
+      if (effect.getResource() == TracePositionResource::get())
+        return effect.getSymbolRef();
+    return mlir::SymbolRefAttr();
+  };
+  EXPECT_EQ(traceSymbol(cursor), traceSymbol(next));
+  EXPECT_EQ(traceSymbol(cursor), traceSymbol(position));
+  EXPECT_EQ(traceSymbol(cursor), traceSymbol(eof));
+  EXPECT_EQ(traceSymbol(cursor),
+            mlir::SymbolRefAttr::get(
+                &context, "M",
+                {mlir::FlatSymbolRefAttr::get(&context, "p/pto")}));
+  unsigned positionWrites = llvm::count_if(
+      effectsOf(position), [](const auto &effect) {
+        return effect.getResource() == TracePositionResource::get() &&
+               mlir::isa<mlir::MemoryEffects::Write>(effect.getEffect());
+      });
+  unsigned eofWrites = llvm::count_if(effectsOf(eof), [](const auto &effect) {
+    return effect.getResource() == TracePositionResource::get() &&
+           mlir::isa<mlir::MemoryEffects::Write>(effect.getEffect());
+  });
+  EXPECT_EQ(positionWrites, 0u);
+  EXPECT_EQ(eofWrites, 0u);
+}
+
+TEST(ACIROpsTest, TaskEightRegistryDeltaIsExactlyTwentyOperations) {
+  mlir::MLIRContext context;
+  context.loadDialect<ACIRDialect>();
+  const std::array<llvm::StringLiteral, 20> names = {
+      "ac.process",       "ac.try_send",      "ac.try_recv",
+      "ac.schedule",      "ac.wait_until",    "ac.wait_for",
+      "ac.await_event",   "ac.yield_sim",     "ac.trace.open",
+      "ac.trace.next",    "ac.trace.decode",  "ac.trace.eof",
+      "ac.trace.position", "ac.require",       "ac.ensure",
+      "ac.assert",        "ac.probe",         "ac.stat",
+      "ac.stat.add",      "ac.instrumentation",
+  };
+  for (llvm::StringLiteral name : names)
+    EXPECT_TRUE(mlir::OperationName(name, &context).isRegistered())
+        << name.str();
+  EXPECT_FALSE(mlir::OperationName("ac.try_issue", &context).isRegistered());
+  EXPECT_FALSE(mlir::OperationName("ac.connect", &context).isRegistered());
+  EXPECT_EQ(context.getRegisteredOperationsByDialect("ac").size(), 55u);
 }
 
 TEST(ACIROpsTest, LargeArrayVerificationIsDeterministic) {
@@ -727,6 +890,317 @@ TEST(ACIROpsTest, TaskSevenOwnersRegisterAtDistinctAbsoluteInstancePaths) {
   EXPECT_EQ(owners[5].stableId, "root/right/state");
 }
 
+TEST(ACIROpsTest, TaskEightOwnersRegisterAtDistinctAbsoluteInstancePaths) {
+  mlir::MLIRContext context;
+  context.loadDialect<ACIRDialect>();
+  mlir::OpBuilder builder(&context);
+  auto loc = builder.getUnknownLoc();
+  auto emptyType = builder.getFunctionType({}, {});
+  auto emptyDictionary = builder.getDictionaryAttr({});
+  auto file = mlir::ModuleOp::create(loc);
+  builder.setInsertionPointToStart(file.getBody());
+  auto leaf = ModuleOp::create(builder, loc, "Leaf", emptyType,
+                               emptyDictionary);
+  builder.setInsertionPointToStart(leaf.addEntryBlock());
+  auto process = ProcessOp::create(builder, loc, "worker", "workload",
+                                   mlir::ValueRange{});
+  builder.setInsertionPointToStart(&process.getBody().emplaceBlock());
+  YieldSimOp::create(builder, loc);
+  builder.setInsertionPointToEnd(&leaf.getBody().front());
+  StatOp::create(builder, loc, "requests", "counter");
+  ReturnOp::create(builder, loc, mlir::ValueRange{});
+
+  builder.setInsertionPointToEnd(file.getBody());
+  auto top = ModuleOp::create(builder, loc, "Top", emptyType, emptyDictionary);
+  builder.setInsertionPointToStart(top.addEntryBlock());
+  InstanceOp::create(builder, loc, mlir::TypeRange{}, mlir::ValueRange{},
+                     "Leaf", "left", "left", "left", emptyDictionary);
+  InstanceOp::create(builder, loc, mlir::TypeRange{}, mlir::ValueRange{},
+                     "Leaf", "right", "right", "right", emptyDictionary);
+  ReturnOp::create(builder, loc, mlir::ValueRange{});
+
+  builder.setInsertionPointToEnd(file.getBody());
+  auto seed = builder.getDictionaryAttr({
+      builder.getNamedAttr("kind", builder.getStringAttr("fixed")),
+      builder.getNamedAttr("value", builder.getI64IntegerAttr(0)),
+  });
+  auto results = builder.getDictionaryAttr({
+      builder.getNamedAttr("id", builder.getStringAttr("owners")),
+      builder.getNamedAttr("format", builder.getStringAttr("json")),
+  });
+  SystemOp::create(builder, loc, "owners", "Top", "root", 0, "cycle",
+                   mlir::FlatSymbolRefAttr(), seed, builder.getArrayAttr({}),
+                   results, true);
+
+  llvm::SmallVector<ElaboratedStateOwner> owners;
+  ASSERT_TRUE(mlir::succeeded(collectElaboratedStateOwners(file, owners)));
+  ASSERT_EQ(owners.size(), 4u);
+  EXPECT_EQ(owners[0].path, "root.left.worker");
+  EXPECT_EQ(owners[0].stableId, "root/left/worker");
+  EXPECT_EQ(owners[1].path, "root.left.requests");
+  EXPECT_EQ(owners[1].stableId, "root/left/requests");
+  EXPECT_EQ(owners[2].path, "root.right.worker");
+  EXPECT_EQ(owners[2].stableId, "root/right/worker");
+  EXPECT_EQ(owners[3].path, "root.right.requests");
+  EXPECT_EQ(owners[3].stableId, "root/right/requests");
+}
+
+TEST(ACIROpsTest, TaskEightOwnersParticipateInSaturatedArrayBudget) {
+  mlir::MLIRContext context;
+  context.loadDialect<ACIRDialect>();
+  mlir::OpBuilder builder(&context);
+  auto loc = builder.getUnknownLoc();
+  auto emptyType = builder.getFunctionType({}, {});
+  auto emptyDictionary = builder.getDictionaryAttr({});
+  auto file = mlir::ModuleOp::create(loc);
+  builder.setInsertionPointToStart(file.getBody());
+  auto leaf = ModuleOp::create(builder, loc, "Leaf", emptyType,
+                               emptyDictionary);
+  builder.setInsertionPointToStart(leaf.addEntryBlock());
+  auto process = ProcessOp::create(builder, loc, "worker", "workload",
+                                   mlir::ValueRange{});
+  builder.setInsertionPointToStart(&process.getBody().emplaceBlock());
+  YieldSimOp::create(builder, loc);
+  builder.setInsertionPointToEnd(&leaf.getBody().front());
+  StatOp::create(builder, loc, "requests", "counter");
+  ReturnOp::create(builder, loc, mlir::ValueRange{});
+
+  llvm::SmallVector<mlir::Attribute> staticArgs(
+      512, mlir::Attribute(emptyDictionary));
+  builder.setInsertionPointToEnd(file.getBody());
+  auto middle = ModuleOp::create(builder, loc, "Middle", emptyType,
+                                 emptyDictionary);
+  builder.setInsertionPointToStart(middle.addEntryBlock());
+  ArrayOp::create(builder, loc, mlir::TypeRange{}, mlir::ValueRange{}, "Leaf",
+                  "leaves", "leaves", "leaves",
+                  builder.getDenseI64ArrayAttr({512}),
+                  builder.getArrayAttr(staticArgs));
+  ReturnOp::create(builder, loc, mlir::ValueRange{});
+
+  builder.setInsertionPointToEnd(file.getBody());
+  auto top = ModuleOp::create(builder, loc, "Top", emptyType, emptyDictionary);
+  builder.setInsertionPointToStart(top.addEntryBlock());
+  ArrayOp::create(builder, loc, mlir::TypeRange{}, mlir::ValueRange{},
+                  "Middle", "middles", "middles", "middles",
+                  builder.getDenseI64ArrayAttr({512}),
+                  builder.getArrayAttr(staticArgs));
+  ReturnOp::create(builder, loc, mlir::ValueRange{});
+
+  builder.setInsertionPointToEnd(file.getBody());
+  auto seed = builder.getDictionaryAttr({
+      builder.getNamedAttr("kind", builder.getStringAttr("fixed")),
+      builder.getNamedAttr("value", builder.getI64IntegerAttr(0)),
+  });
+  auto results = builder.getDictionaryAttr({
+      builder.getNamedAttr("id", builder.getStringAttr("owners")),
+      builder.getNamedAttr("format", builder.getStringAttr("json")),
+  });
+  SystemOp::create(builder, loc, "owners", "Top", "root", 0, "cycle",
+                   mlir::FlatSymbolRefAttr(), seed, builder.getArrayAttr({}),
+                   results, true);
+  EXPECT_TRUE(mlir::succeeded(verifyGraphStructure(file)));
+
+  auto overBudget = mlir::cast<mlir::ModuleOp>(file->clone());
+  auto overBudgetLeaf = *overBudget.getOps<ModuleOp>().begin();
+  builder.setInsertionPoint(&overBudgetLeaf.getBody().front().back());
+  StatOp::create(builder, loc, "latency", "counter");
+  std::string diagnostic;
+  mlir::ScopedDiagnosticHandler handler(&context, [&](mlir::Diagnostic &value) {
+    llvm::raw_string_ostream(diagnostic) << value;
+    return mlir::success();
+  });
+  EXPECT_TRUE(mlir::failed(verifyGraphStructure(overBudget)));
+  EXPECT_NE(diagnostic.find("owner count exceeds bound 1048576"),
+            std::string::npos);
+}
+
+TEST(ACIROpsTest, TraceSourcesHaveOneOwnerAcrossElaboratedHierarchy) {
+  mlir::MLIRContext context;
+  context.loadDialect<ACIRDialect>();
+  auto singleOwner = mlir::parseSourceString<mlir::ModuleOp>(R"mlir(
+    builtin.module attributes {ac.contract_epoch = "0.1"} {
+      ac.module @Top() parameters {} graph {
+        ac.process @workload kind "workload" {
+          %cursor = ac.trace.open source "pto"
+          ac.yield_sim
+        }
+        ac.return
+      }
+      ac.system @test root @Top as "root" tick 0 "cycle"
+          seed {kind = "fixed", value = 0 : i64}
+          instrumentation [] results {id = "trace", format = "json"} selected true
+    }
+  )mlir", &context);
+  ASSERT_TRUE(singleOwner);
+  llvm::SmallVector<ElaboratedStateOwner> owners;
+  ASSERT_TRUE(mlir::succeeded(collectElaboratedStateOwners(
+      singleOwner->getOperation(), owners)));
+  ASSERT_EQ(owners.size(), 1u);
+  EXPECT_EQ(owners.front().path, "root.workload");
+  EXPECT_EQ(owners.front().stableId, "root/workload");
+  ASSERT_EQ(owners.front().traceSources.size(), 1u);
+  EXPECT_EQ(owners.front().traceSources.front(), "pto");
+
+  auto expectDuplicate = [&](llvm::StringRef source) {
+    auto file = mlir::parseSourceString<mlir::ModuleOp>(source, &context);
+    ASSERT_TRUE(file);
+    std::string diagnostic;
+    mlir::ScopedDiagnosticHandler handler(
+        &context, [&](mlir::Diagnostic &value) {
+          llvm::raw_string_ostream(diagnostic) << value;
+          return mlir::success();
+        });
+    EXPECT_TRUE(mlir::failed(verifyGraphStructure(file->getOperation())));
+    EXPECT_NE(diagnostic.find("trace source 'pto' has multiple elaborated "
+                              "cursor owners"),
+              std::string::npos);
+  };
+
+  expectDuplicate(R"mlir(
+    builtin.module attributes {ac.contract_epoch = "0.1"} {
+      ac.module @Left() parameters {} graph {
+        ac.process @workload kind "workload" {
+          %cursor = ac.trace.open source "pto"
+          ac.yield_sim
+        }
+        ac.return
+      }
+      ac.module @Right() parameters {} graph {
+        ac.process @workload kind "workload" {
+          %cursor = ac.trace.open source "pto"
+          ac.yield_sim
+        }
+        ac.return
+      }
+      ac.module @Top() parameters {} graph {
+        ac.instance @left of @Left() static {} id "left" path "left" : () -> ()
+        ac.instance @right of @Right() static {} id "right" path "right" : () -> ()
+        ac.return
+      }
+      ac.system @test root @Top as "root" tick 0 "cycle"
+          seed {kind = "fixed", value = 0 : i64}
+          instrumentation [] results {id = "trace", format = "json"} selected true
+    }
+  )mlir");
+
+  expectDuplicate(R"mlir(
+    builtin.module attributes {ac.contract_epoch = "0.1"} {
+      ac.module @Leaf() parameters {} graph {
+        ac.process @workload kind "workload" {
+          %cursor = ac.trace.open source "pto"
+          ac.yield_sim
+        }
+        ac.return
+      }
+      ac.module @Top() parameters {} graph {
+        ac.instance @left of @Leaf() static {} id "left" path "left" : () -> ()
+        ac.instance @right of @Leaf() static {} id "right" path "right" : () -> ()
+        ac.return
+      }
+      ac.system @test root @Top as "root" tick 0 "cycle"
+          seed {kind = "fixed", value = 0 : i64}
+          instrumentation [] results {id = "trace", format = "json"} selected true
+    }
+  )mlir");
+}
+
+TEST(ACIROpsTest, TraceSourceArrayDuplicationFailsBeforeElaboration) {
+  mlir::MLIRContext context;
+  context.loadDialect<ACIRDialect>();
+  mlir::OpBuilder builder(&context);
+  auto loc = builder.getUnknownLoc();
+  auto emptyType = builder.getFunctionType({}, {});
+  auto emptyDictionary = builder.getDictionaryAttr({});
+  auto file = mlir::ModuleOp::create(loc);
+  builder.setInsertionPointToStart(file.getBody());
+  auto leaf = ModuleOp::create(builder, loc, "Leaf", emptyType,
+                               emptyDictionary);
+  builder.setInsertionPointToStart(leaf.addEntryBlock());
+  auto process = ProcessOp::create(builder, loc, "workload", "workload",
+                                   mlir::ValueRange{});
+  builder.setInsertionPointToStart(&process.getBody().emplaceBlock());
+  TraceOpenOp::create(builder, loc, builder.getIndexType(), "pto");
+  YieldSimOp::create(builder, loc);
+  builder.setInsertionPointToEnd(&leaf.getBody().front());
+  ReturnOp::create(builder, loc, mlir::ValueRange{});
+
+  llvm::SmallVector<mlir::Attribute> staticArgs(
+      512, mlir::Attribute(emptyDictionary));
+  builder.setInsertionPointToEnd(file.getBody());
+  auto middle = ModuleOp::create(builder, loc, "Middle", emptyType,
+                                 emptyDictionary);
+  builder.setInsertionPointToStart(middle.addEntryBlock());
+  ArrayOp::create(builder, loc, mlir::TypeRange{}, mlir::ValueRange{}, "Leaf",
+                  "leaves", "leaves", "leaves",
+                  builder.getDenseI64ArrayAttr({512}),
+                  builder.getArrayAttr(staticArgs));
+  ReturnOp::create(builder, loc, mlir::ValueRange{});
+  builder.setInsertionPointToEnd(file.getBody());
+  auto top = ModuleOp::create(builder, loc, "Top", emptyType, emptyDictionary);
+  builder.setInsertionPointToStart(top.addEntryBlock());
+  ArrayOp::create(builder, loc, mlir::TypeRange{}, mlir::ValueRange{},
+                  "Middle", "middles", "middles", "middles",
+                  builder.getDenseI64ArrayAttr({512}),
+                  builder.getArrayAttr(staticArgs));
+  ReturnOp::create(builder, loc, mlir::ValueRange{});
+  builder.setInsertionPointToEnd(file.getBody());
+  auto seed = builder.getDictionaryAttr({
+      builder.getNamedAttr("kind", builder.getStringAttr("fixed")),
+      builder.getNamedAttr("value", builder.getI64IntegerAttr(0)),
+  });
+  auto results = builder.getDictionaryAttr({
+      builder.getNamedAttr("id", builder.getStringAttr("trace")),
+      builder.getNamedAttr("format", builder.getStringAttr("json")),
+  });
+  SystemOp::create(builder, loc, "trace", "Top", "root", 0, "cycle",
+                   mlir::FlatSymbolRefAttr(), seed, builder.getArrayAttr({}),
+                   results, true);
+
+  std::string diagnostic;
+  mlir::ScopedDiagnosticHandler handler(&context, [&](mlir::Diagnostic &value) {
+    llvm::raw_string_ostream(diagnostic) << value;
+    return mlir::success();
+  });
+  auto start = std::chrono::steady_clock::now();
+  EXPECT_TRUE(mlir::failed(verifyGraphStructure(file)));
+  EXPECT_NE(diagnostic.find("trace source 'pto' has multiple elaborated cursor "
+                            "owners"),
+            std::string::npos);
+  EXPECT_LT(std::chrono::steady_clock::now() - start, std::chrono::seconds(1));
+}
+
+TEST(ACIROpsTest, StaticContractsUseFreezePhaseModuleEffects) {
+  mlir::MLIRContext context;
+  context.loadDialect<ACIRDialect>();
+  auto file = mlir::parseSourceString<mlir::ModuleOp>(R"mlir(
+    builtin.module attributes {ac.contract_epoch = "0.1"} {
+      ac.module @M(i1) parameters {} graph {
+      ^bb0(%condition : i1):
+        ac.require %condition, "capacity"
+        ac.ensure %condition, "topology"
+        ac.return
+      }
+    }
+  )mlir", &context);
+  ASSERT_TRUE(file);
+  ASSERT_TRUE(mlir::succeeded(mlir::verify(file->getOperation())));
+  auto module = *file->getOps<ModuleOp>().begin();
+  for (mlir::Operation &operation : module.getBody().front()) {
+    if (!mlir::isa<RequireOp, EnsureOp>(operation))
+      continue;
+    llvm::SmallVector<mlir::MemoryEffects::EffectInstance> effects;
+    mlir::cast<mlir::MemoryEffectOpInterface>(&operation).getEffects(effects);
+    ASSERT_EQ(effects.size(), 1u);
+    EXPECT_EQ(effects.front().getResource(), ModuleStateResource::get());
+    EXPECT_TRUE(mlir::isa<mlir::MemoryEffects::Read>(
+        effects.front().getEffect()));
+    auto parameters =
+        mlir::cast<mlir::DictionaryAttr>(effects.front().getParameters());
+    EXPECT_EQ(parameters.getAs<mlir::StringAttr>("contract_phase").getValue(),
+              "topology_freeze");
+  }
+}
+
 TEST(ACIROpsTest, ExplicitViewProvenanceScalesNearLinearly) {
   mlir::MLIRContext context;
   context.loadDialect<ACIRDialect>();
@@ -967,7 +1441,7 @@ TEST(ACIRResourcesTest, TaskSevenRegistryDeltaIsExactlySixOperations) {
   for (llvm::StringLiteral name : names)
     EXPECT_TRUE(mlir::OperationName(name, &context).isRegistered())
         << name.str();
-  EXPECT_FALSE(mlir::OperationName("ac.process", &context).isRegistered());
+  EXPECT_FALSE(mlir::OperationName("ac.freeze", &context).isRegistered());
   EXPECT_FALSE(mlir::OperationName("ac.try_issue", &context).isRegistered());
 }
 

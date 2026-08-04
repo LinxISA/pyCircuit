@@ -421,6 +421,157 @@ def ACIR_TimeDomainOp : ACIR_Op<"time_domain"> {
   }];
 }
 
+class ACIR_RuntimeEffectOp<string mnemonic, list<Trait> traits = []>
+    : ACIR_Op<mnemonic, !listconcat([
+        DeclareOpInterfaceMethods<MemoryEffectsOpInterface>
+      ], traits)>;
+
+def ACIR_ProcessOp : ACIR_Op<"process", [
+    IsolatedFromAbove, SingleBlock, RecursiveMemoryEffects, ACIR_ProcessRegion
+  ]> {
+  let arguments = (ins SymbolNameAttr:$sym_name, StrAttr:$kind,
+                       Variadic<AnyType>:$captures);
+  let regions = (region AnyRegion:$body);
+  let builders = [OpBuilder<(ins "::llvm::StringRef":$name,
+                                 "::llvm::StringRef":$kind,
+                                 "::mlir::ValueRange":$captures), [{
+    $_state.addAttribute(::mlir::SymbolTable::getSymbolAttrName(),
+                        $_builder.getStringAttr(name));
+    $_state.addAttribute("kind", $_builder.getStringAttr(kind));
+    $_state.addOperands(captures);
+    $_state.addRegion();
+  }]>];
+  let hasVerifier = 1;
+  let assemblyFormat = [{
+    $sym_name `kind` $kind (`captures` `(` $captures^ `:` type($captures) `)`)?
+    $body attr-dict
+  }];
+}
+
+def ACIR_TrySendOp : ACIR_RuntimeEffectOp<"try_send"> {
+  let arguments = (ins AnyType:$value, FlatSymbolRefAttr:$queue);
+  let results = (outs I1:$accepted);
+  let hasVerifier = 1;
+  let assemblyFormat = "$queue $value attr-dict `:` type($value)";
+}
+
+def ACIR_TryRecvOp : ACIR_RuntimeEffectOp<"try_recv"> {
+  let arguments = (ins FlatSymbolRefAttr:$queue);
+  let results = (outs AnyType:$value, I1:$received);
+  let hasVerifier = 1;
+  let assemblyFormat = "$queue attr-dict `:` type($value)";
+}
+
+def ACIR_ScheduleOp : ACIR_RuntimeEffectOp<"schedule"> {
+  let arguments = (ins AnyType:$value, I64:$delay,
+                       FlatSymbolRefAttr:$target);
+  let hasVerifier = 1;
+  let assemblyFormat = "$target $value `after` $delay attr-dict `:` type($value)";
+}
+
+def ACIR_WaitUntilOp : ACIR_RuntimeEffectOp<"wait_until"> {
+  let arguments = (ins I1:$condition);
+  let hasVerifier = 1;
+  let assemblyFormat = "$condition attr-dict";
+}
+
+def ACIR_WaitForOp : ACIR_RuntimeEffectOp<"wait_for"> {
+  let arguments = (ins FlatSymbolRefAttr:$resource);
+  let hasVerifier = 1;
+  let assemblyFormat = "$resource attr-dict";
+}
+
+def ACIR_AwaitEventOp : ACIR_RuntimeEffectOp<"await_event"> {
+  let arguments = (ins FlatSymbolRefAttr:$event_queue);
+  let hasVerifier = 1;
+  let assemblyFormat = "$event_queue attr-dict";
+}
+
+def ACIR_YieldSimOp : ACIR_RuntimeEffectOp<"yield_sim", [Terminator]> {
+  let hasVerifier = 1;
+  let assemblyFormat = "attr-dict";
+}
+
+def ACIR_TraceOpenOp : ACIR_RuntimeEffectOp<"trace.open"> {
+  let arguments = (ins StrAttr:$source);
+  let results = (outs Index:$cursor);
+  let hasVerifier = 1;
+  let assemblyFormat = "`source` $source attr-dict";
+}
+
+def ACIR_TraceNextOp : ACIR_RuntimeEffectOp<"trace.next"> {
+  let arguments = (ins Index:$input_cursor, StrAttr:$source);
+  let results = (outs Index:$cursor, AnyType:$entry, I1:$advanced);
+  let hasVerifier = 1;
+  let assemblyFormat = "$input_cursor `from` `source` $source attr-dict `:` type($entry)";
+}
+
+def ACIR_TraceDecodeOp : ACIR_Op<"trace.decode", [Pure]> {
+  let arguments = (ins AnyType:$entry);
+  let results = (outs AnyType:$result);
+  let hasVerifier = 1;
+  let assemblyFormat = "$entry attr-dict `:` type($entry) `to` type($result)";
+}
+
+def ACIR_TraceEofOp : ACIR_RuntimeEffectOp<"trace.eof"> {
+  let arguments = (ins Index:$input_cursor, StrAttr:$source);
+  let results = (outs I1:$eof);
+  let hasVerifier = 1;
+  let assemblyFormat = "$input_cursor `from` `source` $source attr-dict";
+}
+
+def ACIR_TracePositionOp : ACIR_RuntimeEffectOp<"trace.position"> {
+  let arguments = (ins Index:$input_cursor, StrAttr:$source);
+  let results = (outs Index:$position);
+  let hasVerifier = 1;
+  let assemblyFormat = "$input_cursor `from` `source` $source attr-dict";
+}
+
+class ACIR_ContractOp<string mnemonic>
+    : ACIR_RuntimeEffectOp<mnemonic, [ACIR_Observation]> {
+  let arguments = (ins I1:$condition, StrAttr:$message);
+  let hasVerifier = 1;
+  let assemblyFormat = "$condition `,` $message attr-dict";
+}
+
+def ACIR_RequireOp : ACIR_ContractOp<"require">;
+def ACIR_EnsureOp : ACIR_ContractOp<"ensure">;
+def ACIR_AssertOp : ACIR_ContractOp<"assert">;
+
+def ACIR_ProbeOp : ACIR_RuntimeEffectOp<"probe", [ACIR_Observation]> {
+  let arguments = (ins FlatSymbolRefAttr:$target, StrAttr:$kind);
+  let results = (outs AnyType:$value);
+  let hasVerifier = 1;
+  let assemblyFormat = "$target `kind` $kind attr-dict `:` type($value)";
+}
+
+def ACIR_StatOp : ACIR_RuntimeEffectOp<"stat", [ACIR_Observation]> {
+  let arguments = (ins SymbolNameAttr:$sym_name, StrAttr:$kind);
+  let hasVerifier = 1;
+  let assemblyFormat = "$sym_name `kind` $kind attr-dict";
+}
+
+def ACIR_StatAddOp : ACIR_RuntimeEffectOp<"stat.add", [ACIR_Observation]> {
+  let arguments = (ins AnyType:$value, FlatSymbolRefAttr:$stat);
+  let hasVerifier = 1;
+  let assemblyFormat = "$stat $value attr-dict `:` type($value)";
+}
+
+def ACIR_InstrumentationOp : ACIR_Op<"instrumentation", [
+    SingleBlock, NoTerminator, RecursiveMemoryEffects,
+    ACIR_Observation
+  ]> {
+  let arguments = (ins SymbolNameAttr:$sym_name);
+  let regions = (region AnyRegion:$body);
+  let builders = [OpBuilder<(ins "::llvm::StringRef":$name), [{
+    $_state.addAttribute(::mlir::SymbolTable::getSymbolAttrName(),
+                        $_builder.getStringAttr(name));
+    $_state.addRegion();
+  }]>];
+  let hasVerifier = 1;
+  let assemblyFormat = "$sym_name $body attr-dict";
+}
+
 def ACIR_ReturnOp : ACIR_Op<"return", [Pure, Terminator, ReturnLike,
                                         HasParent<"ModuleOp">]> {
   let arguments = (ins Variadic<AnyType>:$operands);
