@@ -103,7 +103,13 @@ int main(int argc, char **argv) {
                                   mlir::PassManager &passManager) {
         passManager.addPass(std::make_unique<acir::NormalizeACIRFilePass>());
         passManager.addPass(std::make_unique<acir::VerifyACIRFilePass>());
-        return commandLineConfig.setupPassPipeline(passManager);
+        if (mlir::failed(commandLineConfig.setupPassPipeline(passManager)))
+          return mlir::failure();
+        // The final whole-model gate makes a persisted freeze digest effective
+        // across every user-supplied pipeline: any topology mutation after
+        // ac-freeze-topology is diagnosed before output is committed.
+        passManager.addPass(acir::createVerifyModelPass());
+        return mlir::success();
       });
 
   std::string errorMessage;

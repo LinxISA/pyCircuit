@@ -3,6 +3,7 @@
 
 #include "acir/Dialect/ACIR/ACIROps.h"
 #include "acir/Dialect/ACIR/ACIRResources.h"
+#include "acir/Transforms/Passes.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Pass/PassRegistry.h"
@@ -113,6 +114,7 @@ public:
 
 inline void registerAllPasses() {
   mlir::registerTransformsPasses();
+  registerACIRTransformsPasses();
   mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
     return std::make_unique<NormalizeACIRFilePass>();
   });

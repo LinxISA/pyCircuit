@@ -30,6 +30,16 @@ struct ElaboratedStateOwner {
   llvm::SmallVector<std::string> traceSources;
 };
 
+/// Every owning structural object expanded in the selected hierarchy. Unlike
+/// ElaboratedStateOwner this also includes instances, arrays, ordered
+/// collections, and their elements, so topology freeze can persist one stable
+/// machine-checkable ownership manifest.
+struct ElaboratedTopologyOwner {
+  mlir::Operation *declaration;
+  std::string path;
+  std::string stableId;
+};
+
 /// Context-owned registry of exact build-time structural providers. The
 /// registry is populated by dialect-registry extensions before parsing and is
 /// never model/runtime configuration.
@@ -68,6 +78,12 @@ mlir::LogicalResult verifyGraphStructure(mlir::Operation *topLevel);
 mlir::LogicalResult collectElaboratedStateOwners(
     mlir::Operation *topLevel,
     llvm::SmallVectorImpl<ElaboratedStateOwner> &owners);
+
+/// Verifies the graph and returns every elaborated structural owner in
+/// deterministic hierarchy order.
+mlir::LogicalResult collectElaboratedTopologyOwners(
+    mlir::Operation *topLevel,
+    llvm::SmallVectorImpl<ElaboratedTopologyOwner> &owners);
 
 /// Returns true for concrete builtin static parameter values admitted by the
 /// public v0.1 graph contract.

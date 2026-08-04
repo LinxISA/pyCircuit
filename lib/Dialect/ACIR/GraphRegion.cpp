@@ -151,7 +151,8 @@ std::string buildArrayElementPath(StringRef base, ArrayRef<int64_t> indices) {
 
 static LogicalResult verifyGraphStructureImpl(
     Operation *topLevel,
-    SmallVectorImpl<ElaboratedStateOwner> *elaboratedStateOwners) {
+    SmallVectorImpl<ElaboratedStateOwner> *elaboratedStateOwners,
+    SmallVectorImpl<ElaboratedTopologyOwner> *elaboratedTopologyOwners) {
   auto file = dyn_cast<mlir::ModuleOp>(topLevel);
   if (!file)
     return success();
@@ -415,6 +416,8 @@ static LogicalResult verifyGraphStructureImpl(
     if (!stableIds.insert(stableId).second)
       return op->emitOpError()
              << "duplicate elaborated stable ownership id '" << stableId << "'";
+    if (elaboratedTopologyOwners)
+      elaboratedTopologyOwners->push_back({op, path.str(), stableId.str()});
     return success();
   };
 
@@ -536,14 +539,24 @@ static LogicalResult verifyGraphStructureImpl(
 }
 
 LogicalResult verifyGraphStructure(Operation *topLevel) {
-  return verifyGraphStructureImpl(topLevel, nullptr);
+  return verifyGraphStructureImpl(topLevel, nullptr, nullptr);
 }
 
 LogicalResult
 collectElaboratedStateOwners(Operation *topLevel,
                              SmallVectorImpl<ElaboratedStateOwner> &owners) {
   owners.clear();
-  if (failed(verifyGraphStructureImpl(topLevel, &owners))) {
+  if (failed(verifyGraphStructureImpl(topLevel, &owners, nullptr))) {
+    owners.clear();
+    return failure();
+  }
+  return success();
+}
+
+LogicalResult collectElaboratedTopologyOwners(
+    Operation *topLevel, SmallVectorImpl<ElaboratedTopologyOwner> &owners) {
+  owners.clear();
+  if (failed(verifyGraphStructureImpl(topLevel, nullptr, &owners))) {
     owners.clear();
     return failure();
   }

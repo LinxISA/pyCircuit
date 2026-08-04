@@ -241,6 +241,12 @@ bool normalizeRationalToTicks(uint64_t numerator, uint64_t denominator,
 DictionaryAttr ownerEffectParameters(Operation *operation, StringAttr stableId,
                                      StringAttr path) {
   Builder builder(operation->getContext());
+  if (auto owners = operation->getAttrOfType<ArrayAttr>("ac.frozen_owners"))
+    return builder.getDictionaryAttr({
+        builder.getNamedAttr("identity_phase",
+                             builder.getStringAttr("elaborated_absolute")),
+        builder.getNamedAttr("owners", owners),
+    });
   return builder.getDictionaryAttr({
       builder.getNamedAttr("identity_phase",
                            builder.getStringAttr("definition_pre_freeze")),

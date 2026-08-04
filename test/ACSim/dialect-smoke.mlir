@@ -4,7 +4,7 @@
 // RUN: %not %acir_opt %t/unknown-acsim-op.mlir 2>&1 | %FileCheck %s --check-prefix=UNKNOWN-ACSIM
 // RUN: %not %acir_opt %t/unregistered-dialect.mlir 2>&1 | %FileCheck %s --check-prefix=UNREGISTERED
 
-// DIALECTS: Available Dialects: ac,acsim,arith,builtin,cf,dlti,index,scf
+// DIALECTS: Available Dialects: ac,acsim,arith,builtin,cf,dlti,func,index,scf
 // CANONICAL: module attributes {ac.contract_epoch = "0.1"}
 // UNKNOWN-ACSIM: error: unregistered operation 'acsim.unknown'
 // UNREGISTERED: error: operation being parsed with an unregistered dialect

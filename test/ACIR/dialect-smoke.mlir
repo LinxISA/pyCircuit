@@ -6,7 +6,7 @@
 // RUN: %not %acir_opt %t/wrong-epoch.mlir 2>&1 | %FileCheck %s --check-prefix=WRONG
 // RUN: %not %acir_opt %t/unknown-ac-op.mlir 2>&1 | %FileCheck %s --check-prefix=UNKNOWN-AC
 
-// DIALECTS: Available Dialects: ac,acsim,arith,builtin,cf,dlti,index,scf
+// DIALECTS: Available Dialects: ac,acsim,arith,builtin,cf,dlti,func,index,scf
 // CANONICAL: module attributes {ac.contract_epoch = "0.1"}
 // MISSING: error: expected top-level 'ac.contract_epoch' string attribute equal to "0.1"
 // WRONG: error: expected top-level 'ac.contract_epoch' string attribute equal to "0.1"

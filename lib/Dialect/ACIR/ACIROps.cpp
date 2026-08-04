@@ -1279,7 +1279,8 @@ LogicalResult verifyStaticArgumentSet(Operation *op, DictionaryAttr arguments,
 bool isStructuralGraphChild(Operation &child) {
   return isa<InstanceOp, ArrayOp, InstancesOp, ViewOp, QueueOp, EventQueueOp,
              ResourceOp, AddressSpaceOp, AddressMapOp, TimeDomainOp, ProcessOp,
-             RequireOp, EnsureOp, StatOp, ReturnOp>(child);
+             RequireOp, EnsureOp, StatOp, ReturnOp>(child) ||
+         child.getName().getStringRef() == "arith.constant";
 }
 
 bool isStableHierarchySegment(StringRef segment) {
@@ -2110,7 +2111,17 @@ LogicalResult ReturnOp::verify() {
 LogicalResult verifyTopologyTypeUses(Operation *operation) {
   if (failed(verifyGraphStructure(operation)))
     return failure();
-  auto verifyType = [&](Type type, Value value) -> LogicalResult {
+  std::function<LogicalResult(Type, Value)> verifyType =
+      [&](Type type, Value value) -> LogicalResult {
+    if (auto function = dyn_cast<FunctionType>(type)) {
+      for (Type input : function.getInputs())
+        if (failed(verifyType(input, {})))
+          return failure();
+      for (Type result : function.getResults())
+        if (failed(verifyType(result, {})))
+          return failure();
+      return success();
+    }
     if (Type nested = findNestedTopologyLeaf(type))
       return operation->emitOpError() << "topology type " << nested
                                       << " cannot be nested inside " << type;
@@ -2226,6 +2237,18 @@ Operation *resolvedRuntimeTarget(Operation *operation, StringRef local) {
 DictionaryAttr runtimeEffectParameters(Operation *operation, StringRef kind,
                                        StringRef identity) {
   Builder builder(operation->getContext());
+  Operation *owner = resolvedRuntimeTarget(operation, identity);
+  if (!owner)
+    if (auto process = operation->getParentOfType<ProcessOp>())
+      owner = process;
+  if (owner)
+    if (auto owners = owner->getAttrOfType<ArrayAttr>("ac.frozen_owners"))
+      return builder.getDictionaryAttr({
+          builder.getNamedAttr("identity_phase",
+                               builder.getStringAttr("elaborated_absolute")),
+          builder.getNamedAttr("owner_kind", builder.getStringAttr(kind)),
+          builder.getNamedAttr("owners", owners),
+      });
   return builder.getDictionaryAttr({
       builder.getNamedAttr("identity_phase",
                            builder.getStringAttr("definition_pre_freeze")),
@@ -2246,6 +2269,24 @@ void addEffect(SmallVectorImpl<MemoryEffects::EffectInstance> &effects,
 DictionaryAttr contractEffectParameters(Operation *operation, StringRef phase,
                                         StringRef identity) {
   Builder builder(operation->getContext());
+  if (auto process = operation->getParentOfType<ProcessOp>())
+    if (auto owners = process->getAttrOfType<ArrayAttr>("ac.frozen_owners"))
+      return builder.getDictionaryAttr({
+          builder.getNamedAttr("identity_phase",
+                               builder.getStringAttr("elaborated_absolute")),
+          builder.getNamedAttr("owner_kind", builder.getStringAttr("contract")),
+          builder.getNamedAttr("owners", owners),
+          builder.getNamedAttr("contract_phase", builder.getStringAttr(phase)),
+      });
+  if (operation->getAttrOfType<BoolAttr>("ac.freeze_proven"))
+    return builder.getDictionaryAttr({
+        builder.getNamedAttr("identity_phase",
+                             builder.getStringAttr("elaborated_absolute")),
+        builder.getNamedAttr("owner_kind", builder.getStringAttr("contract")),
+        builder.getNamedAttr("identity", builder.getStringAttr(identity)),
+        builder.getNamedAttr("contract_phase", builder.getStringAttr(phase)),
+        builder.getNamedAttr("freeze_proven", builder.getBoolAttr(true)),
+    });
   return builder.getDictionaryAttr({
       builder.getNamedAttr("identity_phase",
                            builder.getStringAttr("definition_pre_freeze")),
@@ -2304,6 +2345,7 @@ bool isLinearAcrossSuspension(Type type) {
 bool isAllowedProcessOperation(Operation *operation) {
   StringRef name = operation->getName().getStringRef();
   if (name.starts_with("arith.") || name.starts_with("index.") ||
+      name == "func.call" ||
       isa<scf::IfOp, scf::ForOp, scf::WhileOp, scf::ConditionOp, scf::YieldOp>(
           operation))
     return true;

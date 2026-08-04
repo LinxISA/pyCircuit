@@ -1,9 +1,11 @@
 #include "Dialect/ACIR/ACIROpsTestHooks.h"
+#include "acir/Analysis/ModelAnalysis.h"
 #include "acir/Dialect/ACIR/ACIRDialect.h"
 #include "acir/Dialect/ACIR/ACIROps.h"
 #include "acir/Dialect/ACIR/ACIRResources.h"
 #include "acir/Dialect/ACIR/GraphRegion.h"
 #include "acir/InitAllDialects.h"
+#include "acir/Transforms/Passes.h"
 
 #include "mlir/AsmParser/AsmParser.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -15,6 +17,7 @@
 #include "mlir/Interfaces/DataLayoutInterfaces.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "mlir/Parser/Parser.h"
+#include "mlir/Pass/PassManager.h"
 #include "gtest/gtest.h"
 
 #include <algorithm>
@@ -2398,6 +2401,69 @@ selectorOracleName(const testing::TestParamInfo<SelectorOracleCase> &info) {
 INSTANTIATE_TEST_SUITE_P(SmallDomain, SelectorOracleTest,
                          testing::ValuesIn(makeSelectorOracleCases()),
                          selectorOracleName);
+
+TEST(ACIRFreezeEffectsTest, FrozenEffectsUseElaboratedAbsoluteOwnerSets) {
+  mlir::DialectRegistry registry;
+  acir::registerAllDialects(registry);
+  mlir::MLIRContext context(registry);
+  auto file = mlir::parseSourceString<mlir::ModuleOp>(R"mlir(
+    builtin.module attributes {ac.contract_epoch = "0.1"} {
+      ac.system @soc root @Top as "root" tick 0 "cycle"
+          workload @Top::@workload seed {kind = "fixed", value = 0 : i64}
+          instrumentation [] results {id = "default", format = "json"}
+          selected true
+      ac.module @Top() parameters {} graph {
+        ac.process @workload kind "workload" { ac.yield_sim }
+        ac.stat @requests kind "counter"
+        ac.return
+      }
+    }
+  )mlir",
+                                                      &context);
+  ASSERT_TRUE(file);
+  mlir::PassManager manager(&context);
+  manager.addPass(acir::createFreezeTopologyPass());
+  ASSERT_TRUE(mlir::succeeded(manager.run(*file)));
+
+  ProcessOp process;
+  StatOp stat;
+  file->walk([&](ProcessOp candidate) { process = candidate; });
+  file->walk([&](StatOp candidate) { stat = candidate; });
+  ASSERT_TRUE(process && stat);
+  auto checkAbsoluteOwners = [](mlir::Operation *operation,
+                                llvm::StringRef expectedPath) {
+    llvm::SmallVector<mlir::MemoryEffects::EffectInstance> effects;
+    mlir::cast<mlir::MemoryEffectOpInterface>(operation).getEffects(effects);
+    ASSERT_FALSE(effects.empty());
+    for (const mlir::MemoryEffects::EffectInstance &effect : effects) {
+      auto parameters =
+          mlir::cast<mlir::DictionaryAttr>(effect.getParameters());
+      EXPECT_EQ(parameters.getAs<mlir::StringAttr>("identity_phase").getValue(),
+                "elaborated_absolute");
+      auto owners = parameters.getAs<mlir::ArrayAttr>("owners");
+      ASSERT_TRUE(owners);
+      ASSERT_EQ(owners.size(), 1u);
+      EXPECT_EQ(mlir::cast<mlir::DictionaryAttr>(owners[0])
+                    .getAs<mlir::StringAttr>("path")
+                    .getValue(),
+                expectedPath);
+    }
+  };
+  checkAbsoluteOwners(&process.getBody().front().back(), "root.workload");
+  checkAbsoluteOwners(stat, "root.requests");
+
+  std::string diagnostic;
+  mlir::ScopedDiagnosticHandler handler(
+      &context, [&](mlir::Diagnostic &value) {
+        llvm::raw_string_ostream stream(diagnostic);
+        stream << value;
+        return mlir::success();
+      });
+  stat->removeAttr("ac.frozen_owners");
+  EXPECT_TRUE(mlir::failed(acir::verifyModel(*file)));
+  EXPECT_NE(diagnostic.find("frozen topology digest mismatch"),
+            std::string::npos);
+}
 
 } // namespace
 } // namespace acir::ac

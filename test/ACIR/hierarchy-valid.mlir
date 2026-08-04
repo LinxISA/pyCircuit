@@ -20,6 +20,7 @@ builtin.module attributes {ac.contract_epoch = "0.1"} {
 
   "ac.module"() <{sym_name = "Leaf", function_type = (i32) -> i32, static_params = {}}> ({
   ^bb0(%arg0 : i32):
+    ac.process @state kind "control" { ac.yield_sim }
     "ac.return"(%arg0) : (i32) -> ()
   }) : () -> ()
 
@@ -51,7 +52,8 @@ builtin.module attributes {ac.contract_epoch = "0.1"} {
   }) : () -> ()
   "ac.module.extern"() <{sym_name = "Empty", function_type = () -> (), static_params = {}, implementation = {registry = "cpp", name = "Empty"}}> : () -> ()
 
-  // Graph-region SSA may use a value before its textual definition and cycle.
+  // Graph-region SSA may use a value before its textual definition and cycle
+  // when the instantiated module contributes an explicit state boundary.
   "ac.module"() <{sym_name = "DataCycle", function_type = () -> i32, static_params = {}}> ({
     %a = "ac.instance"(%b) <{definition = @Leaf, sym_name = "left", stable_id = "data-left", path = "left", static_args = {}}> : (i32) -> i32
     %b = "ac.instance"(%a) <{definition = @Leaf, sym_name = "right", stable_id = "data-right", path = "right", static_args = {}}> : (i32) -> i32

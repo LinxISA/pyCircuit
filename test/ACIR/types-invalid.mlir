@@ -26,7 +26,7 @@
 // CHANNEL-NESTED: error: channel types cannot be nested inside value types
 // CHANNEL-STANDALONE: error: channel type is only permitted in an ac.interface channel declaration
 // CHANNEL-TUPLE: topology type '!ac.channel<i8, @ready_valid>' cannot be nested inside 'tuple<i8, tuple<!ac.channel<i8, @ready_valid>>>'
-// CHANNEL-FUNCTION: topology type '!ac.channel<i8, @ready_valid>' cannot be nested inside '(i8) -> !ac.channel<i8, @ready_valid>'
+// CHANNEL-FUNCTION: channel type is only permitted in an ac.interface channel declaration
 // CHANNEL-TYPE-ATTR: error: channel type is only permitted in an ac.interface channel declaration
 // CHANNEL-COMPOSITE-ATTR: topology type '!ac.channel<i8, @ready_valid>' cannot be nested inside 'tuple<i8, !ac.channel<i8, @ready_valid>>'
 // RATE-NUMERATOR: error: rate numerator must be a data unit
