@@ -19,6 +19,7 @@
 #include <array>
 #include <chrono>
 #include <limits>
+#include <vector>
 
 namespace acir::ac {
 namespace {
@@ -1411,6 +1412,12 @@ TEST(ACIRResourcesTest,
   auto generalFastDisjoint =
       buildMap({entry(0, 16, 1, 2, 0), entry(3, 2, 1, 7, 3)});
   EXPECT_TRUE(mlir::succeeded(mlir::verify(generalFastDisjoint)));
+  auto clampForward =
+      buildMap({entry(24, 62, 2, 7, 0), entry(48, 98, 8, 8, 5)});
+  auto clampReverse =
+      buildMap({entry(48, 98, 8, 8, 5), entry(24, 62, 2, 7, 0)});
+  EXPECT_TRUE(mlir::succeeded(mlir::verify(clampForward)));
+  EXPECT_TRUE(mlir::succeeded(mlir::verify(clampReverse)));
 
   mlir::ScopedDiagnosticHandler suppress(
       &context, [](mlir::Diagnostic &) { return mlir::success(); });
@@ -1507,6 +1514,223 @@ TEST(ACIRResourcesTest,
           "general mixed interleave analysis exceeds ACIR v0.1 limit 256"),
       std::string::npos);
 }
+
+TEST(ACIRResourcesTest, SingleBankSelectionsDoNotConsumeGeneralMixedBudget) {
+  mlir::MLIRContext context;
+  context.loadDialect<ACIRDialect>();
+  mlir::OpBuilder builder(&context);
+  auto location = builder.getUnknownLoc();
+  auto file = mlir::ModuleOp::create(location);
+  builder.setInsertionPointToStart(file.getBody());
+  auto module =
+      ModuleOp::create(builder, location, "M", builder.getFunctionType({}, {}),
+                       builder.getDictionaryAttr({}));
+  builder.setInsertionPointToStart(module.addEntryBlock());
+  AddressSpaceOp::create(
+      builder, location, builder.getStringAttr("space"),
+      builder.getStringAttr("space"), builder.getStringAttr("space"),
+      builder.getI64IntegerAttr(12), builder.getStringAttr("byte"),
+      mlir::Attribute(), mlir::FlatSymbolRefAttr(), mlir::DictionaryAttr());
+  auto makeEntry = [&](uint64_t base, uint64_t size, uint64_t banks,
+                       std::optional<uint64_t> priority) {
+    llvm::SmallVector<mlir::NamedAttribute> attributes{
+        builder.getNamedAttr("base", builder.getI64IntegerAttr(base)),
+        builder.getNamedAttr("size", builder.getI64IntegerAttr(size)),
+        builder.getNamedAttr("target",
+                             mlir::FlatSymbolRefAttr::get(&context, "space")),
+        builder.getNamedAttr("offset", builder.getI64IntegerAttr(0)),
+        builder.getNamedAttr(
+            "permissions",
+            builder.getArrayAttr({builder.getStringAttr("read")})),
+        builder.getNamedAttr("classes", builder.getArrayAttr({})),
+        builder.getNamedAttr(
+            "interleave",
+            builder.getDictionaryAttr({
+                builder.getNamedAttr("granularity",
+                                     builder.getI64IntegerAttr(1)),
+                builder.getNamedAttr("banks", builder.getI64IntegerAttr(banks)),
+                builder.getNamedAttr("bank", builder.getI64IntegerAttr(0)),
+            })),
+    };
+    if (priority)
+      attributes.push_back(builder.getNamedAttr(
+          "priority", builder.getI64IntegerAttr(*priority)));
+    return builder.getDictionaryAttr(attributes);
+  };
+  llvm::SmallVector<mlir::Attribute> entries;
+  entries.push_back(makeEntry(10, 10, 1, std::nullopt));
+  for (uint64_t index = 0; index < 257; ++index)
+    entries.push_back(makeEntry(0, 2000, 1000 + index, index + 1));
+  AddressMapOp::create(
+      builder, location, "map", "space", builder.getArrayAttr(entries),
+      builder.getDictionaryAttr(
+          {builder.getNamedAttr("kind", builder.getStringAttr("unmapped"))}));
+  ReturnOp::create(builder, location, mlir::ValueRange{});
+  EXPECT_TRUE(mlir::succeeded(mlir::verify(file)));
+}
+
+struct SelectorOracleLane {
+  uint64_t base;
+  uint64_t size;
+  uint64_t granularity;
+  uint64_t banks;
+  uint64_t bank;
+};
+
+enum class SelectorOracleKind {
+  FastFast,
+  GeneralFast,
+  GeneralGeneralSame,
+  GeneralGeneralMixed,
+};
+
+struct SelectorOracleCase {
+  SelectorOracleLane left;
+  SelectorOracleLane right;
+  bool reverse;
+  SelectorOracleKind kind;
+};
+
+bool oracleSelects(const SelectorOracleLane &lane, uint64_t address) {
+  if (address < lane.base || address >= lane.base + lane.size)
+    return false;
+  uint64_t cycle = lane.granularity * lane.banks;
+  uint64_t within = address % cycle;
+  uint64_t begin = lane.granularity * lane.bank;
+  return begin <= within && within < begin + lane.granularity;
+}
+
+std::vector<SelectorOracleCase> makeSelectorOracleCases() {
+  std::vector<SelectorOracleCase> cases;
+  cases.reserve(1800);
+  for (uint64_t index = 0; index < 450; ++index) {
+    uint64_t leftBanks = 8 + index % 5;
+    uint64_t rightBanks = 9 + index % 7;
+    cases.push_back(
+        {{index % 60, 2, 1, leftBanks, (index * 3) % leftBanks},
+         {(index * 7) % 60, 2, 1, rightBanks, (index * 5) % rightBanks},
+         index % 2 != 0,
+         SelectorOracleKind::FastFast});
+
+    uint64_t fastBanks = 8 + index % 9;
+    cases.push_back({{0, 64, 1, 2, index % 2},
+                     {index % 60, 3, 1, fastBanks, (index * 7) % fastBanks},
+                     index % 2 != 0,
+                     SelectorOracleKind::GeneralFast});
+
+    uint64_t granularity = 1 + index % 3;
+    uint64_t banks = 2 + index % 4;
+    cases.push_back({{0, 64, granularity, banks, index % banks},
+                     {0, 64, granularity, banks, (index * 3 + 1) % banks},
+                     index % 2 != 0,
+                     SelectorOracleKind::GeneralGeneralSame});
+
+    uint64_t mixedBanks = 3 + index % 4;
+    cases.push_back({{0, 64, 1, 2, index % 2},
+                     {0, 64, 2, mixedBanks, (index * 5) % mixedBanks},
+                     index % 2 != 0,
+                     SelectorOracleKind::GeneralGeneralMixed});
+  }
+  return cases;
+}
+
+class SelectorOracleTest : public testing::TestWithParam<SelectorOracleCase> {
+protected:
+  static mlir::MLIRContext &context() {
+    static mlir::MLIRContext value;
+    static bool loaded = [] {
+      value.loadDialect<ACIRDialect>();
+      return true;
+    }();
+    (void)loaded;
+    return value;
+  }
+};
+
+TEST_P(SelectorOracleTest, MatchesManualSmallDomainEnumeration) {
+  const SelectorOracleCase &testCase = GetParam();
+  SCOPED_TRACE(testing::Message()
+               << "kind=" << static_cast<unsigned>(testCase.kind)
+               << " reverse=" << testCase.reverse);
+  bool overlaps = false;
+  for (uint64_t address = 0; address < 64; ++address)
+    overlaps |= oracleSelects(testCase.left, address) &&
+                oracleSelects(testCase.right, address);
+
+  mlir::MLIRContext &mlirContext = context();
+  mlir::OpBuilder builder(&mlirContext);
+  auto location = builder.getUnknownLoc();
+  auto file = mlir::ModuleOp::create(location);
+  builder.setInsertionPointToStart(file.getBody());
+  auto module =
+      ModuleOp::create(builder, location, "M", builder.getFunctionType({}, {}),
+                       builder.getDictionaryAttr({}));
+  builder.setInsertionPointToStart(module.addEntryBlock());
+  AddressSpaceOp::create(
+      builder, location, builder.getStringAttr("space"),
+      builder.getStringAttr("space"), builder.getStringAttr("space"),
+      builder.getI64IntegerAttr(8), builder.getStringAttr("byte"),
+      mlir::Attribute(), mlir::FlatSymbolRefAttr(), mlir::DictionaryAttr());
+  auto makeEntry = [&](const SelectorOracleLane &lane) {
+    return builder.getDictionaryAttr({
+        builder.getNamedAttr("base", builder.getI64IntegerAttr(lane.base)),
+        builder.getNamedAttr("size", builder.getI64IntegerAttr(lane.size)),
+        builder.getNamedAttr(
+            "target", mlir::FlatSymbolRefAttr::get(&mlirContext, "space")),
+        builder.getNamedAttr("offset", builder.getI64IntegerAttr(0)),
+        builder.getNamedAttr(
+            "permissions",
+            builder.getArrayAttr({builder.getStringAttr("read")})),
+        builder.getNamedAttr("classes", builder.getArrayAttr({})),
+        builder.getNamedAttr(
+            "interleave",
+            builder.getDictionaryAttr({
+                builder.getNamedAttr(
+                    "granularity", builder.getI64IntegerAttr(lane.granularity)),
+                builder.getNamedAttr("banks",
+                                     builder.getI64IntegerAttr(lane.banks)),
+                builder.getNamedAttr("bank",
+                                     builder.getI64IntegerAttr(lane.bank)),
+            })),
+    });
+  };
+  llvm::SmallVector<mlir::Attribute> entries{makeEntry(testCase.left),
+                                             makeEntry(testCase.right)};
+  if (testCase.reverse)
+    std::reverse(entries.begin(), entries.end());
+  AddressMapOp::create(
+      builder, location, "map", "space", builder.getArrayAttr(entries),
+      builder.getDictionaryAttr(
+          {builder.getNamedAttr("kind", builder.getStringAttr("unmapped"))}));
+  ReturnOp::create(builder, location, mlir::ValueRange{});
+  mlir::ScopedDiagnosticHandler suppress(
+      &mlirContext, [](mlir::Diagnostic &) { return mlir::success(); });
+  EXPECT_EQ(mlir::succeeded(mlir::verify(file)), !overlaps);
+}
+
+std::string
+selectorOracleName(const testing::TestParamInfo<SelectorOracleCase> &info) {
+  const char *prefix = nullptr;
+  switch (info.param.kind) {
+  case SelectorOracleKind::FastFast:
+    prefix = "FF";
+    break;
+  case SelectorOracleKind::GeneralFast:
+    prefix = "GF";
+    break;
+  case SelectorOracleKind::GeneralGeneralSame:
+    prefix = "GGSame";
+    break;
+  case SelectorOracleKind::GeneralGeneralMixed:
+    prefix = "GGMixed";
+    break;
+  }
+  return std::string(prefix) + "_" + std::to_string(info.index);
+}
+
+INSTANTIATE_TEST_SUITE_P(SmallDomain, SelectorOracleTest,
+                         testing::ValuesIn(makeSelectorOracleCases()),
+                         selectorOracleName);
 
 } // namespace
 } // namespace acir::ac

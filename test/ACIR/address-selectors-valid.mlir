@@ -30,6 +30,22 @@ builtin.module attributes {ac.contract_epoch = "0.1"} {
        permissions = ["read"], classes = [], priority = 1 : i64,
        interleave = {granularity = 1 : i64, banks = 4 : i64, bank = 1 : i64}}
     ] default {kind = "unmapped"}
+    ac.address_map @general_fast_forward source @space entries [
+      {base = 24 : i64, size = 62 : i64, target = @space, offset = 0 : i64,
+       permissions = ["read"], classes = [],
+       interleave = {granularity = 2 : i64, banks = 7 : i64, bank = 0 : i64}},
+      {base = 48 : i64, size = 98 : i64, target = @space, offset = 0 : i64,
+       permissions = ["read"], classes = [],
+       interleave = {granularity = 8 : i64, banks = 8 : i64, bank = 5 : i64}}
+    ] default {kind = "unmapped"}
+    ac.address_map @general_fast_reverse source @space entries [
+      {base = 48 : i64, size = 98 : i64, target = @space, offset = 0 : i64,
+       permissions = ["read"], classes = [],
+       interleave = {granularity = 8 : i64, banks = 8 : i64, bank = 5 : i64}},
+      {base = 24 : i64, size = 62 : i64, target = @space, offset = 0 : i64,
+       permissions = ["read"], classes = [],
+       interleave = {granularity = 2 : i64, banks = 7 : i64, bank = 0 : i64}}
+    ] default {kind = "unmapped"}
     ac.return
   }
 }
@@ -37,3 +53,5 @@ builtin.module attributes {ac.contract_epoch = "0.1"} {
 // CHECK: ac.address_map @class_split
 // CHECK: ac.address_map @mixed_disjoint
 // CHECK: ac.address_map @mixed_priority
+// CHECK: ac.address_map @general_fast_forward
+// CHECK: ac.address_map @general_fast_reverse

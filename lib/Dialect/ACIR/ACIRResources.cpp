@@ -795,6 +795,10 @@ bool laneIntersectsInterval(const InterleaveLane &lane, WideAddress begin,
 std::optional<AddressInterval>
 materializeSingleSelection(const InterleaveLane &lane, AddressInterval range,
                            bool &isGeneral) {
+  if (lane.banks == 1) {
+    isGeneral = false;
+    return range;
+  }
   WideAddress cycle = static_cast<WideAddress>(lane.granularity) * lane.banks;
   WideAddress residue = static_cast<WideAddress>(lane.granularity) * lane.bank;
   WideAddress blockStart = (range.begin / cycle) * cycle + residue;
@@ -1175,6 +1179,8 @@ verifyAddressMap(AddressMapOp map,
       return false;
     begin = std::max(begin, concrete.concreteSelection->begin);
     end = std::min(end, concrete.concreteSelection->end);
+    if (begin >= end)
+      return false;
     return laneIntersectsInterval(*general.lane, begin, end);
   };
 
