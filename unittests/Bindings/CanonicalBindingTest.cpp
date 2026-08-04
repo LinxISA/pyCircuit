@@ -15,7 +15,6 @@
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/Path.h"
 #include "llvm/Support/raw_ostream.h"
-#include "gmock/gmock.h"
 #include "gtest/gtest.h"
 
 #include <bit>
@@ -32,6 +31,22 @@ constexpr llvm::StringLiteral kRecordFingerprint =
 
 std::string takeError(llvm::Error error) {
   return llvm::toString(std::move(error));
+}
+
+testing::AssertionResult containsText(llvm::StringRef actual,
+                                      llvm::StringRef expected) {
+  if (actual.contains(expected))
+    return testing::AssertionSuccess();
+  return testing::AssertionFailure() << "expected substring '" << expected.str()
+                                     << "' in '" << actual.str() << "'";
+}
+
+testing::AssertionResult startsWithText(llvm::StringRef actual,
+                                        llvm::StringRef expected) {
+  if (actual.starts_with(expected))
+    return testing::AssertionSuccess();
+  return testing::AssertionFailure() << "expected prefix '" << expected.str()
+                                     << "' in '" << actual.str() << "'";
 }
 
 std::string recordJson(llvm::StringRef fingerprint = kRecordFingerprint,
@@ -279,8 +294,8 @@ void expectCanonicalOutputBoundary(const llvm::json::Value &value,
     detail::ScopedCanonicalEmissionFailure denyEmission;
     auto rejected = canonicalizeJson(value, belowBoundary);
     ASSERT_FALSE(static_cast<bool>(rejected));
-    EXPECT_THAT(takeError(rejected.takeError()),
-                testing::HasSubstr("canonical output byte limit exceeded"));
+    EXPECT_TRUE(containsText(takeError(rejected.takeError()),
+                             "canonical output byte limit exceeded"));
   }
 
   JsonParseLimits atBoundary;
@@ -289,8 +304,8 @@ void expectCanonicalOutputBoundary(const llvm::json::Value &value,
     detail::ScopedCanonicalEmissionFailure denyEmission;
     auto attempted = canonicalizeJson(value, atBoundary);
     ASSERT_FALSE(static_cast<bool>(attempted));
-    EXPECT_THAT(takeError(attempted.takeError()),
-                testing::HasSubstr("canonical emission failure injected"));
+    EXPECT_TRUE(containsText(takeError(attempted.takeError()),
+                             "canonical emission failure injected"));
   }
   auto accepted = canonicalizeJson(value, atBoundary);
   ASSERT_TRUE(static_cast<bool>(accepted)) << takeError(accepted.takeError());
@@ -357,8 +372,8 @@ TEST(CanonicalJsonTest, ImplementsAuthoritativeRfc8785AppendixBNumbers) {
     auto rejected =
         canonicalizeJson(llvm::json::Value(std::bit_cast<double>(bits)));
     ASSERT_FALSE(static_cast<bool>(rejected)) << bits;
-    EXPECT_THAT(takeError(rejected.takeError()),
-                testing::HasSubstr("ACLOWER-BINDING-JSON"));
+    EXPECT_TRUE(
+        containsText(takeError(rejected.takeError()), "ACLOWER-BINDING-JSON"));
   }
 
   for (const auto &[input, expected] :
@@ -389,8 +404,8 @@ TEST(CanonicalJsonTest, RejectsDuplicateInvalidUnsafeAndNegativeZeroInputs) {
        {R"({"x":1,"x":2})", R"("\udead")", "-0", "-0.0", "1e999"}) {
     auto parsed = parseIJson(input);
     EXPECT_FALSE(static_cast<bool>(parsed)) << input.str();
-    EXPECT_THAT(takeError(parsed.takeError()),
-                testing::HasSubstr("ACLOWER-BINDING-JSON"));
+    EXPECT_TRUE(
+        containsText(takeError(parsed.takeError()), "ACLOWER-BINDING-JSON"));
   }
 }
 
@@ -400,8 +415,8 @@ TEST(CanonicalJsonTest, RejectsConstructedNonFiniteAndNegativeZeroValues) {
                        std::numeric_limits<double>::quiet_NaN(), -0.0}) {
     auto canonical = canonicalizeJson(llvm::json::Value(value));
     EXPECT_FALSE(static_cast<bool>(canonical));
-    EXPECT_THAT(takeError(canonical.takeError()),
-                testing::HasSubstr("ACLOWER-BINDING-JSON"));
+    EXPECT_TRUE(
+        containsText(takeError(canonical.takeError()), "ACLOWER-BINDING-JSON"));
   }
 }
 
@@ -410,50 +425,50 @@ TEST(CanonicalJsonTest, AppliesEveryDeterministicResourceCap) {
   bytes.maxInputBytes = 2;
   auto tooManyBytes = parseIJson("null", bytes);
   ASSERT_FALSE(static_cast<bool>(tooManyBytes));
-  EXPECT_THAT(takeError(tooManyBytes.takeError()),
-              testing::HasSubstr("input byte limit"));
+  EXPECT_TRUE(
+      containsText(takeError(tooManyBytes.takeError()), "input byte limit"));
 
   JsonParseLimits shallow;
   shallow.maxDepth = 4;
   auto deep = parseIJson("[[[[[0]]]]]", shallow);
   ASSERT_FALSE(static_cast<bool>(deep));
-  EXPECT_THAT(takeError(deep.takeError()), testing::HasSubstr("maximum depth"));
+  EXPECT_TRUE(containsText(takeError(deep.takeError()), "maximum depth"));
 
   JsonParseLimits small;
   small.maxStructuralWork = 8;
   auto large = parseIJson("[0,1,2,3,4,5,6,7,8]", small);
   ASSERT_FALSE(static_cast<bool>(large));
-  EXPECT_THAT(takeError(large.takeError()),
-              testing::HasSubstr("structural work limit"));
+  EXPECT_TRUE(
+      containsText(takeError(large.takeError()), "structural work limit"));
 
   JsonParseLimits longString;
   longString.maxStringBytes = 1;
   auto oversizedString = parseIJson(R"("ab")", longString);
   ASSERT_FALSE(static_cast<bool>(oversizedString));
-  EXPECT_THAT(takeError(oversizedString.takeError()),
-              testing::HasSubstr("string byte limit"));
+  EXPECT_TRUE(containsText(takeError(oversizedString.takeError()),
+                           "string byte limit"));
 
   JsonParseLimits totalStrings;
   totalStrings.maxStringBytes = 8;
   totalStrings.maxTotalStringBytes = 3;
   auto oversizedTotal = parseIJson(R"(["ab","cd"])", totalStrings);
   ASSERT_FALSE(static_cast<bool>(oversizedTotal));
-  EXPECT_THAT(takeError(oversizedTotal.takeError()),
-              testing::HasSubstr("total string byte limit"));
+  EXPECT_TRUE(containsText(takeError(oversizedTotal.takeError()),
+                           "total string byte limit"));
 
   JsonParseLimits arrayElements;
   arrayElements.maxArrayElements = 2;
   auto oversizedArray = parseIJson("[0,1,2]", arrayElements);
   ASSERT_FALSE(static_cast<bool>(oversizedArray));
-  EXPECT_THAT(takeError(oversizedArray.takeError()),
-              testing::HasSubstr("array element limit"));
+  EXPECT_TRUE(containsText(takeError(oversizedArray.takeError()),
+                           "array element limit"));
 
   JsonParseLimits objectMembers;
   objectMembers.maxObjectMembers = 1;
   auto oversizedObject = parseIJson(R"({"a":0,"b":1})", objectMembers);
   ASSERT_FALSE(static_cast<bool>(oversizedObject));
-  EXPECT_THAT(takeError(oversizedObject.takeError()),
-              testing::HasSubstr("object member limit"));
+  EXPECT_TRUE(containsText(takeError(oversizedObject.takeError()),
+                           "object member limit"));
 }
 
 TEST(CanonicalJsonTest, BoundsEveryConstructedDomBeforeCanonicalization) {
@@ -461,8 +476,7 @@ TEST(CanonicalJsonTest, BoundsEveryConstructedDomBeforeCanonicalization) {
                         llvm::StringRef message) {
     auto canonical = canonicalizeJson(value, limits);
     ASSERT_FALSE(static_cast<bool>(canonical));
-    EXPECT_THAT(takeError(canonical.takeError()),
-                testing::HasSubstr(message.str()));
+    EXPECT_TRUE(containsText(takeError(canonical.takeError()), message.str()));
   };
 
   JsonParseLimits depth;
@@ -532,8 +546,8 @@ TEST(BindingRecordTest, BoundsConstructedStaticValuesBeforeSemanticRecursion) {
   limits.maxArrayElements = 2;
   auto record = BindingRecord::parse(*object, limits);
   ASSERT_FALSE(static_cast<bool>(record));
-  EXPECT_THAT(takeError(record.takeError()),
-              testing::HasSubstr("array element limit"));
+  EXPECT_TRUE(
+      containsText(takeError(record.takeError()), "array element limit"));
 }
 
 TEST(BindingRecordTest, RestrictsSafeIntegerRangeOnlyForStaticMetadata) {
@@ -549,8 +563,7 @@ TEST(BindingRecordTest, RestrictsSafeIntegerRangeOnlyForStaticMetadata) {
 
   auto record = BindingRecord::parse(*object);
   ASSERT_FALSE(static_cast<bool>(record));
-  EXPECT_THAT(takeError(record.takeError()),
-              testing::HasSubstr("safe exact range"));
+  EXPECT_TRUE(containsText(takeError(record.takeError()), "safe exact range"));
 }
 
 TEST(BindingRecordTest, AppliesCanonicalOutputLimitBeforeSemanticRecursion) {
@@ -563,8 +576,8 @@ TEST(BindingRecordTest, AppliesCanonicalOutputLimitBeforeSemanticRecursion) {
   limits.maxInputBytes = 0;
   auto record = BindingRecord::parse(*object, limits);
   ASSERT_FALSE(static_cast<bool>(record));
-  EXPECT_THAT(takeError(record.takeError()),
-              testing::HasSubstr("canonical output byte limit exceeded"));
+  EXPECT_TRUE(containsText(takeError(record.takeError()),
+                           "canonical output byte limit exceeded"));
 }
 
 TEST(BindingRecordTest, ParsesTheClosedTypedMetadataRecord) {
@@ -598,8 +611,8 @@ TEST(BindingRecordTest, RejectsUnknownFieldsAndBehavioralCppFragments) {
   auto parsedUnknown = parseBindingRegistry(registryJson(
       {candidateJson("fast", "arm64-apple-darwin", true, unknown)}));
   ASSERT_FALSE(static_cast<bool>(parsedUnknown));
-  EXPECT_THAT(takeError(parsedUnknown.takeError()),
-              testing::HasSubstr("exactly the acsim-binding-0.1 fields"));
+  EXPECT_TRUE(containsText(takeError(parsedUnknown.takeError()),
+                           "exactly the acsim-binding-0.1 fields"));
 
   for (llvm::StringRef raw : {"gfsim::Leaf()", "Leaf{x}", "#define Leaf X",
                               "leaf = callback", "emit(%s)"}) {
@@ -607,8 +620,8 @@ TEST(BindingRecordTest, RejectsUnknownFieldsAndBehavioralCppFragments) {
         registryJson({candidateJson("fast", "arm64-apple-darwin", true,
                                     recordJson(kRecordFingerprint, raw))}));
     ASSERT_FALSE(static_cast<bool>(parsed)) << raw.str();
-    EXPECT_THAT(takeError(parsed.takeError()),
-                testing::HasSubstr("raw C++ or emitter behavior"));
+    EXPECT_TRUE(containsText(takeError(parsed.takeError()),
+                             "raw C++ or emitter behavior"));
   }
 
   std::string traversal = recordJson();
@@ -617,8 +630,8 @@ TEST(BindingRecordTest, RejectsUnknownFieldsAndBehavioralCppFragments) {
   auto parsedTraversal = parseBindingRegistry(registryJson(
       {candidateJson("fast", "arm64-apple-darwin", true, traversal)}));
   ASSERT_FALSE(static_cast<bool>(parsedTraversal));
-  EXPECT_THAT(takeError(parsedTraversal.takeError()),
-              testing::HasSubstr("header path"));
+  EXPECT_TRUE(
+      containsText(takeError(parsedTraversal.takeError()), "header path"));
 
   std::string rawParameterType = recordJson();
   rawParameterType.replace(rawParameterType.find("std::int64_t"),
@@ -627,8 +640,8 @@ TEST(BindingRecordTest, RejectsUnknownFieldsAndBehavioralCppFragments) {
   auto parsedParameterType = parseBindingRegistry(registryJson(
       {candidateJson("fast", "arm64-apple-darwin", true, rawParameterType)}));
   ASSERT_FALSE(static_cast<bool>(parsedParameterType));
-  EXPECT_THAT(takeError(parsedParameterType.takeError()),
-              testing::HasSubstr("raw C++ or emitter behavior"));
+  EXPECT_TRUE(containsText(takeError(parsedParameterType.takeError()),
+                           "raw C++ or emitter behavior"));
 }
 
 TEST(BindingRecordTest, RejectsDuplicateStatefulActivationSourceNames) {
@@ -656,8 +669,8 @@ TEST(BindingRecordTest, RejectsDuplicateStatefulActivationSourceNames) {
 
   auto duplicate = BindingRecord::parse(*object);
   ASSERT_FALSE(static_cast<bool>(duplicate));
-  EXPECT_THAT(takeError(duplicate.takeError()),
-              testing::HasSubstr("activation-source names must be unique"));
+  EXPECT_TRUE(containsText(takeError(duplicate.takeError()),
+                           "activation-source names must be unique"));
 
   auto *sources = object->getArray("activation_sources");
   ASSERT_NE(nullptr, sources);
@@ -671,9 +684,9 @@ TEST(BindingRecordTest, RejectsDuplicateStatefulActivationSourceNames) {
 TEST(BindingRecordTest, RejectsMalformedRegistryEnvelopeAndResourceCaps) {
   auto objectInsteadOfArray = parseBindingRegistry(candidateJson());
   ASSERT_FALSE(static_cast<bool>(objectInsteadOfArray));
-  EXPECT_THAT(takeError(objectInsteadOfArray.takeError()),
-              testing::HasSubstr(
-                  "registry must contain exactly candidates and requests"));
+  EXPECT_TRUE(
+      containsText(takeError(objectInsteadOfArray.takeError()),
+                   "registry must contain exactly candidates and requests"));
 
   std::string requestWithCppOutput = requestJson();
   requestWithCppOutput.insert(requestWithCppOutput.find("\"binding\""),
@@ -681,8 +694,8 @@ TEST(BindingRecordTest, RejectsMalformedRegistryEnvelopeAndResourceCaps) {
   auto cppAuthoredRequest =
       parseBindingRegistry(registryJson({}, {std::move(requestWithCppOutput)}));
   ASSERT_FALSE(static_cast<bool>(cppAuthoredRequest));
-  EXPECT_THAT(takeError(cppAuthoredRequest.takeError()),
-              testing::HasSubstr("exactly the frozen architecture fields"));
+  EXPECT_TRUE(containsText(takeError(cppAuthoredRequest.takeError()),
+                           "exactly the frozen architecture fields"));
 
   std::string requestWithAccessor = requestJson();
   requestWithAccessor.insert(requestWithAccessor.find("\"cardinality\""),
@@ -690,16 +703,16 @@ TEST(BindingRecordTest, RejectsMalformedRegistryEnvelopeAndResourceCaps) {
   auto accessorAuthoredRequest =
       parseBindingRegistry(registryJson({}, {std::move(requestWithAccessor)}));
   ASSERT_FALSE(static_cast<bool>(accessorAuthoredRequest));
-  EXPECT_THAT(takeError(accessorAuthoredRequest.takeError()),
-              testing::HasSubstr(
-                  "request port must contain exact architecture fields"));
+  EXPECT_TRUE(
+      containsText(takeError(accessorAuthoredRequest.takeError()),
+                   "request port must contain exact architecture fields"));
 
   JsonParseLimits limits;
   limits.maxInputBytes = 32;
   auto tooLarge = parseBindingRegistry(registryJson({candidateJson()}), limits);
   ASSERT_FALSE(static_cast<bool>(tooLarge));
-  EXPECT_THAT(takeError(tooLarge.takeError()),
-              testing::HasSubstr("input byte limit"));
+  EXPECT_TRUE(
+      containsText(takeError(tooLarge.takeError()), "input byte limit"));
 }
 
 TEST(BindingCandidateTest, RejectsOversizedConstructedProfileAndTarget) {
@@ -714,8 +727,8 @@ TEST(BindingCandidateTest, RejectsOversizedConstructedProfileAndTarget) {
     (*object)[key] = std::string(72, key.front());
     auto candidate = BindingCandidate::parse(*object, limits);
     ASSERT_FALSE(static_cast<bool>(candidate)) << key.str();
-    EXPECT_THAT(takeError(candidate.takeError()),
-                testing::HasSubstr("string byte limit exceeded"));
+    EXPECT_TRUE(containsText(takeError(candidate.takeError()),
+                             "string byte limit exceeded"));
     (*object)[key] = key == "profile" ? "fast" : "arm64-apple-darwin";
   }
 }
@@ -730,15 +743,15 @@ TEST(BindingCandidateTest, AppliesDepthAndOutputLimitsToCompleteEnvelope) {
   depth.maxDepth = 4;
   auto tooDeep = BindingCandidate::parse(*object, depth);
   ASSERT_FALSE(static_cast<bool>(tooDeep));
-  EXPECT_THAT(takeError(tooDeep.takeError()),
-              testing::HasSubstr("maximum depth exceeded"));
+  EXPECT_TRUE(
+      containsText(takeError(tooDeep.takeError()), "maximum depth exceeded"));
 
   JsonParseLimits output;
   output.maxInputBytes = 0;
   auto tooLarge = BindingCandidate::parse(*object, output);
   ASSERT_FALSE(static_cast<bool>(tooLarge));
-  EXPECT_THAT(takeError(tooLarge.takeError()),
-              testing::HasSubstr("canonical output byte limit exceeded"));
+  EXPECT_TRUE(containsText(takeError(tooLarge.takeError()),
+                           "canonical output byte limit exceeded"));
 }
 
 TEST(BindingRegistryTest, ExactSelectionIsIndependentOfProviderOrder) {
@@ -766,24 +779,24 @@ TEST(BindingRegistryTest, MissingUnavailableAndAmbiguousAreHardFailures) {
 
   auto missing = resolveBindings({}, {request}, "fast", "arm64-apple-darwin");
   ASSERT_FALSE(static_cast<bool>(missing));
-  EXPECT_THAT(takeError(missing.takeError()),
-              testing::HasSubstr("ACLOWER-BINDING-MISSING"));
+  EXPECT_TRUE(
+      containsText(takeError(missing.takeError()), "ACLOWER-BINDING-MISSING"));
 
   auto unavailable = parseCandidates(
       registryJson({candidateJson("fast", "arm64-apple-darwin", false)}));
   auto noAvailable =
       resolveBindings(unavailable, {request}, "fast", "arm64-apple-darwin");
   ASSERT_FALSE(static_cast<bool>(noAvailable));
-  EXPECT_THAT(takeError(noAvailable.takeError()),
-              testing::HasSubstr("ACLOWER-BINDING-MISSING"));
+  EXPECT_TRUE(containsText(takeError(noAvailable.takeError()),
+                           "ACLOWER-BINDING-MISSING"));
 
   auto ambiguous =
       parseCandidates(registryJson({candidateJson(), candidateJson()}));
   auto multiple =
       resolveBindings(ambiguous, {request}, "fast", "arm64-apple-darwin");
   ASSERT_FALSE(static_cast<bool>(multiple));
-  EXPECT_THAT(takeError(multiple.takeError()),
-              testing::HasSubstr("ACLOWER-BINDING-AMBIGUOUS"));
+  EXPECT_TRUE(containsText(takeError(multiple.takeError()),
+                           "ACLOWER-BINDING-AMBIGUOUS"));
 }
 
 TEST(BindingRegistryTest,
@@ -815,15 +828,15 @@ TEST(BindingRegistryTest,
     auto result =
         resolveBindings(candidates, {request}, "fast", "arm64-apple-darwin");
     ASSERT_FALSE(static_cast<bool>(result)) << input.code.str();
-    EXPECT_THAT(takeError(result.takeError()),
-                testing::StartsWith(input.code.str()));
+    EXPECT_TRUE(
+        startsWithText(takeError(result.takeError()), input.code.str()));
   }
 
   auto invalidProfile =
       resolveBindings(candidates, {exact}, "fast debug", "arm64-apple-darwin");
   ASSERT_FALSE(static_cast<bool>(invalidProfile));
-  EXPECT_THAT(takeError(invalidProfile.takeError()),
-              testing::StartsWith("ACLOWER-PROFILE"));
+  EXPECT_TRUE(
+      startsWithText(takeError(invalidProfile.takeError()), "ACLOWER-PROFILE"));
 }
 
 TEST(BindingRegistryTest, ZeroExactMatchesAreMissingWithSubordinateReason) {
@@ -861,10 +874,10 @@ TEST(BindingRegistryTest, ZeroExactMatchesAreMissingWithSubordinateReason) {
         resolveBindings(candidates, {request}, "fast", "arm64-apple-darwin");
     ASSERT_FALSE(static_cast<bool>(result)) << mismatch.reason.str();
     std::string message = takeError(result.takeError());
-    EXPECT_THAT(message, testing::StartsWith("ACLOWER-BINDING-MISSING"));
-    EXPECT_THAT(message, testing::HasSubstr(
+    EXPECT_TRUE(startsWithText(message, "ACLOWER-BINDING-MISSING"));
+    EXPECT_TRUE(containsText(message,
                              (llvm::Twine("reason=") + mismatch.reason).str()));
-    EXPECT_THAT(message, testing::HasSubstr("key=@Leaf"));
+    EXPECT_TRUE(containsText(message, "key=@Leaf"));
   }
 
   for (auto [profile, target] : {std::pair<llvm::StringRef, llvm::StringRef>(
@@ -873,8 +886,8 @@ TEST(BindingRegistryTest, ZeroExactMatchesAreMissingWithSubordinateReason) {
     auto result = resolveBindings(candidates, {exact}, profile, target);
     ASSERT_FALSE(static_cast<bool>(result));
     std::string message = takeError(result.takeError());
-    EXPECT_THAT(message, testing::StartsWith("ACLOWER-BINDING-MISSING"));
-    EXPECT_THAT(message, testing::HasSubstr("reason=ACLOWER-PROFILE"));
+    EXPECT_TRUE(startsWithText(message, "ACLOWER-BINDING-MISSING"));
+    EXPECT_TRUE(containsText(message, "reason=ACLOWER-PROFILE"));
   }
 }
 
@@ -889,8 +902,7 @@ TEST(BindingRegistryTest, NarrowsOneCandidateSetAcrossEveryExactField) {
   auto result =
       resolveBindings(candidates, {request}, "fast", "arm64-apple-darwin");
   ASSERT_FALSE(static_cast<bool>(result));
-  EXPECT_THAT(takeError(result.takeError()),
-              testing::HasSubstr("ACLOWER-PROFILE"));
+  EXPECT_TRUE(containsText(takeError(result.takeError()), "ACLOWER-PROFILE"));
 }
 
 TEST(BindingRegistryTest, RejectsIncorrectRecordFingerprintBeforeSelection) {
@@ -903,8 +915,8 @@ TEST(BindingRegistryTest, RejectsIncorrectRecordFingerprintBeforeSelection) {
   auto result =
       resolveBindings(candidates, {request}, "fast", "arm64-apple-darwin");
   ASSERT_FALSE(static_cast<bool>(result));
-  EXPECT_THAT(takeError(result.takeError()),
-              testing::HasSubstr("ACLOWER-FINGERPRINT"));
+  EXPECT_TRUE(
+      containsText(takeError(result.takeError()), "ACLOWER-FINGERPRINT"));
 }
 
 TEST(BindingLockTest, EmitsStableCanonicalBytesAndProjectHashVector) {
@@ -947,8 +959,8 @@ TEST(BindingLockTest, PublishesAtomicallyOnlyAfterCompleteResolution) {
   llvm::Error failure = resolveAndWriteBindingLock(
       candidates, {missing}, "fast", "arm64-apple-darwin", failurePath);
   ASSERT_TRUE(static_cast<bool>(failure));
-  EXPECT_THAT(takeError(std::move(failure)),
-              testing::HasSubstr("ACLOWER-BINDING-MISSING"));
+  EXPECT_TRUE(
+      containsText(takeError(std::move(failure)), "ACLOWER-BINDING-MISSING"));
   EXPECT_FALSE(llvm::sys::fs::exists(failurePath));
 
   constexpr llvm::StringLiteral sentinel = "existing-lock-sentinel\n";
@@ -956,8 +968,8 @@ TEST(BindingLockTest, PublishesAtomicallyOnlyAfterCompleteResolution) {
   llvm::Error existingResolutionFailure = resolveAndWriteBindingLock(
       candidates, {missing}, "fast", "arm64-apple-darwin", existingPath);
   ASSERT_TRUE(static_cast<bool>(existingResolutionFailure));
-  EXPECT_THAT(takeError(std::move(existingResolutionFailure)),
-              testing::HasSubstr("ACLOWER-BINDING-MISSING"));
+  EXPECT_TRUE(containsText(takeError(std::move(existingResolutionFailure)),
+                           "ACLOWER-BINDING-MISSING"));
   EXPECT_EQ(sentinel, readTestFile(existingPath));
   expectNoBindingTemporaries(directory);
 
@@ -968,16 +980,16 @@ TEST(BindingLockTest, PublishesAtomicallyOnlyAfterCompleteResolution) {
   ASSERT_TRUE(static_cast<bool>(result)) << takeError(result.takeError());
   llvm::Error writeFailure = emitBindingLockAtomically(*result, invalidParent);
   ASSERT_TRUE(static_cast<bool>(writeFailure));
-  EXPECT_THAT(takeError(std::move(writeFailure)),
-              testing::HasSubstr("ACLOWER-BINDING-OUTPUT"));
+  EXPECT_TRUE(containsText(takeError(std::move(writeFailure)),
+                           "ACLOWER-BINDING-OUTPUT"));
 
   {
     detail::ScopedBindingPublishFailure failure;
     llvm::Error publishFailure =
         emitBindingLockAtomically(*result, existingPath);
     ASSERT_TRUE(static_cast<bool>(publishFailure));
-    EXPECT_THAT(takeError(std::move(publishFailure)),
-                testing::HasSubstr("ACLOWER-BINDING-OUTPUT"));
+    EXPECT_TRUE(containsText(takeError(std::move(publishFailure)),
+                             "ACLOWER-BINDING-OUTPUT"));
   }
   EXPECT_EQ(sentinel, readTestFile(existingPath));
   expectNoBindingTemporaries(directory);
@@ -1016,8 +1028,8 @@ TEST(ResolveBindingsApiTest, ReturnsTypedResultWithoutMutatingFrozenTopology) {
 
   auto beforeFreeze = resolveModuleBindings(*module, options);
   ASSERT_FALSE(static_cast<bool>(beforeFreeze));
-  EXPECT_THAT(takeError(beforeFreeze.takeError()),
-              testing::HasSubstr("ACLOWER-BINDING-MISSING"));
+  EXPECT_TRUE(containsText(takeError(beforeFreeze.takeError()),
+                           "ACLOWER-BINDING-MISSING"));
 
   mlir::PassManager manager(&context);
   manager.enableVerifier(false);
@@ -1042,16 +1054,15 @@ TEST(ResolveBindingsApiTest, ReturnsTypedResultWithoutMutatingFrozenTopology) {
       parseCandidates(registryJson({candidateJson(), candidateJson()}));
   auto ambiguous = resolveModuleBindings(*module, ambiguousOptions);
   ASSERT_FALSE(static_cast<bool>(ambiguous));
-  EXPECT_THAT(takeError(ambiguous.takeError()),
-              testing::HasSubstr("ACLOWER-BINDING-AMBIGUOUS"));
+  EXPECT_TRUE(containsText(takeError(ambiguous.takeError()),
+                           "ACLOWER-BINDING-AMBIGUOUS"));
 
   ResolveBindingsPassOptions absentRequest = options;
   absentRequest.requests.clear();
   auto absent = resolveModuleBindings(*module, absentRequest);
   ASSERT_FALSE(static_cast<bool>(absent));
-  EXPECT_THAT(
-      takeError(absent.takeError()),
-      testing::HasSubstr("exact frozen architecture request is absent"));
+  EXPECT_TRUE(containsText(takeError(absent.takeError()),
+                           "exact frozen architecture request is absent"));
 
   ResolveBindingsPassOptions schemaMismatch = options;
   schemaMismatch.candidates = parseCandidates(registryJson(
@@ -1059,23 +1070,23 @@ TEST(ResolveBindingsApiTest, ReturnsTypedResultWithoutMutatingFrozenTopology) {
                      withComponentSchema(recordJson(), "ac.std.OtherLeaf"))}));
   auto wrongSchema = resolveModuleBindings(*module, schemaMismatch);
   ASSERT_FALSE(static_cast<bool>(wrongSchema));
-  EXPECT_THAT(takeError(wrongSchema.takeError()),
-              testing::HasSubstr("ACLOWER-SCHEMA-MISMATCH"));
+  EXPECT_TRUE(containsText(takeError(wrongSchema.takeError()),
+                           "ACLOWER-SCHEMA-MISMATCH"));
 
   ResolveBindingsPassOptions providerMismatch = options;
   providerMismatch.requests.front().providerImplementationFingerprint =
       "sha256:3333333333333333333333333333333333333333333333333333333333333333";
   auto wrongProvider = resolveModuleBindings(*module, providerMismatch);
   ASSERT_FALSE(static_cast<bool>(wrongProvider));
-  EXPECT_THAT(takeError(wrongProvider.takeError()),
-              testing::HasSubstr("ACLOWER-FINGERPRINT"));
+  EXPECT_TRUE(containsText(takeError(wrongProvider.takeError()),
+                           "ACLOWER-FINGERPRINT"));
 
   ResolveBindingsPassOptions signatureMismatch = options;
   signatureMismatch.requests.front().functionType = "() -> i64";
   auto wrongSignature = resolveModuleBindings(*module, signatureMismatch);
   ASSERT_FALSE(static_cast<bool>(wrongSignature));
-  EXPECT_THAT(takeError(wrongSignature.takeError()),
-              testing::HasSubstr("ACLOWER-TYPE-MISMATCH"));
+  EXPECT_TRUE(containsText(takeError(wrongSignature.takeError()),
+                           "ACLOWER-TYPE-MISMATCH"));
 
   std::string unitSource = source.str();
   unitSource.replace(unitSource.find("width = 8 : i64"),

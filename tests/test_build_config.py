@@ -74,6 +74,69 @@ class BuildConfigurationTest(unittest.TestCase):
         self.assertIn("ACIR_TOOLS_DIR", result.stderr)
         self.assertIn("LLVM_TOOLS_DIR", result.stderr)
 
+    def test_binding_unit_target_configures_with_portable_gtest_only(self):
+        cmake = shutil.which("cmake")
+        ninja = shutil.which("ninja")
+        self.assertIsNotNone(cmake)
+        self.assertIsNotNone(ninja)
+
+        binding_source = (self.repo_root / "unittests" / "Bindings").as_posix()
+        support_targets = "\n".join(
+            f"add_library({target} INTERFACE)"
+            for target in (
+                "ACIRBindings",
+                "ACIRDialect",
+                "ACIRTransforms",
+                "ACSimDialect",
+                "LLVMSupport",
+                "MLIRFuncDialect",
+                "MLIRIndexDialect",
+                "MLIRParser",
+                "MLIRSCFDialect",
+            )
+        )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            source_dir = Path(temp_dir) / "source"
+            build_dir = Path(temp_dir) / "build"
+            gtest_dir = source_dir / "gtest-only"
+            gtest_dir.mkdir(parents=True)
+            (gtest_dir / "GTestConfig.cmake").write_text(
+                "add_library(GTest::gtest_main INTERFACE IMPORTED)\n"
+                "set(GTest_FOUND TRUE)\n",
+                encoding="utf-8",
+            )
+            (source_dir / "CMakeLists.txt").write_text(
+                "cmake_minimum_required(VERSION 3.20)\n"
+                "project(BindingUnitConfigure LANGUAGES CXX)\n"
+                "enable_testing()\n"
+                f"{support_targets}\n"
+                f'add_subdirectory("{binding_source}" bindings)\n',
+                encoding="utf-8",
+            )
+
+            result = subprocess.run(
+                [
+                    cmake,
+                    "-S",
+                    str(source_dir),
+                    "-B",
+                    str(build_dir),
+                    "-G",
+                    "Ninja",
+                    f"-DCMAKE_MAKE_PROGRAM={ninja}",
+                    f"-DGTest_DIR={gtest_dir}",
+                ],
+                capture_output=True,
+                text=True,
+            )
+
+        self.assertEqual(
+            result.returncode,
+            0,
+            msg=f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

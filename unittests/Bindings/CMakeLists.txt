@@ -15,6 +15,5 @@ target_link_libraries(ACIRBindingTests PRIVATE
   MLIRParser
   MLIRSCFDialect
   GTest::gtest_main
-  GTest::gmock
 )
 add_test(NAME ACIRBindingTests COMMAND ACIRBindingTests)
