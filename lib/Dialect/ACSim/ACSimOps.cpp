@@ -451,6 +451,109 @@ LogicalResult verifyBindingLockShape(BindingOp binding) {
   return success();
 }
 
+LogicalResult verifyModuleInterfaceShape(ModuleOp module) {
+  constexpr std::array<StringLiteral, 3> interfaceKeys = {"ports", "resources",
+                                                          "results"};
+  constexpr std::array<StringLiteral, 11> portKeys = {
+      "accessor",  "cardinality", "delegation", "direction",
+      "interface", "name",        "ownership",  "payload",
+      "protocol",  "role",        "time_domain"};
+  constexpr std::array<StringLiteral, 8> resourceKeys = {
+      "accessor",  "delegation", "mode", "name",
+      "ownership", "resource",   "role", "time_domain"};
+  constexpr std::array<StringLiteral, 2> resultKeys = {"cpp_type", "name"};
+  DictionaryAttr interface = module.getInterface();
+  if (!hasExactKeys(interface, interfaceKeys))
+    return module.emitOpError(
+        "interface must contain exactly ports, resources, and results");
+  auto ports = interface.getAs<ArrayAttr>("ports");
+  auto resources = interface.getAs<ArrayAttr>("resources");
+  auto results = interface.getAs<ArrayAttr>("results");
+  if (!ports || !resources || !results)
+    return module.emitOpError("interface fields must be ordered record arrays");
+
+  llvm::StringSet<> accessors;
+  auto verifyNames = [&](ArrayAttr records, ArrayRef<StringLiteral> keys,
+                         StringRef kind) -> LogicalResult {
+    StringRef previous;
+    for (Attribute attribute : records) {
+      auto record = dyn_cast<DictionaryAttr>(attribute);
+      auto name = record ? record.getAs<StringAttr>("name") : StringAttr();
+      if (!hasExactKeys(record, keys) || !name ||
+          !isCanonicalIdentifier(name.getValue()))
+        return module.emitOpError()
+               << kind << " interface records require exact closed fields and "
+               << "canonical names";
+      if (!previous.empty() && name.getValue() <= previous)
+        return module.emitOpError()
+               << kind << " interface records must be strictly name-sorted";
+      previous = name.getValue();
+    }
+    return success();
+  };
+  if (failed(verifyNames(ports, portKeys, "port")) ||
+      failed(verifyNames(resources, resourceKeys, "resource")) ||
+      failed(verifyNames(results, resultKeys, "result")))
+    return failure();
+
+  for (Attribute attribute : ports) {
+    auto record = cast<DictionaryAttr>(attribute);
+    auto accessor = record.getAs<FlatSymbolRefAttr>("accessor");
+    auto cardinality = record.getAs<StringAttr>("cardinality");
+    auto delegation = record.getAs<StringAttr>("delegation");
+    auto direction = record.getAs<StringAttr>("direction");
+    auto ownership = record.getAs<StringAttr>("ownership");
+    if (!accessor || !accessors.insert(accessor.getValue()).second ||
+        !record.getAs<FlatSymbolRefAttr>("interface") ||
+        !record.getAs<FlatSymbolRefAttr>("payload") ||
+        !record.getAs<FlatSymbolRefAttr>("protocol") ||
+        !record.getAs<FlatSymbolRefAttr>("role") ||
+        !record.getAs<FlatSymbolRefAttr>("time_domain") || !cardinality ||
+        !delegation || !direction || !ownership ||
+        !llvm::is_contained({StringRef("exclusive"), StringRef("shared")},
+                            cardinality.getValue()) ||
+        !llvm::is_contained({StringRef("forbidden"), StringRef("allowed"),
+                             StringRef("required")},
+                            delegation.getValue()) ||
+        !llvm::is_contained({StringRef("input"), StringRef("output")},
+                            direction.getValue()) ||
+        !llvm::is_contained(
+            {StringRef("owned"), StringRef("borrowed"), StringRef("shared")},
+            ownership.getValue()))
+      return module.emitOpError(
+          "port interface records require exact typed endpoint metadata and "
+          "globally unique accessors");
+  }
+  for (Attribute attribute : resources) {
+    auto record = cast<DictionaryAttr>(attribute);
+    auto accessor = record.getAs<FlatSymbolRefAttr>("accessor");
+    auto delegation = record.getAs<StringAttr>("delegation");
+    auto mode = record.getAs<StringAttr>("mode");
+    auto ownership = record.getAs<StringAttr>("ownership");
+    if (!accessor || !accessors.insert(accessor.getValue()).second ||
+        !record.getAs<FlatSymbolRefAttr>("resource") ||
+        !record.getAs<FlatSymbolRefAttr>("role") ||
+        !record.getAs<FlatSymbolRefAttr>("time_domain") || !delegation ||
+        !mode || !ownership ||
+        !llvm::is_contained({StringRef("forbidden"), StringRef("allowed"),
+                             StringRef("required")},
+                            delegation.getValue()) ||
+        !llvm::is_contained({StringRef("initiator"), StringRef("target")},
+                            mode.getValue()) ||
+        !llvm::is_contained(
+            {StringRef("owned"), StringRef("borrowed"), StringRef("shared")},
+            ownership.getValue()))
+      return module.emitOpError(
+          "resource interface records require exact typed endpoint metadata "
+          "and globally unique accessors");
+  }
+  for (Attribute attribute : results)
+    if (!cast<DictionaryAttr>(attribute).getAs<FlatSymbolRefAttr>("cpp_type"))
+      return module.emitOpError(
+          "result interface records require an exact C++ type realization");
+  return success();
+}
+
 std::string symbolKey(SymbolRefAttr reference) {
   std::string result = reference.getRootReference().getValue().str();
   for (FlatSymbolRefAttr nested : reference.getNestedReferences()) {
@@ -863,13 +966,15 @@ LogicalResult verifyCanonicalType(Type type, Operation *from,
                                "C++ type");
       })
       .Case<OwnerType, RefType>([&](auto ownerType) -> LogicalResult {
-        FailureOr<Operation *> definition = requireReference<BindingOp>(
-            index, from, ownerType.getSymbol(), "binding");
+        FailureOr<Operation *> definition =
+            requireReference<BindingOp, ModuleOp>(
+                index, from, ownerType.getRealization(), "realization");
         if (failed(definition))
           return failure();
-        if (cast<BindingOp>(*definition).getEffect() != "stateful")
-          return from->emitOpError()
-                 << "owner/ref type requires a stateful binding";
+        if (auto binding = dyn_cast<BindingOp>(*definition);
+            binding && binding.getEffect() != "stateful")
+          return from->emitOpError() << "owner/ref type requires a generated "
+                                        "module or stateful binding";
         return success();
       })
       .Case<PortType>([&](PortType port) {
@@ -1020,13 +1125,20 @@ LogicalResult verifyDeterministicOrder(ModelOp model) {
 
 struct ExpandedRuntimeRow {
   Operation *placement = nullptr;
+  Operation *realization = nullptr;
   unsigned context = 0;
   std::string target;
   std::string path;
   SmallVector<int64_t> indices;
-  FlatSymbolRefAttr binding;
   int64_t objectId = -1;
   int64_t activationId = -1;
+};
+
+struct ExpandedOwnerRow {
+  Operation *placement = nullptr;
+  unsigned context = 0;
+  std::string path;
+  SmallVector<int64_t> indices;
 };
 
 struct ExpansionContext {
@@ -1039,9 +1151,10 @@ struct ExpansionContext {
 };
 
 struct HierarchyExpansion {
-  SmallVector<ExpandedRuntimeRow> rows;
+  SmallVector<ExpandedOwnerRow> ownerRows;
+  SmallVector<ExpandedRuntimeRow> runtimeRows;
   SmallVector<ExpansionContext> contexts;
-  llvm::StringMap<unsigned> rowByPath;
+  llvm::StringMap<unsigned> ownerByPath;
 };
 
 std::string expandedPath(StringRef parent, StringRef name,
@@ -1068,8 +1181,8 @@ std::string moduleSpecializationKey(ModuleOp module) {
   return key;
 }
 
-LogicalResult expandSelectedRoot(ModelOp model, const ModelIndex &index,
-                                 HierarchyExpansion &expansion) {
+LogicalResult expandSelectedRootOwners(ModelOp model, const ModelIndex &index,
+                                       HierarchyExpansion &expansion) {
   FailureOr<Operation *> root = requireReference<ModuleOp>(
       index, model, model.getRootAttr(), "root", false);
   if (failed(root))
@@ -1106,44 +1219,34 @@ LogicalResult expandSelectedRoot(ModelOp model, const ModelIndex &index,
       continue;
     }
     if (action.kind == ActionKind::Row) {
-      if (expansion.rows.size() >= expansionLimit)
+      if (expansion.ownerRows.size() >= expansionLimit)
         return action.placement->emitOpError()
                << "expanded hierarchy exceeds ACSim v0.1 capability "
                << expansionLimit;
-      if (expansion.rowByPath.contains(action.path))
+      if (expansion.ownerByPath.contains(action.path))
         return action.placement->emitOpError()
                << "derived hierarchy path is not unique: '" << action.path
                << "'";
-      FlatSymbolRefAttr binding;
       SymbolRefAttr target;
       if (auto instance = dyn_cast<InstanceOp>(action.placement)) {
-        binding = instance.getBindingAttr();
         target = instance.getTargetAttr();
       } else if (auto array = dyn_cast<ArrayOp>(action.placement)) {
-        binding = array.getBindingAttr();
         target = array.getTargetAttr();
-      } else {
-        binding = cast<ProcessOp>(action.placement).getBindingAttr();
       }
-      int64_t id = static_cast<int64_t>(expansion.rows.size());
-      ExpandedRuntimeRow row{action.placement,
-                             action.context,
-                             definitionKey(action.placement),
-                             action.path,
-                             std::move(action.indices),
-                             binding,
-                             id,
-                             id};
-      expansion.rowByPath.try_emplace(
-          row.path, static_cast<unsigned>(expansion.rows.size()));
-      expansion.contexts[action.context].objectIds[action.placement].push_back(
-          id);
-      expansion.rows.push_back(std::move(row));
-      if (modelVerificationWorkCollector)
-        ++modelVerificationWorkCollector->expandedRuntimeRows;
-
       Operation *targetDefinition =
           target ? index.definitions.lookup(symbolKey(target)) : nullptr;
+      if (auto binding = dyn_cast_or_null<BindingOp>(targetDefinition);
+          binding && binding.getEffect() != "stateful")
+        return action.placement->emitOpError(
+            "ownership expansion requires a generated module or stateful "
+            "binding target");
+      unsigned ownerOrdinal = expansion.ownerRows.size();
+      expansion.ownerByPath.try_emplace(action.path, ownerOrdinal);
+      expansion.ownerRows.push_back(
+          {action.placement, action.context, action.path, action.indices});
+      if (modelVerificationWorkCollector)
+        ++modelVerificationWorkCollector->expandedOwnerRows;
+
       if (auto childModule = dyn_cast_or_null<ModuleOp>(targetDefinition))
         stack.push_back({ActionKind::Enter,
                          childModule,
@@ -1201,6 +1304,40 @@ LogicalResult expandSelectedRoot(ModelOp model, const ModelIndex &index,
   return success();
 }
 
+LogicalResult expandRuntime(const ModelIndex &index,
+                            HierarchyExpansion &expansion) {
+  const uint64_t expansionLimit =
+      currentModelVerificationLimits().maxExpandedObjects;
+  for (const ExpandedOwnerRow &owner : expansion.ownerRows) {
+    Operation *realization = nullptr;
+    if (isa<ProcessOp>(owner.placement)) {
+      realization = owner.placement;
+    } else {
+      SymbolRefAttr target =
+          isa<InstanceOp>(owner.placement)
+              ? cast<InstanceOp>(owner.placement).getTargetAttr()
+              : cast<ArrayOp>(owner.placement).getTargetAttr();
+      Operation *definition = index.definitions.lookup(symbolKey(target));
+      if (isa_and_nonnull<BindingOp>(definition))
+        realization = definition;
+    }
+    if (!realization)
+      continue;
+    if (expansion.runtimeRows.size() >= expansionLimit)
+      return owner.placement->emitOpError()
+             << "runtime expansion exceeds ACSim v0.1 capability "
+             << expansionLimit;
+    int64_t id = static_cast<int64_t>(expansion.runtimeRows.size());
+    expansion.runtimeRows.push_back(
+        {owner.placement, realization, owner.context,
+         definitionKey(owner.placement), owner.path, owner.indices, id, id});
+    expansion.contexts[owner.context].objectIds[owner.placement].push_back(id);
+    if (modelVerificationWorkCollector)
+      ++modelVerificationWorkCollector->expandedRuntimeRows;
+  }
+  return success();
+}
+
 LogicalResult verifyConstructionOrder(ModelOp model,
                                       const HierarchyExpansion &expansion) {
   auto readOrder = [&](ArrayAttr order, StringRef label,
@@ -1220,8 +1357,8 @@ LogicalResult verifyConstructionOrder(ModelOp model,
   };
 
   SmallVector<std::string> actual;
-  actual.reserve(expansion.rows.size());
-  for (const ExpandedRuntimeRow &row : expansion.rows)
+  actual.reserve(expansion.ownerRows.size());
+  for (const ExpandedOwnerRow &row : expansion.ownerRows)
     actual.push_back(row.path);
   SmallVector<std::string> construction;
   SmallVector<std::string> destruction;
@@ -1448,23 +1585,30 @@ LogicalResult verifyProcess(ProcessOp process, const ModelIndex &index) {
   return success();
 }
 
-BindingOp bindingForBase(Value value, const ModelIndex &index) {
+Operation *realizationForBase(Value value, const ModelIndex &index) {
   SymbolRefAttr symbol;
   if (auto owner = dyn_cast<OwnerType>(value.getType()))
-    symbol = owner.getSymbol();
+    symbol = owner.getRealization();
   else if (auto reference = dyn_cast<RefType>(value.getType()))
-    symbol = reference.getSymbol();
+    symbol = reference.getRealization();
   if (!symbol)
-    return {};
-  return dyn_cast_or_null<BindingOp>(
-      index.definitions.lookup(symbolKey(symbol)));
+    return nullptr;
+  Operation *definition = index.definitions.lookup(symbolKey(symbol));
+  return isa_and_nonnull<BindingOp, ModuleOp>(definition) ? definition
+                                                          : nullptr;
 }
 
-DictionaryAttr findEndpoint(BindingOp binding, StringRef field,
+ArrayAttr realizationRecords(Operation *realization, StringRef field) {
+  if (auto binding = dyn_cast_or_null<BindingOp>(realization))
+    return binding.getRecord().getAs<ArrayAttr>(field);
+  if (auto module = dyn_cast_or_null<ModuleOp>(realization))
+    return module.getInterface().getAs<ArrayAttr>(field);
+  return {};
+}
+
+DictionaryAttr findEndpoint(Operation *realization, StringRef field,
                             FlatSymbolRefAttr accessor) {
-  if (!binding)
-    return {};
-  auto records = binding.getRecord().getAs<ArrayAttr>(field);
+  auto records = realizationRecords(realization, field);
   if (!records)
     return {};
   for (Attribute attribute : records) {
@@ -1503,37 +1647,32 @@ ArrayAttr bindingStaticValues(BindingOp binding) {
   return ArrayAttr::get(binding.getContext(), values);
 }
 
-LogicalResult
-verifyPlacementTarget(Operation *operation, FlatSymbolRefAttr bindingReference,
-                      SymbolRefAttr targetReference, ArrayAttr staticArguments,
-                      StringAttr specialization, const ModelIndex &index) {
-  auto bindingDefinition = requireReference<BindingOp>(
-      index, operation, bindingReference, "binding");
-  if (failed(bindingDefinition))
-    return failure();
-  BindingOp binding = cast<BindingOp>(*bindingDefinition);
+LogicalResult verifyPlacementTarget(Operation *operation,
+                                    SymbolRefAttr targetReference,
+                                    ArrayAttr staticArguments,
+                                    StringAttr specialization,
+                                    const ModelIndex &index) {
   FailureOr<Operation *> targetDefinition =
       requireReference<BindingOp, ModuleOp>(index, operation, targetReference,
-                                            "placement target");
+                                            "realization target");
   if (failed(targetDefinition))
     return failure();
   Operation *target = *targetDefinition;
   if (auto targetBinding = dyn_cast<BindingOp>(target)) {
-    if (targetBinding != binding)
+    if (targetBinding.getEffect() != "stateful")
       return operation->emitOpError(
-          "placement target binding must equal the declared binding");
+          "placement target binding must be stateful");
+    if (bindingStaticValues(targetBinding) != staticArguments)
+      return operation->emitOpError("static arguments must exactly match "
+                                    "ordered binding-lock parameters");
   } else {
     auto targetModule = cast<ModuleOp>(target);
-    if (targetModule.getBindingAttr() != bindingReference ||
-        targetModule.getStaticParams() != staticArguments ||
+    if (targetModule.getStaticParams() != staticArguments ||
         targetModule.getSpecializationFingerprintAttr() != specialization)
       return operation->emitOpError(
-          "reusable module target requires exact binding, static arguments, "
-          "and specialization fingerprint");
+          "generated module target requires exact static arguments and "
+          "specialization fingerprint");
   }
-  if (bindingStaticValues(binding) != staticArguments)
-    return operation->emitOpError(
-        "static arguments must exactly match ordered binding-lock parameters");
   return success();
 }
 
@@ -1709,32 +1848,73 @@ LogicalResult verifyModulesAndTypedGraph(ModelOp model,
           return failure();
       }
     } else if (auto module = dyn_cast<ModuleOp>(operation)) {
-      auto definition = requireReference<BindingOp>(
-          index, module, module.getBindingAttr(), "binding");
-      if (failed(definition))
-        return failure();
-      if (bindingStaticValues(cast<BindingOp>(*definition)) !=
-          module.getStaticParams())
-        return module.emitOpError(
-            "module static parameters must exactly match its binding lock");
+      for (StringRef field : {StringRef("ports"), StringRef("resources")})
+        for (Attribute item : module.getInterface().getAs<ArrayAttr>(field)) {
+          auto endpoint = cast<DictionaryAttr>(item);
+          const std::array<StringRef, 1> accessorKinds = {"accessor"};
+          const std::array<StringRef, 1> roleKinds = {"role"};
+          const std::array<StringRef, 1> timeDomainKinds = {"time_domain"};
+          if (failed(requireTypeKind(
+                  index, module, endpoint.getAs<FlatSymbolRefAttr>("accessor"),
+                  accessorKinds, "interface accessor")) ||
+              failed(requireTypeKind(index, module,
+                                     endpoint.getAs<FlatSymbolRefAttr>("role"),
+                                     roleKinds, "interface role")) ||
+              failed(requireTypeKind(
+                  index, module,
+                  endpoint.getAs<FlatSymbolRefAttr>("time_domain"),
+                  timeDomainKinds, "interface time-domain")))
+            return failure();
+        }
+      for (Attribute item : module.getInterface().getAs<ArrayAttr>("ports")) {
+        auto endpoint = cast<DictionaryAttr>(item);
+        const std::array<StringRef, 1> interfaceKinds = {"interface"};
+        const std::array<StringRef, 2> payloadKinds = {"value", "packet"};
+        const std::array<StringRef, 1> protocolKinds = {"protocol"};
+        if (failed(requireTypeKind(
+                index, module, endpoint.getAs<FlatSymbolRefAttr>("interface"),
+                interfaceKinds, "interface kind")) ||
+            failed(requireTypeKind(index, module,
+                                   endpoint.getAs<FlatSymbolRefAttr>("payload"),
+                                   payloadKinds, "interface payload")) ||
+            failed(requireTypeKind(
+                index, module, endpoint.getAs<FlatSymbolRefAttr>("protocol"),
+                protocolKinds, "interface protocol")))
+          return failure();
+      }
+      for (Attribute item :
+           module.getInterface().getAs<ArrayAttr>("resources")) {
+        const std::array<StringRef, 1> resourceKinds = {"resource"};
+        if (failed(requireTypeKind(
+                index, module,
+                cast<DictionaryAttr>(item).getAs<FlatSymbolRefAttr>("resource"),
+                resourceKinds, "interface resource")))
+          return failure();
+      }
+      for (Attribute item : module.getInterface().getAs<ArrayAttr>("results")) {
+        const std::array<StringRef, 2> resultKinds = {"value", "packet"};
+        if (failed(requireTypeKind(
+                index, module,
+                cast<DictionaryAttr>(item).getAs<FlatSymbolRefAttr>("cpp_type"),
+                resultKinds, "interface result C++ type")))
+          return failure();
+      }
     } else if (auto instance = dyn_cast<InstanceOp>(operation)) {
       auto ownerType = dyn_cast<OwnerType>(instance.getResult().getType());
       if (failed(verifyPlacementTarget(
-              instance, instance.getBindingAttr(), instance.getTargetAttr(),
-              instance.getStaticArgs(),
+              instance, instance.getTargetAttr(), instance.getStaticArgs(),
               instance.getSpecializationFingerprintAttr(), index)) ||
           failed(recordSpecialization(
               instance, instance.getTargetAttr(), instance.getStaticArgs(),
               instance.getSpecializationFingerprintAttr())))
         return failure();
-      if (!ownerType || ownerType.getSymbol() != instance.getBindingAttr())
+      if (!ownerType || ownerType.getRealization() != instance.getTargetAttr())
         return instance.emitOpError(
-            "instance result must be owner of its exact stateful binding");
+            "instance result must own its exact realization target");
     } else if (auto array = dyn_cast<ArrayOp>(operation)) {
       if (failed(verifyPlacementTarget(
-              array, array.getBindingAttr(), array.getTargetAttr(),
-              array.getStaticArgs(), array.getSpecializationFingerprintAttr(),
-              index)) ||
+              array, array.getTargetAttr(), array.getStaticArgs(),
+              array.getSpecializationFingerprintAttr(), index)) ||
           failed(recordSpecialization(
               array, array.getTargetAttr(), array.getStaticArgs(),
               array.getSpecializationFingerprintAttr())))
@@ -1743,16 +1923,16 @@ LogicalResult verifyModulesAndTypedGraph(ModelOp model,
       auto element =
           type ? dyn_cast<OwnerType>(type.getElementType()) : OwnerType();
       if (!type || type.getShape().asArrayRef() != array.getShape() ||
-          !element || element.getSymbol() != array.getBindingAttr())
+          !element || element.getRealization() != array.getTargetAttr())
         return array.emitOpError(
-            "array result shape and owning element binding must be exact");
+            "array result shape and owning element realization must be exact");
     } else if (auto element = dyn_cast<ElementOp>(operation)) {
       auto arrayType = dyn_cast<ArrayType>(element.getArray().getType());
       auto owner = arrayType ? dyn_cast<OwnerType>(arrayType.getElementType())
                              : OwnerType();
       auto reference = dyn_cast<RefType>(element.getResult().getType());
       if (!arrayType || !owner || !reference ||
-          owner.getSymbol() != reference.getSymbol() ||
+          owner.getRealization() != reference.getRealization() ||
           element.getIndices().size() != arrayType.getShape().size())
         return element.emitOpError(
             "element must be a constant typed reference projection");
@@ -1776,10 +1956,9 @@ LogicalResult verifyModulesAndTypedGraph(ModelOp model,
       if (failed(requireTypeKind(index, port, port.getAccessorAttr(), kinds,
                                  "port accessor")))
         return failure();
-      BindingOp binding = bindingForBase(port.getBase(), index);
+      Operation *realization = realizationForBase(port.getBase(), index);
       DictionaryAttr endpoint =
-          binding ? findEndpoint(binding, "ports", port.getAccessorAttr())
-                  : DictionaryAttr();
+          findEndpoint(realization, "ports", port.getAccessorAttr());
       PortType type = cast<PortType>(port.getResult().getType());
       if (!endpoint ||
           endpoint.getAs<FlatSymbolRefAttr>("interface") !=
@@ -1798,11 +1977,9 @@ LogicalResult verifyModulesAndTypedGraph(ModelOp model,
       if (failed(requireTypeKind(index, resource, resource.getAccessorAttr(),
                                  kinds, "resource accessor")))
         return failure();
-      BindingOp binding = bindingForBase(resource.getBase(), index);
+      Operation *realization = realizationForBase(resource.getBase(), index);
       DictionaryAttr endpoint =
-          binding
-              ? findEndpoint(binding, "resources", resource.getAccessorAttr())
-              : DictionaryAttr();
+          findEndpoint(realization, "resources", resource.getAccessorAttr());
       ResourceType type = cast<ResourceType>(resource.getResult().getType());
       if (!endpoint ||
           endpoint.getAs<FlatSymbolRefAttr>("resource") != type.getResource() ||
@@ -1818,11 +1995,11 @@ LogicalResult verifyModulesAndTypedGraph(ModelOp model,
         auto source = bind.getSource().getDefiningOp<PortOp>();
         auto target = bind.getTarget().getDefiningOp<PortOp>();
         DictionaryAttr sourceRecord =
-            source ? findEndpoint(bindingForBase(source.getBase(), index),
+            source ? findEndpoint(realizationForBase(source.getBase(), index),
                                   "ports", source.getAccessorAttr())
                    : DictionaryAttr();
         DictionaryAttr targetRecord =
-            target ? findEndpoint(bindingForBase(target.getBase(), index),
+            target ? findEndpoint(realizationForBase(target.getBase(), index),
                                   "ports", target.getAccessorAttr())
                    : DictionaryAttr();
         if (!sourceRecord || !targetRecord ||
@@ -1846,11 +2023,11 @@ LogicalResult verifyModulesAndTypedGraph(ModelOp model,
         auto source = bind.getSource().getDefiningOp<ResourceOp>();
         auto target = bind.getTarget().getDefiningOp<ResourceOp>();
         DictionaryAttr sourceRecord =
-            source ? findEndpoint(bindingForBase(source.getBase(), index),
+            source ? findEndpoint(realizationForBase(source.getBase(), index),
                                   "resources", source.getAccessorAttr())
                    : DictionaryAttr();
         DictionaryAttr targetRecord =
-            target ? findEndpoint(bindingForBase(target.getBase(), index),
+            target ? findEndpoint(realizationForBase(target.getBase(), index),
                                   "resources", target.getAccessorAttr())
                    : DictionaryAttr();
         if (!sourceRecord || !targetRecord ||
@@ -1917,12 +2094,6 @@ LogicalResult verifyModulesAndTypedGraph(ModelOp model,
                                  "export role")))
         return failure();
     } else if (auto process = dyn_cast<ProcessOp>(operation)) {
-      FailureOr<Operation *> definition = requireReference<BindingOp>(
-          index, process, process.getBindingAttr(), "process binding");
-      if (failed(definition) ||
-          cast<BindingOp>(*definition).getEffect() != "stateful")
-        return process.emitOpError(
-            "process requires an exact stateful binding-lock record");
       for (Value capture : process.getCaptures())
         if (failed(verifyCaptureBoundary(process, capture, index)))
           return failure();
@@ -1942,15 +2113,59 @@ LogicalResult verifyModulesAndTypedGraph(ModelOp model,
     for (Operation &child : module.getBody().front())
       if (auto exportOp = dyn_cast<ExportOp>(child))
         exports.push_back(exportOp);
-    if (module.getExports().size() != exports.size())
+    SmallVector<std::pair<StringRef, DictionaryAttr>> interfaceRecords;
+    for (StringRef field :
+         {StringRef("ports"), StringRef("resources"), StringRef("results")})
+      for (Attribute attribute : module.getInterface().getAs<ArrayAttr>(field))
+        interfaceRecords.emplace_back(field, cast<DictionaryAttr>(attribute));
+    if (module.getExports().size() != exports.size() ||
+        exports.size() != interfaceRecords.size())
       return module.emitOpError(
-          "module exports metadata must exactly cover ordered exports");
-    for (auto [attribute, exportOp] :
-         llvm::zip_equal(module.getExports(), exports)) {
+          "module exports must exactly cover its ordered interface records");
+    for (auto [attribute, exportOp, interfaceRecord] :
+         llvm::zip_equal(module.getExports(), exports, interfaceRecords)) {
       auto reference = dyn_cast<FlatSymbolRefAttr>(attribute);
-      if (!reference || reference.getValue() != exportOp.getSymName())
+      DictionaryAttr record = interfaceRecord.second;
+      if (!reference || reference.getValue() != exportOp.getSymName() ||
+          record.getAs<StringAttr>("name").getValue() != exportOp.getSymName())
         return module.emitOpError(
-            "module export order must match acsim.export declaration order");
+            "module export names must match ordered interface records and "
+            "acsim.export declarations");
+      if (interfaceRecord.first == "ports") {
+        auto projection = exportOp.getValue().getDefiningOp<PortOp>();
+        auto type = dyn_cast<PortType>(exportOp.getValue().getType());
+        if (!projection || !type ||
+            projection.getAccessorAttr() !=
+                record.getAs<FlatSymbolRefAttr>("accessor") ||
+            exportOp.getRoleAttr() != record.getAs<FlatSymbolRefAttr>("role") ||
+            type.getInterface() !=
+                record.getAs<FlatSymbolRefAttr>("interface") ||
+            type.getRole() != record.getAs<FlatSymbolRefAttr>("role") ||
+            type.getPayload() != record.getAs<FlatSymbolRefAttr>("payload") ||
+            type.getProtocol() != record.getAs<FlatSymbolRefAttr>("protocol"))
+          return exportOp.emitOpError(
+              "port export must exactly match its module interface record");
+      } else if (interfaceRecord.first == "resources") {
+        auto projection = exportOp.getValue().getDefiningOp<ResourceOp>();
+        auto type = dyn_cast<ResourceType>(exportOp.getValue().getType());
+        if (!projection || !type ||
+            projection.getAccessorAttr() !=
+                record.getAs<FlatSymbolRefAttr>("accessor") ||
+            exportOp.getRoleAttr() != record.getAs<FlatSymbolRefAttr>("role") ||
+            type.getResource() != record.getAs<FlatSymbolRefAttr>("resource") ||
+            type.getRole() != record.getAs<FlatSymbolRefAttr>("role"))
+          return exportOp.emitOpError(
+              "resource export must exactly match its module interface record");
+      } else {
+        SymbolRefAttr cppType;
+        if (auto value = dyn_cast<ValueType>(exportOp.getValue().getType()))
+          cppType = value.getSymbol();
+        else if (auto expr = dyn_cast<ExprType>(exportOp.getValue().getType()))
+          cppType = expr.getSymbol();
+        if (!cppType || cppType != record.getAs<FlatSymbolRefAttr>("cpp_type"))
+          return exportOp.emitOpError(
+              "result export must exactly match its module interface record");
+      }
     }
     auto returnOp = cast<ReturnOp>(module.getBody().front().back());
     if (returnOp.getValues().size() != exports.size())
@@ -1965,8 +2180,22 @@ LogicalResult verifyModulesAndTypedGraph(ModelOp model,
   return success();
 }
 
+std::string generatedProcessThunk(ProcessOp process, StringRef kind) {
+  ModuleOp module = process->getParentOfType<ModuleOp>();
+  std::string result = "acsim_generated::";
+  result.append(module.getSymName());
+  result.append("::s");
+  result.append(module.getSpecializationFingerprint().drop_front(7));
+  result.append("::");
+  result.append(process.getSymName());
+  result.append("::p");
+  result.append(process.getSpecializationFingerprint().drop_front(7));
+  result.append("::");
+  result.append(kind);
+  return result;
+}
+
 LogicalResult verifyDispatchAndActivation(ModelOp model,
-                                          const ModelIndex &index,
                                           HierarchyExpansion &expansion) {
   llvm::DenseMap<int64_t, DispatchOp> dispatchByObject;
   for (Operation &operation : model.getBody().front()) {
@@ -1976,10 +2205,10 @@ LogicalResult verifyDispatchAndActivation(ModelOp model,
     if (!dispatch)
       continue;
     int64_t id = dispatch.getObjectId();
-    if (id < 0 || static_cast<uint64_t>(id) >= expansion.rows.size())
+    if (id < 0 || static_cast<uint64_t>(id) >= expansion.runtimeRows.size())
       return dispatch.emitOpError(
           "dispatch object ID has no expanded runtime object");
-    const ExpandedRuntimeRow &row = expansion.rows[id];
+    const ExpandedRuntimeRow &row = expansion.runtimeRows[id];
     std::string target = symbolKey(dispatch.getTargetAttr());
     if (target != row.target || dispatch.getPath() != row.path ||
         dispatch.getIndices() != ArrayRef<int64_t>(row.indices) ||
@@ -1990,20 +2219,28 @@ LogicalResult verifyDispatchAndActivation(ModelOp model,
     if (!dispatchByObject.try_emplace(id, dispatch).second)
       return dispatch.emitOpError(
           "runtime object has more than one dispatch row");
-    auto binding = dyn_cast_or_null<BindingOp>(
-        index.definitions.lookup(symbolKey(row.binding)));
-    auto entryPoints =
-        binding ? binding.getCppRecord().getAs<DictionaryAttr>("entry_points")
-                : DictionaryAttr();
-    if (!entryPoints ||
-        dispatch.getWorkAttr() != entryPoints.getAs<StringAttr>("work") ||
-        dispatch.getXferAttr() != entryPoints.getAs<StringAttr>("xfer") ||
-        dispatch.getResetAttr() != entryPoints.getAs<StringAttr>("reset") ||
-        dispatch.getValidateAttr() != entryPoints.getAs<StringAttr>("validate"))
-      return dispatch.emitOpError(
-          "dispatch thunks must exactly match the placement binding lock");
+    if (auto binding = dyn_cast<BindingOp>(row.realization)) {
+      auto entryPoints =
+          binding.getCppRecord().getAs<DictionaryAttr>("entry_points");
+      if (dispatch.getWorkAttr() != entryPoints.getAs<StringAttr>("work") ||
+          dispatch.getXferAttr() != entryPoints.getAs<StringAttr>("xfer") ||
+          dispatch.getResetAttr() != entryPoints.getAs<StringAttr>("reset") ||
+          dispatch.getValidateAttr() !=
+              entryPoints.getAs<StringAttr>("validate"))
+        return dispatch.emitOpError(
+            "dispatch thunks must exactly match the placement binding lock");
+    } else {
+      auto process = cast<ProcessOp>(row.realization);
+      if (dispatch.getWork() != generatedProcessThunk(process, "work") ||
+          dispatch.getXfer() != generatedProcessThunk(process, "xfer") ||
+          dispatch.getReset() != generatedProcessThunk(process, "reset") ||
+          dispatch.getValidate() != generatedProcessThunk(process, "validate"))
+        return dispatch.emitOpError(
+            "dispatch thunks must exactly match the generated process "
+            "realization");
+    }
   }
-  if (dispatchByObject.size() != expansion.rows.size())
+  if (dispatchByObject.size() != expansion.runtimeRows.size())
     return model.emitOpError(
         "every runtime object requires exactly one typed dispatch row");
 
@@ -2091,7 +2328,7 @@ LogicalResult verifyDispatchAndActivation(ModelOp model,
   };
 
   std::set<std::pair<int64_t, int64_t>> expected;
-  for (const ExpandedRuntimeRow &row : expansion.rows)
+  for (const ExpandedRuntimeRow &row : expansion.runtimeRows)
     expected.insert({row.activationId, row.objectId});
   for (auto [contextOrdinal, expansionContext] :
        llvm::enumerate(expansion.contexts)) {
@@ -2105,7 +2342,8 @@ LogicalResult verifyDispatchAndActivation(ModelOp model,
           return failure();
         for (int64_t source : *sources)
           for (int64_t target : *targets)
-            expected.insert({expansion.rows[source].activationId, target});
+            expected.insert(
+                {expansion.runtimeRows[source].activationId, target});
       } else if (auto process = dyn_cast<ProcessOp>(operation)) {
         auto rows = expansionContext.objectIds.find(process);
         if (rows == expansionContext.objectIds.end() ||
@@ -2119,7 +2357,8 @@ LogicalResult verifyDispatchAndActivation(ModelOp model,
           if (failed(sources))
             return failure();
           for (int64_t source : *sources)
-            expected.insert({expansion.rows[source].activationId, processId});
+            expected.insert(
+                {expansion.runtimeRows[source].activationId, processId});
         }
         LogicalResult invokeStatus = success();
         process.walk([&](InvokeOp invoke) -> WalkResult {
@@ -2131,7 +2370,8 @@ LogicalResult verifyDispatchAndActivation(ModelOp model,
               return WalkResult::interrupt();
             }
             for (int64_t source : *sources)
-              expected.insert({expansion.rows[source].activationId, processId});
+              expected.insert(
+                  {expansion.runtimeRows[source].activationId, processId});
           }
           return WalkResult::advance();
         });
@@ -2175,7 +2415,6 @@ LogicalResult verifyDispatchAndActivation(ModelOp model,
 ParseResult ProcessOp::parse(OpAsmParser &parser, OperationState &result) {
   Builder &builder = parser.getBuilder();
   StringAttr name;
-  FlatSymbolRefAttr binding;
   SmallVector<OpAsmParser::UnresolvedOperand> captures;
   SmallVector<Type> captureTypes;
   ArrayAttr captureNames;
@@ -2187,7 +2426,6 @@ ParseResult ProcessOp::parse(OpAsmParser &parser, OperationState &result) {
 
   if (parser.parseSymbolName(name, SymbolTable::getSymbolAttrName(),
                              result.attributes) ||
-      parser.parseKeyword("binding") || parser.parseAttribute(binding) ||
       parser.parseKeyword("captures") || parser.parseLParen())
     return failure();
   if (failed(parser.parseOptionalRParen())) {
@@ -2212,7 +2450,6 @@ ParseResult ProcessOp::parse(OpAsmParser &parser, OperationState &result) {
       parser.parseAttribute(specializationFingerprint))
     return failure();
 
-  result.addAttribute("binding", binding);
   result.addAttribute("capture_names", captureNames);
   result.addAttribute("entry_pc", entryPc);
   result.addAttribute("pcs", pcs);
@@ -2244,7 +2481,7 @@ ParseResult ProcessOp::parse(OpAsmParser &parser, OperationState &result) {
 void ProcessOp::print(OpAsmPrinter &printer) {
   printer << ' ';
   printer.printSymbolName(getSymName());
-  printer << " binding " << getBindingAttr() << " captures(";
+  printer << " captures(";
   llvm::interleaveComma(getCaptures(), printer, [&](Value capture) {
     printer << capture << " : " << capture.getType();
   });
@@ -2254,8 +2491,8 @@ void ProcessOp::print(OpAsmPrinter &printer) {
           << " specialization " << getSpecializationFingerprintAttr();
   printer.printOptionalAttrDictWithKeyword(
       (*this)->getAttrs(),
-      {SymbolTable::getSymbolAttrName(), "binding", "capture_names", "entry_pc",
-       "pcs", "live_slots", "fairness_cap", "specialization_fingerprint"});
+      {SymbolTable::getSymbolAttrName(), "capture_names", "entry_pc", "pcs",
+       "live_slots", "fairness_cap", "specialization_fingerprint"});
   printer << " {";
   for (auto [pc, state] : llvm::zip(getPcs(), getStates())) {
     printer << "\nstate " << pc << ' ';
@@ -2292,10 +2529,11 @@ LogicalResult ModelOp::verify() {
   if (failed(buildIndex(*this, index)) ||
       failed(verifyClosedLegality(*this, index.ordered)) ||
       failed(verifyDeterministicOrder(*this)) ||
-      failed(expandSelectedRoot(*this, index, expansion)) ||
+      failed(expandSelectedRootOwners(*this, index, expansion)) ||
+      failed(expandRuntime(index, expansion)) ||
       failed(verifyConstructionOrder(*this, expansion)) ||
       failed(verifyModulesAndTypedGraph(*this, index)) ||
-      failed(verifyDispatchAndActivation(*this, index, expansion)))
+      failed(verifyDispatchAndActivation(*this, expansion)))
     return failure();
   return success();
 }
@@ -2316,8 +2554,12 @@ LogicalResult TypeOp::verify() {
 LogicalResult BindingOp::verify() { return verifyBindingLockShape(*this); }
 
 LogicalResult ModuleOp::verify() {
+  if (!isCanonicalIdentifier(getSymName()))
+    return emitOpError(
+        "generated module symbol must be a canonical C++ identifier");
   if (failed(verifyFingerprint(*this, getSpecializationFingerprintAttr(),
-                               "specialization fingerprint")))
+                               "specialization fingerprint")) ||
+      failed(verifyModuleInterfaceShape(*this)))
     return failure();
   if (getBody().empty() || getBody().front().empty() ||
       !isa<ReturnOp>(getBody().front().back()))
@@ -2330,8 +2572,8 @@ LogicalResult InstanceOp::verify() {
                                "specialization fingerprint")))
     return failure();
   auto owner = dyn_cast<OwnerType>(getResult().getType());
-  if (!owner || owner.getSymbol() != getBindingAttr())
-    return emitOpError("result must be owner of the exact binding");
+  if (!owner || owner.getRealization() != getTargetAttr())
+    return emitOpError("result must own the exact realization target");
   return success();
 }
 
@@ -2340,8 +2582,11 @@ LogicalResult ArrayOp::verify() {
                                "specialization fingerprint")))
     return failure();
   auto type = dyn_cast<ArrayType>(getResult().getType());
-  if (!type || type.getShape().asArrayRef() != getShape())
-    return emitOpError("result array type must exactly match shape metadata");
+  auto owner = type ? dyn_cast<OwnerType>(type.getElementType()) : OwnerType();
+  if (!type || type.getShape().asArrayRef() != getShape() || !owner ||
+      owner.getRealization() != getTargetAttr())
+    return emitOpError(
+        "result array type must exactly match shape and realization target");
   return success();
 }
 
@@ -2367,22 +2612,23 @@ LogicalResult ResourceOp::verify() {
 }
 
 LogicalResult BindOp::verify() {
-  auto findBinding = [&](Value base) -> BindingOp {
+  auto findRealization = [&](Value base) -> Operation * {
     SymbolRefAttr reference;
     if (auto owner = dyn_cast<OwnerType>(base.getType()))
-      reference = owner.getSymbol();
+      reference = owner.getRealization();
     else if (auto ref = dyn_cast<RefType>(base.getType()))
-      reference = ref.getSymbol();
+      reference = ref.getRealization();
     if (!reference)
-      return {};
+      return nullptr;
     ModelOp model = (*this)->getParentOfType<ModelOp>();
     if (!model)
-      return {};
+      return nullptr;
     for (Operation &operation : model.getBody().front())
-      if (auto binding = dyn_cast<BindingOp>(operation))
-        if (binding.getSymName() == reference.getRootReference().getValue())
-          return binding;
-    return {};
+      if (isa<BindingOp, ModuleOp>(operation) &&
+          symbolName(&operation).getValue() ==
+              reference.getRootReference().getValue())
+        return &operation;
+    return nullptr;
   };
   if (getKind() == "port") {
     auto sourceOp = getSource().getDefiningOp<PortOp>();
@@ -2390,11 +2636,11 @@ LogicalResult BindOp::verify() {
     auto source = dyn_cast<PortType>(getSource().getType());
     auto target = dyn_cast<PortType>(getTarget().getType());
     DictionaryAttr sourceRecord =
-        sourceOp ? findEndpoint(findBinding(sourceOp.getBase()), "ports",
+        sourceOp ? findEndpoint(findRealization(sourceOp.getBase()), "ports",
                                 sourceOp.getAccessorAttr())
                  : DictionaryAttr();
     DictionaryAttr targetRecord =
-        targetOp ? findEndpoint(findBinding(targetOp.getBase()), "ports",
+        targetOp ? findEndpoint(findRealization(targetOp.getBase()), "ports",
                                 targetOp.getAccessorAttr())
                  : DictionaryAttr();
     if (!source || !target || !sourceRecord || !targetRecord ||
@@ -2433,12 +2679,12 @@ LogicalResult BindOp::verify() {
     auto source = dyn_cast<ResourceType>(getSource().getType());
     auto target = dyn_cast<ResourceType>(getTarget().getType());
     DictionaryAttr sourceRecord =
-        sourceOp ? findEndpoint(findBinding(sourceOp.getBase()), "resources",
-                                sourceOp.getAccessorAttr())
+        sourceOp ? findEndpoint(findRealization(sourceOp.getBase()),
+                                "resources", sourceOp.getAccessorAttr())
                  : DictionaryAttr();
     DictionaryAttr targetRecord =
-        targetOp ? findEndpoint(findBinding(targetOp.getBase()), "resources",
-                                targetOp.getAccessorAttr())
+        targetOp ? findEndpoint(findRealization(targetOp.getBase()),
+                                "resources", targetOp.getAccessorAttr())
                  : DictionaryAttr();
     if (!source || !target || !sourceRecord || !targetRecord ||
         sourceRecord.getAs<StringAttr>("mode").getValue() != "initiator" ||
@@ -2486,6 +2732,9 @@ LogicalResult InlineOp::verify() {
 }
 
 LogicalResult ProcessOp::verify() {
+  if (!isCanonicalIdentifier(getSymName()))
+    return emitOpError(
+        "generated process symbol must be a canonical C++ identifier");
   return verifyFingerprint(*this, getSpecializationFingerprintAttr(),
                            "specialization fingerprint");
 }

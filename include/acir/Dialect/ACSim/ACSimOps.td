@@ -78,13 +78,13 @@ def ACSim_BindingOp : ACSim_Op<"binding", [Symbol, Pure]> {
 def ACSim_ModuleOp : ACSim_Op<"module", [
     Symbol, SymbolTable, SingleBlock, RecursiveMemoryEffects
   ]> {
-  let arguments = (ins SymbolNameAttr:$sym_name, FlatSymbolRefAttr:$binding,
+  let arguments = (ins SymbolNameAttr:$sym_name, DictionaryAttr:$interface,
                        ArrayAttr:$static_params,
                        StrAttr:$specialization_fingerprint,
                        ArrayAttr:$exports);
   let regions = (region SizedRegion<1>:$body);
   let assemblyFormat = [{
-    $sym_name `binding` $binding `static` $static_params
+    $sym_name `interface` $interface `static` $static_params
     `specialization` $specialization_fingerprint `exports` $exports
     attr-dict-with-keyword $body
   }];
@@ -92,25 +92,25 @@ def ACSim_ModuleOp : ACSim_Op<"module", [
 }
 
 def ACSim_InstanceOp : ACSim_Op<"instance"> {
-  let arguments = (ins SymbolNameAttr:$sym_name, FlatSymbolRefAttr:$binding,
-                       SymbolRefAttr:$target, ArrayAttr:$static_args,
+  let arguments = (ins SymbolNameAttr:$sym_name, SymbolRefAttr:$target,
+                       ArrayAttr:$static_args,
                        StrAttr:$specialization_fingerprint);
   let results = (outs AnyType:$result);
   let assemblyFormat = [{
-    $sym_name `binding` $binding `target` $target `args` $static_args
+    $sym_name `target` $target `args` $static_args
     `specialization` $specialization_fingerprint attr-dict `:` type($result)
   }];
   let hasVerifier = 1;
 }
 
 def ACSim_ArrayOp : ACSim_Op<"array"> {
-  let arguments = (ins SymbolNameAttr:$sym_name, FlatSymbolRefAttr:$binding,
-                       SymbolRefAttr:$target, ArrayAttr:$static_args,
+  let arguments = (ins SymbolNameAttr:$sym_name, SymbolRefAttr:$target,
+                       ArrayAttr:$static_args,
                        StrAttr:$specialization_fingerprint,
                        DenseI64ArrayAttr:$shape);
   let results = (outs AnyType:$result);
   let assemblyFormat = [{
-    $sym_name `binding` $binding `target` $target `args` $static_args
+    $sym_name `target` $target `args` $static_args
     `specialization` $specialization_fingerprint
     `shape` $shape attr-dict `:` type($result)
   }];
@@ -166,7 +166,7 @@ def ACSim_ProcessOp : ACSim_Op<"process", [
     Symbol, IsolatedFromAbove, RecursiveMemoryEffects
   ]> {
   let arguments = (ins Variadic<AnyType>:$captures,
-                       SymbolNameAttr:$sym_name, FlatSymbolRefAttr:$binding,
+                       SymbolNameAttr:$sym_name,
                        ArrayAttr:$capture_names,
                        FlatSymbolRefAttr:$entry_pc, ArrayAttr:$pcs,
                        ArrayAttr:$live_slots, I64Attr:$fairness_cap,

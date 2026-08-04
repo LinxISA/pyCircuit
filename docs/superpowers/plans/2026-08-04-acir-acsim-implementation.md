@@ -341,7 +341,24 @@ dialect injection tests, and deterministic verifier diagnostics.
 
 **Commit:** `feat(ir): implement canonical ACSim dialect`
 
+### Task 10 corrective: separate generated realizations from library bindings
+
+Hard-break the initial Task 10 representation before conversion work. Generated
+`acsim.module` and `acsim.process` realizations use symbols plus specialization
+fingerprints and never consume registry BindingRecords. Module interfaces are
+closed compile-time construction metadata. Placements have one realization
+target. Separate bounded deterministic owner expansion from runtime expansion;
+generated-module wrappers participate only in owner expansion, while stateful
+library placements and concrete processes receive runtime rows.
+
+**Commit:** `fix(ir): separate generated ACSim realizations`
+
 ## Task 11: Implement binding locks and deterministic binding resolution
+
+This task follows the Task 10 corrective and includes the separately reviewed
+empty-lock corrective. A canonical empty binding lock is valid when the frozen
+model requests no reusable external/library implementations. It MUST NOT create
+records for generated modules, generated processes, or core IR primitives.
 
 **Files:**
 
@@ -372,61 +389,62 @@ order permutations, and inspect for forbidden component-name emitter dispatch.
 
 **Commit:** `feat(lowering): resolve exact gfsim bindings`
 
-## Task 12: Lower frozen ACIR structure and collections to ACSim
+## Task 12: Plan non-mutating process-state materialization
 
 **Files:**
 
-- Create: `lib/Conversion/ACIRToACSim/ACIRToACSim.cpp`
-- Create: `lib/Conversion/ACIRToACSim/TypeConverter.cpp`
-- Create: `include/acir/Conversion/ACIRToACSim/ACIRToACSim.h`
-- Create: `test/Conversion/structure.mlir`
-- Create: `test/Conversion/collections.mlir`
-- Create: `test/Conversion/bindings.mlir`
-- Create: `test/Conversion/hierarchy.mlir`
+- Create: process-state analysis interfaces and focused analysis tests
+- Do not mutate frozen ACIR or create partial ACSim
 
-**Red:** Test module specialization, nested ownership, homogeneous arrays,
-constant projections, typed construction bindings, pure inline expressions,
-object IDs, activation-source IDs, activation adjacency, exports, and stable
-ordering. Test rejection of unfrozen or unresolved ACIR.
+**Red:** Test deterministic PC assignment, live-across-suspend discovery,
+typed state-slot plans, exact wake boundaries, and rejection of unsupported
+control without changing the input IR.
 
-**Green:** Implement generic pattern-based conversion driven only by operation
-kind and normalized binding metadata. Preserve generated module hierarchy and
-static shapes. Build non-owning dense scheduler indices without flattening
-ownership.
+**Green:** Produce one immutable process-state plan consumed by the later atomic
+conversion. The analysis is iterative and bounded and leaves frozen ACIR
+byte-for-byte unchanged.
 
-**Verify:** Run conversion tests and compare canonical ACSim from semantically
-equivalent inputs. Search the conversion source for standard-component names;
-the result must be empty.
+**Verify:** Compare plans across canonical declaration permutations and prove
+that analysis failure publishes neither mutations nor partial output.
 
-**Commit:** `feat(lowering): lower frozen ACIR hierarchy to ACSim`
+**Commit:** `feat(lowering): plan ACSim process state`
 
-## Task 13: Lower ACIR processes to explicit ACSim state machines
+## Task 13: Atomically lower the whole frozen model to ACSim
 
 **Files:**
 
 - Create: `lib/Transforms/LowerProcessState.cpp`
-- Modify: `lib/Conversion/ACIRToACSim/ACIRToACSim.cpp`
+- Create: `lib/Conversion/ACIRToACSim/ACIRToACSim.cpp`
+- Create: `lib/Conversion/ACIRToACSim/TypeConverter.cpp`
+- Create: `include/acir/Conversion/ACIRToACSim/ACIRToACSim.h`
+- Create: `test/Conversion/whole-model.mlir`
+- Create: `test/Conversion/atomic-failure.mlir`
 - Create: `test/Conversion/process-basic.mlir`
 - Create: `test/Conversion/process-control-flow.mlir`
 - Create: `test/Conversion/process-live-values.mlir`
 - Create: `test/Conversion/process-invalid.mlir`
 
-**Red:** Test deterministic PC assignment, live-across-suspend discovery,
-typed state slots, proposal stores, continue/suspend/terminate, exact wake
-registration, `scf` lowering inside a state, and rejection of edges across
-suspension boundaries.
+**Red:** Test one atomic conversion containing generated module interfaces,
+nested ownership, homogeneous arrays, library bindings, typed graph edges,
+process PCs/state slots, owner/runtime expansions, dispatch, activation,
+exports, and stable ordering. Every failure leaves no ACSim model behind.
 
-**Green:** Outline maximal execution segments, create a closed PC enum, perform
-liveness analysis, materialize typed loads/stores, lower legal control to `cf`,
-and preserve effects and source locations. PC numbering follows canonical block
-order, independent of pointer identity.
+**Green:** Convert the entire selected frozen model in one transaction using the
+non-mutating process-state plan. Publish canonical ACSim only after all
+realization, ownership, runtime, interface, and binding checks succeed. There
+is no supported structure-first or process-later partial conversion path.
 
-**Verify:** Run process tests, determinism permutations, and C++ unit tests for
-liveness and suspension-boundary analysis.
+**Verify:** Run whole-model and process tests, deterministic permutations, and
+atomic-failure tests. Search conversion code for component-specific dispatch.
 
-**Commit:** `feat(lowering): specialize ACIR processes into ACSim`
+**Commit:** `feat(lowering): atomically lower ACIR to ACSim`
 
 ## Task 14: Add exhaustive inventory coverage and Phase 1 CI gates
+
+Run this only after the Task 10 realization corrective, Task 11 empty-lock
+corrective, non-mutating process-state plan, and atomic whole-model conversion.
+These exhaustive Phase 1 gates validate that single corrected path; the former
+structure-before-process split is not an alternative pipeline.
 
 **Files:**
 
@@ -505,7 +523,7 @@ ACIR types:
 ACSim types:
 
 `!acsim.value<@cpp_type>`, `!acsim.expr<@cpp_type>`,
-`!acsim.owner<@binding>`, `!acsim.ref<@binding>`,
+`!acsim.owner<@realization>`, `!acsim.ref<@realization>`,
 `!acsim.port<@interface, @role, @payload, @protocol>`,
 `!acsim.resource<@resource, @role>`, `!acsim.array<[shape], element_type>`,
 `!acsim.object_id`, `!acsim.activation_id`, `!acsim.pc<@process>`, and

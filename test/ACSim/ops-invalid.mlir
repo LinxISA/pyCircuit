@@ -9,6 +9,9 @@
 // RUN: %not %acir_opt %t/nonreverse-destruction.mlir 2>&1 | %FileCheck %s --check-prefix=DESTRUCTION
 // RUN: %not %acir_opt %t/orphan-acsim-op.mlir 2>&1 | %FileCheck %s --check-prefix=ZERO-MODEL
 // RUN: %not %acir_opt %t/nested-orphan-acsim-op.mlir 2>&1 | %FileCheck %s --check-prefix=NESTED-ZERO-MODEL
+// RUN: %not %acir_opt %t/legacy-module-binding.mlir 2>&1 | %FileCheck %s --check-prefix=LEGACY-MODULE
+// RUN: %not %acir_opt %t/legacy-placement-binding.mlir 2>&1 | %FileCheck %s --check-prefix=LEGACY-PLACEMENT
+// RUN: %not %acir_opt %t/legacy-process-binding.mlir 2>&1 | %FileCheck %s --check-prefix=LEGACY-PROCESS
 
 // GENERIC: error: generic ACIR operation spelling is internal-only
 // EPOCH: contract epoch must be exactly "0.1"
@@ -20,6 +23,9 @@
 // DESTRUCTION: destruction order must be the exact reverse of construction order
 // ZERO-MODEL: canonical ACSim requires exactly one acsim.model
 // NESTED-ZERO-MODEL: canonical ACSim requires exactly one acsim.model
+// LEGACY-MODULE: custom op 'acsim.module' expected 'interface'
+// LEGACY-PLACEMENT: custom op 'acsim.instance' expected 'target'
+// LEGACY-PROCESS: custom op 'acsim.process' expected 'captures'
 
 //--- generic-spelling.mlir
 builtin.module attributes {ac.contract_epoch = "0.1"} {
@@ -99,8 +105,8 @@ builtin.module attributes {ac.contract_epoch = "0.1"} {
       toolchain = "sha256:0000000000000000000000000000000000000000000000000000000000000000",
       schema_set = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
     } {
-    acsim.module @Top binding @missing static [] specialization "sha256:0000000000000000000000000000000000000000000000000000000000000000" exports [] {
-      acsim.process @p binding @missing captures() names []
+    acsim.module @Top interface {ports = [], resources = [], results = []} static [] specialization "sha256:0000000000000000000000000000000000000000000000000000000000000000" exports [] {
+      acsim.process @p captures() names []
           entry @entry pcs [@entry] live [] fairness 1 specialization "sha256:0000000000000000000000000000000000000000000000000000000000000000" {
         state @entry {
           "scf.yield"() : () -> ()
@@ -140,15 +146,40 @@ builtin.module attributes {ac.contract_epoch = "0.1"} {
       toolchain = "sha256:0000000000000000000000000000000000000000000000000000000000000000",
       schema_set = "sha256:0000000000000000000000000000000000000000000000000000000000000000"}}>
     ({
-      "acsim.module"() <{sym_name = "Top", binding = @missing,
+      "acsim.module"() <{sym_name = "Top", interface = {ports = [], resources = [], results = []},
         static_params = [], specialization_fingerprint = "sha256:0000000000000000000000000000000000000000000000000000000000000000", exports = []}> ({
-        %a = "acsim.instance"() <{sym_name = "a", binding = @missing,
+        %a = "acsim.instance"() <{sym_name = "a",
           target = @missing, static_args = [], specialization_fingerprint = "sha256:0000000000000000000000000000000000000000000000000000000000000000"}>
           : () -> !acsim.owner<@missing>
-        %b = "acsim.instance"() <{sym_name = "b", binding = @missing,
+        %b = "acsim.instance"() <{sym_name = "b",
           target = @missing, static_args = [], specialization_fingerprint = "sha256:0000000000000000000000000000000000000000000000000000000000000000"}>
           : () -> !acsim.owner<@missing>
         "acsim.return"() : () -> ()
       }) : () -> ()
     }) : () -> ()
+}
+
+//--- legacy-module-binding.mlir
+builtin.module {
+  acsim.module @Top binding @legacy static [] specialization "sha256:0000000000000000000000000000000000000000000000000000000000000000" exports [] {
+    acsim.return
+  }
+}
+
+//--- legacy-placement-binding.mlir
+builtin.module {
+  acsim.module @Top interface {ports = [], resources = [], results = []} static [] specialization "sha256:0000000000000000000000000000000000000000000000000000000000000000" exports [] {
+    %legacy = acsim.instance @legacy binding @legacy target @legacy args [] specialization "sha256:0000000000000000000000000000000000000000000000000000000000000000" : !acsim.owner<@legacy>
+    acsim.return
+  }
+}
+
+//--- legacy-process-binding.mlir
+builtin.module {
+  acsim.module @Top interface {ports = [], resources = [], results = []} static [] specialization "sha256:0000000000000000000000000000000000000000000000000000000000000000" exports [] {
+    acsim.process @legacy binding @legacy captures() names [] entry @entry pcs [@entry] live [] fairness 1 specialization "sha256:0000000000000000000000000000000000000000000000000000000000000000" {
+      state @entry { acsim.terminate "success" }
+    }
+    acsim.return
+  }
 }

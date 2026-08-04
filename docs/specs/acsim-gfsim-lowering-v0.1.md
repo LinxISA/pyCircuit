@@ -74,7 +74,7 @@ ACSim is created.
 ```text
 verified frozen ACIR
   -> normalize target types and static parameters
-  -> resolve exact schemas, providers, C++ bindings, and concepts
+  -> resolve exact reusable library bindings and C++ type realizations
   -> lower process suspension to explicit enum-PC state
   -> assign ownership and deterministic construction order
   -> lower homogeneous collections to static arrays
@@ -95,9 +95,8 @@ preserve these boundaries.
 
 ## Exact binding resolution
 
-Every external module, standard component, generated realization, policy,
-protocol, packet, and runtime primitive resolves to exactly one C++20 binding
-using:
+Every declaration that explicitly requests a reusable external or library C++
+implementation resolves to exactly one C++20 binding using:
 
 - global contract epoch;
 - canonical schema identity and fingerprint;
@@ -118,9 +117,38 @@ runtime, defer the error to link time, or add a component-specific emitter
 branch. The required repair is to add or correct the reusable C++ library
 implementation and binding record.
 
+Generated modules, generated processes, and core IR primitives never resolve
+through the binding registry and never receive fabricated binding records.
+Their compiler-generated C++ identities are carried by ACSim symbols and
+specialization fingerprints. Registry records and the binding lock remain
+exclusive to reusable external/library realizations.
+
 The generic emitter may dispatch on ACSim operation kind and normalized binding
 metadata. It MUST NOT dispatch on component name, family, provider namespace,
 binding ID, or C++ symbol.
+
+## Generated realization interfaces
+
+An `acsim.module` is one compiler-generated owner class. Its symbol plus
+specialization fingerprint is its realization identity. It has no binding
+attribute and carries one closed `interface` dictionary containing exactly
+`ports`, `resources`, and `results`.
+
+A port record contains exactly `name`, `accessor`, `cardinality`, `delegation`,
+`direction`, `interface`, `ownership`, `payload`, `protocol`, `role`, and
+`time_domain`. A resource record contains exactly `name`, `accessor`,
+`delegation`, `mode`, `ownership`, `resource`, `role`, and `time_domain`. A
+result record contains exactly `name` and `cpp_type`. Each list is strictly
+name-sorted with unique names; non-empty accessors are unique across the port
+and resource lists. Ordered `acsim.export` operations and module results MUST
+match the interface names and exact types, roles, delegation, and accessors as
+applicable.
+
+`acsim.instance` and `acsim.array` have exactly one realization `target`, which
+resolves to a generated `acsim.module` or stateful `acsim.binding`. Their owner
+element type names that exact target. `acsim.process` has no binding attribute;
+its nested symbol and specialization fingerprint identify its generated state
+machine.
 
 ## Binding lock
 
@@ -160,8 +188,8 @@ or mutable registry.
 | --- | --- |
 | `!acsim.value<@cpp_type>` | Concrete typed C++ value in generated state or a library call |
 | `!acsim.expr<@cpp_type>` | Pure effect-free inline expression |
-| `!acsim.owner<@binding>` | Unique owning placement of a stateful object |
-| `!acsim.ref<@binding>` | Statically resolved non-owning reference |
+| `!acsim.owner<@realization>` | Unique owning placement of a generated module or stateful library object |
+| `!acsim.ref<@realization>` | Statically resolved non-owning reference to that exact realization |
 | `!acsim.port<@interface, @role, @payload, @protocol>` | Typed construction-time port |
 | `!acsim.resource<@resource, @role>` | Typed construction-time resource capability |
 | `!acsim.array<[shape], element_type>` | Statically shaped homogeneous collection |
@@ -230,6 +258,13 @@ generator, or component schema.
   non-owning index and never flattens ownership.
 - Hierarchy paths derive from frozen source naming and remain separate from
   specialization and cache fingerprints.
+- Owner expansion is deterministic, iterative, and bounded. It includes
+  generated-module placements, stateful binding placements, every array
+  element, and every process, and drives construction, destruction, paths, and
+  recursive child expansion.
+- A placement targeting `acsim.module` is an ownership-only wrapper. It remains
+  in construction/destruction order and recursively exposes its children but
+  receives no runtime object ID, activation ID, or dispatch row.
 
 ### Collections
 
@@ -275,8 +310,17 @@ generator, or component schema.
 
 ### Dispatch and activation
 
-- Every stateful runtime object has one dense object ID in canonical ownership
-  preorder and one typed dispatch row.
+- Runtime expansion is a separate deterministic, iterative, bounded analysis.
+  It contains only stateful `acsim.binding`-targeted placements and array
+  elements plus one row for every process in every concrete generated-module
+  context.
+- Every runtime row has one dense object ID and activation ID in canonical path
+  order and exactly one typed dispatch row. Generated-module wrapper
+  placements never receive a runtime row.
+- Binding-targeted rows use the exact Work/Xfer/reset/validate entry points
+  from their binding-lock record. Process rows use deterministic
+  compiler-generated thunks derived from the enclosing module and process
+  realization identities without a registry record.
 - Every committed value, event target, subscription, pending commit, and
   internal wake has a complete static activation path.
 - Activation-source IDs are dense; target IDs are deduplicated and sorted.

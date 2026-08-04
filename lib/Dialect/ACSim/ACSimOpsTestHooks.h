@@ -16,6 +16,7 @@ struct ModelVerificationWork {
   uint64_t runtimeOperationVisits = 0;
   uint64_t edgeVisits = 0;
   uint64_t referenceLookups = 0;
+  uint64_t expandedOwnerRows = 0;
   uint64_t expandedRuntimeRows = 0;
 
   uint64_t total() const {
@@ -23,7 +24,7 @@ struct ModelVerificationWork {
            indexOperationVisits + closureOperationVisits +
            orderingOperationVisits + constructionOperationVisits +
            semanticOperationVisits + runtimeOperationVisits + edgeVisits +
-           referenceLookups + expandedRuntimeRows;
+           referenceLookups + expandedOwnerRows + expandedRuntimeRows;
   }
 };
 

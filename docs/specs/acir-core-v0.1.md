@@ -211,7 +211,8 @@ A module signature contains:
 - typed static parameters;
 - named flow ports and interface ports;
 - optional time-domain parameter;
-- optional implementation binding;
+- optional reusable implementation binding, present only on declarations that
+  explicitly request an external/library implementation;
 - contracts and source location.
 
 The structural body of `ac.module` is an MLIR Graph region. Its operations
@@ -224,6 +225,11 @@ The region arguments represent module input flows and imported endpoint or
 resource roles. `ac.return` yields the module's exported flows and roles. The
 body may contain structural ACIR operations and nested executable regions, but
 general branch-based control flow is confined to `ac.process`.
+
+Internal `ac.module` definitions and `ac.process` bodies are compiler-generated
+realizations and do not implicitly request registry bindings. Core IR
+primitives likewise have no implementation binding. Absence of a reusable
+implementation request is not a missing-binding condition.
 
 ### Static parameters
 

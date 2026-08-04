@@ -73,6 +73,20 @@ void replaceRecordArrayField(BindingOp binding, llvm::StringRef records,
   binding.setRecordAttr(fields.getDictionary(binding.getContext()));
 }
 
+void replaceModuleInterfaceRecordField(ModuleOp module, llvm::StringRef records,
+                                       unsigned ordinal, llvm::StringRef name,
+                                       mlir::Attribute value) {
+  mlir::NamedAttrList fields(module.getInterface());
+  auto array = mlir::cast<mlir::ArrayAttr>(fields.get(records));
+  llvm::SmallVector<mlir::Attribute> elements(array.begin(), array.end());
+  mlir::NamedAttrList nested(
+      mlir::cast<mlir::DictionaryAttr>(elements[ordinal]));
+  nested.set(name, value);
+  elements[ordinal] = nested.getDictionary(module.getContext());
+  fields.set(records, mlir::ArrayAttr::get(module.getContext(), elements));
+  module.setInterfaceAttr(fields.getDictionary(module.getContext()));
+}
+
 template <typename Callable>
 std::string expectDirectVerificationFailure(mlir::MLIRContext &context,
                                             Callable &&verify) {
@@ -99,29 +113,13 @@ builtin.module attributes {ac.contract_epoch = "0.1"} {
         toolchain = "sha256:0000000000000000000000000000000000000000000000000000000000000000",
         schema_set = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
       } {
-    acsim.type @impl cpp "Impl" kind "implementation" fingerprint "sha256:0000000000000000000000000000000000000000000000000000000000000000"
-    acsim.type @provider cpp "Provider" kind "provider" fingerprint "sha256:0000000000000000000000000000000000000000000000000000000000000000"
-    acsim.type @schema cpp "schema" kind "schema" fingerprint "sha256:0000000000000000000000000000000000000000000000000000000000000000"
-    acsim.type @value cpp "bool" kind "value" fingerprint "sha256:0000000000000000000000000000000000000000000000000000000000000000"
 )mlir";
   for (unsigned index = 0; index != extraTypes; ++index)
     os << "    acsim.type @x" << llvm::format_hex_no_prefix(index, 8)
        << " cpp \"bool\" kind \"value\" fingerprint \"sha256:"
           "0000000000000000000000000000000000000000000000000000000000000000\""
           "\n";
-  os << R"mlir(    acsim.binding @top record {
-      activation_sources = [], availability = "available", binding = "top",
-      binding_schema = "acsim-binding-0.1", component_schema = @schema,
-      component_schema_fingerprint = "sha256:0000000000000000000000000000000000000000000000000000000000000000",
-      construction = {arguments = [], kind = "constructor"}, contract_epoch = "0.1",
-      cpp = {concept = "Model", entry_points = {pure = "", reset = "reset", validate = "validate", work = "work", xfer = "xfer"}, header = "model.hpp", symbol = "Model", target = "model"},
-      cpp_type = @value, effect = "stateful", fingerprint = "sha256:0000000000000000000000000000000000000000000000000000000000000000",
-      implementation = @impl, ownership = {kind = "unique", placement = "root_or_process"},
-      parameters = [], ports = [], provider = @provider,
-      provider_implementation_fingerprint = "sha256:0000000000000000000000000000000000000000000000000000000000000000",
-      resources = [], results = []
-    }
-    acsim.module @Top binding @top static [] specialization "sha256:0000000000000000000000000000000000000000000000000000000000000000" exports [] {
+  os << R"mlir(    acsim.module @Top interface {ports = [], resources = [], results = []} static [] specialization "sha256:0000000000000000000000000000000000000000000000000000000000000000" exports [] {
       acsim.return
     }
   }
@@ -171,6 +169,247 @@ TEST(ACSimOpsTest, RegistryIsExactlyTheAuthoritativeTwentyTwoOperationTable) {
   };
   llvm::sort(expected);
   EXPECT_EQ(actual, expected);
+}
+
+TEST(ACSimOpsTest, GeneratedRealizationsParseWithoutFabricatedBindings) {
+  mlir::MLIRContext context;
+  loadTestDialects(context);
+
+  auto file = mlir::parseSourceString<mlir::ModuleOp>(R"mlir(
+builtin.module {
+  acsim.module @Child interface {ports = [], resources = [], results = []}
+      static [] specialization "sha256:1000000000000000000000000000000000000000000000000000000000000000"
+      exports [] {
+    acsim.return
+  }
+  acsim.module @Top interface {ports = [], resources = [], results = []}
+      static [] specialization "sha256:2000000000000000000000000000000000000000000000000000000000000000"
+      exports [] {
+    %child = acsim.instance @child target @Child args []
+        specialization "sha256:1000000000000000000000000000000000000000000000000000000000000000"
+        : !acsim.owner<@Child>
+    acsim.process @tick captures() names [] entry @entry pcs [@entry] live []
+        fairness 1 specialization "sha256:3000000000000000000000000000000000000000000000000000000000000000" {
+      state @entry {
+        acsim.terminate "success"
+      }
+    }
+    acsim.return
+  }
+}
+)mlir",
+                                                      &context);
+  ASSERT_TRUE(file);
+  EXPECT_TRUE(mlir::succeeded(mlir::verify(*file)));
+}
+
+TEST(ACSimOpsTest, LegacyGeneratedBindingSyntaxIsRejected) {
+  mlir::MLIRContext context;
+  loadTestDialects(context);
+
+  auto file = mlir::parseSourceString<mlir::ModuleOp>(R"mlir(
+builtin.module {
+  acsim.module @Top binding @legacy static []
+      specialization "sha256:1000000000000000000000000000000000000000000000000000000000000000"
+      exports [] {
+    %child = acsim.instance @child binding @legacy target @legacy args []
+        specialization "sha256:2000000000000000000000000000000000000000000000000000000000000000"
+        : !acsim.owner<@legacy>
+    acsim.process @tick binding @legacy captures() names [] entry @entry
+        pcs [@entry] live [] fairness 1
+        specialization "sha256:3000000000000000000000000000000000000000000000000000000000000000" {
+      state @entry {
+        acsim.terminate "success"
+      }
+    }
+    acsim.return
+  }
+}
+)mlir",
+                                                      &context);
+  EXPECT_FALSE(file);
+}
+
+TEST(ACSimOpsTest, ModuleInterfaceRecordsAreClosedOrderedAndExact) {
+  mlir::MLIRContext context;
+  loadTestDialects(context);
+
+  auto extraKeyFile = parseValidModel(context);
+  ASSERT_TRUE(extraKeyFile);
+  ModuleOp module = firstOp<ModuleOp>(*extraKeyFile);
+  mlir::NamedAttrList interface(module.getInterface());
+  interface.set("runtime", mlir::UnitAttr::get(&context));
+  module.setInterfaceAttr(interface.getDictionary(&context));
+  EXPECT_TRUE(llvm::StringRef(expectDirectVerificationFailure(context, [&] {
+                return module.verify();
+              })).contains("exactly ports, resources, and results"));
+
+  auto orderingFile = parseValidModel(context);
+  ASSERT_TRUE(orderingFile);
+  module = firstOp<ModuleOp>(*orderingFile);
+  auto ports = module.getInterface().getAs<mlir::ArrayAttr>("ports");
+  llvm::SmallVector<mlir::Attribute> duplicated{ports[0], ports[0]};
+  interface = mlir::NamedAttrList(module.getInterface());
+  interface.set("ports", mlir::ArrayAttr::get(&context, duplicated));
+  module.setInterfaceAttr(interface.getDictionary(&context));
+  EXPECT_TRUE(llvm::StringRef(expectDirectVerificationFailure(context, [&] {
+                return module.verify();
+              })).contains("strictly name-sorted"));
+
+  auto accessorFile = parseValidModel(context);
+  ASSERT_TRUE(accessorFile);
+  module = firstOp<ModuleOp>(*accessorFile);
+  replaceModuleInterfaceRecordField(
+      module, "resources", 0, "accessor",
+      mlir::FlatSymbolRefAttr::get(&context, "port_accessor"));
+  EXPECT_TRUE(llvm::StringRef(expectDirectVerificationFailure(context, [&] {
+                return module.verify();
+              })).contains("globally unique accessors"));
+
+  auto closedRecordFile = parseValidModel(context);
+  ASSERT_TRUE(closedRecordFile);
+  module = firstOp<ModuleOp>(*closedRecordFile);
+  auto resultRecords = module.getInterface().getAs<mlir::ArrayAttr>("results");
+  mlir::NamedAttrList result(
+      mlir::cast<mlir::DictionaryAttr>(resultRecords[0]));
+  result.set("role", mlir::FlatSymbolRefAttr::get(&context, "role"));
+  interface = mlir::NamedAttrList(module.getInterface());
+  interface.set("results", mlir::ArrayAttr::get(
+                               &context, {result.getDictionary(&context)}));
+  module.setInterfaceAttr(interface.getDictionary(&context));
+  EXPECT_TRUE(llvm::StringRef(expectDirectVerificationFailure(context, [&] {
+                return module.verify();
+              })).contains("exact closed fields"));
+
+  auto wrongKindFile = parseValidModel(context);
+  ASSERT_TRUE(wrongKindFile);
+  module = firstOp<ModuleOp>(*wrongKindFile);
+  replaceModuleInterfaceRecordField(
+      module, "ports", 0, "interface",
+      mlir::FlatSymbolRefAttr::get(&context, "role"));
+  EXPECT_TRUE(
+      llvm::StringRef(expectVerificationFailure(*wrongKindFile))
+          .contains("interface kind reference '@role' has incompatible"));
+
+  auto delegationFile = parseValidModel(context);
+  ASSERT_TRUE(delegationFile);
+  module = firstOp<ModuleOp>(*delegationFile);
+  replaceModuleInterfaceRecordField(
+      module, "ports", 0, "delegation",
+      mlir::StringAttr::get(&context, "optional"));
+  EXPECT_TRUE(llvm::StringRef(expectDirectVerificationFailure(context, [&] {
+                return module.verify();
+              })).contains("exact typed endpoint metadata"));
+
+  auto roleMismatchFile = parseValidModel(context);
+  ASSERT_TRUE(roleMismatchFile);
+  module = firstOp<ModuleOp>(*roleMismatchFile);
+  replaceModuleInterfaceRecordField(
+      module, "ports", 0, "role",
+      mlir::FlatSymbolRefAttr::get(&context, "consumer"));
+  EXPECT_TRUE(llvm::StringRef(expectVerificationFailure(*roleMismatchFile))
+                  .contains("port export must exactly match"));
+
+  auto typeMismatchFile = parseValidModel(context);
+  ASSERT_TRUE(typeMismatchFile);
+  module = firstOp<ModuleOp>(*typeMismatchFile);
+  replaceModuleInterfaceRecordField(
+      module, "results", 0, "cpp_type",
+      mlir::FlatSymbolRefAttr::get(&context, "payload"));
+  EXPECT_TRUE(llvm::StringRef(expectVerificationFailure(*typeMismatchFile))
+                  .contains("result export must exactly match"));
+
+  auto exportMismatchFile = parseValidModel(context);
+  ASSERT_TRUE(exportMismatchFile);
+  module = firstOp<ModuleOp>(*exportMismatchFile);
+  replaceModuleInterfaceRecordField(
+      module, "ports", 0, "accessor",
+      mlir::FlatSymbolRefAttr::get(&context, "port_in_accessor"));
+  EXPECT_TRUE(llvm::StringRef(expectVerificationFailure(*exportMismatchFile))
+                  .contains("port export must exactly match"));
+}
+
+TEST(ACSimOpsTest, GeneratedModuleWrappersOwnChildrenButHaveNoRuntimeRows) {
+  mlir::MLIRContext context;
+  loadTestDialects(context);
+  auto file = parseReusableModel(context);
+  ASSERT_TRUE(file);
+  ASSERT_TRUE(mlir::succeeded(mlir::verify(*file)));
+
+  ModelOp model = firstOp<ModelOp>(*file);
+  EXPECT_EQ(model.getConstructionOrder().size(), 9u);
+  unsigned dispatches = 0;
+  unsigned processRows = 0;
+  file->walk([&](DispatchOp dispatch) {
+    ++dispatches;
+    EXPECT_EQ(dispatch.getTarget().getRootReference().getValue(), "Leaf");
+    EXPECT_TRUE(
+        llvm::is_contained({llvm::StringRef("child"), llvm::StringRef("pulse")},
+                           dispatch.getTarget().getLeafReference().getValue()));
+    processRows +=
+        dispatch.getTarget().getLeafReference().getValue() == "pulse";
+  });
+  EXPECT_EQ(dispatches, 6u);
+  EXPECT_EQ(processRows, 3u);
+
+  InstanceOp wrapper;
+  file->walk([&](InstanceOp candidate) {
+    if (candidate.getSymName() == "left")
+      wrapper = candidate;
+  });
+  ASSERT_TRUE(wrapper);
+  auto owner = mlir::dyn_cast<OwnerType>(wrapper.getResult().getType());
+  ASSERT_TRUE(owner);
+  EXPECT_EQ(owner.getRealization(), wrapper.getTargetAttr());
+
+  auto invalid = parseValidModel(context);
+  ASSERT_TRUE(invalid);
+  firstOp<ElementOp>(*invalid).getResult().setType(
+      RefType::get(&context, mlir::FlatSymbolRefAttr::get(&context, "role")));
+  EXPECT_TRUE(llvm::StringRef(expectVerificationFailure(*invalid))
+                  .contains("realization reference '@role' resolves to "
+                            "incompatible operation"));
+}
+
+TEST(ACSimOpsTest, BindingArraysAndProcessesReceiveExactRuntimeRows) {
+  mlir::MLIRContext context;
+  loadTestDialects(context);
+  auto file = parseValidModel(context);
+  ASSERT_TRUE(file);
+  ASSERT_TRUE(mlir::succeeded(mlir::verify(*file)));
+
+  unsigned laneRows = 0;
+  unsigned processRows = 0;
+  file->walk([&](DispatchOp dispatch) {
+    laneRows += dispatch.getPath().starts_with("Top.lanes[");
+    processRows += dispatch.getTarget().getLeafReference().getValue() == "tick";
+  });
+  EXPECT_EQ(laneRows, 2u);
+  EXPECT_EQ(processRows, 1u);
+}
+
+TEST(ACSimOpsTest,
+     DeclarationPermutationsFailBeforeExpansionDeterministically) {
+  mlir::MLIRContext context;
+  loadTestDialects(context);
+  auto diagnose = [&]() {
+    auto file = parseReusableModel(context);
+    EXPECT_TRUE(file);
+    ModuleOp top;
+    file->walk([&](ModuleOp candidate) {
+      if (candidate.getSymName() == "Top")
+        top = candidate;
+    });
+    auto left = *top.getBody().front().getOps<InstanceOp>().begin();
+    auto right = *top.getBody().front().getOps<ArrayOp>().begin();
+    right->moveBefore(left);
+    return expectVerificationFailure(*file);
+  };
+  std::string first = diagnose();
+  std::string second = diagnose();
+  EXPECT_EQ(first, second);
+  EXPECT_TRUE(llvm::StringRef(first).contains(
+      "owned placements must be strictly symbol-sorted"));
 }
 
 TEST(ACSimOpsTest, EveryPublicOperationHasItsTypedCppClass) {
@@ -251,13 +490,13 @@ TEST(ACSimOpsTest, CanonicalFixtureCoversInventoryEffectsAndPerPcRoundTrip) {
     EXPECT_GT(counts.lookup(operation.getStringRef()), 0u)
         << operation.getStringRef().str();
   const std::array<std::pair<llvm::StringLiteral, unsigned>, 22> exact = {{
-      {"acsim.model", 1},     {"acsim.type", 26},      {"acsim.binding", 3},
+      {"acsim.model", 1},     {"acsim.type", 24},      {"acsim.binding", 2},
       {"acsim.module", 1},    {"acsim.instance", 1},   {"acsim.array", 1},
       {"acsim.element", 2},   {"acsim.port", 2},       {"acsim.resource", 2},
       {"acsim.bind", 3},      {"acsim.inline", 2},     {"acsim.process", 1},
       {"acsim.live.load", 1}, {"acsim.live.store", 1}, {"acsim.invoke", 2},
       {"acsim.continue", 1},  {"acsim.suspend", 1},    {"acsim.terminate", 1},
-      {"acsim.export", 1},    {"acsim.dispatch", 4},   {"acsim.activate", 6},
+      {"acsim.export", 3},    {"acsim.dispatch", 4},   {"acsim.activate", 6},
       {"acsim.return", 1},
   }};
   for (auto [name, expected] : exact)
@@ -418,7 +657,7 @@ TEST(ACSimOpsTest, SemanticMutationsProduceDeterministicDiagnostics) {
   exportFile->walk([&](ModuleOp candidate) { module = candidate; });
   module.setExportsAttr(mlir::ArrayAttr::get(&context, {}));
   EXPECT_TRUE(llvm::StringRef(expectVerificationFailure(*exportFile))
-                  .contains("exports metadata must exactly cover"));
+                  .contains("exports must exactly cover"));
 
   auto wakeFile = parseValidModel(context);
   ASSERT_TRUE(wakeFile);
@@ -569,13 +808,13 @@ TEST(ACSimOpsTest, EveryOperationHasATableDrivenBehavioralNegative) {
          firstOp<ModuleOp>(file).setExportsAttr(
              mlir::ArrayAttr::get(&context, {}));
        },
-       "exports metadata must exactly cover"},
+       "exports must exactly cover"},
       {"instance",
        [&](mlir::ModuleOp file) {
          firstOp<InstanceOp>(file).getResult().setType(OwnerType::get(
              &context, mlir::FlatSymbolRefAttr::get(&context, "pure")));
        },
-       "owner/ref type requires a stateful binding"},
+       "owner/ref type requires a generated module or stateful binding"},
       {"array",
        [&](mlir::ModuleOp file) {
          ArrayOp op = firstOp<ArrayOp>(file);
@@ -584,7 +823,7 @@ TEST(ACSimOpsTest, EveryOperationHasATableDrivenBehavioralNegative) {
              OwnerType::get(&context, mlir::FlatSymbolRefAttr::get(
                                           &context, "stateful"))));
        },
-       "array result shape and owning element binding must be exact"},
+       "array result shape and owning element realization must be exact"},
       {"element",
        [&](mlir::ModuleOp file) {
          firstOp<ElementOp>(file).setIndicesAttr(
@@ -713,13 +952,13 @@ TEST(ACSimOpsTest, EveryTypeHasATableDrivenSemanticNegative) {
          firstOp<InstanceOp>(file).getResult().setType(OwnerType::get(
              &context, mlir::FlatSymbolRefAttr::get(&context, "pure")));
        },
-       "owner/ref type requires a stateful binding"},
+       "owner/ref type requires a generated module or stateful binding"},
       {"ref",
        [&](mlir::ModuleOp file) {
          firstOp<ElementOp>(file).getResult().setType(RefType::get(
              &context, mlir::FlatSymbolRefAttr::get(&context, "pure")));
        },
-       "owner/ref type requires a stateful binding"},
+       "owner/ref type requires a generated module or stateful binding"},
       {"port",
        [&](mlir::ModuleOp file) {
          PortOp op = firstOp<PortOp>(file);
@@ -747,7 +986,7 @@ TEST(ACSimOpsTest, EveryTypeHasATableDrivenSemanticNegative) {
              OwnerType::get(&context, mlir::FlatSymbolRefAttr::get(
                                           &context, "stateful"))));
        },
-       "array result shape and owning element binding must be exact"},
+       "array result shape and owning element realization must be exact"},
       {"object_id",
        [&](mlir::ModuleOp file) {
          ActivateOp op = firstOp<ActivateOp>(file);
@@ -915,7 +1154,7 @@ TEST(ACSimOpsTest, BindingLockNestedDomainsAreClosedAndDeclarative) {
                                  mlir::StringAttr::get(&context, "bad.name"));
        },
        "result name must be a canonical identifier"},
-      {"activation-name", "top",
+      {"activation-name", "stateful",
        [&](BindingOp binding) {
          replaceRecordArrayField(binding, "activation_sources", 0, "name",
                                  mlir::StringAttr::get(&context, "wake()"));
@@ -1316,7 +1555,6 @@ TEST(ACSimOpsTest, ReusableExpansionCycleAndTotalCapFailExplicitly) {
       child = candidate;
   });
   ASSERT_TRUE(child);
-  child.setBindingAttr(mlir::FlatSymbolRefAttr::get(&context, "leaf"));
   child.setTargetAttr(mlir::SymbolRefAttr::get(&context, "Leaf"));
   child.setStaticArgsAttr(mlir::ArrayAttr::get(
       &context,
@@ -1325,7 +1563,7 @@ TEST(ACSimOpsTest, ReusableExpansionCycleAndTotalCapFailExplicitly) {
       "sha256:"
       "8000000000000000000000000000000000000000000000000000000000000000");
   child.getResult().setType(
-      OwnerType::get(&context, mlir::FlatSymbolRefAttr::get(&context, "leaf")));
+      OwnerType::get(&context, mlir::FlatSymbolRefAttr::get(&context, "Leaf")));
   std::string cycleDiagnostic = expectVerificationFailure(*cycleFile);
   EXPECT_TRUE(llvm::StringRef(cycleDiagnostic)
                   .contains("active module specialization cycle"))
@@ -1383,7 +1621,7 @@ TEST(ACSimOpsTest, DeepProcessPcChainUsesATopologicalWorklist) {
         mlir::FlatSymbolRefAttr::get(&context, ("pc" + std::to_string(index))));
   mlir::OpBuilder builder(oldProcess);
   ProcessOp process = ProcessOp::create(
-      builder, oldProcess.getLoc(), oldProcess.getCaptures(), "tick", "top",
+      builder, oldProcess.getLoc(), oldProcess.getCaptures(), "tick",
       oldProcess.getCaptureNamesAttr(), "pc0",
       mlir::ArrayAttr::get(&context, pcs), oldProcess.getLiveSlotsAttr(), depth,
       oldProcess.getSpecializationFingerprint(), depth);

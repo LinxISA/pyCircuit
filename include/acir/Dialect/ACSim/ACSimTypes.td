@@ -17,8 +17,16 @@ class ACSim_SymbolType<string name, string mnemonic>
 
 def ACSim_ValueType : ACSim_SymbolType<"Value", "value">;
 def ACSim_ExprType : ACSim_SymbolType<"Expr", "expr">;
-def ACSim_OwnerType : ACSim_SymbolType<"Owner", "owner">;
-def ACSim_RefType : ACSim_SymbolType<"Ref", "ref">;
+
+def ACSim_OwnerType : ACSim_Type<"Owner", "owner"> {
+  let parameters = (ins "mlir::SymbolRefAttr":$realization);
+  let assemblyFormat = "`<` $realization `>`";
+}
+
+def ACSim_RefType : ACSim_Type<"Ref", "ref"> {
+  let parameters = (ins "mlir::SymbolRefAttr":$realization);
+  let assemblyFormat = "`<` $realization `>`";
+}
 
 def ACSim_PortType : ACSim_Type<"Port", "port"> {
   let parameters = (ins "mlir::SymbolRefAttr":$interface,
