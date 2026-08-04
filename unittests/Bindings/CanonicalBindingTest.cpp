@@ -271,6 +271,32 @@ void expectNoBindingTemporaries(llvm::StringRef directory) {
   EXPECT_FALSE(error) << error.message();
 }
 
+void expectCanonicalOutputBoundary(const llvm::json::Value &value,
+                                   llvm::StringRef expected) {
+  JsonParseLimits belowBoundary;
+  belowBoundary.maxInputBytes = expected.size() - 1;
+  {
+    detail::ScopedCanonicalEmissionFailure denyEmission;
+    auto rejected = canonicalizeJson(value, belowBoundary);
+    ASSERT_FALSE(static_cast<bool>(rejected));
+    EXPECT_THAT(takeError(rejected.takeError()),
+                testing::HasSubstr("canonical output byte limit exceeded"));
+  }
+
+  JsonParseLimits atBoundary;
+  atBoundary.maxInputBytes = expected.size();
+  {
+    detail::ScopedCanonicalEmissionFailure denyEmission;
+    auto attempted = canonicalizeJson(value, atBoundary);
+    ASSERT_FALSE(static_cast<bool>(attempted));
+    EXPECT_THAT(takeError(attempted.takeError()),
+                testing::HasSubstr("canonical emission failure injected"));
+  }
+  auto accepted = canonicalizeJson(value, atBoundary);
+  ASSERT_TRUE(static_cast<bool>(accepted)) << takeError(accepted.takeError());
+  EXPECT_EQ(expected, *accepted);
+}
+
 TEST(CanonicalJsonTest, ImplementsTheAuthoritativeRfc8785Vector) {
   constexpr llvm::StringLiteral input = R"json({
     "numbers": [333333333.33333329, 1E30, 4.50, 2e-3, 0.000000000000000000000000001],
@@ -480,6 +506,17 @@ TEST(CanonicalJsonTest, BoundsEveryConstructedDomBeforeCanonicalization) {
   expectLimit("ab", output, "canonical output byte limit");
 }
 
+TEST(CanonicalJsonTest, CountsContainerPunctuationBeforeRecursiveEmission) {
+  llvm::json::Object object;
+  object["a"] = llvm::json::Array({nullptr, true, false, 1});
+  expectCanonicalOutputBoundary(llvm::json::Value(std::move(object)),
+                                R"json({"a":[null,true,false,1]})json");
+}
+
+TEST(CanonicalJsonTest, CountsEscapedStringBytesBeforeRecursiveEmission) {
+  expectCanonicalOutputBoundary(std::string("\"\\\n"), R"json("\"\\\n")json");
+}
+
 TEST(BindingRecordTest, BoundsConstructedStaticValuesBeforeSemanticRecursion) {
   auto parsed = parseIJson(recordJson());
   ASSERT_TRUE(static_cast<bool>(parsed)) << takeError(parsed.takeError());
@@ -514,6 +551,20 @@ TEST(BindingRecordTest, RestrictsSafeIntegerRangeOnlyForStaticMetadata) {
   ASSERT_FALSE(static_cast<bool>(record));
   EXPECT_THAT(takeError(record.takeError()),
               testing::HasSubstr("safe exact range"));
+}
+
+TEST(BindingRecordTest, AppliesCanonicalOutputLimitBeforeSemanticRecursion) {
+  auto parsed = parseIJson(recordJson());
+  ASSERT_TRUE(static_cast<bool>(parsed)) << takeError(parsed.takeError());
+  auto *object = parsed->getAsObject();
+  ASSERT_NE(nullptr, object);
+
+  JsonParseLimits limits;
+  limits.maxInputBytes = 0;
+  auto record = BindingRecord::parse(*object, limits);
+  ASSERT_FALSE(static_cast<bool>(record));
+  EXPECT_THAT(takeError(record.takeError()),
+              testing::HasSubstr("canonical output byte limit exceeded"));
 }
 
 TEST(BindingRecordTest, ParsesTheClosedTypedMetadataRecord) {
@@ -649,6 +700,45 @@ TEST(BindingRecordTest, RejectsMalformedRegistryEnvelopeAndResourceCaps) {
   ASSERT_FALSE(static_cast<bool>(tooLarge));
   EXPECT_THAT(takeError(tooLarge.takeError()),
               testing::HasSubstr("input byte limit"));
+}
+
+TEST(BindingCandidateTest, RejectsOversizedConstructedProfileAndTarget) {
+  auto parsed = parseIJson(candidateJson());
+  ASSERT_TRUE(static_cast<bool>(parsed)) << takeError(parsed.takeError());
+  auto *object = parsed->getAsObject();
+  ASSERT_NE(nullptr, object);
+
+  JsonParseLimits limits;
+  limits.maxStringBytes = 71;
+  for (llvm::StringRef key : {"profile", "target"}) {
+    (*object)[key] = std::string(72, key.front());
+    auto candidate = BindingCandidate::parse(*object, limits);
+    ASSERT_FALSE(static_cast<bool>(candidate)) << key.str();
+    EXPECT_THAT(takeError(candidate.takeError()),
+                testing::HasSubstr("string byte limit exceeded"));
+    (*object)[key] = key == "profile" ? "fast" : "arm64-apple-darwin";
+  }
+}
+
+TEST(BindingCandidateTest, AppliesDepthAndOutputLimitsToCompleteEnvelope) {
+  auto parsed = parseIJson(candidateJson());
+  ASSERT_TRUE(static_cast<bool>(parsed)) << takeError(parsed.takeError());
+  auto *object = parsed->getAsObject();
+  ASSERT_NE(nullptr, object);
+
+  JsonParseLimits depth;
+  depth.maxDepth = 4;
+  auto tooDeep = BindingCandidate::parse(*object, depth);
+  ASSERT_FALSE(static_cast<bool>(tooDeep));
+  EXPECT_THAT(takeError(tooDeep.takeError()),
+              testing::HasSubstr("maximum depth exceeded"));
+
+  JsonParseLimits output;
+  output.maxInputBytes = 0;
+  auto tooLarge = BindingCandidate::parse(*object, output);
+  ASSERT_FALSE(static_cast<bool>(tooLarge));
+  EXPECT_THAT(takeError(tooLarge.takeError()),
+              testing::HasSubstr("canonical output byte limit exceeded"));
 }
 
 TEST(BindingRegistryTest, ExactSelectionIsIndependentOfProviderOrder) {

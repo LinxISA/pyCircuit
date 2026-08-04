@@ -4,6 +4,24 @@
 namespace acir::bindings::detail {
 
 inline thread_local bool failBindingPublish = false;
+inline thread_local bool failCanonicalEmission = false;
+
+class ScopedCanonicalEmissionFailure {
+public:
+  ScopedCanonicalEmissionFailure() : previous(failCanonicalEmission) {
+    failCanonicalEmission = true;
+  }
+
+  ~ScopedCanonicalEmissionFailure() { failCanonicalEmission = previous; }
+
+  ScopedCanonicalEmissionFailure(const ScopedCanonicalEmissionFailure &) =
+      delete;
+  ScopedCanonicalEmissionFailure &
+  operator=(const ScopedCanonicalEmissionFailure &) = delete;
+
+private:
+  bool previous;
+};
 
 class ScopedBindingPublishFailure {
 public:
@@ -22,6 +40,7 @@ private:
 };
 
 inline bool shouldFailBindingPublish() { return failBindingPublish; }
+inline bool shouldFailCanonicalEmission() { return failCanonicalEmission; }
 
 } // namespace acir::bindings::detail
 

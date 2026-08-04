@@ -1,5 +1,6 @@
 #include "acir/Bindings/Registry.h"
 
+#include "BindingInternal.h"
 #include "BindingTestHooks.h"
 
 #include "llvm/ADT/STLExtras.h"
@@ -457,6 +458,9 @@ BindingCandidate::~BindingCandidate() = default;
 llvm::Expected<BindingCandidate>
 BindingCandidate::parse(const llvm::json::Object &object,
                         const JsonParseLimits &limits) {
+  auto canonicalSize = detail::preflightConstructedJson(object, limits);
+  if (!canonicalSize)
+    return canonicalSize.takeError();
   static constexpr std::array<llvm::StringRef, 4> Keys = {
       "available", "profile", "record", "target"};
   if (object.size() != Keys.size() ||

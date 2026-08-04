@@ -1,5 +1,8 @@
 #include "acir/Bindings/Binding.h"
 
+#include "BindingInternal.h"
+#include "BindingTestHooks.h"
+
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringExtras.h"
@@ -296,22 +299,46 @@ private:
   size_t totalStringBytes = 0;
 };
 
+llvm::Expected<std::vector<uint16_t>> utf16Units(llvm::StringRef string);
+llvm::Expected<std::string> ecmascriptNumber(double value);
+
+llvm::Expected<size_t> canonicalStringSize(llvm::StringRef string) {
+  if (auto units = utf16Units(string); !units)
+    return units.takeError();
+  size_t size = 2;
+  for (unsigned char byte : string.bytes()) {
+    if (byte == '"' || byte == '\\' || byte == '\b' || byte == '\t' ||
+        byte == '\n' || byte == '\f' || byte == '\r') {
+      size += 2;
+    } else if (byte < 0x20) {
+      size += 6;
+    } else {
+      ++size;
+    }
+  }
+  return size;
+}
+
 class ConstructedJsonPreflight {
 public:
   explicit ConstructedJsonPreflight(const JsonParseLimits &limits)
       : limits(limits) {}
 
-  llvm::Error run(const llvm::json::Value &value) {
+  llvm::Expected<size_t> run(const llvm::json::Value &value) {
     pending.push_back({&value, 1});
-    return drain();
+    if (llvm::Error error = drain())
+      return std::move(error);
+    return canonicalBytes;
   }
 
-  llvm::Error run(const llvm::json::Object &object) {
+  llvm::Expected<size_t> run(const llvm::json::Object &object) {
     if (llvm::Error error = enter(1))
-      return error;
+      return std::move(error);
     if (llvm::Error error = visitObject(object, 1))
-      return error;
-    return drain();
+      return std::move(error);
+    if (llvm::Error error = drain())
+      return std::move(error);
+    return canonicalBytes;
   }
 
 private:
@@ -328,20 +355,46 @@ private:
     return llvm::Error::success();
   }
 
-  llvm::Error accountString(llvm::StringRef string) {
+  llvm::Error accountCanonicalBytes(size_t bytes) {
+    if (bytes > limits.maxInputBytes - canonicalBytes)
+      return jsonError("canonical output byte limit exceeded");
+    canonicalBytes += bytes;
+    return llvm::Error::success();
+  }
+
+  llvm::Error accountRawString(llvm::StringRef string) {
     if (string.size() > limits.maxStringBytes)
       return jsonError("string byte limit exceeded");
-    totalStringBytes += string.size();
-    if (totalStringBytes > limits.maxTotalStringBytes)
+    if (string.size() > limits.maxTotalStringBytes - totalStringBytes)
       return jsonError("total string byte limit exceeded");
+    totalStringBytes += string.size();
+    return llvm::Error::success();
+  }
+
+  llvm::Error accountCanonicalString(llvm::StringRef string) {
+    auto size = canonicalStringSize(string);
+    if (!size)
+      return size.takeError();
+    if (llvm::Error error = accountCanonicalBytes(*size))
+      return error;
     return llvm::Error::success();
   }
 
   llvm::Error visitObject(const llvm::json::Object &object, size_t depth) {
     if (object.size() > limits.maxObjectMembers)
       return jsonError("object member limit exceeded");
+    if (llvm::Error error = accountCanonicalBytes(2))
+      return error;
+    if (!object.empty()) {
+      if (llvm::Error error = accountCanonicalBytes(object.size() - 1))
+        return error;
+      if (llvm::Error error = accountCanonicalBytes(object.size()))
+        return error;
+    }
     for (const auto &entry : object) {
-      if (llvm::Error error = accountString(entry.first))
+      if (llvm::Error error = accountRawString(entry.first))
+        return error;
+      if (llvm::Error error = accountCanonicalString(entry.first))
         return error;
       pending.push_back({&entry.second, depth + 1});
     }
@@ -354,16 +407,31 @@ private:
       if (llvm::Error error = enter(frame.depth))
         return error;
       const llvm::json::Value &value = *frame.value;
-      if (value.getAsNull() || value.getAsBoolean())
+      if (value.getAsNull()) {
+        if (llvm::Error error = accountCanonicalBytes(4))
+          return error;
         continue;
+      }
+      if (auto boolean = value.getAsBoolean()) {
+        if (llvm::Error error = accountCanonicalBytes(*boolean ? 4 : 5))
+          return error;
+        continue;
+      }
       if (auto string = value.getAsString()) {
-        if (llvm::Error error = accountString(*string))
+        if (llvm::Error error = accountRawString(*string))
+          return error;
+        if (llvm::Error error = accountCanonicalString(*string))
           return error;
         continue;
       }
       if (const auto *array = value.getAsArray()) {
         if (array->size() > limits.maxArrayElements)
           return jsonError("array element limit exceeded");
+        if (llvm::Error error = accountCanonicalBytes(2))
+          return error;
+        if (!array->empty())
+          if (llvm::Error error = accountCanonicalBytes(array->size() - 1))
+            return error;
         for (const llvm::json::Value &element : *array)
           pending.push_back({&element, frame.depth + 1});
         continue;
@@ -377,6 +445,11 @@ private:
       if (!number || !std::isfinite(*number) ||
           (std::signbit(*number) && *number == 0.0))
         return jsonError("constructed number is not canonical I-JSON");
+      auto serialized = ecmascriptNumber(*number);
+      if (!serialized)
+        return serialized.takeError();
+      if (llvm::Error error = accountCanonicalBytes(serialized->size()))
+        return error;
     }
     return llvm::Error::success();
   }
@@ -385,6 +458,7 @@ private:
   llvm::SmallVector<Frame, 64> pending;
   size_t structuralWork = 0;
   size_t totalStringBytes = 0;
+  size_t canonicalBytes = 0;
 };
 
 llvm::Expected<std::vector<uint16_t>> utf16Units(llvm::StringRef string) {
@@ -751,6 +825,23 @@ parseRecordArray(const llvm::json::Object &object, llvm::StringRef key,
 
 } // namespace
 
+namespace detail {
+
+llvm::Expected<size_t> preflightConstructedJson(const llvm::json::Value &value,
+                                                const JsonParseLimits &limits) {
+  ConstructedJsonPreflight preflight(limits);
+  return preflight.run(value);
+}
+
+llvm::Expected<size_t>
+preflightConstructedJson(const llvm::json::Object &object,
+                         const JsonParseLimits &limits) {
+  ConstructedJsonPreflight preflight(limits);
+  return preflight.run(object);
+}
+
+} // namespace detail
+
 struct BindingRecord::Storage {
   llvm::json::Object object;
   std::string bindingSchema;
@@ -789,16 +880,17 @@ llvm::Expected<llvm::json::Value> parseIJson(llvm::StringRef input,
 
 llvm::Expected<std::string> canonicalizeJson(const llvm::json::Value &value,
                                              const JsonParseLimits &limits) {
-  ConstructedJsonPreflight preflight(limits);
-  if (llvm::Error error = preflight.run(value))
-    return std::move(error);
+  auto canonicalSize = detail::preflightConstructedJson(value, limits);
+  if (!canonicalSize)
+    return canonicalSize.takeError();
+  if (detail::shouldFailCanonicalEmission())
+    return jsonError("canonical emission failure injected");
   std::string storage;
+  storage.reserve(*canonicalSize);
   llvm::raw_string_ostream output(storage);
   if (llvm::Error error = writeCanonical(value, output))
     return std::move(error);
   output.flush();
-  if (storage.size() > limits.maxInputBytes)
-    return jsonError("canonical output byte limit exceeded");
   return storage;
 }
 
@@ -824,9 +916,9 @@ BindingRecord::~BindingRecord() = default;
 llvm::Expected<BindingRecord>
 BindingRecord::parse(const llvm::json::Object &object,
                      const JsonParseLimits &limits) {
-  ConstructedJsonPreflight preflight(limits);
-  if (llvm::Error error = preflight.run(object))
-    return std::move(error);
+  auto canonicalSize = detail::preflightConstructedJson(object, limits);
+  if (!canonicalSize)
+    return canonicalSize.takeError();
   static constexpr std::array<llvm::StringRef, 20> TopKeys = {
       "activation_sources",
       "availability",
