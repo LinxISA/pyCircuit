@@ -2309,7 +2309,7 @@ LogicalResult verifySupportedSCFShape(ProcessOp process) {
   LogicalResult result = success();
   process.getBody().walk([&](Operation *operation) {
     auto requireTerminator = [&](Region &region, StringRef owner,
-                                 StringRef terminator) {
+                                 StringRef terminator) -> Operation * {
       if (region.empty() || !llvm::hasSingleElement(region) ||
           region.front().empty() ||
           region.front().back().getName().getStringRef() != terminator) {
@@ -2317,9 +2317,23 @@ LogicalResult verifySupportedSCFShape(ProcessOp process) {
             << "malformed " << owner << " region must terminate with "
             << terminator;
         result = failure();
-        return false;
+        return nullptr;
       }
-      return true;
+      return &region.front().back();
+    };
+    auto sameTypes = [](auto left, auto right) {
+      if (left.size() != right.size())
+        return false;
+      return llvm::all_of(llvm::zip(left, right), [](auto pair) {
+        return std::get<0>(pair).getType() == std::get<1>(pair).getType();
+      });
+    };
+    auto emitArityError = [&](StringRef owner) {
+      operation->emitOpError()
+          << "malformed " << owner
+          << " operand/result/block argument/yield arity or type mismatch";
+      result = failure();
+      return WalkResult::interrupt();
     };
     if (isa<scf::IfOp>(operation)) {
       if (operation->getNumRegions() != 2) {
@@ -2328,28 +2342,71 @@ LogicalResult verifySupportedSCFShape(ProcessOp process) {
         result = failure();
         return WalkResult::interrupt();
       }
+      Region &thenRegion = operation->getRegion(0);
       Region &elseRegion = operation->getRegion(1);
-      if (!requireTerminator(operation->getRegion(0), "scf.if", "scf.yield") ||
-          (!elseRegion.empty() &&
-           !requireTerminator(elseRegion, "scf.if", "scf.yield")))
+      Operation *thenYield =
+          requireTerminator(thenRegion, "scf.if", "scf.yield");
+      Operation *elseYield =
+          elseRegion.empty()
+              ? nullptr
+              : requireTerminator(elseRegion, "scf.if", "scf.yield");
+      if (!thenYield || (!elseRegion.empty() && !elseYield))
         return WalkResult::interrupt();
-      if (elseRegion.empty() && operation->getNumResults() != 0) {
-        operation->emitOpError(
-            "malformed scf.if region must terminate with scf.yield");
-        result = failure();
-        return WalkResult::interrupt();
-      }
+      if (operation->getNumOperands() != 1 ||
+          !operation->getOperand(0).getType().isInteger(1) ||
+          !thenRegion.front().getArguments().empty() ||
+          (!elseRegion.empty() && !elseRegion.front().getArguments().empty()) ||
+          thenYield->getNumResults() != 0 ||
+          (elseYield && elseYield->getNumResults() != 0) ||
+          !sameTypes(thenYield->getOperands(), operation->getResults()) ||
+          (elseRegion.empty()
+               ? operation->getNumResults() != 0
+               : !sameTypes(elseYield->getOperands(), operation->getResults())))
+        return emitArityError("scf.if");
     } else if (isa<scf::ForOp>(operation)) {
-      if (operation->getNumRegions() != 1 ||
-          !requireTerminator(operation->getRegion(0), "scf.for", "scf.yield"))
+      if (operation->getNumRegions() != 1)
+        return emitArityError("scf.for");
+      Region &body = operation->getRegion(0);
+      Operation *yield = requireTerminator(body, "scf.for", "scf.yield");
+      if (!yield)
         return WalkResult::interrupt();
+      unsigned resultCount = operation->getNumResults();
+      if (operation->getNumOperands() < 3 ||
+          operation->getNumOperands() != resultCount + 3 ||
+          body.front().getNumArguments() != resultCount + 1)
+        return emitArityError("scf.for");
+      Type inductionType = operation->getOperand(0).getType();
+      if (yield->getNumResults() != 0 ||
+          (!inductionType.isIndex() && !isa<IntegerType>(inductionType)) ||
+          operation->getOperand(1).getType() != inductionType ||
+          operation->getOperand(2).getType() != inductionType ||
+          body.front().getArgument(0).getType() != inductionType ||
+          !sameTypes(operation->getOperands().drop_front(3),
+                     operation->getResults()) ||
+          !sameTypes(body.front().getArguments().drop_front(),
+                     operation->getResults()) ||
+          !sameTypes(yield->getOperands(), operation->getResults()))
+        return emitArityError("scf.for");
     } else if (isa<scf::WhileOp>(operation)) {
-      if (operation->getNumRegions() != 2 ||
-          !requireTerminator(operation->getRegion(0), "scf.while before",
-                             "scf.condition") ||
-          !requireTerminator(operation->getRegion(1), "scf.while after",
-                             "scf.yield"))
+      if (operation->getNumRegions() != 2)
+        return emitArityError("scf.while");
+      Region &before = operation->getRegion(0);
+      Region &after = operation->getRegion(1);
+      Operation *condition =
+          requireTerminator(before, "scf.while before", "scf.condition");
+      Operation *yield =
+          requireTerminator(after, "scf.while after", "scf.yield");
+      if (!condition || !yield)
         return WalkResult::interrupt();
+      if (condition->getNumResults() != 0 || yield->getNumResults() != 0 ||
+          condition->getNumOperands() < 1 ||
+          !condition->getOperand(0).getType().isInteger(1) ||
+          !sameTypes(operation->getOperands(), before.front().getArguments()) ||
+          !sameTypes(condition->getOperands().drop_front(),
+                     operation->getResults()) ||
+          !sameTypes(after.front().getArguments(), operation->getResults()) ||
+          !sameTypes(yield->getOperands(), before.front().getArguments()))
+        return emitArityError("scf.while");
     }
     return WalkResult::advance();
   });
@@ -2612,6 +2669,8 @@ LogicalResult verifyTraceProvenance(ProcessOp process) {
       return false;
     if (auto argument = dyn_cast<BlockArgument>(value)) {
       Operation *parent = argument.getOwner()->getParentOp();
+      if (auto forOp = dyn_cast_or_null<scf::ForOp>(parent))
+        return argument == forOp.getInductionVar();
       return !isa_and_nonnull<scf::IfOp, scf::ForOp, scf::WhileOp>(parent);
     }
     return true;

@@ -13,6 +13,12 @@
 // RUN: %not %acir_opt %t/if-path-live.mlir 2>&1 | %FileCheck %s --check-prefix=IF-LIVE
 // RUN: %not %acir_opt %t/while-iter-arg-live.mlir 2>&1 | %FileCheck %s --check-prefix=WHILE-LIVE
 // RUN: %not %acir_opt %t/malformed-scf.mlir 2>&1 | %FileCheck %s --check-prefix=MALFORMED
+// RUN: /bin/sh -c '%acir_opt %t/malformed-if-arity.mlir > %t/malformed-if-arity.out 2>&1; status=$?; test $status -gt 0 && test $status -lt 128'
+// RUN: %FileCheck %s --check-prefix=MALFORMED-IF-ARITY < %t/malformed-if-arity.out
+// RUN: /bin/sh -c '%acir_opt %t/malformed-for-arity.mlir > %t/malformed-for-arity.out 2>&1; status=$?; test $status -gt 0 && test $status -lt 128'
+// RUN: %FileCheck %s --check-prefix=MALFORMED-FOR-ARITY < %t/malformed-for-arity.out
+// RUN: /bin/sh -c '%acir_opt %t/malformed-while-arity.mlir > %t/malformed-while-arity.out 2>&1; status=$?; test $status -gt 0 && test $status -lt 128'
+// RUN: %FileCheck %s --check-prefix=MALFORMED-WHILE-ARITY < %t/malformed-while-arity.out
 
 //--- bad-kind.mlir
 builtin.module attributes {ac.contract_epoch = "0.1"} {
@@ -230,3 +236,60 @@ builtin.module attributes {ac.contract_epoch = "0.1"} {
   }) : () -> ()
 }
 // MALFORMED: malformed scf.if region must terminate with scf.yield
+
+//--- malformed-if-arity.mlir
+builtin.module attributes {ac.contract_epoch = "0.1"} {
+  "ac.module"() <{sym_name = "M", function_type = () -> (), static_params = {}}> ({
+    "ac.process"() <{kind = "control", sym_name = "p"}> ({
+      %true = "arith.constant"() <{value = true}> : () -> i1
+      %zero = "index.constant"() <{value = 0 : index}> : () -> index
+      %result = "scf.if"(%true) ({
+        "scf.yield"() : () -> ()
+      }, {
+        "scf.yield"(%zero) : (index) -> ()
+      }) : (i1) -> index
+      "ac.yield_sim"() : () -> ()
+    }) : () -> ()
+    "ac.return"() : () -> ()
+  }) : () -> ()
+}
+// MALFORMED-IF-ARITY: malformed scf.if operand/result/block argument/yield arity or type mismatch
+
+//--- malformed-for-arity.mlir
+builtin.module attributes {ac.contract_epoch = "0.1"} {
+  "ac.module"() <{sym_name = "M", function_type = () -> (), static_params = {}}> ({
+    "ac.process"() <{kind = "control", sym_name = "p"}> ({
+      %lb = "index.constant"() <{value = 0 : index}> : () -> index
+      %ub = "index.constant"() <{value = 4 : index}> : () -> index
+      %step = "index.constant"() <{value = 1 : index}> : () -> index
+      %seed = "index.constant"() <{value = 7 : index}> : () -> index
+      %result = "scf.for"(%lb, %ub, %step, %seed) ({
+      ^bb0(%iter : index):
+        "scf.yield"(%iter) : (index) -> ()
+      }) : (index, index, index, index) -> index
+      "ac.yield_sim"() : () -> ()
+    }) : () -> ()
+    "ac.return"() : () -> ()
+  }) : () -> ()
+}
+// MALFORMED-FOR-ARITY: malformed scf.for operand/result/block argument/yield arity or type mismatch
+
+//--- malformed-while-arity.mlir
+builtin.module attributes {ac.contract_epoch = "0.1"} {
+  "ac.module"() <{sym_name = "M", function_type = () -> (), static_params = {}}> ({
+    "ac.process"() <{kind = "control", sym_name = "p"}> ({
+      %seed = "index.constant"() <{value = 7 : index}> : () -> index
+      %result = "scf.while"(%seed) ({
+      ^bb0(%before : index):
+        %true = "arith.constant"() <{value = true}> : () -> i1
+        "scf.condition"(%true) : (i1) -> ()
+      }, {
+      ^bb0(%after : index):
+        "scf.yield"(%after) : (index) -> ()
+      }) : (index) -> index
+      "ac.yield_sim"() : () -> ()
+    }) : () -> ()
+    "ac.return"() : () -> ()
+  }) : () -> ()
+}
+// MALFORMED-WHILE-ARITY: malformed scf.while operand/result/block argument/yield arity or type mismatch

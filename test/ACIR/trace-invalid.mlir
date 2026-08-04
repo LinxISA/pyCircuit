@@ -8,6 +8,7 @@
 // RUN: %not %acir_opt %t/forwarded-fork.mlir 2>&1 | %FileCheck %s --check-prefix=FORWARDED-FORK
 // RUN: %not %acir_opt %t/ambiguous-merge.mlir 2>&1 | %FileCheck %s --check-prefix=AMBIGUOUS
 // RUN: %not %acir_opt %t/cursor-noncursor-merge.mlir 2>&1 | %FileCheck %s --check-prefix=NONCURSOR-MERGE
+// RUN: %not %acir_opt %t/for-induction-cursor.mlir 2>&1 | %FileCheck %s --check-prefix=FOR-INDUCTION
 
 //--- forked-cursor.mlir
 builtin.module attributes {ac.contract_epoch = "0.1"} {
@@ -152,3 +153,23 @@ builtin.module attributes {ac.contract_epoch = "0.1"} {
   }
 }
 // NONCURSOR-MERGE: trace cursor forwarding merges cursor and non-cursor values
+
+//--- for-induction-cursor.mlir
+builtin.module attributes {ac.contract_epoch = "0.1"} {
+  ac.module @M() parameters {} graph {
+    ac.process @p kind "workload" {
+      %cursor = ac.trace.open source "pto"
+      %lb = index.constant 0
+      %ub = index.constant 4
+      %step = index.constant 1
+      %laundered = scf.for %i = %lb to %ub step %step
+          iter_args(%iter = %cursor) -> index {
+        scf.yield %i : index
+      }
+      %next, %raw, %advanced = ac.trace.next %laundered from source "pto" : i32
+      ac.yield_sim
+    }
+    ac.return
+  }
+}
+// FOR-INDUCTION: trace cursor forwarding merges cursor and non-cursor values

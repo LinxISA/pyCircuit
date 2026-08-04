@@ -48,6 +48,30 @@ builtin.module attributes {ac.contract_epoch = "0.1"} {
     }
     ac.return
   }
+  ac.module @ForTrace() parameters {} graph {
+    ac.stat @position kind "gauge"
+    ac.stat @ordinary kind "gauge"
+    ac.process @workload kind "workload" {
+      %cursor0 = ac.trace.open source "for_loop"
+      %lb = index.constant 0
+      %ub = index.constant 4
+      %step = index.constant 1
+      %cursor1 = scf.for %i = %lb to %ub step %step
+          iter_args(%cursor = %cursor0) -> index {
+        scf.yield %cursor : index
+      }
+      %ordinary0 = index.constant 7
+      %ordinary1 = scf.for %i = %lb to %ub step %step
+          iter_args(%ordinary = %ordinary0) -> index {
+        scf.yield %ordinary : index
+      }
+      %position = ac.trace.position %cursor1 from source "for_loop"
+      ac.stat.add @position %position : index
+      ac.stat.add @ordinary %ordinary1 : index
+      ac.yield_sim
+    }
+    ac.return
+  }
   ac.module @MergedTrace(i1) parameters {} graph {
   ^bb0(%condition : i1):
     ac.process @workload kind "workload" captures(%condition : i1) {
@@ -73,6 +97,7 @@ builtin.module attributes {ac.contract_epoch = "0.1"} {
 // CHECK: ac.module @LoopTrace
 // CHECK: scf.while
 // CHECK: ac.trace.next
+// CHECK: ac.module @ForTrace
 // CHECK: ac.module @MergedTrace
 // EFFECTS: ac.trace.open
 // EFFECTS: ac.trace.next
