@@ -550,6 +550,159 @@ TEST(ACIROpsTest, HierarchyDepthAndOwnerBudgetsRejectCompactGraphs) {
                   .contains("hierarchy depth exceeds bound 1024"));
 }
 
+TEST(ACIROpsTest, NestedArraysCountTaskSevenOwnersBeforeElaboration) {
+  mlir::MLIRContext context;
+  context.loadDialect<ACIRDialect>();
+  mlir::OpBuilder builder(&context);
+  auto loc = builder.getUnknownLoc();
+  auto emptyType = builder.getFunctionType({}, {});
+  auto emptyDictionary = builder.getDictionaryAttr({});
+  auto file = mlir::ModuleOp::create(loc);
+  builder.setInsertionPointToStart(file.getBody());
+
+  auto leaf =
+      ModuleOp::create(builder, loc, "Leaf", emptyType, emptyDictionary);
+  builder.setInsertionPointToStart(leaf.addEntryBlock());
+  auto latency = builder.getDictionaryAttr({
+      builder.getNamedAttr("kind", builder.getStringAttr("fixed")),
+      builder.getNamedAttr("ticks", builder.getI64IntegerAttr(1)),
+  });
+  auto lifecycle = builder.getDictionaryAttr({
+      builder.getNamedAttr("reservation",
+                           builder.getStringAttr("propose_commit")),
+      builder.getNamedAttr("release", builder.getStringAttr("balanced")),
+      builder.getNamedAttr("cancellation", builder.getStringAttr("explicit")),
+  });
+  QueueOp::create(
+      builder, loc, builder.getStringAttr("queue"),
+      builder.getStringAttr("queue"), builder.getStringAttr("queue"),
+      mlir::TypeAttr::get(builder.getI32Type()), builder.getI64IntegerAttr(1),
+      mlir::IntegerAttr(), builder.getStringAttr("fifo"),
+      mlir::FlatSymbolRefAttr::get(&context, "p"),
+      builder.getStringAttr("exclusive"), mlir::DictionaryAttr(),
+      builder.getI64IntegerAttr(1));
+  EventQueueOp::create(
+      builder, loc, builder.getStringAttr("events"),
+      builder.getStringAttr("events"), builder.getStringAttr("events"),
+      mlir::TypeAttr::get(EventType::get(&context, builder.getI32Type())),
+      builder.getI64IntegerAttr(1), builder.getStringAttr("time_then_sequence"),
+      mlir::FlatSymbolRefAttr::get(&context, "clock"),
+      builder.getI64IntegerAttr(1));
+  ResourceOp::create(builder, loc, "state", "state", "state", 1, 1, 1, latency,
+                     lifecycle, "exclusive", mlir::FlatSymbolRefAttr(),
+                     builder.getArrayAttr({}), 1);
+  ReturnOp::create(builder, loc, mlir::ValueRange{});
+
+  llvm::SmallVector<mlir::Attribute> staticArgs(
+      1024, mlir::Attribute(emptyDictionary));
+  builder.setInsertionPointToEnd(file.getBody());
+  auto middle =
+      ModuleOp::create(builder, loc, "Middle", emptyType, emptyDictionary);
+  builder.setInsertionPointToStart(middle.addEntryBlock());
+  ArrayOp::create(builder, loc, mlir::TypeRange{}, mlir::ValueRange{}, "Leaf",
+                  "leaves", "leaves", "leaves",
+                  builder.getDenseI64ArrayAttr({1024}),
+                  builder.getArrayAttr(staticArgs));
+  ReturnOp::create(builder, loc, mlir::ValueRange{});
+
+  builder.setInsertionPointToEnd(file.getBody());
+  auto top = ModuleOp::create(builder, loc, "Top", emptyType, emptyDictionary);
+  builder.setInsertionPointToStart(top.addEntryBlock());
+  ArrayOp::create(builder, loc, mlir::TypeRange{}, mlir::ValueRange{}, "Middle",
+                  "middles", "middles", "middles",
+                  builder.getDenseI64ArrayAttr({1024}),
+                  builder.getArrayAttr(staticArgs));
+  ReturnOp::create(builder, loc, mlir::ValueRange{});
+
+  builder.setInsertionPointToEnd(file.getBody());
+  auto seed = builder.getDictionaryAttr({
+      builder.getNamedAttr("kind", builder.getStringAttr("fixed")),
+      builder.getNamedAttr("value", builder.getI64IntegerAttr(0)),
+  });
+  auto results = builder.getDictionaryAttr({
+      builder.getNamedAttr("id", builder.getStringAttr("owners")),
+      builder.getNamedAttr("format", builder.getStringAttr("json")),
+  });
+  SystemOp::create(builder, loc, "owners", "Top", "root", 0, "cycle",
+                   mlir::FlatSymbolRefAttr(), seed, builder.getArrayAttr({}),
+                   results, true);
+
+  std::string diagnostic;
+  mlir::ScopedDiagnosticHandler handler(&context, [&](mlir::Diagnostic &value) {
+    llvm::raw_string_ostream(diagnostic) << value;
+    return mlir::success();
+  });
+  auto start = std::chrono::steady_clock::now();
+  EXPECT_TRUE(mlir::failed(verifyGraphStructure(file)));
+  EXPECT_NE(diagnostic.find("owner count exceeds bound 1048576"),
+            std::string::npos);
+  EXPECT_LT(std::chrono::steady_clock::now() - start, std::chrono::seconds(1));
+}
+
+TEST(ACIROpsTest, TaskSevenOwnersRegisterAtDistinctAbsoluteInstancePaths) {
+  mlir::MLIRContext context;
+  context.loadDialect<ACIRDialect>();
+  mlir::OpBuilder builder(&context);
+  auto loc = builder.getUnknownLoc();
+  auto emptyType = builder.getFunctionType({}, {});
+  auto emptyDictionary = builder.getDictionaryAttr({});
+  auto file = mlir::ModuleOp::create(loc);
+  builder.setInsertionPointToStart(file.getBody());
+  auto leaf =
+      ModuleOp::create(builder, loc, "Leaf", emptyType, emptyDictionary);
+  builder.setInsertionPointToStart(leaf.addEntryBlock());
+  auto latency = builder.getDictionaryAttr({
+      builder.getNamedAttr("kind", builder.getStringAttr("fixed")),
+      builder.getNamedAttr("ticks", builder.getI64IntegerAttr(1)),
+  });
+  auto lifecycle = builder.getDictionaryAttr({
+      builder.getNamedAttr("reservation",
+                           builder.getStringAttr("propose_commit")),
+      builder.getNamedAttr("release", builder.getStringAttr("balanced")),
+      builder.getNamedAttr("cancellation", builder.getStringAttr("explicit")),
+  });
+  QueueOp::create(
+      builder, loc, builder.getStringAttr("queue"),
+      builder.getStringAttr("queue"), builder.getStringAttr("queue"),
+      mlir::TypeAttr::get(builder.getI32Type()), builder.getI64IntegerAttr(1),
+      mlir::IntegerAttr(), builder.getStringAttr("fifo"),
+      mlir::FlatSymbolRefAttr::get(&context, "p"),
+      builder.getStringAttr("exclusive"), mlir::DictionaryAttr(),
+      builder.getI64IntegerAttr(1));
+  EventQueueOp::create(
+      builder, loc, builder.getStringAttr("events"),
+      builder.getStringAttr("events"), builder.getStringAttr("events"),
+      mlir::TypeAttr::get(EventType::get(&context, builder.getI32Type())),
+      builder.getI64IntegerAttr(1), builder.getStringAttr("time_then_sequence"),
+      mlir::FlatSymbolRefAttr::get(&context, "clock"),
+      builder.getI64IntegerAttr(1));
+  ResourceOp::create(builder, loc, "state", "state", "state", 1, 1, 1, latency,
+                     lifecycle, "exclusive", mlir::FlatSymbolRefAttr(),
+                     builder.getArrayAttr({}), 1);
+  ReturnOp::create(builder, loc, mlir::ValueRange{});
+  builder.setInsertionPointToEnd(file.getBody());
+  auto top = ModuleOp::create(builder, loc, "Top", emptyType, emptyDictionary);
+  builder.setInsertionPointToStart(top.addEntryBlock());
+  InstanceOp::create(builder, loc, mlir::TypeRange{}, mlir::ValueRange{},
+                     "Leaf", "left", "left", "left", emptyDictionary);
+  InstanceOp::create(builder, loc, mlir::TypeRange{}, mlir::ValueRange{},
+                     "Leaf", "right", "right", "right", emptyDictionary);
+  ReturnOp::create(builder, loc, mlir::ValueRange{});
+  builder.setInsertionPointToEnd(file.getBody());
+  auto seed = builder.getDictionaryAttr({
+      builder.getNamedAttr("kind", builder.getStringAttr("fixed")),
+      builder.getNamedAttr("value", builder.getI64IntegerAttr(0)),
+  });
+  auto results = builder.getDictionaryAttr({
+      builder.getNamedAttr("id", builder.getStringAttr("owners")),
+      builder.getNamedAttr("format", builder.getStringAttr("json")),
+  });
+  SystemOp::create(builder, loc, "owners", "Top", "root", 0, "cycle",
+                   mlir::FlatSymbolRefAttr(), seed, builder.getArrayAttr({}),
+                   results, true);
+  EXPECT_TRUE(mlir::succeeded(verifyGraphStructure(file)));
+}
+
 TEST(ACIROpsTest, ExplicitViewProvenanceScalesNearLinearly) {
   mlir::MLIRContext context;
   context.loadDialect<ACIRDialect>();
@@ -738,7 +891,10 @@ TEST(ACIRResourcesTest, CheckedArithmeticAndIntervalsRejectBoundaries) {
       checkedMultiply(std::numeric_limits<uint64_t>::max(), 2, result));
   EXPECT_TRUE(intervalsOverlap({0, 8}, {7, 9}));
   EXPECT_FALSE(intervalsOverlap({0, 8}, {8, 9}));
-  EXPECT_EQ(compareAddressMapOrder({0, 8, 2}, {0, 4, 1}), -1);
+  EXPECT_TRUE(intervalsOverlap(
+      {uint64_t{1} << 63, WideAddress{1} << 64},
+      {std::numeric_limits<uint64_t>::max(), WideAddress{1} << 64}));
+  EXPECT_EQ(compareAddressMapOrder({0, 8, true, 2}, {0, 4, true, 1}), -1);
 }
 
 TEST(ACIRResourcesTest, RationalNormalizationIsExactAndBounded) {
@@ -753,6 +909,22 @@ TEST(ACIRResourcesTest, RationalNormalizationIsExactAndBounded) {
   EXPECT_EQ(ticks, 1000u);
   EXPECT_TRUE(normalizeRationalToTicks(0, 1, 1, 1, ticks));
   EXPECT_EQ(ticks, 0u);
+  EXPECT_TRUE(normalizeRationalToTicks(std::numeric_limits<int64_t>::max(), 1,
+                                       uint64_t{1} << 63, uint64_t{1} << 63,
+                                       ticks));
+  EXPECT_EQ(ticks, static_cast<uint64_t>(std::numeric_limits<int64_t>::max()));
+  EXPECT_TRUE(normalizeRationalToTicks(1, 1, 1, kMaxTickScale, ticks));
+  EXPECT_EQ(ticks, kMaxTickScale);
+  EXPECT_FALSE(normalizeRationalToTicks(1, 1, 1, kMaxTickScale + 1, ticks));
+}
+
+TEST(ACIRResourcesTest, DomainTickUsesNormativePhasePlusCycleTimesPeriod) {
+  uint64_t tick = 0;
+  EXPECT_TRUE(
+      checkedDomainTick(std::numeric_limits<int64_t>::max(), 1, 0, tick));
+  EXPECT_EQ(tick, static_cast<uint64_t>(std::numeric_limits<int64_t>::max()));
+  EXPECT_FALSE(
+      checkedDomainTick(std::numeric_limits<int64_t>::max(), 1, 1, tick));
 }
 
 TEST(ACIRResourcesTest, TaskSevenRegistryDeltaIsExactlySixOperations) {
@@ -842,6 +1014,25 @@ TEST(ACIRResourcesTest, PublicBuildersAndTypedEffectsCoverAllSixOperations) {
   EXPECT_FALSE(mlir::isMemoryEffectFree(queue));
   EXPECT_FALSE(mlir::isMemoryEffectFree(eventQueue));
   EXPECT_FALSE(mlir::isMemoryEffectFree(resource));
+
+  auto effectOf = [](mlir::Operation *operation) {
+    llvm::SmallVector<mlir::MemoryEffects::EffectInstance> effects;
+    mlir::cast<mlir::MemoryEffectOpInterface>(operation).getEffects(effects);
+    EXPECT_EQ(effects.size(), 1u);
+    return effects.front();
+  };
+  auto queueEffect = effectOf(queue);
+  auto eventEffect = effectOf(eventQueue);
+  auto queueEffectAgain = effectOf(queue);
+  EXPECT_EQ(queueEffect.getSymbolRef(), symbol("q"));
+  EXPECT_EQ(eventEffect.getSymbolRef(), symbol("events"));
+  EXPECT_EQ(queueEffect.getSymbolRef(), queueEffectAgain.getSymbolRef());
+  EXPECT_EQ(queueEffect.getParameters(), queueEffectAgain.getParameters());
+  EXPECT_NE(queueEffect.getSymbolRef(), eventEffect.getSymbolRef());
+  auto parameters =
+      mlir::cast<mlir::DictionaryAttr>(queueEffect.getParameters());
+  EXPECT_EQ(parameters.getAs<mlir::StringAttr>("stable_id").getValue(), "q");
+  EXPECT_EQ(parameters.getAs<mlir::StringAttr>("path").getValue(), "q");
 }
 
 TEST(ACIRResourcesTest, LargeAddressMapAndParentGraphScaleNearLinearly) {
@@ -866,15 +1057,24 @@ TEST(ACIRResourcesTest, LargeAddressMapAndParentGraphScaleNearLinearly) {
   entries.reserve(entryCount);
   for (unsigned index = 0; index != entryCount; ++index) {
     entries.push_back(builder.getDictionaryAttr({
-        builder.getNamedAttr("base", builder.getI64IntegerAttr(index)),
-        builder.getNamedAttr("size", builder.getI64IntegerAttr(1)),
+        builder.getNamedAttr("base", builder.getI64IntegerAttr(0)),
+        builder.getNamedAttr("size", builder.getI64IntegerAttr(entryCount)),
         builder.getNamedAttr("target",
                              mlir::FlatSymbolRefAttr::get(&context, "space")),
-        builder.getNamedAttr("offset", builder.getI64IntegerAttr(index)),
+        builder.getNamedAttr("offset", builder.getI64IntegerAttr(0)),
         builder.getNamedAttr(
             "permissions",
             builder.getArrayAttr({builder.getStringAttr("read")})),
         builder.getNamedAttr("classes", builder.getArrayAttr({})),
+        builder.getNamedAttr(
+            "interleave",
+            builder.getDictionaryAttr({
+                builder.getNamedAttr("granularity",
+                                     builder.getI64IntegerAttr(1)),
+                builder.getNamedAttr("banks",
+                                     builder.getI64IntegerAttr(entryCount)),
+                builder.getNamedAttr("bank", builder.getI64IntegerAttr(index)),
+            })),
     }));
   }
   AddressMapOp::create(
@@ -890,10 +1090,18 @@ TEST(ACIRResourcesTest, LargeAddressMapAndParentGraphScaleNearLinearly) {
   constexpr unsigned domainCount = 10000;
   auto graphFile = mlir::ModuleOp::create(location);
   builder.setInsertionPointToStart(graphFile.getBody());
+  auto bridgeModule =
+      ModuleOp::create(builder, location, "Bridge",
+                       builder.getFunctionType({}, {}), emptyDictionary);
+  builder.setInsertionPointToStart(bridgeModule.addEntryBlock());
+  ReturnOp::create(builder, location, mlir::ValueRange{});
+  builder.setInsertionPointToEnd(graphFile.getBody());
   auto graphModule =
       ModuleOp::create(builder, location, "Graph",
                        builder.getFunctionType({}, {}), emptyDictionary);
   builder.setInsertionPointToStart(graphModule.addEntryBlock());
+  InstanceOp::create(builder, location, mlir::TypeRange{}, mlir::ValueRange{},
+                     "Bridge", "bridge", "bridge", "bridge", emptyDictionary);
   for (unsigned index = 0; index != domainCount; ++index) {
     std::string name = "d" + std::to_string(index);
     mlir::FlatSymbolRefAttr parent;
@@ -901,7 +1109,11 @@ TEST(ACIRResourcesTest, LargeAddressMapAndParentGraphScaleNearLinearly) {
     if (index) {
       parent = mlir::FlatSymbolRefAttr::get(&context,
                                             "d" + std::to_string(index - 1));
-      bridge = emptyDictionary;
+      bridge = builder.getDictionaryAttr({
+          builder.getNamedAttr("kind", builder.getStringAttr("explicit")),
+          builder.getNamedAttr(
+              "owner", mlir::FlatSymbolRefAttr::get(&context, "bridge")),
+      });
     }
     TimeDomainOp::create(builder, location, builder.getStringAttr(name),
                          builder.getI64IntegerAttr(1),
@@ -911,7 +1123,7 @@ TEST(ACIRResourcesTest, LargeAddressMapAndParentGraphScaleNearLinearly) {
   ReturnOp::create(builder, location, mlir::ValueRange{});
 
   start = std::chrono::steady_clock::now();
-  EXPECT_TRUE(mlir::succeeded(verifyResourceStructure(graphFile)));
+  EXPECT_TRUE(mlir::succeeded(mlir::verify(graphFile)));
   auto graphElapsed = std::chrono::steady_clock::now() - start;
   EXPECT_LT(verifyElapsed, std::chrono::seconds(5));
   EXPECT_LT(graphElapsed, std::chrono::seconds(5));

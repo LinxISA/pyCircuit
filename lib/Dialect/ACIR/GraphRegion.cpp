@@ -324,6 +324,9 @@ LogicalResult verifyGraphStructure(Operation *topLevel) {
               std::max(localDepth, saturatedAdd(2, childStats.depth,
                                                 maxHierarchyDepth + 1));
         }
+      } else if (isa<QueueOp, EventQueueOp, ResourceOp>(child)) {
+        localOwners = 1;
+        localDepth = 1;
       }
       stats.owners =
           saturatedAdd(stats.owners, localOwners, maxHierarchyOwners + 1);
@@ -415,6 +418,21 @@ LogicalResult verifyGraphStructure(Operation *topLevel) {
               failed(elaborate(lookupDefinition(symbols, target), path, id)))
             return failure();
         }
+      } else if (auto queue = dyn_cast<QueueOp>(child)) {
+        std::string path = (parentPath + "." + queue.getPath()).str();
+        std::string id = (parentId + "/" + queue.getStableId()).str();
+        if (failed(registerOwner(&child, path, id)))
+          return failure();
+      } else if (auto eventQueue = dyn_cast<EventQueueOp>(child)) {
+        std::string path = (parentPath + "." + eventQueue.getPath()).str();
+        std::string id = (parentId + "/" + eventQueue.getStableId()).str();
+        if (failed(registerOwner(&child, path, id)))
+          return failure();
+      } else if (auto resource = dyn_cast<ResourceOp>(child)) {
+        std::string path = (parentPath + "." + resource.getPath()).str();
+        std::string id = (parentId + "/" + resource.getStableId()).str();
+        if (failed(registerOwner(&child, path, id)))
+          return failure();
       }
     }
     return success();

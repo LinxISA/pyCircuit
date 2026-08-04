@@ -99,6 +99,7 @@ def ACIR_InterfaceOp : ACIR_Op<"interface", [
     $_state.addRegion();
   }]>];
   let hasVerifier = 1;
+  let assemblyFormat = "$sym_name $body attr-dict";
 }
 
 def ACIR_ProtocolOp : ACIR_Op<"protocol", [
@@ -113,18 +114,21 @@ def ACIR_ProtocolOp : ACIR_Op<"protocol", [
     $_state.addRegion();
   }]>];
   let hasVerifier = 1;
+  let assemblyFormat = "$sym_name $body attr-dict";
 }
 
 def ACIR_RoleOp : ACIR_Op<"role", [Symbol, Pure]> {
   let arguments = (ins SymbolNameAttr:$sym_name, FlatSymbolRefAttr:$dual,
                        StrAttr:$cardinality);
   let hasVerifier = 1;
+  let assemblyFormat = "$sym_name `dual` $dual `cardinality` $cardinality attr-dict";
 }
 
 def ACIR_StateOp : ACIR_Op<"state", [Symbol, Pure]> {
   let arguments = (ins SymbolNameAttr:$sym_name, BoolAttr:$initial,
                        BoolAttr:$terminal);
   let hasVerifier = 1;
+  let assemblyFormat = "$sym_name `initial` $initial `terminal` $terminal attr-dict";
 }
 
 def ACIR_EventOp : ACIR_Op<"event", [Symbol, Pure]> {
@@ -132,6 +136,10 @@ def ACIR_EventOp : ACIR_Op<"event", [Symbol, Pure]> {
                        FlatSymbolRefAttr:$to, TypeAttr:$payload,
                        StrAttr:$action);
   let hasVerifier = 1;
+  let assemblyFormat = [{
+    $sym_name `from` $from `to` $to `payload` $payload `action` $action
+    attr-dict
+  }];
 }
 
 def ACIR_TransitionOp : ACIR_Op<"transition", [SingleBlock, NoTerminator]> {
@@ -142,11 +150,16 @@ def ACIR_TransitionOp : ACIR_Op<"transition", [SingleBlock, NoTerminator]> {
                        DefaultValuedAttr<BoolAttr, "false">:$retain);
   let regions = (region AnyRegion:$guard);
   let hasVerifier = 1;
+  let assemblyFormat = [{
+    `from` $source `to` $target `on` $event (`priority` $priority^)?
+    `transfer` $transfer `retain` $retain `guard` $guard attr-dict
+  }];
 }
 
 def ACIR_GuaranteeOp : ACIR_Op<"guarantee", [Pure]> {
   let arguments = (ins StrAttr:$kind, AnyAttr:$value);
   let hasVerifier = 1;
+  let assemblyFormat = "$kind `=` $value attr-dict";
 }
 
 def ACIR_PortOp : ACIR_Op<"port", [Symbol, Pure]> {
@@ -155,6 +168,10 @@ def ACIR_PortOp : ACIR_Op<"port", [Symbol, Pure]> {
                        FlatSymbolRefAttr:$protocol_from,
                        FlatSymbolRefAttr:$protocol_to);
   let hasVerifier = 1;
+  let assemblyFormat = [{
+    $sym_name `:` $type `from` $from `to` $to
+    `protocol_roles` $protocol_from `to` $protocol_to attr-dict
+  }];
 }
 
 def ACIR_SystemOp : ACIR_Op<"system", [Symbol]> {

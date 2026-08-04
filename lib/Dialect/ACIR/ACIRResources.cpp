@@ -36,19 +36,6 @@ LogicalResult verifyPlacement(Operation *op) {
       "must be a direct child of the unique ac.module Graph block");
 }
 
-Operation *lookupLocal(Operation *from, FlatSymbolRefAttr reference) {
-  auto module = from->getParentOfType<ModuleOp>();
-  if (!module || reference.getValue().empty())
-    return nullptr;
-  for (Operation &candidate : module.getBody().front()) {
-    auto name =
-        candidate.getAttrOfType<StringAttr>(SymbolTable::getSymbolAttrName());
-    if (name && name.getValue() == reference.getValue())
-      return &candidate;
-  }
-  return nullptr;
-}
-
 Operation *lookupOuter(Operation *from, SymbolRefAttr reference) {
   if (Operation *target = SymbolTable::lookupNearestSymbolFrom(from, reference))
     return target;
@@ -118,17 +105,16 @@ LogicalResult verifyLifecycle(ResourceOp op) {
   return success();
 }
 
-LogicalResult verifyParentCycles(ModuleOp module, bool timeDomains) {
+LogicalResult
+verifyParentCycles(ModuleOp module, bool timeDomains,
+                   const llvm::StringMap<Operation *> &producerIndex) {
   SmallVector<Operation *> nodes;
-  DenseMap<StringRef, Operation *> byName;
   for (Operation &operation : module.getBody().front()) {
     bool selected = timeDomains ? isa<TimeDomainOp>(operation)
                                 : isa<AddressSpaceOp>(operation);
     if (!selected)
       continue;
     nodes.push_back(&operation);
-    byName[operation.getAttrOfType<StringAttr>(SymbolTable::getSymbolAttrName())
-               .getValue()] = &operation;
   }
 
   enum class State : uint8_t { Unvisited, Active, Complete };
@@ -146,7 +132,9 @@ LogicalResult verifyParentCycles(ModuleOp module, bool timeDomains) {
       FlatSymbolRefAttr parent =
           timeDomains ? cast<TimeDomainOp>(current).getParentAttr()
                       : cast<AddressSpaceOp>(current).getParentAttr();
-      current = parent ? byName.lookup(parent.getValue()) : nullptr;
+      auto target =
+          parent ? producerIndex.find(parent.getValue()) : producerIndex.end();
+      current = target == producerIndex.end() ? nullptr : target->second;
     }
     if (current && states.lookup(current) == State::Active) {
       InFlightDiagnostic diagnostic =
@@ -196,11 +184,22 @@ bool intervalsOverlap(AddressInterval left, AddressInterval right) {
 int compareAddressMapOrder(AddressMapOrderKey left, AddressMapOrderKey right) {
   if (left.base != right.base)
     return left.base < right.base ? -1 : 1;
-  if (left.priority != right.priority)
+  if (left.hasPriority != right.hasPriority)
+    return left.hasPriority ? -1 : 1;
+  if (left.hasPriority && left.priority != right.priority)
     return left.priority > right.priority ? -1 : 1;
   if (left.size != right.size)
     return left.size < right.size ? -1 : 1;
   return 0;
+}
+
+bool checkedDomainTick(uint64_t phase, uint64_t period, uint64_t cycle,
+                       uint64_t &tick) {
+  uint64_t elapsed = 0;
+  if (!checkedMultiply(period, cycle, elapsed) ||
+      !checkedAdd(phase, elapsed, tick))
+    return false;
+  return tick <= static_cast<uint64_t>(std::numeric_limits<int64_t>::max());
 }
 
 bool normalizeRationalToTicks(uint64_t numerator, uint64_t denominator,
@@ -208,15 +207,20 @@ bool normalizeRationalToTicks(uint64_t numerator, uint64_t denominator,
                               uint64_t quantumDenominator, uint64_t &ticks) {
   if (!denominator || !quantumNumerator || !quantumDenominator)
     return false;
-  uint64_t leftGcd = std::gcd(numerator, denominator);
-  numerator /= leftGcd;
-  denominator /= leftGcd;
-  uint64_t crossGcd = std::gcd(quantumDenominator, denominator);
+  uint64_t durationGcd = std::gcd(numerator, denominator);
+  numerator /= durationGcd;
+  denominator /= durationGcd;
+  uint64_t quantumGcd = std::gcd(quantumNumerator, quantumDenominator);
+  quantumNumerator /= quantumGcd;
+  quantumDenominator /= quantumGcd;
+  uint64_t crossGcd = std::gcd(numerator, quantumNumerator);
+  numerator /= crossGcd;
+  quantumNumerator /= crossGcd;
+  crossGcd = std::gcd(quantumDenominator, denominator);
   quantumDenominator /= crossGcd;
   denominator /= crossGcd;
-  uint64_t quantumGcd = std::gcd(numerator, quantumNumerator);
-  numerator /= quantumGcd;
-  quantumNumerator /= quantumGcd;
+  if (quantumNumerator > kMaxTickScale || quantumDenominator > kMaxTickScale)
+    return false;
   uint64_t divisor = 0;
   if (!checkedMultiply(denominator, quantumNumerator, divisor) || !divisor)
     return false;
@@ -225,24 +229,41 @@ bool normalizeRationalToTicks(uint64_t numerator, uint64_t denominator,
       product % divisor != 0)
     return false;
   ticks = product / divisor;
-  return ticks <= static_cast<uint64_t>(std::numeric_limits<int64_t>::max());
+  return true;
+}
+
+DictionaryAttr ownerEffectParameters(Operation *operation, StringAttr stableId,
+                                     StringAttr path) {
+  Builder builder(operation->getContext());
+  return builder.getDictionaryAttr({builder.getNamedAttr("stable_id", stableId),
+                                    builder.getNamedAttr("path", path)});
 }
 
 void QueueOp::getEffects(
     SmallVectorImpl<MemoryEffects::EffectInstance> &effects) {
-  effects.emplace_back(MemoryEffects::Write::get(), QueueStateResource::get());
+  effects.emplace_back(
+      MemoryEffects::Write::get(),
+      FlatSymbolRefAttr::get(getContext(), getSymName()),
+      ownerEffectParameters(*this, getStableIdAttr(), getPathAttr()),
+      QueueStateResource::get());
 }
 
 void EventQueueOp::getEffects(
     SmallVectorImpl<MemoryEffects::EffectInstance> &effects) {
-  effects.emplace_back(MemoryEffects::Write::get(),
-                       EventQueueStateResource::get());
+  effects.emplace_back(
+      MemoryEffects::Write::get(),
+      FlatSymbolRefAttr::get(getContext(), getSymName()),
+      ownerEffectParameters(*this, getStableIdAttr(), getPathAttr()),
+      EventQueueStateResource::get());
 }
 
 void ResourceOp::getEffects(
     SmallVectorImpl<MemoryEffects::EffectInstance> &effects) {
-  effects.emplace_back(MemoryEffects::Write::get(),
-                       ReservationStateResource::get());
+  effects.emplace_back(
+      MemoryEffects::Write::get(),
+      FlatSymbolRefAttr::get(getContext(), getSymName()),
+      ownerEffectParameters(*this, getStableIdAttr(), getPathAttr()),
+      ReservationStateResource::get());
 }
 
 LogicalResult QueueOp::verify() {
@@ -270,18 +291,39 @@ LogicalResult QueueOp::verify() {
       return emitOpError(
           "watermarks require 0 <= low < high <= entry capacity");
   }
-  Operation *protocol = lookupOuter(*this, getProtocolAttr());
-  if (!isa_and_nonnull<ProtocolOp>(protocol))
+  auto protocol =
+      dyn_cast_or_null<ProtocolOp>(lookupOuter(*this, getProtocolAttr()));
+  if (!protocol)
     return emitOpError() << "endpoint protocol '" << getProtocolAttr()
                          << "' is unresolved";
+  StringRef protocolOrdering = "unordered";
+  bool hasCorrelation = false;
+  for (Operation &operation : protocol.getBody().front()) {
+    auto guarantee = dyn_cast<GuaranteeOp>(operation);
+    if (!guarantee)
+      continue;
+    if (guarantee.getKind() == "ordering")
+      protocolOrdering = cast<StringAttr>(guarantee.getValue()).getValue();
+    else if (guarantee.getKind() == "correlation")
+      hasCorrelation = true;
+  }
+  auto orderingStrength = [](StringRef ordering) {
+    return ordering == "fifo" ? 2 : ordering == "per_key" ? 1 : 0;
+  };
+  if (orderingStrength(getOrdering()) < orderingStrength(protocolOrdering))
+    return emitOpError() << "queue ordering '" << getOrdering()
+                         << "' weakens protocol ordering '" << protocolOrdering
+                         << "'";
+  if (getOrdering() == "per_key" && !hasCorrelation)
+    return emitOpError(
+        "per_key queue storage requires protocol correlation semantics");
   bool carrier =
-      llvm::any_of(cast<ProtocolOp>(protocol).getBody().getOps<EventOp>(),
-                   [&](EventOp event) {
-                     return event.getPayload() == getPayload() &&
-                            (event.getAction() == "offer" ||
-                             event.getAction() == "response" ||
-                             event.getAction() == "notify");
-                   });
+      llvm::any_of(protocol.getBody().getOps<EventOp>(), [&](EventOp event) {
+        return event.getPayload() == getPayload() &&
+               (event.getAction() == "offer" ||
+                event.getAction() == "response" ||
+                event.getAction() == "notify");
+      });
   if (!carrier)
     return emitOpError("queue payload does not match endpoint protocol schema");
   return success();
@@ -297,9 +339,6 @@ LogicalResult EventQueueOp::verify() {
     return emitOpError("event queue payload must be an exact !ac.event type");
   if (getOrdering() != "time_then_sequence")
     return emitOpError("ordering must be exactly 'time_then_sequence'");
-  if (!isa_and_nonnull<TimeDomainOp>(lookupLocal(*this, getTimeDomainAttr())))
-    return emitOpError() << "time domain '" << getTimeDomainAttr()
-                         << "' is unresolved";
   return success();
 }
 
@@ -348,11 +387,6 @@ LogicalResult ResourceOp::verify() {
         requiresArbiter
             ? "shared or contested resource requires one arbitration owner"
             : "exclusive resource cannot declare an arbitration owner");
-  Operation *arbiterTarget = arbiter ? lookupLocal(*this, arbiter) : nullptr;
-  if (arbiter &&
-      !isa_and_nonnull<InstanceOp, ArrayOp, InstancesOp>(arbiterTarget))
-    return emitOpError() << "arbitration owner '" << arbiter
-                         << "' is unresolved";
   DenseSet<Attribute> classes;
   for (Attribute attribute : getTransactionClasses()) {
     auto reference = dyn_cast<SymbolRefAttr>(attribute);
@@ -390,42 +424,37 @@ LogicalResult AddressSpaceOp::verify() {
         "parent address space and translation must appear together");
   if (!parent)
     return success();
-  auto target = dyn_cast_or_null<AddressSpaceOp>(lookupLocal(*this, parent));
-  if (!target)
-    return emitOpError() << "parent address space '" << parent
-                         << "' is unresolved";
-  if (target == *this)
-    return emitOpError("address-space parent cycle: self reference");
-  int64_t targetWidth = target.getAddressWidthAttr().getInt();
-  if (addressWidth > targetWidth)
-    return emitOpError("parent address width is not translation-compatible");
-  if (getAddressUnit() != target.getAddressUnit())
-    return emitOpError("parent address unit is not translation-compatible");
-  if (!hasExactKeys(translation, {"numerator", "denominator", "offset"}))
-    return emitOpError(
-        "translation requires exact numerator/denominator/offset schema");
   auto numerator = translation.getAs<IntegerAttr>("numerator");
   auto denominator = translation.getAs<IntegerAttr>("denominator");
   auto offset = translation.getAs<IntegerAttr>("offset");
   if (!numerator || !denominator || !offset ||
       !numerator.getType().isSignlessInteger(64) ||
       !denominator.getType().isSignlessInteger(64) ||
-      !offset.getType().isSignlessInteger(64) || numerator.getInt() <= 0 ||
-      denominator.getInt() <= 0 || offset.getInt() < 0)
+      !offset.getType().isSignlessInteger(64) ||
+      numerator.getValue().isZero() || denominator.getValue().isZero())
     return emitOpError(
-        "translation values must be exact non-negative signless i64 rationals");
-  uint64_t childMaximum = addressWidth == 64
-                              ? std::numeric_limits<uint64_t>::max()
-                              : (uint64_t{1} << addressWidth) - 1;
-  uint64_t parentMaximum = targetWidth == 64
-                               ? std::numeric_limits<uint64_t>::max()
-                               : (uint64_t{1} << targetWidth) - 1;
-  unsigned __int128 translated =
-      static_cast<unsigned __int128>(childMaximum) * numerator.getInt();
-  translated /= denominator.getInt();
-  translated += offset.getInt();
-  if (translated > parentMaximum)
-    return emitOpError("parent address width is not translation-compatible");
+        "translation values must be unsigned signless i64 with positive ratio");
+  uint64_t n = numerator.getValue().getZExtValue();
+  uint64_t d = denominator.getValue().getZExtValue();
+  if (std::gcd(n, d) != 1)
+    return emitOpError(
+        "translation rational must be in canonical reduced form");
+  if (d == 1) {
+    if (!hasExactKeys(translation, {"numerator", "denominator", "offset"}))
+      return emitOpError("integral translation requires exact "
+                         "numerator/denominator/offset schema");
+  } else {
+    auto alignment = translation.getAs<IntegerAttr>("alignment");
+    if (!hasExactKeys(translation,
+                      {"numerator", "denominator", "offset", "alignment"}) ||
+        !alignment || !alignment.getType().isSignlessInteger(64) ||
+        alignment.getValue().isZero() ||
+        (static_cast<WideAddress>(alignment.getValue().getZExtValue()) * n) %
+                d !=
+            0)
+      return emitOpError("fractional translation requires exact positive "
+                         "alignment proving divisibility");
+  }
   return success();
 }
 
@@ -434,184 +463,6 @@ LogicalResult AddressMapOp::verify() {
     return failure();
   if (!isStableSegment(getSymName()))
     return emitOpError("address-map name must be one stable local segment");
-  auto source =
-      dyn_cast_or_null<AddressSpaceOp>(lookupLocal(*this, getSourceAttr()));
-  if (!source)
-    return emitOpError() << "source address space '" << getSourceAttr()
-                         << "' is unresolved";
-  DictionaryAttr fallback = getDefaultBehavior();
-  auto fallbackKind = fallback.getAs<StringAttr>("kind");
-  if (fallbackKind && fallbackKind.getValue() == "unmapped") {
-    if (!hasExactKeys(fallback, {"kind"}))
-      return emitOpError(
-          "default behavior requires exact unmapped or target schema");
-  } else if (fallbackKind && fallbackKind.getValue() == "target") {
-    auto target = fallback.getAs<FlatSymbolRefAttr>("target");
-    Operation *targetOperation = target ? lookupLocal(*this, target) : nullptr;
-    if (!hasExactKeys(fallback, {"kind", "target"}) || !target ||
-        !isa_and_nonnull<AddressSpaceOp, InstanceOp, ArrayOp, InstancesOp>(
-            targetOperation))
-      return emitOpError("default target behavior is unresolved");
-  } else {
-    return emitOpError(
-        "default behavior requires exact unmapped or target schema");
-  }
-
-  struct Entry {
-    AddressInterval interval;
-    std::optional<int64_t> priority;
-    AddressMapOrderKey order;
-  };
-  SmallVector<Entry> entries;
-  AddressMapOrderKey previous{};
-  bool hasPrevious = false;
-  uint64_t sourceMaximum =
-      source.getAddressWidthAttr().getInt() == 64
-          ? std::numeric_limits<uint64_t>::max()
-          : (uint64_t{1} << source.getAddressWidthAttr().getInt()) - 1;
-  for (Attribute attribute : getEntries()) {
-    auto dictionary = dyn_cast<DictionaryAttr>(attribute);
-    if (!dictionary)
-      return emitOpError("address-map entries must be dictionaries");
-    static constexpr StringLiteral mandatory[] = {
-        "base", "size", "target", "offset", "permissions", "classes"};
-    for (StringRef key : mandatory)
-      if (!dictionary.get(key))
-        return emitOpError() << "address-map entry is missing '" << key << "'";
-    for (NamedAttribute value : dictionary)
-      if (!llvm::is_contained(ArrayRef<StringRef>{"base", "size", "target",
-                                                  "offset", "permissions",
-                                                  "classes", "priority",
-                                                  "interleave"},
-                              value.getName().getValue()))
-        return emitOpError() << "unknown address-map entry key '"
-                             << value.getName().getValue() << "'";
-    auto base = dictionary.getAs<IntegerAttr>("base");
-    auto size = dictionary.getAs<IntegerAttr>("size");
-    auto offset = dictionary.getAs<IntegerAttr>("offset");
-    auto targetRef = dictionary.getAs<FlatSymbolRefAttr>("target");
-    if (!base || !size || !offset || !base.getType().isSignlessInteger(64) ||
-        !size.getType().isSignlessInteger(64) ||
-        !offset.getType().isSignlessInteger(64) || base.getInt() < 0 ||
-        size.getInt() <= 0 || offset.getInt() < 0)
-      return emitOpError("address base/size/offset require non-negative i64 "
-                         "and positive size");
-    uint64_t end = 0;
-    if (!checkedAdd(base.getInt(), size.getInt(), end) ||
-        end > static_cast<uint64_t>(std::numeric_limits<int64_t>::max()))
-      return emitOpError("address interval overflows signed 64-bit range");
-    if (end - 1 > sourceMaximum)
-      return emitOpError("address interval exceeds source address width");
-    Operation *target = targetRef ? lookupLocal(*this, targetRef) : nullptr;
-    if (!isa_and_nonnull<AddressSpaceOp, InstanceOp, ArrayOp, InstancesOp>(
-            target))
-      return emitOpError() << "address-map target '" << targetRef
-                           << "' is unresolved";
-    uint64_t targetEnd = 0;
-    if (!checkedAdd(static_cast<uint64_t>(offset.getInt()),
-                    static_cast<uint64_t>(size.getInt()), targetEnd) ||
-        targetEnd > static_cast<uint64_t>(std::numeric_limits<int64_t>::max()))
-      return emitOpError(
-          "address target offset range overflows signed 64-bit range");
-    if (auto targetSpace = dyn_cast<AddressSpaceOp>(target)) {
-      uint64_t targetMaximum =
-          targetSpace.getAddressWidthAttr().getInt() == 64
-              ? std::numeric_limits<uint64_t>::max()
-              : (uint64_t{1} << targetSpace.getAddressWidthAttr().getInt()) - 1;
-      if (targetEnd - 1 > targetMaximum)
-        return emitOpError("address target range exceeds target address width");
-    }
-    auto permissions = dictionary.getAs<ArrayAttr>("permissions");
-    if (!permissions || permissions.empty())
-      return emitOpError(
-          "address-map permissions must be a non-empty closed set");
-    llvm::SmallSet<StringRef, 3> permissionSet;
-    for (Attribute permissionAttr : permissions) {
-      auto permission = dyn_cast<StringAttr>(permissionAttr);
-      if (!permission ||
-          !llvm::is_contained(ArrayRef<StringRef>{"read", "write", "execute"},
-                              permission.getValue()) ||
-          !permissionSet.insert(permission.getValue()).second)
-        return emitOpError(
-            "address-map permissions must be unique read/write/execute values");
-    }
-    auto classes = dictionary.getAs<ArrayAttr>("classes");
-    if (!classes)
-      return emitOpError("address-map classes must be an array");
-    DenseSet<Attribute> classSet;
-    for (Attribute classAttr : classes) {
-      auto reference = dyn_cast<SymbolRefAttr>(classAttr);
-      if (!reference ||
-          !isa_and_nonnull<TransactionOp>(
-              reference ? lookupOuter(*this, reference) : nullptr))
-        return emitOpError() << "address-map transaction class '" << classAttr
-                             << "' is unresolved";
-      if (!classSet.insert(classAttr).second)
-        return emitOpError("duplicate address-map transaction class");
-    }
-    if (auto interleave = dictionary.getAs<DictionaryAttr>("interleave")) {
-      if (!hasExactKeys(interleave, {"granularity", "banks", "bank"}))
-        return emitOpError(
-            "interleave requires exact granularity/banks/bank schema");
-      auto granularity = interleave.getAs<IntegerAttr>("granularity");
-      auto banks = interleave.getAs<IntegerAttr>("banks");
-      auto bank = interleave.getAs<IntegerAttr>("bank");
-      if (!granularity || !banks || !bank ||
-          !granularity.getType().isSignlessInteger(64) ||
-          !banks.getType().isSignlessInteger(64) ||
-          !bank.getType().isSignlessInteger(64) || granularity.getInt() <= 0 ||
-          banks.getInt() <= 0 || bank.getInt() < 0 ||
-          bank.getInt() >= banks.getInt())
-        return emitOpError("interleave bank must be in [0, banks)");
-      uint64_t stripe = 0;
-      if (!checkedMultiply(granularity.getInt(), banks.getInt(), stripe) ||
-          size.getInt() % stripe != 0)
-        return emitOpError(
-            "interleave size must be a multiple of granularity*banks");
-    }
-    std::optional<int64_t> priority;
-    if (auto priorityAttr = dictionary.getAs<IntegerAttr>("priority")) {
-      if (!priorityAttr.getType().isSignlessInteger(64) ||
-          priorityAttr.getInt() < 0)
-        return emitOpError(
-            "address-map priority must be a non-negative signless i64");
-      priority = priorityAttr.getInt();
-    }
-    AddressMapOrderKey order{static_cast<uint64_t>(base.getInt()),
-                             static_cast<uint64_t>(size.getInt()),
-                             priority.value_or(-1)};
-    if (hasPrevious && compareAddressMapOrder(previous, order) > 0)
-      return emitOpError(
-          "address-map entries must be in deterministic base order");
-    previous = order;
-    hasPrevious = true;
-    entries.push_back({{order.base, end}, priority, order});
-  }
-  std::multimap<uint64_t, std::optional<int64_t>> activeByEnd;
-  std::set<int64_t> activePriorities;
-  unsigned activeWithoutPriority = 0;
-  for (const Entry &entry : entries) {
-    while (!activeByEnd.empty() &&
-           activeByEnd.begin()->first <= entry.interval.begin) {
-      if (activeByEnd.begin()->second)
-        activePriorities.erase(*activeByEnd.begin()->second);
-      else
-        --activeWithoutPriority;
-      activeByEnd.erase(activeByEnd.begin());
-    }
-    if (!activeByEnd.empty()) {
-      if (!entry.priority || activeWithoutPriority)
-        return emitOpError(
-            "overlapping entries require explicit distinct priorities");
-      if (activePriorities.contains(*entry.priority))
-        return emitOpError("overlapping entries have equal priority");
-    }
-    activeByEnd.emplace(entry.interval.end, entry.priority);
-    if (entry.priority)
-      activePriorities.insert(*entry.priority);
-    else
-      ++activeWithoutPriority;
-  }
   return success();
 }
 
@@ -629,12 +480,6 @@ LogicalResult TimeDomainOp::verify() {
     return emitOpError("phase must be non-negative global ticks");
   if (scale <= 0 || static_cast<uint64_t>(scale) > kMaxTickScale)
     return emitOpError("tick scale exceeds implementation capability");
-  uint64_t normalized = 0;
-  if (!checkedMultiply(static_cast<uint64_t>(period),
-                       static_cast<uint64_t>(scale), normalized) ||
-      !checkedAdd(normalized, static_cast<uint64_t>(phase), normalized) ||
-      normalized > static_cast<uint64_t>(std::numeric_limits<int64_t>::max()))
-    return emitOpError("time-domain scaled tick arithmetic overflows i64");
   FlatSymbolRefAttr parent = getParentAttr();
   DictionaryAttr bridge = getBridgeAttr();
   if (static_cast<bool>(parent) != static_cast<bool>(bridge))
@@ -642,32 +487,420 @@ LogicalResult TimeDomainOp::verify() {
         "cross-domain parent relation requires explicit bridge metadata");
   if (!parent)
     return success();
-  auto target = dyn_cast_or_null<TimeDomainOp>(lookupLocal(*this, parent));
-  if (!target)
-    return emitOpError() << "parent time domain '" << parent
-                         << "' is unresolved";
-  if (target == *this)
-    return emitOpError("time-domain parent cycle: self reference");
   auto kind = bridge.getAs<StringAttr>("kind");
   auto owner = bridge.getAs<FlatSymbolRefAttr>("owner");
-  Operation *ownerTarget = owner ? lookupLocal(*this, owner) : nullptr;
   if (!hasExactKeys(bridge, {"kind", "owner"}) || !kind ||
-      kind.getValue() != "explicit" || !owner ||
-      !isa_and_nonnull<InstanceOp, ArrayOp, InstancesOp>(ownerTarget))
+      kind.getValue() != "explicit" || !owner)
     return emitOpError("bridge requires exact {kind = \"explicit\", owner = "
                        "local symbol} schema");
   return success();
 }
 
-LogicalResult verifyResourceStructure(Operation *topLevel) {
-  auto file = dyn_cast<mlir::ModuleOp>(topLevel);
-  if (!file || file->getParentOp())
-    return success();
-  for (ModuleOp module : file.getOps<ModuleOp>()) {
-    if (failed(verifyParentCycles(module, false)) ||
-        failed(verifyParentCycles(module, true)))
-      return failure();
+namespace {
+
+Operation *lookupIndexed(const llvm::StringMap<Operation *> &producerIndex,
+                         FlatSymbolRefAttr reference) {
+  if (!reference)
+    return nullptr;
+  auto found = producerIndex.find(reference.getValue());
+  return found == producerIndex.end() ? nullptr : found->second;
+}
+
+FailureOr<uint64_t> readUnsignedI64(Operation *op, IntegerAttr attribute,
+                                    StringRef diagnostic) {
+  if (!attribute || !attribute.getType().isSignlessInteger(64)) {
+    op->emitOpError(diagnostic);
+    return failure();
   }
+  return attribute.getValue().getZExtValue();
+}
+
+WideAddress addressLimit(unsigned width) { return WideAddress{1} << width; }
+
+LogicalResult
+verifyAddressTranslation(AddressSpaceOp child,
+                         const llvm::StringMap<Operation *> &producerIndex) {
+  FlatSymbolRefAttr parentRef = child.getParentAttr();
+  if (!parentRef)
+    return success();
+  auto parent =
+      dyn_cast_or_null<AddressSpaceOp>(lookupIndexed(producerIndex, parentRef));
+  if (!parent)
+    return child.emitOpError()
+           << "parent address space '" << parentRef << "' is unresolved";
+
+  DictionaryAttr translation = child.getTranslationAttr();
+  uint64_t numerator =
+      translation.getAs<IntegerAttr>("numerator").getValue().getZExtValue();
+  uint64_t denominator =
+      translation.getAs<IntegerAttr>("denominator").getValue().getZExtValue();
+  uint64_t offset =
+      translation.getAs<IntegerAttr>("offset").getValue().getZExtValue();
+  uint64_t alignment = denominator == 1
+                           ? 1
+                           : translation.getAs<IntegerAttr>("alignment")
+                                 .getValue()
+                                 .getZExtValue();
+
+  // Normative formula, in declared address units:
+  //   parent = child * numerator / denominator + offset
+  // Fractional schemas constrain legal child addresses to multiples of
+  // alignment, which makes the division exact for every legal input. Unit
+  // conversion is encoded in the rational itself (byte -> bit is 8/1).
+  WideAddress childMaximum =
+      addressLimit(child.getAddressWidthAttr().getInt()) - 1;
+  WideAddress legalMaximum = childMaximum - childMaximum % alignment;
+  WideAddress translated = legalMaximum * numerator;
+  if (translated % denominator != 0)
+    return child.emitOpError(
+        "translation alignment does not make the full child domain exact");
+  translated = translated / denominator + offset;
+  if (translated >= addressLimit(parent.getAddressWidthAttr().getInt()))
+    return child.emitOpError(
+        "translated child address range exceeds parent address width");
+  return success();
+}
+
+std::string attributeToken(Attribute attribute) {
+  std::string storage;
+  llvm::raw_string_ostream stream(storage);
+  stream << attribute;
+  return storage;
+}
+
+struct SelectorSummary {
+  uint64_t count = 0;
+  uint64_t withoutPriority = 0;
+  std::map<uint64_t, uint64_t> priorities;
+};
+
+struct MapEntry {
+  AddressInterval interval;
+  AddressMapOrderKey order;
+  std::optional<uint64_t> priority;
+  SmallVector<std::string> registrationKeys;
+  SmallVector<std::string> queryKeys;
+};
+
+void appendUnique(SmallVectorImpl<std::string> &keys, std::string key) {
+  if (!llvm::is_contained(keys, key))
+    keys.push_back(std::move(key));
+}
+
+void buildSelectorKeys(ArrayRef<unsigned> permissions,
+                       ArrayRef<std::string> classes,
+                       std::optional<std::string> lane, MapEntry &entry) {
+  bool wildcardClass = classes.empty();
+  bool wildcardLane = !lane;
+  for (unsigned permission : permissions) {
+    std::string prefix = std::to_string(permission) + "|";
+    appendUnique(entry.registrationKeys, "G|" + prefix);
+    if (wildcardClass)
+      appendUnique(entry.registrationKeys, "CW|" + prefix);
+    else
+      for (const std::string &className : classes)
+        appendUnique(entry.registrationKeys, "C|" + prefix + className);
+    if (wildcardLane)
+      appendUnique(entry.registrationKeys, "LW|" + prefix);
+    else
+      appendUnique(entry.registrationKeys, "L|" + prefix + *lane);
+
+    if (wildcardClass && wildcardLane) {
+      appendUnique(entry.registrationKeys, "CW_LW|" + prefix);
+      appendUnique(entry.queryKeys, "G|" + prefix);
+    } else if (wildcardClass) {
+      appendUnique(entry.registrationKeys, "CW_L|" + prefix + *lane);
+      appendUnique(entry.queryKeys, "LW|" + prefix);
+      appendUnique(entry.queryKeys, "L|" + prefix + *lane);
+    } else if (wildcardLane) {
+      for (const std::string &className : classes)
+        appendUnique(entry.registrationKeys, "C_LW|" + prefix + className);
+      appendUnique(entry.queryKeys, "CW|" + prefix);
+      for (const std::string &className : classes)
+        appendUnique(entry.queryKeys, "C|" + prefix + className);
+    } else {
+      for (const std::string &className : classes)
+        appendUnique(entry.registrationKeys,
+                     "C_L|" + prefix + className + "|" + *lane);
+      appendUnique(entry.queryKeys, "CW_LW|" + prefix);
+      appendUnique(entry.queryKeys, "CW_L|" + prefix + *lane);
+      for (const std::string &className : classes) {
+        appendUnique(entry.queryKeys, "C_LW|" + prefix + className);
+        appendUnique(entry.queryKeys,
+                     "C_L|" + prefix + className + "|" + *lane);
+      }
+    }
+  }
+}
+
+LogicalResult
+verifyAddressMap(AddressMapOp map,
+                 const llvm::StringMap<Operation *> &producerIndex) {
+  auto source = dyn_cast_or_null<AddressSpaceOp>(
+      lookupIndexed(producerIndex, map.getSourceAttr()));
+  if (!source)
+    return map.emitOpError() << "source address space '" << map.getSourceAttr()
+                             << "' is unresolved";
+
+  DictionaryAttr fallback = map.getDefaultBehavior();
+  auto fallbackKind = fallback.getAs<StringAttr>("kind");
+  if (fallbackKind && fallbackKind.getValue() == "unmapped") {
+    if (!hasExactKeys(fallback, {"kind"}))
+      return map.emitOpError(
+          "default behavior requires exact unmapped or target schema");
+  } else if (fallbackKind && fallbackKind.getValue() == "target") {
+    auto target = fallback.getAs<FlatSymbolRefAttr>("target");
+    if (!hasExactKeys(fallback, {"kind", "target"}) || !target ||
+        !isa_and_nonnull<AddressSpaceOp, InstanceOp, ArrayOp, InstancesOp>(
+            lookupIndexed(producerIndex, target)))
+      return map.emitOpError("default target behavior is unresolved");
+  } else {
+    return map.emitOpError(
+        "default behavior requires exact unmapped or target schema");
+  }
+
+  SmallVector<MapEntry> entries;
+  entries.reserve(map.getEntries().size());
+  AddressMapOrderKey previous{};
+  bool hasPrevious = false;
+  WideAddress sourceLimit = addressLimit(source.getAddressWidthAttr().getInt());
+
+  for (Attribute attribute : map.getEntries()) {
+    auto dictionary = dyn_cast<DictionaryAttr>(attribute);
+    if (!dictionary)
+      return map.emitOpError("address-map entries must be dictionaries");
+    static constexpr StringLiteral mandatory[] = {
+        "base", "size", "target", "offset", "permissions", "classes"};
+    for (StringRef key : mandatory)
+      if (!dictionary.get(key))
+        return map.emitOpError()
+               << "address-map entry is missing '" << key << "'";
+    for (NamedAttribute value : dictionary)
+      if (!llvm::is_contained(ArrayRef<StringRef>{"base", "size", "target",
+                                                  "offset", "permissions",
+                                                  "classes", "priority",
+                                                  "interleave"},
+                              value.getName().getValue()))
+        return map.emitOpError() << "unknown address-map entry key '"
+                                 << value.getName().getValue() << "'";
+
+    auto baseValue = readUnsignedI64(
+        map, dictionary.getAs<IntegerAttr>("base"),
+        "address base/size/offset require unsigned signless i64 values");
+    auto sizeValue = readUnsignedI64(
+        map, dictionary.getAs<IntegerAttr>("size"),
+        "address base/size/offset require unsigned signless i64 values");
+    auto offsetValue = readUnsignedI64(
+        map, dictionary.getAs<IntegerAttr>("offset"),
+        "address base/size/offset require unsigned signless i64 values");
+    if (failed(baseValue) || failed(sizeValue) || failed(offsetValue))
+      return failure();
+    uint64_t base = *baseValue;
+    uint64_t size = *sizeValue;
+    uint64_t offset = *offsetValue;
+    if (size == 0)
+      return map.emitOpError("address-map entry size must be positive");
+    WideAddress end = static_cast<WideAddress>(base) + size;
+    if (end > sourceLimit)
+      return map.emitOpError("address interval exceeds source address width");
+
+    auto targetRef = dictionary.getAs<FlatSymbolRefAttr>("target");
+    Operation *target = lookupIndexed(producerIndex, targetRef);
+    if (!targetRef ||
+        !isa_and_nonnull<AddressSpaceOp, InstanceOp, ArrayOp, InstancesOp>(
+            target))
+      return map.emitOpError()
+             << "address-map target '" << targetRef << "' is unresolved";
+
+    auto permissions = dictionary.getAs<ArrayAttr>("permissions");
+    if (!permissions || permissions.empty())
+      return map.emitOpError(
+          "address-map permissions must be a non-empty closed set");
+    llvm::SmallSet<StringRef, 3> permissionSet;
+    SmallVector<unsigned> permissionIds;
+    for (Attribute permissionAttr : permissions) {
+      auto permission = dyn_cast<StringAttr>(permissionAttr);
+      if (!permission ||
+          !llvm::is_contained(ArrayRef<StringRef>{"read", "write", "execute"},
+                              permission.getValue()) ||
+          !permissionSet.insert(permission.getValue()).second)
+        return map.emitOpError(
+            "address-map permissions must be unique read/write/execute values");
+      permissionIds.push_back(permission.getValue() == "read"    ? 0
+                              : permission.getValue() == "write" ? 1
+                                                                 : 2);
+    }
+
+    auto classes = dictionary.getAs<ArrayAttr>("classes");
+    if (!classes)
+      return map.emitOpError("address-map classes must be an array");
+    DenseSet<Attribute> classSet;
+    SmallVector<std::string> classTokens;
+    for (Attribute classAttr : classes) {
+      auto reference = dyn_cast<SymbolRefAttr>(classAttr);
+      if (!reference || !isa_and_nonnull<TransactionOp>(
+                            reference ? lookupOuter(map, reference) : nullptr))
+        return map.emitOpError() << "address-map transaction class '"
+                                 << classAttr << "' is unresolved";
+      if (!classSet.insert(classAttr).second)
+        return map.emitOpError("duplicate address-map transaction class");
+      classTokens.push_back(attributeToken(classAttr));
+    }
+
+    uint64_t targetSpan = size;
+    std::optional<std::string> lane;
+    if (auto interleave = dictionary.getAs<DictionaryAttr>("interleave")) {
+      if (!hasExactKeys(interleave, {"granularity", "banks", "bank"}))
+        return map.emitOpError(
+            "interleave requires exact granularity/banks/bank schema");
+      auto granularityValue =
+          readUnsignedI64(map, interleave.getAs<IntegerAttr>("granularity"),
+                          "interleave values must be unsigned signless i64");
+      auto banksValue =
+          readUnsignedI64(map, interleave.getAs<IntegerAttr>("banks"),
+                          "interleave values must be unsigned signless i64");
+      auto bankValue =
+          readUnsignedI64(map, interleave.getAs<IntegerAttr>("bank"),
+                          "interleave values must be unsigned signless i64");
+      if (failed(granularityValue) || failed(banksValue) || failed(bankValue))
+        return failure();
+      uint64_t granularity = *granularityValue;
+      uint64_t banks = *banksValue;
+      uint64_t bank = *bankValue;
+      if (!granularity || !banks || bank >= banks)
+        return map.emitOpError("interleave bank must be in [0, banks)");
+      WideAddress stripeWide = static_cast<WideAddress>(granularity) * banks;
+      if (stripeWide > std::numeric_limits<uint64_t>::max())
+        return map.emitOpError("interleave geometry exceeds unsigned i64");
+      uint64_t stripe = static_cast<uint64_t>(stripeWide);
+      if (base % stripe || offset % granularity || size % stripe)
+        return map.emitOpError("interleave base/size/offset must satisfy "
+                               "stripe alignment and geometry");
+      targetSpan = size / banks;
+      // ACIR v0.1 defines an interleave lane by the exact canonical
+      // (granularity, banks, bank) tuple. A non-interleaved selector is the
+      // wildcard over all such lane identities.
+      lane = std::to_string(granularity) + ":" + std::to_string(banks) + ":" +
+             std::to_string(bank);
+    }
+
+    WideAddress targetEnd = static_cast<WideAddress>(offset) + targetSpan;
+    if (auto targetSpace = dyn_cast<AddressSpaceOp>(target))
+      if (targetEnd > addressLimit(targetSpace.getAddressWidthAttr().getInt()))
+        return map.emitOpError(
+            "address target range exceeds target address width");
+
+    std::optional<uint64_t> priority;
+    if (IntegerAttr priorityAttr = dictionary.getAs<IntegerAttr>("priority")) {
+      auto value = readUnsignedI64(
+          map, priorityAttr,
+          "address-map priority must be an unsigned signless i64");
+      if (failed(value))
+        return failure();
+      priority = *value;
+    }
+    AddressMapOrderKey order{base, size, priority.has_value(),
+                             priority.value_or(0)};
+    if (hasPrevious && compareAddressMapOrder(previous, order) > 0)
+      return map.emitOpError(
+          "address-map entries must be in deterministic base order");
+    previous = order;
+    hasPrevious = true;
+    entries.push_back({{base, end}, order, priority});
+    buildSelectorKeys(permissionIds, classTokens, lane, entries.back());
+  }
+
+  std::map<std::string, SelectorSummary> selectorIndex;
+  std::multimap<WideAddress, const MapEntry *> activeByEnd;
+  auto update = [&](const MapEntry &entry, bool add) {
+    for (const std::string &key : entry.registrationKeys) {
+      SelectorSummary &summary = selectorIndex[key];
+      if (add) {
+        ++summary.count;
+        if (entry.priority)
+          ++summary.priorities[*entry.priority];
+        else
+          ++summary.withoutPriority;
+      } else {
+        --summary.count;
+        if (entry.priority) {
+          auto priority = summary.priorities.find(*entry.priority);
+          if (--priority->second == 0)
+            summary.priorities.erase(priority);
+        } else {
+          --summary.withoutPriority;
+        }
+      }
+    }
+  };
+  for (const MapEntry &entry : entries) {
+    while (!activeByEnd.empty() &&
+           activeByEnd.begin()->first <= entry.interval.begin) {
+      update(*activeByEnd.begin()->second, false);
+      activeByEnd.erase(activeByEnd.begin());
+    }
+    for (const std::string &key : entry.queryKeys) {
+      auto found = selectorIndex.find(key);
+      if (found == selectorIndex.end() || found->second.count == 0)
+        continue;
+      if (!entry.priority || found->second.withoutPriority)
+        return map.emitOpError("overlapping selector intersections require "
+                               "explicit distinct priorities");
+      if (found->second.priorities.contains(*entry.priority))
+        return map.emitOpError(
+            "overlapping selector intersections have equal priority");
+    }
+    update(entry, true);
+    activeByEnd.emplace(entry.interval.end, &entry);
+  }
+  return success();
+}
+
+} // namespace
+
+LogicalResult verifyModuleResourceReferences(
+    Operation *operation, const llvm::StringMap<Operation *> &producerIndex) {
+  auto module = dyn_cast<ModuleOp>(operation);
+  if (!module)
+    return success();
+  for (Operation &child : module.getBody().front()) {
+    if (auto eventQueue = dyn_cast<EventQueueOp>(child)) {
+      if (!isa_and_nonnull<TimeDomainOp>(
+              lookupIndexed(producerIndex, eventQueue.getTimeDomainAttr())))
+        return eventQueue.emitOpError()
+               << "time domain '" << eventQueue.getTimeDomainAttr()
+               << "' is unresolved";
+    } else if (auto resource = dyn_cast<ResourceOp>(child)) {
+      if (FlatSymbolRefAttr arbiter = resource.getArbitrationOwnerAttr();
+          arbiter && !isa_and_nonnull<InstanceOp, ArrayOp, InstancesOp>(
+                         lookupIndexed(producerIndex, arbiter)))
+        return resource.emitOpError()
+               << "arbitration owner '" << arbiter << "' is unresolved";
+    } else if (auto addressSpace = dyn_cast<AddressSpaceOp>(child)) {
+      if (failed(verifyAddressTranslation(addressSpace, producerIndex)))
+        return failure();
+    } else if (auto addressMap = dyn_cast<AddressMapOp>(child)) {
+      if (failed(verifyAddressMap(addressMap, producerIndex)))
+        return failure();
+    } else if (auto domain = dyn_cast<TimeDomainOp>(child)) {
+      if (!domain.getParentAttr())
+        continue;
+      if (!isa_and_nonnull<TimeDomainOp>(
+              lookupIndexed(producerIndex, domain.getParentAttr())))
+        return domain.emitOpError()
+               << "parent time domain '" << domain.getParentAttr()
+               << "' is unresolved";
+      FlatSymbolRefAttr owner =
+          domain.getBridgeAttr().getAs<FlatSymbolRefAttr>("owner");
+      if (!isa_and_nonnull<InstanceOp, ArrayOp, InstancesOp>(
+              lookupIndexed(producerIndex, owner)))
+        return domain.emitOpError(
+            "bridge owner must resolve to a local structural owner");
+    }
+  }
+  if (failed(verifyParentCycles(module, false, producerIndex)) ||
+      failed(verifyParentCycles(module, true, producerIndex)))
+    return failure();
   return success();
 }
 

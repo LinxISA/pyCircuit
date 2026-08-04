@@ -1,6 +1,6 @@
 #include "acir/Dialect/ACIR/ACIROps.h"
-#include "acir/Dialect/ACIR/GraphRegion.h"
 #include "acir/Dialect/ACIR/ACIRResources.h"
+#include "acir/Dialect/ACIR/GraphRegion.h"
 
 #include "mlir/Dialect/DLTI/DLTI.h"
 #include "mlir/IR/BuiltinOps.h"
@@ -1454,6 +1454,17 @@ LogicalResult ModuleOp::verify() {
   }
   if (entry.empty() || !isa<ReturnOp>(entry.back()))
     return emitOpError("module Graph region must end with ac.return");
+  for (Operation &child : entry) {
+    LogicalResult local = TypeSwitch<Operation *, LogicalResult>(&child)
+                              .Case<QueueOp, EventQueueOp, ResourceOp,
+                                    AddressSpaceOp, AddressMapOp, TimeDomainOp>(
+                                  [](auto op) { return op.verify(); })
+                              .Default([](Operation *) { return success(); });
+    if (failed(local))
+      return failure();
+  }
+  if (failed(verifyModuleResourceReferences(*this, producerIndex)))
+    return failure();
   for (ViewOp view : entry.getOps<ViewOp>())
     if (failed(view.verify()) ||
         failed(view.verifyWithProducerIndex(producerIndex)))
@@ -1887,8 +1898,6 @@ LogicalResult ReturnOp::verify() {
 
 LogicalResult verifyTopologyTypeUses(Operation *operation) {
   if (failed(verifyGraphStructure(operation)))
-    return failure();
-  if (failed(verifyResourceStructure(operation)))
     return failure();
   auto verifyType = [&](Type type, Value value) -> LogicalResult {
     if (Type nested = findNestedTopologyLeaf(type))

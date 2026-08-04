@@ -29,6 +29,8 @@
 // RUN: %not %acir_opt %t/queue-schema.mlir 2>&1 | %FileCheck %s --check-prefix=QUEUE-SCHEMA
 // RUN: %not %acir_opt %t/resource-latency-schema.mlir 2>&1 | %FileCheck %s --check-prefix=LATENCY-SCHEMA
 // RUN: %not %acir_opt %t/resource-arbiter-kind.mlir 2>&1 | %FileCheck %s --check-prefix=ARBITER-KIND
+// RUN: %not %acir_opt %t/fifo-weakened.mlir 2>&1 | %FileCheck %s --check-prefix=FIFO-WEAKENED
+// RUN: %not %acir_opt %t/per-key-no-correlation.mlir 2>&1 | %FileCheck %s --check-prefix=PER-KEY-CORRELATION
 
 //--- queue-zero.mlir
 builtin.module attributes {ac.contract_epoch = "0.1"} {
@@ -310,3 +312,37 @@ builtin.module attributes {ac.contract_epoch = "0.1"} {
   }) : () -> ()
 }
 // ARBITER-KIND: arbitration owner '@clock' is unresolved
+
+//--- fifo-weakened.mlir
+builtin.module attributes {ac.contract_epoch = "0.1"} {
+  "ac.protocol"() <{sym_name = "p"}> ({
+    "ac.role"() <{sym_name = "a", dual = @b, cardinality = "exclusive"}> : () -> ()
+    "ac.role"() <{sym_name = "b", dual = @a, cardinality = "exclusive"}> : () -> ()
+    "ac.state"() <{sym_name = "s", initial = true, terminal = false}> : () -> ()
+    "ac.event"() <{sym_name = "e", from = @a, to = @b, payload = i32, action = "notify"}> : () -> ()
+    "ac.transition"() <{source = @s, target = @s, event = @e}> ({}) : () -> ()
+    "ac.guarantee"() <{kind = "ordering", value = "fifo"}> : () -> ()
+  }) : () -> ()
+  "ac.module"() <{sym_name = "M", function_type = () -> (), static_params = {}}> ({
+    "ac.queue"() <{sym_name = "q", stable_id = "q", path = "q", payload = i32, entry_capacity = 1 : i64, ordering = "per_key", protocol = @p, ownership = "exclusive", delay_ticks = 1 : i64}> : () -> ()
+    "ac.return"() : () -> ()
+  }) : () -> ()
+}
+// FIFO-WEAKENED: queue ordering 'per_key' weakens protocol ordering 'fifo'
+
+//--- per-key-no-correlation.mlir
+builtin.module attributes {ac.contract_epoch = "0.1"} {
+  "ac.protocol"() <{sym_name = "p"}> ({
+    "ac.role"() <{sym_name = "a", dual = @b, cardinality = "exclusive"}> : () -> ()
+    "ac.role"() <{sym_name = "b", dual = @a, cardinality = "exclusive"}> : () -> ()
+    "ac.state"() <{sym_name = "s", initial = true, terminal = false}> : () -> ()
+    "ac.event"() <{sym_name = "e", from = @a, to = @b, payload = i32, action = "notify"}> : () -> ()
+    "ac.transition"() <{source = @s, target = @s, event = @e}> ({}) : () -> ()
+    "ac.guarantee"() <{kind = "ordering", value = "unordered"}> : () -> ()
+  }) : () -> ()
+  "ac.module"() <{sym_name = "M", function_type = () -> (), static_params = {}}> ({
+    "ac.queue"() <{sym_name = "q", stable_id = "q", path = "q", payload = i32, entry_capacity = 1 : i64, ordering = "per_key", protocol = @p, ownership = "exclusive", delay_ticks = 1 : i64}> : () -> ()
+    "ac.return"() : () -> ()
+  }) : () -> ()
+}
+// PER-KEY-CORRELATION: per_key queue storage requires protocol correlation semantics

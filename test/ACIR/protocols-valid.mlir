@@ -65,9 +65,9 @@ builtin.module attributes {ac.contract_epoch = "0.1"} {
   %flow = "builtin.unrealized_conversion_cast"() : () -> !ac.flow<i32, @handshake>
 }
 
-// CHECK: "ac.protocol"
-// CHECK: "ac.role"
-// CHECK: "ac.state"
-// CHECK: "ac.event"
-// CHECK: "ac.transition"
-// CHECK: "ac.guarantee"
+// CHECK: ac.protocol
+// CHECK: ac.role
+// CHECK: ac.state
+// CHECK: ac.event
+// CHECK: ac.transition
+// CHECK: ac.guarantee

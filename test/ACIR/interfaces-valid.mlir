@@ -46,7 +46,7 @@ builtin.module attributes {ac.contract_epoch = "0.1"} {
   %use1 = "builtin.unrealized_conversion_cast"(%shared) : (!ac.endpoint<@SharedWire, @source>) -> i1
 }
 
-// CHECK: "ac.interface"
-// CHECK: "ac.port"
+// CHECK: ac.interface
+// CHECK: ac.port
 // CHECK-SAME: !ac.channel<i8, @wire>
 // CHECK: !ac.endpoint<@Wire, @source>
