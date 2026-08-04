@@ -4,6 +4,7 @@
 #include "acir/Dialect/ACIR/ACIROps.h"
 #include "mlir/IR/SymbolTable.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/StringMap.h"
 
 using namespace mlir;
 
@@ -31,19 +32,34 @@ Operation *lookupOwner(ModuleOp model, SymbolRefAttr reference) {
   return nullptr;
 }
 
-FailureOr<DictionaryAttr> findManifestOwner(ArrayAttr manifest,
-                                            SymbolRefAttr owner,
-                                            StringRef kind = {}) {
-  for (Attribute attribute : manifest) {
-    auto record = cast<DictionaryAttr>(attribute);
-    if (record.getAs<SymbolRefAttr>("owner") != owner)
-      continue;
-    if (!kind.empty() && record.getAs<StringAttr>("kind").getValue() != kind)
-      continue;
-    return record;
-  }
-  return failure();
+std::string manifestKey(SymbolRefAttr owner, StringRef kind) {
+  std::string key;
+  llvm::raw_string_ostream stream(key);
+  stream << owner << '\0' << kind;
+  return key;
 }
+
+class ManifestOwnerIndex {
+public:
+  explicit ManifestOwnerIndex(ArrayAttr manifest) {
+    for (Attribute attribute : manifest) {
+      auto record = cast<DictionaryAttr>(attribute);
+      index[manifestKey(record.getAs<SymbolRefAttr>("owner"),
+                        record.getAs<StringAttr>("kind").getValue())]
+          .push_back(record);
+    }
+  }
+
+  FailureOr<DictionaryAttr> lookup(SymbolRefAttr owner, StringRef kind) const {
+    auto found = index.find(manifestKey(owner, kind));
+    if (found == index.end() || found->second.size() != 1)
+      return failure();
+    return found->second.front();
+  }
+
+private:
+  llvm::StringMap<SmallVector<DictionaryAttr>> index;
+};
 
 LogicalResult freezeTopology(ModuleOp model) {
   if (failed(canonicalizeModel(model)))
@@ -78,10 +94,11 @@ LogicalResult freezeTopology(ModuleOp model) {
       "ac.frozen_system",
       FlatSymbolRefAttr::get(model.getContext(), selected.getSymName()));
   model->setAttr("ac.frozen_owners", *ownerManifest);
+  ManifestOwnerIndex ownerIndex(*ownerManifest);
 
   SymbolRefAttr workload = selected.getPrimaryWorkloadAttr();
   FailureOr<DictionaryAttr> workloadOwner =
-      findManifestOwner(*ownerManifest, workload, "ac.process");
+      ownerIndex.lookup(workload, "ac.process");
   if (failed(workloadOwner))
     return selected.emitOpError()
            << "primary workload '" << workload
@@ -101,10 +118,11 @@ LogicalResult freezeTopology(ModuleOp model) {
     SymbolRefAttr processReference = SymbolRefAttr::get(
         model.getContext(), reference.getRootReference(), {nested.front()});
     FailureOr<DictionaryAttr> processOwner =
-        findManifestOwner(*ownerManifest, processReference, "ac.process");
+        ownerIndex.lookup(processReference, "ac.process");
     if (failed(processOwner))
-      return selected.emitOpError() << "instrumentation '" << reference
-                                    << "' has no elaborated process owner";
+      return selected.emitOpError()
+             << "instrumentation '" << reference
+             << "' has no unique elaborated process owner";
     StringRef local = nested.back().getValue();
     frozenInstrumentation.push_back(builder.getDictionaryAttr({
         builder.getNamedAttr("reference", reference),
@@ -177,6 +195,11 @@ LogicalResult freezeTopology(ModuleOp model) {
           }));
     });
   }
+
+  model.walk([&](ac::ProcessOp process) {
+    process->setAttr("ac.frozen_process_skeleton",
+                     buildFrozenProcessSkeleton(process));
+  });
 
   model->setAttr("ac.topology_frozen", builder.getBoolAttr(true));
   model->setAttr("ac.topology_digest",

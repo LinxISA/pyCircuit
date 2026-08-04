@@ -45,6 +45,17 @@ StringRef symbolName(Operation *operation) {
   return {};
 }
 
+std::string ownerJoinKey(Operation *declaration, StringRef path,
+                         StringRef stableId) {
+  std::string key;
+  llvm::raw_string_ostream stream(key);
+  if (auto definition = declaration->getParentOfType<ac::ModuleOp>())
+    stream << definition.getSymName();
+  stream << "::" << declaration->getName().getStringRef()
+         << "::" << symbolName(declaration) << '\0' << path << '\0' << stableId;
+  return key;
+}
+
 std::string operationKey(Operation *operation) {
   std::string key = operation->getName().getStringRef().str();
   key.push_back('|');
@@ -66,80 +77,244 @@ std::string operationKey(Operation *operation) {
   return key;
 }
 
-std::string valueKey(Value value) {
-  if (auto argument = dyn_cast<BlockArgument>(value))
-    return ("arg" + llvm::Twine(argument.getArgNumber())).str();
-  auto result = cast<OpResult>(value);
-  Operation *owner = result.getOwner();
-  StringRef name = symbolName(owner);
-  return ((name.empty() ? operationKey(owner) : name) +
-          ("#" + llvm::Twine(result.getResultNumber())).str())
-      .str();
-}
+class StructuredTopologySerializer {
+public:
+  explicit StructuredTopologySerializer(llvm::raw_ostream &stream)
+      : stream(stream) {}
 
-void serializeOperationHeader(Operation *operation, llvm::raw_ostream &stream) {
-  stream << operation->getName().getStringRef() << '{';
-  SmallVector<NamedAttribute> attributes(operation->getAttrs().begin(),
-                                         operation->getAttrs().end());
-  llvm::sort(attributes, [](NamedAttribute left, NamedAttribute right) {
-    return left.getName().getValue() < right.getName().getValue();
-  });
-  for (NamedAttribute attribute : attributes) {
-    if (isTopologyDigestAttribute(attribute.getName().getValue()))
-      continue;
-    stream << attribute.getName().getValue() << '=' << attribute.getValue()
-           << ';';
+  void run(ModuleOp model) {
+    SmallVector<Operation *> topLevel;
+    for (Operation &operation : model.getBody()->getOperations())
+      if (operation.getName().getStringRef().starts_with("ac."))
+        topLevel.push_back(&operation);
+
+    indexResults(model.getOperation(), "root");
+    for (auto [ordinal, operation] : llvm::enumerate(topLevel))
+      indexOperation(operation, ("root/r0/b0/o" + llvm::Twine(ordinal)).str());
+
+    serializeHeader(model.getOperation(), "root");
+    stream << "region root/r0\nblock root/r0/b0\n";
+    for (auto [ordinal, operation] : llvm::enumerate(topLevel))
+      serializeOperation(operation,
+                         ("root/r0/b0/o" + llvm::Twine(ordinal)).str());
   }
-  stream << "}props=" << operation->getPropertiesAsAttribute() << " operands=";
-  for (Value operand : operation->getOperands())
-    stream << valueKey(operand) << ':' << operand.getType() << ',';
-  stream << " results=";
-  for (Type type : operation->getResultTypes())
-    stream << type << ',';
-  stream << '\n';
+
+private:
+  bool skipsRegions(Operation *operation) const {
+    return isa<ac::ProcessOp>(operation);
+  }
+
+  void indexResults(Operation *operation, StringRef path) {
+    for (auto [ordinal, result] : llvm::enumerate(operation->getResults()))
+      valueIds[result] = (path + "/v" + llvm::Twine(ordinal)).str();
+  }
+
+  void indexOperation(Operation *operation, StringRef path) {
+    indexResults(operation, path);
+    if (skipsRegions(operation))
+      return;
+    for (auto [regionIndex, region] :
+         llvm::enumerate(operation->getRegions())) {
+      for (auto [blockIndex, block] : llvm::enumerate(region)) {
+        std::string blockPath = (path + "/r" + llvm::Twine(regionIndex) + "/b" +
+                                 llvm::Twine(blockIndex))
+                                    .str();
+        for (auto [argumentIndex, argument] :
+             llvm::enumerate(block.getArguments()))
+          valueIds[argument] =
+              (blockPath + "/a" + llvm::Twine(argumentIndex)).str();
+        for (auto [operationIndex, child] : llvm::enumerate(block))
+          indexOperation(
+              &child, (blockPath + "/o" + llvm::Twine(operationIndex)).str());
+      }
+    }
+  }
+
+  void serializeHeader(Operation *operation, StringRef path) {
+    stream << "op " << path << ' ' << operation->getName().getStringRef()
+           << '{';
+    SmallVector<NamedAttribute> attributes(operation->getAttrs().begin(),
+                                           operation->getAttrs().end());
+    llvm::sort(attributes, [](NamedAttribute left, NamedAttribute right) {
+      return left.getName().getValue() < right.getName().getValue();
+    });
+    for (NamedAttribute attribute : attributes) {
+      if (isTopologyDigestAttribute(attribute.getName().getValue()))
+        continue;
+      stream << attribute.getName().getValue() << '=' << attribute.getValue()
+             << ';';
+    }
+    stream << "}props=" << operation->getPropertiesAsAttribute()
+           << " operands=";
+    for (Value operand : operation->getOperands()) {
+      auto found = valueIds.find(operand);
+      if (found == valueIds.end())
+        stream << "external";
+      else
+        stream << found->second;
+      stream << ':' << operand.getType() << ',';
+    }
+    stream << " results=";
+    for (auto [ordinal, type] : llvm::enumerate(operation->getResultTypes()))
+      stream << valueIds.lookup(operation->getResult(ordinal)) << ':' << type
+             << ',';
+    stream << '\n';
+  }
+
+  void serializeOperation(Operation *operation, StringRef path) {
+    serializeHeader(operation, path);
+    if (skipsRegions(operation))
+      return;
+    for (auto [regionIndex, region] :
+         llvm::enumerate(operation->getRegions())) {
+      std::string regionPath = (path + "/r" + llvm::Twine(regionIndex)).str();
+      stream << "region " << regionPath << '\n';
+      for (auto [blockIndex, block] : llvm::enumerate(region)) {
+        std::string blockPath =
+            (regionPath + "/b" + llvm::Twine(blockIndex)).str();
+        stream << "block " << blockPath << " args=";
+        for (auto [argumentIndex, argument] :
+             llvm::enumerate(block.getArguments()))
+          stream << valueIds.lookup(argument) << ':' << argument.getType()
+                 << ',';
+        stream << '\n';
+        for (auto [operationIndex, child] : llvm::enumerate(block))
+          serializeOperation(
+              &child, (blockPath + "/o" + llvm::Twine(operationIndex)).str());
+      }
+    }
+  }
+
+  llvm::raw_ostream &stream;
+  DenseMap<Value, std::string> valueIds;
+};
+
+bool isProcessSkeletonOperation(Operation *operation) {
+  StringRef name = operation->getName().getStringRef();
+  return name.starts_with("ac.") || name == "func.call";
 }
 
-bool isTopologyGraphOperation(Operation *operation) {
-  return !operation->getName().getStringRef().starts_with("arith.") &&
-         !operation->getName().getStringRef().starts_with("index.");
-}
+class ProcessSkeletonSerializer {
+public:
+  explicit ProcessSkeletonSerializer(ac::ProcessOp process)
+      : process(process), builder(process.getContext()) {}
+
+  ArrayAttr run() {
+    process.getBody().walk([&](Operation *operation) {
+      if (isProcessSkeletonOperation(operation))
+        include(operation);
+    });
+    indexRegion(process.getBody(), "process/r0");
+    serializeRegion(process.getBody());
+    return builder.getArrayAttr(entries);
+  }
+
+private:
+  bool isInsideProcess(Operation *operation) {
+    return operation && operation != process.getOperation() &&
+           operation->getParentOfType<ac::ProcessOp>() == process;
+  }
+
+  void include(Operation *operation) {
+    if (!isInsideProcess(operation) || !included.insert(operation).second)
+      return;
+    for (Value operand : operation->getOperands())
+      if (Operation *producer = operand.getDefiningOp())
+        include(producer);
+    if (Operation *parent = operation->getParentOp())
+      include(parent);
+    // Region results are defined by terminator operands. Commit those
+    // dependencies whenever a region-bearing producer/control ancestor is
+    // part of the semantic closure.
+    for (Region &region : operation->getRegions())
+      for (Block &block : region)
+        if (!block.empty())
+          include(&block.back());
+  }
+
+  void indexRegion(Region &region, StringRef regionPath) {
+    for (auto [blockIndex, block] : llvm::enumerate(region)) {
+      std::string blockPath =
+          (regionPath + "/b" + llvm::Twine(blockIndex)).str();
+      for (auto [argumentIndex, argument] :
+           llvm::enumerate(block.getArguments()))
+        valueIds[argument] =
+            (blockPath + "/a" + llvm::Twine(argumentIndex)).str();
+      unsigned operationIndex = 0;
+      for (Operation &operation : block) {
+        if (!included.contains(&operation))
+          continue;
+        std::string path =
+            (blockPath + "/o" + llvm::Twine(operationIndex++)).str();
+        operationPaths[&operation] = path;
+        for (auto [resultIndex, result] :
+             llvm::enumerate(operation.getResults()))
+          valueIds[result] = (path + "/v" + llvm::Twine(resultIndex)).str();
+        for (auto [regionIndex, nested] :
+             llvm::enumerate(operation.getRegions()))
+          indexRegion(nested, (path + "/r" + llvm::Twine(regionIndex)).str());
+      }
+    }
+  }
+
+  void serializeRegion(Region &region) {
+    for (Block &block : region) {
+      for (Operation &operation : block) {
+        if (!included.contains(&operation))
+          continue;
+        serializeOperation(&operation, operationPaths.lookup(&operation));
+        for (Region &nested : operation.getRegions())
+          serializeRegion(nested);
+      }
+    }
+  }
+
+  void serializeOperation(Operation *operation, StringRef path) {
+    std::string storage;
+    llvm::raw_string_ostream stream(storage);
+    stream << path << ' ' << operation->getName().getStringRef() << '{';
+    SmallVector<NamedAttribute> attributes(operation->getAttrs().begin(),
+                                           operation->getAttrs().end());
+    llvm::sort(attributes, [](NamedAttribute left, NamedAttribute right) {
+      return left.getName().getValue() < right.getName().getValue();
+    });
+    for (NamedAttribute attribute : attributes)
+      stream << attribute.getName().getValue() << '=' << attribute.getValue()
+             << ';';
+    stream << "}props=" << operation->getPropertiesAsAttribute()
+           << " operands=";
+    for (Value operand : operation->getOperands()) {
+      auto found = valueIds.find(operand);
+      stream << (found == valueIds.end() ? "external" : found->second) << ':'
+             << operand.getType() << ',';
+    }
+    stream << " results=";
+    for (Value result : operation->getResults())
+      stream << valueIds.lookup(result) << ':' << result.getType() << ',';
+    stream << " regions=";
+    for (Region &region : operation->getRegions()) {
+      stream << '[';
+      for (Block &block : region) {
+        stream << '(';
+        for (BlockArgument argument : block.getArguments())
+          stream << argument.getType() << ',';
+        stream << ')';
+      }
+      stream << ']';
+    }
+    entries.push_back(builder.getStringAttr(storage));
+  }
+
+  ac::ProcessOp process;
+  Builder builder;
+  DenseSet<Operation *> included;
+  DenseMap<Operation *, std::string> operationPaths;
+  DenseMap<Value, std::string> valueIds;
+  SmallVector<Attribute> entries;
+};
 
 void serializeTopology(ModuleOp model, llvm::raw_ostream &stream) {
-  serializeOperationHeader(model.getOperation(), stream);
-  SmallVector<Operation *> topLevel;
-  for (Operation &operation : model.getBody()->getOperations())
-    if (operation.getName().getStringRef().starts_with("ac."))
-      topLevel.push_back(&operation);
-  for (Operation *operation : topLevel) {
-    auto module = dyn_cast<ac::ModuleOp>(operation);
-    serializeOperationHeader(operation, stream);
-    if (!module || module.getBody().empty()) {
-      SmallVector<Operation *> nested;
-      operation->walk([&](Operation *child) {
-        if (child != operation)
-          nested.push_back(child);
-      });
-      llvm::sort(nested, [](Operation *left, Operation *right) {
-        return operationKey(left) < operationKey(right);
-      });
-      for (Operation *child : nested)
-        serializeOperationHeader(child, stream);
-      continue;
-    }
-
-    SmallVector<Operation *> graph;
-    for (Operation &child : module.getBody().front())
-      if (isTopologyGraphOperation(&child))
-        graph.push_back(&child);
-    for (Operation *child : graph) {
-      serializeOperationHeader(child, stream);
-      // Process bodies are dynamic continuation state and are intentionally
-      // outside the topology digest. The declaration, kind, captures, stable
-      // hierarchy path, and owner ID above remain frozen.
-      if (isa<ac::ProcessOp>(child))
-        continue;
-    }
-  }
+  StructuredTopologySerializer(stream).run(model);
 }
 
 Operation *lookupDefinition(ModuleOp model, FlatSymbolRefAttr reference) {
@@ -164,6 +339,10 @@ std::optional<bool> constantBoolean(Value value) {
 }
 
 } // namespace
+
+ArrayAttr buildFrozenProcessSkeleton(ac::ProcessOp process) {
+  return ProcessSkeletonSerializer(process).run();
+}
 
 bool isTopologyFrozen(ModuleOp model) {
   auto marker = model->getAttrOfType<BoolAttr>("ac.topology_frozen");
@@ -489,6 +668,7 @@ LogicalResult ModelAnalysis::verifyFreezeContracts() {
 }
 
 FailureOr<ArrayAttr> ModelAnalysis::buildFrozenOwnerManifest() {
+  lastOwnerManifestWork = {};
   SmallVector<ac::ElaboratedTopologyOwner> topologyOwners;
   SmallVector<ac::ElaboratedStateOwner> stateOwners;
   if (failed(ac::collectElaboratedTopologyOwners(model, topologyOwners)) ||
@@ -502,6 +682,18 @@ FailureOr<ArrayAttr> ModelAnalysis::buildFrozenOwnerManifest() {
     SymbolRefAttr owner;
     SmallVector<std::string> traceSources;
   };
+  llvm::StringMap<SmallVector<std::string>> stateOwnerIndex;
+  for (const ac::ElaboratedStateOwner &owner : stateOwners) {
+    ++lastOwnerManifestWork.stateIndexInsertions;
+    std::string key =
+        ownerJoinKey(owner.declaration, owner.path, owner.stableId);
+    bool inserted = stateOwnerIndex.try_emplace(key, owner.traceSources).second;
+    if (!inserted)
+      return owner.declaration->emitOpError()
+             << "duplicate elaborated state-owner identity for path '"
+             << owner.path << "' and stable ID '" << owner.stableId << "'";
+  }
+
   SmallVector<Record> records;
   for (ac::SystemOp system : model.getOps<ac::SystemOp>())
     if (system.getSelected())
@@ -523,14 +715,12 @@ FailureOr<ArrayAttr> ModelAnalysis::buildFrozenOwnerManifest() {
     else if (definition)
       reference =
           FlatSymbolRefAttr::get(model.getContext(), definition.getSymName());
+    ++lastOwnerManifestWork.topologyIndexLookups;
     SmallVector<std::string> traces;
-    auto state = llvm::find_if(stateOwners, [&](const auto &candidate) {
-      return candidate.declaration == declaration &&
-             candidate.path == owner.path &&
-             candidate.stableId == owner.stableId;
-    });
-    if (state != stateOwners.end())
-      traces = state->traceSources;
+    auto state = stateOwnerIndex.find(
+        ownerJoinKey(declaration, owner.path, owner.stableId));
+    if (state != stateOwnerIndex.end())
+      traces = state->second;
     llvm::sort(traces);
     records.push_back({owner.path, owner.stableId,
                        declaration->getName().getStringRef().str(), reference,
@@ -588,6 +778,21 @@ LogicalResult ModelAnalysis::verifyFrozenIntegrity() {
     return model.emitError(
         "malformed topology freeze marker; expected epoch 0.1, owner manifest, "
         "and SHA-256 digest");
+  LogicalResult skeletonResult = success();
+  model.walk([&](ac::ProcessOp process) {
+    if (failed(skeletonResult))
+      return;
+    ArrayAttr frozen =
+        process->getAttrOfType<ArrayAttr>("ac.frozen_process_skeleton");
+    if (!frozen || frozen != buildFrozenProcessSkeleton(process)) {
+      process.emitOpError(
+          "frozen process skeleton mismatch; effect semantics were mutated "
+          "after ac-freeze-topology");
+      skeletonResult = failure();
+    }
+  });
+  if (failed(skeletonResult))
+    return failure();
   std::string actual = computeTopologyDigest();
   if (digest.getValue() != actual)
     return model.emitError(

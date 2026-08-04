@@ -1,0 +1,485 @@
+#include "acir/Analysis/ModelAnalysis.h"
+#include "acir/Dialect/ACIR/ACIROps.h"
+#include "acir/Dialect/ACIR/GraphRegion.h"
+#include "acir/InitAllDialects.h"
+#include "acir/Transforms/Passes.h"
+
+#include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/IR/Diagnostics.h"
+#include "mlir/Parser/Parser.h"
+#include "mlir/Pass/PassManager.h"
+#include "gtest/gtest.h"
+
+#include <functional>
+#include <string>
+
+namespace acir {
+namespace {
+
+using namespace mlir;
+using namespace acir::ac;
+
+constexpr llvm::StringLiteral kProcessModel = R"mlir(
+  builtin.module attributes {ac.contract_epoch = "0.1"} {
+    ac.protocol @p32 {
+      ac.role @sender dual @receiver cardinality "exclusive"
+      ac.role @receiver dual @sender cardinality "exclusive"
+      ac.state @idle initial true terminal false
+      ac.event @push from @sender to @receiver payload i32 action "notify"
+      ac.transition from @idle to @idle on @push transfer false retain false guard {}
+    }
+    ac.protocol @p64 {
+      ac.role @sender dual @receiver cardinality "exclusive"
+      ac.role @receiver dual @sender cardinality "exclusive"
+      ac.state @idle initial true terminal false
+      ac.event @push from @sender to @receiver payload i64 action "notify"
+      ac.transition from @idle to @idle on @push transfer false retain false guard {}
+    }
+    ac.system @soc root @Top as "root" tick 0 "cycle"
+        workload @Top::@workload seed {kind = "fixed", value = 0 : i64}
+        instrumentation [] results {id = "default", format = "json"}
+        selected true
+    ac.module @Top() parameters {} graph {
+      %graph_i32 = arith.constant 7 : i32
+      %graph_i64 = arith.constant 9 : i64
+      ac.time_domain @clock period 1 phase 0 scale 1
+      ac.queue @q0 payload i32 entries 4 ordering "fifo" protocol @p32
+          ownership "exclusive" id "q0" path "q0"
+      ac.queue @q1 payload i32 entries 4 ordering "fifo" protocol @p32
+          ownership "exclusive" id "q1" path "q1"
+      ac.queue @q64 payload i64 entries 4 ordering "fifo" protocol @p64
+          ownership "exclusive" id "q64" path "q64"
+      ac.event_queue @e0 payload !ac.event<i32> capacity 4
+          ordering "time_then_sequence" domain @clock id "e0" path "e0"
+      ac.event_queue @e1 payload !ac.event<i32> capacity 4
+          ordering "time_then_sequence" domain @clock id "e1" path "e1"
+      ac.resource @r0 capacity 1 issue_width 1 ii 1
+          latency {kind = "fixed", ticks = 1 : i64}
+          lifecycle {reservation = "propose_commit", release = "balanced", cancellation = "explicit"}
+          ownership "exclusive" classes [] id "r0" path "r0"
+      ac.resource @r1 capacity 1 issue_width 1 ii 1
+          latency {kind = "fixed", ticks = 1 : i64}
+          lifecycle {reservation = "propose_commit", release = "balanced", cancellation = "explicit"}
+          ownership "exclusive" classes [] id "r1" path "r1"
+      ac.stat @s0 kind "counter"
+      ac.stat @s1 kind "counter"
+      ac.process @worker0 kind "control" captures(%graph_i32 : i32) {
+      ^bb0(%captured : i32):
+        ac.yield_sim
+      }
+      ac.process @worker1 kind "control" captures(%graph_i32 : i32) {
+      ^bb0(%captured : i32):
+        ac.yield_sim
+      }
+      ac.process @workload kind "workload" captures(%graph_i32 : i32) {
+      ^bb0(%captured : i32):
+        %one = arith.constant 1 : i64
+        %other = arith.constant 11 : i64
+        %true = arith.constant true
+        %unused = arith.constant 101 : i64
+        %accepted = ac.try_send @q0 %captured : i32
+        %value, %received = ac.try_recv @q0 : i32
+        ac.schedule @worker0 %value after %one : i32
+        ac.wait_until %true
+        ac.wait_for @r0
+        ac.await_event @e0
+        %cursor = ac.trace.open source "pto"
+        %observed = ac.probe @q0 kind "queue" : i32
+        ac.stat.add @s0 %captured : i32
+        ac.assert %true, "runtime"
+        ac.yield_sim
+      }
+      ac.return
+    }
+  }
+)mlir";
+
+OwningOpRef<mlir::ModuleOp> parseAndFreeze(MLIRContext &context,
+                                           StringRef source) {
+  auto model = parseSourceString<mlir::ModuleOp>(source, &context);
+  if (!model)
+    return {};
+  PassManager manager(&context);
+  manager.addPass(createFreezeTopologyPass());
+  if (failed(manager.run(*model)))
+    return {};
+  return model;
+}
+
+std::string
+verifyAfterMutation(MLIRContext &context,
+                    const std::function<void(mlir::ModuleOp)> &mutate) {
+  OwningOpRef<mlir::ModuleOp> model = parseAndFreeze(context, kProcessModel);
+  if (!model)
+    return "setup failed";
+  mutate(*model);
+  std::string diagnostic;
+  ScopedDiagnosticHandler handler(&context, [&](Diagnostic &value) {
+    llvm::raw_string_ostream(diagnostic) << value;
+    return success();
+  });
+  if (succeeded(verifyModel(*model)))
+    return "verification unexpectedly succeeded";
+  return diagnostic;
+}
+
+template <typename OpTy> OpTy one(mlir::ModuleOp model) {
+  OpTy result;
+  model.walk([&](OpTy candidate) {
+    if (!result)
+      result = candidate;
+  });
+  return result;
+}
+
+template <typename OpTy> OpTy named(mlir::ModuleOp model, StringRef name) {
+  OpTy result;
+  model.walk([&](OpTy candidate) {
+    if (candidate->template getAttrOfType<StringAttr>(
+            SymbolTable::getSymbolAttrName()) ==
+        StringAttr::get(model.getContext(), name))
+      result = candidate;
+  });
+  return result;
+}
+
+OwningOpRef<mlir::ModuleOp> makeFlatAddressModel(MLIRContext &context,
+                                                 uint64_t ownerCount) {
+  OpBuilder builder(&context);
+  Location loc = builder.getUnknownLoc();
+  auto model = mlir::ModuleOp::create(loc);
+  builder.setInsertionPointToStart(model.getBody());
+  auto top =
+      ac::ModuleOp::create(builder, loc, "Top", builder.getFunctionType({}, {}),
+                           builder.getDictionaryAttr({}));
+  builder.setInsertionPointToStart(top.addEntryBlock());
+  for (uint64_t index = 0; index < ownerCount; ++index) {
+    std::string name = ("mem" + Twine(index)).str();
+    AddressSpaceOp::create(builder, loc, name, name, name, 32, "byte",
+                           Attribute(), FlatSymbolRefAttr(), DictionaryAttr());
+  }
+  ReturnOp::create(builder, loc, ValueRange{});
+  builder.setInsertionPointToEnd(model.getBody());
+  SystemOp::create(
+      builder, loc, "owners", "Top", "root", 0, "cycle", FlatSymbolRefAttr(),
+      builder.getDictionaryAttr({
+          builder.getNamedAttr("kind", builder.getStringAttr("fixed")),
+          builder.getNamedAttr("value", builder.getI64IntegerAttr(0)),
+      }),
+      builder.getArrayAttr({}),
+      builder.getDictionaryAttr({
+          builder.getNamedAttr("id", builder.getStringAttr("owners")),
+          builder.getNamedAttr("format", builder.getStringAttr("json")),
+      }),
+      true);
+  return OwningOpRef<mlir::ModuleOp>(model);
+}
+
+TEST(ModelAnalysisTest, FrozenProcessSkeletonRejectsEffectSemanticMutation) {
+  DialectRegistry registry;
+  registerAllDialects(registry);
+  MLIRContext context(registry);
+  auto symbol = [&](StringRef value) {
+    return FlatSymbolRefAttr::get(&context, value);
+  };
+  struct Mutation {
+    const char *name;
+    std::function<void(mlir::ModuleOp)> apply;
+  };
+  const Mutation mutations[] = {
+      {"queue target",
+       [&](mlir::ModuleOp model) {
+         one<TrySendOp>(model).setQueueAttr(symbol("q1"));
+       }},
+      {"resource target",
+       [&](mlir::ModuleOp model) {
+         one<WaitForOp>(model).setResourceAttr(symbol("r1"));
+       }},
+      {"stat target",
+       [&](mlir::ModuleOp model) {
+         one<StatAddOp>(model).setStatAttr(symbol("s1"));
+       }},
+      {"process target",
+       [&](mlir::ModuleOp model) {
+         one<ScheduleOp>(model).setTargetAttr(symbol("worker1"));
+       }},
+      {"event target",
+       [&](mlir::ModuleOp model) {
+         one<AwaitEventOp>(model).setEventQueueAttr(symbol("e1"));
+       }},
+      {"trace source",
+       [&](mlir::ModuleOp model) {
+         one<TraceOpenOp>(model).setSource("pto_other");
+       }},
+      {"trace frozen owner",
+       [&](mlir::ModuleOp model) {
+         auto trace = one<TraceOpenOp>(model);
+         auto owner = trace->getAttrOfType<DictionaryAttr>("ac.frozen_owner");
+         NamedAttrList fields(owner);
+         fields.set("path", StringAttr::get(&context, "wrong.path"));
+         trace->setAttr("ac.frozen_owner", fields.getDictionary(&context));
+       }},
+      {"probe target",
+       [&](mlir::ModuleOp model) {
+         one<ProbeOp>(model).setTargetAttr(symbol("q1"));
+       }},
+      {"contract attribute",
+       [&](mlir::ModuleOp model) {
+         one<AssertOp>(model).setMessage("changed runtime contract");
+       }},
+      {"control dependency",
+       [&](mlir::ModuleOp model) {
+         arith::ConstantOp condition;
+         model.walk([&](arith::ConstantOp candidate) {
+           if (candidate.getType().isInteger(1))
+             condition = candidate;
+         });
+         condition.setValueAttr(IntegerAttr::get(condition.getType(), 0));
+       }},
+      {"effect value type",
+       [&](mlir::ModuleOp model) {
+         TrySendOp send = one<TrySendOp>(model);
+         arith::ConstantOp replacement;
+         model.walk([&](arith::ConstantOp candidate) {
+           if (candidate.getType().isInteger(64) &&
+               cast<IntegerAttr>(candidate.getValue()).getInt() == 11)
+             replacement = candidate;
+         });
+         send.setQueueAttr(symbol("q64"));
+         send->setOperand(0, replacement.getResult());
+       }},
+  };
+  for (const Mutation &mutation : mutations) {
+    std::string diagnostic = verifyAfterMutation(context, mutation.apply);
+    EXPECT_NE(diagnostic.find("frozen process skeleton mismatch"),
+              std::string::npos)
+        << mutation.name << ": " << diagnostic;
+  }
+}
+
+TEST(ModelAnalysisTest,
+     FrozenProcessSkeletonPermitsPureContinuationSSARewrite) {
+  DialectRegistry registry;
+  registerAllDialects(registry);
+  MLIRContext context(registry);
+  OwningOpRef<mlir::ModuleOp> model = parseAndFreeze(context, kProcessModel);
+  ASSERT_TRUE(model);
+  arith::ConstantOp unused;
+  model->walk([&](arith::ConstantOp candidate) {
+    if (candidate.getType().isInteger(64) &&
+        cast<IntegerAttr>(candidate.getValue()).getInt() == 101)
+      unused = candidate;
+  });
+  ASSERT_TRUE(unused);
+  unused.setValueAttr(IntegerAttr::get(unused.getType(), 202));
+  EXPECT_TRUE(succeeded(verifyModel(*model)));
+}
+
+TEST(ModelAnalysisTest, FrozenDigestCommitsNestedGuardParentage) {
+  DialectRegistry registry;
+  registerAllDialects(registry);
+  MLIRContext context(registry);
+  OwningOpRef<mlir::ModuleOp> model = parseAndFreeze(context, R"mlir(
+    builtin.module attributes {ac.contract_epoch = "0.1"} {
+      ac.protocol @p {
+        ac.role @a dual @b cardinality "exclusive"
+        ac.role @b dual @a cardinality "exclusive"
+        ac.state @idle initial true terminal false
+        ac.event @x from @a to @b payload i1 action "notify"
+        ac.event @y from @a to @b payload i1 action "notify"
+        ac.transition from @idle to @idle on @x transfer false retain false guard {
+          %x = arith.constant true
+        }
+        ac.transition from @idle to @idle on @y transfer false retain false guard {
+          %y = arith.constant false
+        }
+      }
+      ac.system @soc root @Top as "root" tick 0 "cycle"
+          workload @Top::@workload seed {kind = "fixed", value = 0 : i64}
+          instrumentation [] results {id = "default", format = "json"}
+          selected true
+      ac.module @Top() parameters {} graph {
+        ac.process @workload kind "workload" { ac.yield_sim }
+        ac.return
+      }
+    }
+  )mlir");
+  ASSERT_TRUE(model);
+  SmallVector<TransitionOp> transitions;
+  model->walk(
+      [&](TransitionOp transition) { transitions.push_back(transition); });
+  ASSERT_EQ(transitions.size(), 2u);
+  Operation *first = &transitions[0].getGuard().front().front();
+  Operation *second = &transitions[1].getGuard().front().front();
+  first->moveBefore(second);
+  second->moveBefore(&transitions[0].getGuard().front(),
+                     transitions[0].getGuard().front().end());
+  std::string diagnostic;
+  ScopedDiagnosticHandler handler(&context, [&](Diagnostic &value) {
+    llvm::raw_string_ostream(diagnostic) << value;
+    return success();
+  });
+  EXPECT_TRUE(failed(verifyModel(*model)));
+  EXPECT_NE(diagnostic.find("frozen topology digest mismatch"),
+            std::string::npos);
+}
+
+TEST(ModelAnalysisTest, AddressSpacesFreezeAsAbsoluteStateOwners) {
+  DialectRegistry registry;
+  registerAllDialects(registry);
+  MLIRContext context(registry);
+  OwningOpRef<mlir::ModuleOp> model = parseAndFreeze(context, R"mlir(
+    builtin.module attributes {ac.contract_epoch = "0.1"} {
+      ac.system @soc root @Top as "root" tick 0 "cycle"
+          workload @Top::@workload seed {kind = "fixed", value = 0 : i64}
+          instrumentation [] results {id = "default", format = "json"}
+          selected true
+      ac.module @Leaf() parameters {} graph {
+        ac.address_space @mem width 32 unit "byte" id "mem" path "mem"
+        ac.address_space @other width 32 unit "byte" id "other" path "other"
+        ac.process @observer kind "monitor" {
+          %value = ac.probe @mem kind "storage" : i64
+          ac.yield_sim
+        }
+        ac.return
+      }
+      "ac.module"() <{sym_name = "Top", function_type = () -> (), static_params = {}}> ({
+        "ac.instance"() <{definition = @Leaf, sym_name = "left", stable_id = "left", path = "left", static_args = {}}> : () -> ()
+        "ac.array"() <{definition = @Leaf, sym_name = "banks", stable_id = "banks", path = "banks", shape = array<i64: 2>, static_args = [{}, {}]}> : () -> ()
+        "ac.instances"() <{sym_name = "mix", stable_id = "mix", path = "mix", definitions = [@Leaf, @Leaf], names = ["x", "y"], stable_ids = ["x", "y"], paths = ["x", "y"], interface = () -> (), static_args = [{}, {}]}> : () -> ()
+        ac.address_space @root_mem width 32 unit "byte" id "root_mem" path "root_mem"
+        ac.process @workload kind "workload" { ac.yield_sim }
+        "ac.return"() : () -> ()
+      }) : () -> ()
+    }
+  )mlir");
+  ASSERT_TRUE(model);
+  AddressSpaceOp memory = named<AddressSpaceOp>(*model, "mem");
+  ASSERT_TRUE(memory);
+  ArrayAttr owners = memory->getAttrOfType<ArrayAttr>("ac.frozen_owners");
+  ASSERT_TRUE(owners);
+  ASSERT_EQ(owners.size(), 5u);
+  const char *expectedPaths[] = {"root.banks[0].mem", "root.banks[1].mem",
+                                 "root.left.mem", "root.mix.x.mem",
+                                 "root.mix.y.mem"};
+  for (auto [owner, expected] : llvm::zip(owners, expectedPaths))
+    EXPECT_EQ(cast<DictionaryAttr>(owner).getAs<StringAttr>("path").getValue(),
+              expected);
+
+  AddressSpaceOp rootMemory = named<AddressSpaceOp>(*model, "root_mem");
+  ASSERT_TRUE(rootMemory);
+  ArrayAttr rootOwners =
+      rootMemory->getAttrOfType<ArrayAttr>("ac.frozen_owners");
+  ASSERT_TRUE(rootOwners);
+  ASSERT_EQ(rootOwners.size(), 1u);
+  EXPECT_EQ(
+      cast<DictionaryAttr>(rootOwners[0]).getAs<StringAttr>("path").getValue(),
+      "root.root_mem");
+
+  ProbeOp probe = one<ProbeOp>(*model);
+  SmallVector<MemoryEffects::EffectInstance> effects;
+  cast<MemoryEffectOpInterface>(probe.getOperation()).getEffects(effects);
+  ASSERT_FALSE(effects.empty());
+  for (const MemoryEffects::EffectInstance &effect : effects) {
+    auto parameters = cast<DictionaryAttr>(effect.getParameters());
+    EXPECT_EQ(parameters.getAs<StringAttr>("identity_phase").getValue(),
+              "elaborated_absolute");
+    EXPECT_EQ(parameters.getAs<ArrayAttr>("owners"), owners);
+  }
+
+  memory->removeAttr("ac.frozen_owners");
+  ScopedDiagnosticHandler handler(&context,
+                                  [&](Diagnostic &) { return success(); });
+  EXPECT_TRUE(failed(verifyModel(*model)));
+}
+
+TEST(ModelAnalysisTest, AddressSpacesParticipateInSaturatedOwnerBudget) {
+  MLIRContext context;
+  context.loadDialect<ACIRDialect>();
+  OpBuilder builder(&context);
+  auto loc = builder.getUnknownLoc();
+  auto emptyType = builder.getFunctionType({}, {});
+  auto emptyDictionary = builder.getDictionaryAttr({});
+  auto model = mlir::ModuleOp::create(loc);
+  builder.setInsertionPointToStart(model.getBody());
+  auto leaf =
+      ac::ModuleOp::create(builder, loc, "Leaf", emptyType, emptyDictionary);
+  builder.setInsertionPointToStart(leaf.addEntryBlock());
+  auto addAddress = [&](StringRef name) {
+    return AddressSpaceOp::create(builder, loc, name, name, name, 32, "byte",
+                                  Attribute(), FlatSymbolRefAttr(),
+                                  DictionaryAttr());
+  };
+  addAddress("mem0");
+  addAddress("mem1");
+  ReturnOp::create(builder, loc, ValueRange{});
+
+  SmallVector<Attribute> staticArgs(512, Attribute(emptyDictionary));
+  builder.setInsertionPointToEnd(model.getBody());
+  auto middle =
+      ac::ModuleOp::create(builder, loc, "Middle", emptyType, emptyDictionary);
+  builder.setInsertionPointToStart(middle.addEntryBlock());
+  ArrayOp::create(builder, loc, TypeRange{}, ValueRange{}, "Leaf", "leaves",
+                  "leaves", "leaves", builder.getDenseI64ArrayAttr({512}),
+                  builder.getArrayAttr(staticArgs));
+  ReturnOp::create(builder, loc, ValueRange{});
+
+  builder.setInsertionPointToEnd(model.getBody());
+  auto top =
+      ac::ModuleOp::create(builder, loc, "Top", emptyType, emptyDictionary);
+  builder.setInsertionPointToStart(top.addEntryBlock());
+  ArrayOp::create(builder, loc, TypeRange{}, ValueRange{}, "Middle", "middles",
+                  "middles", "middles", builder.getDenseI64ArrayAttr({512}),
+                  builder.getArrayAttr(staticArgs));
+  ReturnOp::create(builder, loc, ValueRange{});
+
+  builder.setInsertionPointToEnd(model.getBody());
+  auto seed = builder.getDictionaryAttr({
+      builder.getNamedAttr("kind", builder.getStringAttr("fixed")),
+      builder.getNamedAttr("value", builder.getI64IntegerAttr(0)),
+  });
+  auto results = builder.getDictionaryAttr({
+      builder.getNamedAttr("id", builder.getStringAttr("owners")),
+      builder.getNamedAttr("format", builder.getStringAttr("json")),
+  });
+  SystemOp::create(builder, loc, "owners", "Top", "root", 0, "cycle",
+                   FlatSymbolRefAttr(), seed, builder.getArrayAttr({}), results,
+                   true);
+  EXPECT_TRUE(succeeded(verifyGraphStructure(model)));
+
+  auto overBudget = cast<mlir::ModuleOp>(model->clone());
+  auto overBudgetLeaf = *overBudget.getOps<ac::ModuleOp>().begin();
+  builder.setInsertionPoint(&overBudgetLeaf.getBody().front().back());
+  addAddress("mem2");
+  std::string diagnostic;
+  ScopedDiagnosticHandler handler(&context, [&](Diagnostic &value) {
+    llvm::raw_string_ostream(diagnostic) << value;
+    return success();
+  });
+  EXPECT_TRUE(failed(verifyGraphStructure(overBudget)));
+  EXPECT_NE(diagnostic.find("owner count exceeds bound 1048576"),
+            std::string::npos);
+}
+
+TEST(ModelAnalysisTest, OwnerManifestJoinHasExactLinearWork) {
+  MLIRContext context;
+  context.loadDialect<ACIRDialect>();
+  auto measure = [&](uint64_t ownerCount) {
+    OwningOpRef<mlir::ModuleOp> model =
+        makeFlatAddressModel(context, ownerCount);
+    ModelAnalysis analysis(*model);
+    EXPECT_TRUE(succeeded(analysis.buildFrozenOwnerManifest()));
+    OwnerManifestWork work = analysis.getLastOwnerManifestWork();
+    EXPECT_EQ(work.stateIndexInsertions, ownerCount);
+    EXPECT_EQ(work.topologyIndexLookups, ownerCount);
+    return work.total();
+  };
+  uint64_t work1000 = measure(1000);
+  uint64_t work4000 = measure(4000);
+  EXPECT_EQ(work1000, 2000u);
+  EXPECT_EQ(work4000, 8000u);
+  EXPECT_EQ(work4000, 4 * work1000);
+}
+
+} // namespace
+} // namespace acir

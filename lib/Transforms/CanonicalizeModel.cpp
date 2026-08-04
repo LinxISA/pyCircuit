@@ -47,6 +47,27 @@ unsigned graphRank(Operation *operation) {
       .Default(5);
 }
 
+unsigned typeScopeRank(Operation *) { return 0; }
+
+unsigned interfaceRank(Operation *operation) {
+  return llvm::StringSwitch<unsigned>(operation->getName().getStringRef())
+      .Case("ac.role", 0)
+      .Case("ac.port", 1)
+      .Case("ac.guarantee", 2)
+      .Default(3);
+}
+
+unsigned protocolRank(Operation *operation) {
+  return llvm::StringSwitch<unsigned>(operation->getName().getStringRef())
+      .Case("ac.role", 0)
+      .Case("ac.state", 1)
+      .Case("ac.event", 2)
+      // Transition order is semantically ordered and must remain stable.
+      .Case("ac.transition", 3)
+      .Case("ac.guarantee", 4)
+      .Default(5);
+}
+
 std::string stableKey(Operation *operation, unsigned rank) {
   std::string rankKey = std::to_string(rank);
   rankKey.insert(rankKey.begin(), 3 - std::min<size_t>(3, rankKey.size()), '0');
@@ -81,7 +102,12 @@ LogicalResult sortBlock(Block &block, bool topologyFrozen,
     current.push_back(&operation);
   SmallVector<Operation *> sorted = current;
   llvm::stable_sort(sorted, [&](Operation *left, Operation *right) {
-    return stableKey(left, rank(left)) < stableKey(right, rank(right));
+    unsigned leftRank = rank(left);
+    unsigned rightRank = rank(right);
+    if (leftRank == rightRank && isa<ac::TransitionOp>(left) &&
+        isa<ac::TransitionOp>(right))
+      return false;
+    return stableKey(left, leftRank) < stableKey(right, rightRank);
   });
   if (current == sorted)
     return success();
@@ -105,6 +131,18 @@ LogicalResult canonicalizeModel(ModuleOp model) {
   for (ac::ModuleOp module : model.getOps<ac::ModuleOp>())
     if (!module.getBody().empty() &&
         failed(sortBlock(module.getBody().front(), frozen, graphRank)))
+      return failure();
+  for (ac::TypeScopeOp scope : model.getOps<ac::TypeScopeOp>())
+    if (!scope.getBody().empty() &&
+        failed(sortBlock(scope.getBody().front(), frozen, typeScopeRank)))
+      return failure();
+  for (ac::InterfaceOp interface : model.getOps<ac::InterfaceOp>())
+    if (!interface.getBody().empty() &&
+        failed(sortBlock(interface.getBody().front(), frozen, interfaceRank)))
+      return failure();
+  for (ac::ProtocolOp protocol : model.getOps<ac::ProtocolOp>())
+    if (!protocol.getBody().empty() &&
+        failed(sortBlock(protocol.getBody().front(), frozen, protocolRank)))
       return failure();
 
   UnknownLoc unknown = UnknownLoc::get(model.getContext());

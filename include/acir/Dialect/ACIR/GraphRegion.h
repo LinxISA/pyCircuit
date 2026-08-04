@@ -74,7 +74,8 @@ getStructuralProviderRegistry(mlir::MLIRContext *context);
 mlir::LogicalResult verifyGraphStructure(mlir::Operation *topLevel);
 
 /// Verifies the graph and returns every elaborated queue/event/resource,
-/// process, and statistics owner in deterministic hierarchy order.
+/// address-space, process, and statistics owner in deterministic hierarchy
+/// order.
 mlir::LogicalResult collectElaboratedStateOwners(
     mlir::Operation *topLevel,
     llvm::SmallVectorImpl<ElaboratedStateOwner> &owners);

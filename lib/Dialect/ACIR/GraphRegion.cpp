@@ -362,8 +362,8 @@ static LogicalResult verifyGraphStructureImpl(
         localOwners = 1;
         localDepth = 1;
         for (Attribute reference : instances.getDefinitions()) {
-          Operation *definition = lookupDefinition(
-              symbols, cast<FlatSymbolRefAttr>(reference));
+          Operation *definition =
+              lookupDefinition(symbols, cast<FlatSymbolRefAttr>(reference));
           childStats = expansionMemo.lookup(definition);
           if (failed(mergeTraceSources(definition, 1, &child)))
             return failure();
@@ -375,8 +375,8 @@ static LogicalResult verifyGraphStructureImpl(
               std::max(localDepth, saturatedAdd(2, childStats.depth,
                                                 maxHierarchyDepth + 1));
         }
-      } else if (isa<QueueOp, EventQueueOp, ResourceOp, ProcessOp, StatOp>(
-                     child)) {
+      } else if (isa<QueueOp, EventQueueOp, ResourceOp, AddressSpaceOp,
+                     ProcessOp, StatOp>(child)) {
         localOwners = 1;
         localDepth = 1;
       }
@@ -499,6 +499,13 @@ static LogicalResult verifyGraphStructureImpl(
       } else if (auto resource = dyn_cast<ResourceOp>(child)) {
         std::string path = (parentPath + "." + resource.getPath()).str();
         std::string id = (parentId + "/" + resource.getStableId()).str();
+        if (failed(registerOwner(&child, path, id)))
+          return failure();
+        if (elaboratedStateOwners)
+          elaboratedStateOwners->push_back({&child, path, id});
+      } else if (auto addressSpace = dyn_cast<AddressSpaceOp>(child)) {
+        std::string path = (parentPath + "." + addressSpace.getPath()).str();
+        std::string id = (parentId + "/" + addressSpace.getStableId()).str();
         if (failed(registerOwner(&child, path, id)))
           return failure();
         if (elaboratedStateOwners)
