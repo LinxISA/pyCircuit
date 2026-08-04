@@ -1,3 +1,4 @@
+#include "Dialect/ACIR/ACIROpsTestHooks.h"
 #include "acir/Dialect/ACIR/ACIRDialect.h"
 #include "acir/Dialect/ACIR/ACIROps.h"
 #include "acir/Dialect/ACIR/ACIRResources.h"
@@ -674,7 +675,7 @@ TEST(ACIROpsTest, TaskEightRegistryDeltaIsExactlyTwentyOperations) {
   EXPECT_EQ(context.getRegisteredOperationsByDialect("ac").size(), 55u);
 }
 
-TEST(ACIROpsTest, ProcessLinearLivenessScalesNearLinearly) {
+TEST(ACIROpsTest, ProcessLinearLivenessDoesNotRescanBlockPerValue) {
   mlir::MLIRContext context;
   context.loadDialect<ACIRDialect, mlir::arith::ArithDialect,
                       mlir::scf::SCFDialect>();
@@ -704,36 +705,46 @@ TEST(ACIROpsTest, ProcessLinearLivenessScalesNearLinearly) {
     EXPECT_TRUE(file);
     return file;
   };
-  auto verifyTimed = [&](unsigned valueCount) {
+  auto measureWork = [&](unsigned valueCount) {
     auto file = buildProcess(valueCount);
     if (!file)
-      return int64_t{0};
+      return detail::ProcessLivenessWork{};
     ProcessOp process;
     file->walk([&](ProcessOp candidate) { process = candidate; });
     EXPECT_TRUE(process);
-    EXPECT_TRUE(mlir::succeeded(process.verify()));
-    int64_t bestMicros = std::numeric_limits<int64_t>::max();
-    for (unsigned repetition = 0; repetition != 3; ++repetition) {
-      auto start = std::chrono::steady_clock::now();
+    detail::ProcessLivenessWork work;
+    {
+      detail::ScopedProcessLivenessWorkCollector collector(work);
       EXPECT_TRUE(mlir::succeeded(process.verify()));
-      auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(
-                         std::chrono::steady_clock::now() - start)
-                         .count();
-      bestMicros = std::min(bestMicros, elapsed);
     }
-    return bestMicros;
+    return work;
   };
 
-  constexpr unsigned smallSize = 1000;
-  constexpr unsigned largeSize = 4000;
-  int64_t smallMicros = verifyTimed(smallSize);
-  int64_t largeMicros = verifyTimed(largeSize);
+  auto expectSinglePassWork = [](const detail::ProcessLivenessWork &work,
+                                 uint64_t valueCount) {
+    // Each fixture value contributes trace.open, trace.next, and trace.decode.
+    // The only fixed operation is the terminating ac.yield_sim.
+    uint64_t operationCount = valueCount * 3 + 1;
+    EXPECT_EQ(work.summaryOperationVisits, operationCount);
+    EXPECT_EQ(work.epochOperationVisits, operationCount);
+    EXPECT_EQ(work.livenessOperationVisits, operationCount);
+    EXPECT_EQ(work.valueVisits, valueCount * 5);
+    EXPECT_EQ(work.useVisits, valueCount);
+    EXPECT_EQ(work.total(), valueCount * 15 + 3);
+  };
+
+  constexpr unsigned smallSize = 64;
+  constexpr unsigned largeSize = 256;
+  detail::ProcessLivenessWork smallWork = measureWork(smallSize);
+  detail::ProcessLivenessWork largeWork = measureWork(largeSize);
   RecordProperty("small_values", smallSize);
   RecordProperty("large_values", largeSize);
-  RecordProperty("small_microseconds", smallMicros);
-  RecordProperty("large_microseconds", largeMicros);
-  EXPECT_GT(smallMicros, 0);
-  EXPECT_LT(largeMicros, smallMicros * 6 + 1000);
+  RecordProperty("small_work_units", smallWork.total());
+  RecordProperty("large_work_units", largeWork.total());
+  expectSinglePassWork(smallWork, smallSize);
+  expectSinglePassWork(largeWork, largeSize);
+  EXPECT_EQ(largeWork.total() - smallWork.total(),
+            uint64_t{15} * (largeSize - smallSize));
 }
 
 TEST(ACIROpsTest, LargeArrayVerificationIsDeterministic) {

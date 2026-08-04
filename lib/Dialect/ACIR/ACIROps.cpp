@@ -1,4 +1,5 @@
 #include "acir/Dialect/ACIR/ACIROps.h"
+#include "ACIROpsTestHooks.h"
 #include "acir/Dialect/ACIR/ACIRResources.h"
 #include "acir/Dialect/ACIR/GraphRegion.h"
 
@@ -21,6 +22,28 @@
 using namespace mlir;
 
 namespace acir::ac {
+namespace {
+
+thread_local detail::ProcessLivenessWork *processLivenessWorkCollector =
+    nullptr;
+
+} // namespace
+
+namespace detail {
+
+ScopedProcessLivenessWorkCollector::ScopedProcessLivenessWorkCollector(
+    ProcessLivenessWork &work)
+    : previous(processLivenessWorkCollector) {
+  work = {};
+  processLivenessWorkCollector = &work;
+}
+
+ScopedProcessLivenessWorkCollector::~ScopedProcessLivenessWorkCollector() {
+  processLivenessWorkCollector = previous;
+}
+
+} // namespace detail
+
 namespace {
 
 struct NamedRef {
@@ -2415,7 +2438,8 @@ LogicalResult verifySupportedSCFShape(ProcessOp process) {
 
 class StructuredSuspensionAnalysis {
 public:
-  explicit StructuredSuspensionAnalysis(ProcessOp process) {
+  explicit StructuredSuspensionAnalysis(ProcessOp process)
+      : work(processLivenessWorkCollector) {
     buildSummaries(process.getBody());
     buildEpochs(process.getBody());
   }
@@ -2431,9 +2455,13 @@ public:
         return failed(result) ? WalkResult::interrupt() : WalkResult::advance();
       auto verifyValue = [&](Value value,
                              uint64_t definitionEpoch) -> LogicalResult {
+        if (work)
+          ++work->valueVisits;
         if (!isLinearAcrossSuspension(value.getType()))
           return success();
         for (OpOperand &use : value.getUses()) {
+          if (work)
+            ++work->useVisits;
           if (!reachableBlocks.contains(use.getOwner()->getBlock()))
             continue;
           if (beforeEpoch.lookup(use.getOwner()) > definitionEpoch)
@@ -2449,12 +2477,15 @@ public:
           result = failure();
           return WalkResult::interrupt();
         }
-      for (Operation &operation : *block)
+      for (Operation &operation : *block) {
+        if (work)
+          ++work->livenessOperationVisits;
         for (Value value : operation.getResults())
           if (failed(verifyValue(value, afterEpoch.lookup(&operation)))) {
             result = failure();
             return WalkResult::interrupt();
           }
+      }
       return WalkResult::advance();
     });
     return result;
@@ -2476,6 +2507,8 @@ private:
               worklist.emplace_back(&nested, false);
         continue;
       }
+      if (work)
+        ++work->summaryOperationVisits;
       for (Region &region : operation->getRegions()) {
         bool may = false;
         bool guarantees = false;
@@ -2532,6 +2565,8 @@ private:
       blockEntryEpoch.try_emplace(block, entryEpoch);
       uint64_t epoch = entryEpoch;
       for (Operation &operation : *block) {
+        if (work)
+          ++work->epochOperationVisits;
         beforeEpoch.try_emplace(&operation, epoch);
         SmallVector<unsigned> reachableRegions;
         if (auto ifOp = dyn_cast<scf::IfOp>(operation)) {
@@ -2560,6 +2595,7 @@ private:
   llvm::DenseMap<Operation *, uint64_t> beforeEpoch;
   llvm::DenseMap<Operation *, uint64_t> afterEpoch;
   llvm::DenseSet<Block *> reachableBlocks;
+  detail::ProcessLivenessWork *work;
 };
 
 LogicalResult verifyTraceProvenance(ProcessOp process) {

@@ -10,6 +10,9 @@ target_link_libraries(ACIRTypesTests PRIVATE
 add_test(NAME ACIRTypesTests COMMAND ACIRTypesTests)
 
 add_executable(ACIROpsTests OpsTest.cpp)
+target_include_directories(ACIROpsTests PRIVATE
+  "${PROJECT_SOURCE_DIR}/lib"
+)
 target_link_libraries(ACIROpsTests PRIVATE
   ACIRDialect
   ACSimDialect
