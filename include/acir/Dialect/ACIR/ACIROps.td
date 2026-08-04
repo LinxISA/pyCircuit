@@ -178,7 +178,7 @@ def ACIR_SystemOp : ACIR_Op<"system", [Symbol]> {
   let arguments = (ins SymbolNameAttr:$sym_name, FlatSymbolRefAttr:$root,
                        StrAttr:$root_name, I64Attr:$tick_epoch,
                        StrAttr:$tick_unit,
-                       OptionalAttr<FlatSymbolRefAttr>:$primary_workload,
+                       OptionalAttr<SymbolRefAttr>:$primary_workload,
                        DictionaryAttr:$seed_policy,
                        ArrayAttr:$instrumentation,
                        DictionaryAttr:$result_schema,

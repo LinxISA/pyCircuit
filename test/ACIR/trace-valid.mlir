@@ -4,6 +4,11 @@
 
 builtin.module attributes {ac.contract_epoch = "0.1"} {
   ac.module @Trace() parameters {} graph {
+    ac.stat @decoded kind "counter"
+    ac.stat @position kind "gauge"
+    ac.stat @eof kind "counter"
+    ac.stat @observed kind "gauge"
+    ac.process @decoder kind "monitor" { ac.yield_sim }
     ac.process @workload kind "workload" {
       %cursor0 = ac.trace.open source "pto"
       %cursor1, %raw, %advanced = ac.trace.next %cursor0 from source "pto" : i32
@@ -23,6 +28,26 @@ builtin.module attributes {ac.contract_epoch = "0.1"} {
     }
     ac.return
   }
+  ac.module @LoopTrace(i1) parameters {} graph {
+  ^bb0(%keep_running : i1):
+    ac.stat @position kind "gauge"
+    ac.process @workload kind "workload" captures(%keep_running : i1) {
+    ^bb0(%condition : i1):
+      %cursor0 = ac.trace.open source "runtime_loop"
+      %cursor1 = scf.while (%cursor = %cursor0) : (index) -> index {
+        scf.condition(%condition) %cursor : index
+      } do {
+      ^bb0(%cursor : index):
+        %next, %raw, %advanced = ac.trace.next %cursor from source "runtime_loop" : i32
+        ac.wait_until %advanced
+        scf.yield %next : index
+      }
+      %position = ac.trace.position %cursor1 from source "runtime_loop"
+      ac.stat.add @position %position : index
+      ac.yield_sim
+    }
+    ac.return
+  }
 }
 
 // CHECK: ac.trace.open source "pto"
@@ -30,6 +55,9 @@ builtin.module attributes {ac.contract_epoch = "0.1"} {
 // CHECK: ac.trace.decode
 // CHECK: ac.trace.position
 // CHECK: ac.trace.eof
+// CHECK: ac.module @LoopTrace
+// CHECK: scf.while
+// CHECK: ac.trace.next
 // EFFECTS: ac.trace.open
 // EFFECTS: ac.trace.next
 // EFFECTS: ac.trace.position

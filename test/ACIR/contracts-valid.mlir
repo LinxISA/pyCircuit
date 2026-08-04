@@ -3,8 +3,18 @@
 // RUN: %acir_opt_public --pass-pipeline='builtin.module(canonicalize,cse)' %s | %FileCheck %s --check-prefix=EFFECTS
 
 builtin.module attributes {ac.contract_epoch = "0.1"} {
+  ac.protocol @fifo {
+    ac.role @sender dual @receiver cardinality "exclusive"
+    ac.role @receiver dual @sender cardinality "exclusive"
+    ac.state @idle initial true terminal false
+    ac.state @done initial false terminal true
+    ac.event @push from @sender to @receiver payload i64 action "offer"
+    ac.transition from @idle to @done on @push transfer true retain false guard {}
+  }
   ac.module @Observed(i1) parameters {} graph {
   ^bb0(%static_condition : i1):
+    ac.queue @queue payload i64 entries 8 ordering "fifo" protocol @fifo
+        ownership "exclusive" id "queue" path "queue"
     ac.require %static_condition, "static capacity contract"
     ac.ensure %static_condition, "static topology contract"
     ac.stat @cycles kind "counter"

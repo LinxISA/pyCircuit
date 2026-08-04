@@ -172,12 +172,23 @@ static LogicalResult verifyGraphStructureImpl(
       return system.emitOpError() << "root '" << system.getRootAttr()
                                   << "' does not resolve to ac.module";
     }
-    if (FlatSymbolRefAttr workload = system.getPrimaryWorkloadAttr()) {
-      Operation *target = lookupDefinition(symbols, workload);
+    if (SymbolRefAttr workload = system.getPrimaryWorkloadAttr()) {
+      Operation *target = nullptr;
+      if (workload.getRootReference() == system.getRootAttr().getValue() &&
+          workload.getNestedReferences().size() == 1) {
+        auto module = cast<ModuleOp>(root);
+        StringRef processName =
+            workload.getNestedReferences().front().getValue();
+        for (ProcessOp process : module.getBody().front().getOps<ProcessOp>())
+          if (process.getSymName() == processName) {
+            target = process;
+            break;
+          }
+      }
       if (!target)
         return system.emitOpError()
                << "primary workload '" << workload << "' is unresolved";
-      if (target->getName().getStringRef() != "ac.process")
+      if (!isa<ProcessOp>(target))
         return system.emitOpError() << "primary workload '" << workload
                                     << "' does not resolve to ac.process";
     }

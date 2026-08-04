@@ -5,6 +5,8 @@
 // RUN: %not %acir_opt %t/duplicate-document-owner.mlir 2>&1 | %FileCheck %s --check-prefix=MULTI-OWNER
 // RUN: %not %acir_opt %t/duplicate-cursor.mlir 2>&1 | %FileCheck %s --check-prefix=DUPLICATE-CURSOR
 // RUN: %not %acir_opt %t/source-is-not-path.mlir 2>&1 | %FileCheck %s --check-prefix=SOURCE-ID
+// RUN: %not %acir_opt %t/forwarded-fork.mlir 2>&1 | %FileCheck %s --check-prefix=FORWARDED-FORK
+// RUN: %not %acir_opt %t/ambiguous-merge.mlir 2>&1 | %FileCheck %s --check-prefix=AMBIGUOUS
 
 //--- forked-cursor.mlir
 builtin.module attributes {ac.contract_epoch = "0.1"} {
@@ -18,7 +20,7 @@ builtin.module attributes {ac.contract_epoch = "0.1"} {
     ac.return
   }
 }
-// CURSOR: trace cursor must have at most one consuming use
+// CURSOR: trace cursor provenance has more than one advancing consumer
 
 //--- noncursor.mlir
 builtin.module attributes {ac.contract_epoch = "0.1"} {
@@ -86,3 +88,45 @@ builtin.module attributes {ac.contract_epoch = "0.1"} {
   }
 }
 // DUPLICATE-CURSOR: trace source 'pto' must have exactly one cursor owner
+
+//--- forwarded-fork.mlir
+builtin.module attributes {ac.contract_epoch = "0.1"} {
+  ac.module @M(i1) parameters {} graph {
+  ^bb0(%condition : i1):
+    ac.process @p kind "workload" captures(%condition : i1) {
+    ^bb0(%condition_copy : i1):
+      %cursor = ac.trace.open source "pto"
+      %forwarded = scf.if %condition_copy -> index {
+        scf.yield %cursor : index
+      } else {
+        scf.yield %cursor : index
+      }
+      %next0, %raw0, %advanced0 = ac.trace.next %cursor from source "pto" : i32
+      %next1, %raw1, %advanced1 = ac.trace.next %forwarded from source "pto" : i32
+      ac.yield_sim
+    }
+    ac.return
+  }
+}
+// FORWARDED-FORK: trace cursor provenance has more than one advancing consumer
+
+//--- ambiguous-merge.mlir
+builtin.module attributes {ac.contract_epoch = "0.1"} {
+  ac.module @M(i1) parameters {} graph {
+  ^bb0(%condition : i1):
+    ac.process @p kind "workload" captures(%condition : i1) {
+    ^bb0(%condition_copy : i1):
+      %left = ac.trace.open source "left"
+      %right = ac.trace.open source "right"
+      %merged = scf.if %condition_copy -> index {
+        scf.yield %left : index
+      } else {
+        scf.yield %right : index
+      }
+      %next, %raw, %advanced = ac.trace.next %merged from source "left" : i32
+      ac.yield_sim
+    }
+    ac.return
+  }
+}
+// AMBIGUOUS: trace cursor forwarding merges distinct provenance

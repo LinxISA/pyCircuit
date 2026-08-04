@@ -3,8 +3,29 @@
 // RUN: %acir_opt_public --pass-pipeline='builtin.module(canonicalize,cse)' %s | %FileCheck %s --check-prefix=EFFECTS
 
 builtin.module attributes {ac.contract_epoch = "0.1"} {
+  ac.protocol @fifo {
+    ac.role @sender dual @receiver cardinality "exclusive"
+    ac.role @receiver dual @sender cardinality "exclusive"
+    ac.state @idle initial true terminal false
+    ac.state @done initial false terminal true
+    ac.event @push from @sender to @receiver payload i32 action "offer"
+    ac.transition from @idle to @done on @push transfer true retain false guard {}
+  }
   ac.module @Top(i32) parameters {} graph {
   ^bb0(%arg0 : i32):
+    ac.time_domain @core period 1 phase 0 scale 1
+    ac.queue @ready payload i32 entries 8 ordering "fifo" protocol @fifo
+        ownership "exclusive" id "ready" path "ready"
+    ac.event_queue @done payload !ac.event<i32> capacity 8
+        ordering "time_then_sequence" domain @core id "done" path "done"
+    ac.resource @compute capacity 1 issue_width 1 ii 1
+        latency {kind = "fixed", ticks = 1 : i64}
+        lifecycle {reservation = "propose_commit", release = "balanced", cancellation = "explicit"}
+        ownership "exclusive" classes [] id "compute" path "compute"
+    ac.process @worker kind "workload" captures(%arg0 : i32) {
+    ^bb0(%value : i32):
+      ac.yield_sim
+    }
     ac.process @control kind "control" captures(%arg0 : i32) {
     ^bb0(%capture : i32):
       %c0 = arith.constant 0 : i64

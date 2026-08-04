@@ -2,7 +2,7 @@
 // RUN: %acir_opt %s | %acir_opt | %FileCheck %s
 
 builtin.module attributes {ac.contract_epoch = "0.1"} {
-  "ac.system"() <{sym_name = "soc", root = @Top, root_name = "root", tick_epoch = 0 : i64, tick_unit = "cycle", seed_policy = {kind = "fixed", value = 7 : i64}, instrumentation = [], result_schema = {id = "default", format = "json"}, selected = true}> : () -> ()
+  "ac.system"() <{sym_name = "soc", root = @Top, root_name = "root", tick_epoch = 0 : i64, tick_unit = "cycle", primary_workload = @Top::@workload, seed_policy = {kind = "fixed", value = 7 : i64}, instrumentation = [@Top::@workload::@trace], result_schema = {id = "default", format = "json"}, selected = true}> : () -> ()
   "ac.system"() <{sym_name = "leaf_harness", root = @Leaf, root_name = "leaf", tick_epoch = 0 : i64, tick_unit = "cycle", seed_policy = {kind = "fixed", value = 9 : i64}, instrumentation = [], result_schema = {id = "default", format = "json"}, selected = false}> : () -> ()
 
   "ac.module"() <{sym_name = "Top", function_type = (i32) -> i32, static_params = {}}> ({
@@ -10,6 +10,11 @@ builtin.module attributes {ac.contract_epoch = "0.1"} {
     %0 = "ac.instance"(%arg0) <{definition = @Leaf, sym_name = "child", stable_id = "child", path = "child", static_args = {}}> : (i32) -> i32
     "ac.instance"() <{definition = @Reusable, sym_name = "left", stable_id = "left", path = "left", static_args = {}}> : () -> ()
     "ac.instance"() <{definition = @Reusable, sym_name = "right", stable_id = "right", path = "right", static_args = {}}> : () -> ()
+    ac.process @workload kind "workload" captures(%arg0 : i32) {
+    ^bb0(%capture : i32):
+      ac.instrumentation @trace {}
+      ac.yield_sim
+    }
     "ac.return"(%0) : (i32) -> ()
   }) : () -> ()
 
@@ -55,6 +60,8 @@ builtin.module attributes {ac.contract_epoch = "0.1"} {
 }
 
 // CHECK: ac.system
+// CHECK-SAME: workload @Top::@workload
+// CHECK-SAME: instrumentation [@Top::@workload::@trace]
 // CHECK: ac.module
 // CHECK: ac.instance
 // CHECK: ac.return

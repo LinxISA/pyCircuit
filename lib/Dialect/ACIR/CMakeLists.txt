@@ -19,6 +19,7 @@ target_link_libraries(ACIRDialect PUBLIC
   MLIRDataLayoutInterfaces
   MLIRFunctionInterfaces
   MLIRPresburger
+  MLIRSCFDialect
   MLIRSideEffectInterfaces
 )
 target_include_directories(ACIRDialect PUBLIC

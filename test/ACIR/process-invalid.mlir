@@ -8,6 +8,8 @@
 // RUN: %not %acir_opt %t/result-live.mlir 2>&1 | %FileCheck %s --check-prefix=RESULT-LIVE
 // RUN: %not %acir_opt %t/duplicate-owner-name.mlir 2>&1 | %FileCheck %s --check-prefix=OWNER-NAME
 // RUN: %not %acir_opt %t/unstable-owner-segment.mlir 2>&1 | %FileCheck %s --check-prefix=OWNER-SEGMENT
+// RUN: %not %acir_opt %t/unreachable-suspension.mlir 2>&1 | %FileCheck %s --check-prefix=BACKEDGE
+// RUN: %not %acir_opt %t/for-iter-arg-live.mlir 2>&1 | %FileCheck %s --check-prefix=ITER-LIVE
 
 //--- bad-kind.mlir
 builtin.module attributes {ac.contract_epoch = "0.1"} {
@@ -34,7 +36,7 @@ builtin.module attributes {ac.contract_epoch = "0.1"} {
     ac.return
   }
 }
-// PROGRESS: scf.while in ac.process must contain an explicit suspension point
+// PROGRESS: every scf.while backedge must suspend or prove bounded progress
 
 //--- linear-live.mlir
 builtin.module attributes {ac.contract_epoch = "0.1"} {
@@ -119,3 +121,46 @@ builtin.module attributes {ac.contract_epoch = "0.1"} {
   }
 }
 // OWNER-SEGMENT: symbol name must be one stable hierarchy owner segment
+
+//--- unreachable-suspension.mlir
+builtin.module attributes {ac.contract_epoch = "0.1"} {
+  ac.module @M() parameters {} graph {
+    ac.process @p kind "control" {
+      %true = arith.constant true
+      %false = arith.constant false
+      scf.while : () -> () {
+        scf.condition(%true)
+      } do {
+        scf.if %false {
+          ac.wait_until %true
+        }
+        scf.yield
+      }
+      ac.yield_sim
+    }
+    ac.return
+  }
+}
+// BACKEDGE: every scf.while backedge must suspend or prove bounded progress
+
+//--- for-iter-arg-live.mlir
+builtin.module attributes {ac.contract_epoch = "0.1"} {
+  ac.module @M(!ac.resource_token<@r>) parameters {} graph {
+  ^bb0(%token : !ac.resource_token<@r>):
+    ac.process @p kind "control" captures(%token : !ac.resource_token<@r>) {
+    ^bb0(%captured : !ac.resource_token<@r>):
+      %lb = arith.constant 0 : index
+      %ub = arith.constant 4 : index
+      %step = arith.constant 1 : index
+      %true = arith.constant true
+      %result = scf.for %i = %lb to %ub step %step
+          iter_args(%iter = %captured) -> (!ac.resource_token<@r>) {
+        ac.wait_until %true
+        scf.yield %iter : !ac.resource_token<@r>
+      }
+      ac.yield_sim
+    }
+    ac.return
+  }
+}
+// ITER-LIVE: cannot remain live across suspension

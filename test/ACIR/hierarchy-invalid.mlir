@@ -134,9 +134,9 @@ builtin.module attributes {ac.contract_epoch = "0.1"} {
 //--- unresolved-workload.mlir
 builtin.module attributes {ac.contract_epoch = "0.1"} {
   "ac.module"() <{sym_name = "Top", function_type = () -> (), static_params = {}}> ({ "ac.return"() : () -> () }) : () -> ()
-  "ac.system"() <{sym_name = "s", root = @Top, root_name = "root", tick_epoch = 0 : i64, tick_unit = "cycle", primary_workload = @missing, seed_policy = {kind = "fixed", value = 0 : i64}, instrumentation = [], result_schema = {id = "default", format = "json"}, selected = true}> : () -> ()
+  "ac.system"() <{sym_name = "s", root = @Top, root_name = "root", tick_epoch = 0 : i64, tick_unit = "cycle", primary_workload = @Top::@missing, seed_policy = {kind = "fixed", value = 0 : i64}, instrumentation = [], result_schema = {id = "default", format = "json"}, selected = true}> : () -> ()
 }
-// WORKLOAD: primary workload '@missing' is unresolved
+// WORKLOAD: primary workload '@Top::@missing' is unresolved
 
 //--- direct-recursion.mlir
 builtin.module attributes {ac.contract_epoch = "0.1"} {
@@ -271,6 +271,6 @@ builtin.module attributes {ac.contract_epoch = "0.1"} {
 //--- unresolved-instrumentation.mlir
 builtin.module attributes {ac.contract_epoch = "0.1"} {
   "ac.module"() <{sym_name = "Top", function_type = () -> (), static_params = {}}> ({ "ac.return"() : () -> () }) : () -> ()
-  "ac.system"() <{sym_name = "s", root = @Top, root_name = "root", tick_epoch = 0 : i64, tick_unit = "cycle", seed_policy = {kind = "fixed", value = 0 : i64}, instrumentation = [@trace], result_schema = {id = "x", format = "json"}, selected = true}> : () -> ()
+  "ac.system"() <{sym_name = "s", root = @Top, root_name = "root", tick_epoch = 0 : i64, tick_unit = "cycle", seed_policy = {kind = "fixed", value = 0 : i64}, instrumentation = [@Top::@missing::@trace], result_schema = {id = "x", format = "json"}, selected = true}> : () -> ()
 }
-// INSTRUMENTATION-REF: instrumentation reference '@trace' does not resolve to ac.instrumentation
+// INSTRUMENTATION-REF: instrumentation reference '@Top::@missing::@trace' does not resolve to ac.instrumentation

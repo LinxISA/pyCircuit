@@ -417,15 +417,42 @@ TEST(ACIROpsTest, PublicBuildersConstructEveryTaskEightOperation) {
   context.loadDialect<ACIRDialect, mlir::arith::ArithDialect>();
   mlir::OpBuilder builder(&context);
   auto loc = builder.getUnknownLoc();
-  auto file = mlir::ModuleOp::create(loc);
-  builder.setInsertionPointToStart(file.getBody());
-  auto module = ModuleOp::create(builder, loc, "M",
-                                 builder.getFunctionType({}, {}),
-                                 builder.getDictionaryAttr({}));
-  builder.setInsertionPointToStart(module.addEntryBlock());
-
-  auto stat = StatOp::create(builder, loc, "count", "counter");
-  EXPECT_TRUE(stat);
+  auto file = mlir::parseSourceString<mlir::ModuleOp>(R"mlir(
+    builtin.module attributes {ac.contract_epoch = "0.1"} {
+      ac.protocol @fifo {
+        ac.role @sender dual @receiver cardinality "exclusive"
+        ac.role @receiver dual @sender cardinality "exclusive"
+        ac.state @idle initial true terminal false
+        ac.state @done initial false terminal true
+        ac.event @push from @sender to @receiver payload i32 action "offer"
+        ac.transition from @idle to @done on @push transfer true retain false guard {}
+      }
+      ac.module @M(i32) parameters {} graph {
+      ^bb0(%input : i32):
+        ac.time_domain @clock period 1 phase 0 scale 1
+        ac.queue @q payload i32 entries 4 ordering "fifo" protocol @fifo
+            ownership "exclusive" id "q" path "q"
+        ac.event_queue @events payload !ac.event<i32> capacity 4
+            ordering "time_then_sequence" domain @clock id "events" path "events"
+        ac.resource @resource capacity 1 issue_width 1 ii 1
+            latency {kind = "fixed", ticks = 1 : i64}
+            lifecycle {reservation = "propose_commit", release = "balanced", cancellation = "explicit"}
+            ownership "exclusive" classes [] id "resource" path "resource"
+        ac.address_space @memory width 32 unit "byte" id "memory" path "memory"
+        ac.stat @count kind "counter"
+        ac.process @worker kind "workload" captures(%input : i32) {
+        ^bb0(%value : i32):
+          ac.yield_sim
+        }
+        ac.return
+      }
+    }
+  )mlir",
+                                                      &context);
+  ASSERT_TRUE(file);
+  ModuleOp module = *file->getOps<ModuleOp>().begin();
+  builder.setInsertionPoint(&module.getBody().front().back());
+  StatOp stat = *module.getBody().front().getOps<StatOp>().begin();
   auto process = ProcessOp::create(builder, loc, "p", "control",
                                    mlir::ValueRange{});
   auto *body = &process.getBody().emplaceBlock();
@@ -460,10 +487,11 @@ TEST(ACIROpsTest, PublicBuildersConstructEveryTaskEightOperation) {
   EXPECT_TRUE(decoded && eof);
   auto runtimeRequire = RequireOp::create(builder, loc, i1, "require");
   EXPECT_TRUE(runtimeRequire);
-  EXPECT_TRUE(EnsureOp::create(builder, loc, i1, "ensure"));
-  EXPECT_TRUE(AssertOp::create(builder, loc, i1, "assert"));
-  auto probe = ProbeOp::create(builder, loc, builder.getI64Type(), "q",
-                               "queue");
+  auto runtimeEnsure = EnsureOp::create(builder, loc, i1, "ensure");
+  auto runtimeAssert = AssertOp::create(builder, loc, i1, "assert");
+  EXPECT_TRUE(runtimeEnsure && runtimeAssert);
+  auto probe =
+      ProbeOp::create(builder, loc, builder.getI32Type(), "q", "queue");
   auto storageProbe = ProbeOp::create(builder, loc, builder.getI64Type(),
                                       "memory", "storage");
   auto statAdd = StatAddOp::create(builder, loc, probe, "count");
@@ -473,6 +501,7 @@ TEST(ACIROpsTest, PublicBuildersConstructEveryTaskEightOperation) {
   instrumentation.getBody().emplaceBlock();
   auto yield = YieldSimOp::create(builder, loc);
   EXPECT_TRUE(yield);
+  EXPECT_TRUE(mlir::succeeded(mlir::verify(*file)));
 
   auto effectsOf = [](mlir::Operation *operation) {
     llvm::SmallVector<mlir::MemoryEffects::EffectInstance> effects;
@@ -487,13 +516,27 @@ TEST(ACIROpsTest, PublicBuildersConstructEveryTaskEightOperation) {
   };
   EXPECT_TRUE(hasResource(send, QueueStateResource::get()));
   EXPECT_TRUE(hasResource(send, ProtocolStateResource::get()));
+  EXPECT_TRUE(hasResource(recv, QueueStateResource::get()));
+  EXPECT_TRUE(hasResource(recv, ProtocolStateResource::get()));
   EXPECT_TRUE(hasResource(waitFor, ReservationStateResource::get()));
   EXPECT_TRUE(hasResource(schedule, ModuleStateResource::get()));
+  EXPECT_TRUE(hasResource(schedule, EventQueueStateResource::get()));
+  EXPECT_TRUE(hasResource(waitUntil, EventQueueStateResource::get()));
+  EXPECT_TRUE(hasResource(waitUntil, ModuleStateResource::get()));
+  EXPECT_TRUE(hasResource(waitFor, ModuleStateResource::get()));
   EXPECT_TRUE(hasResource(storageProbe, StorageStateResource::get()));
   EXPECT_TRUE(hasResource(awaitEvent, EventQueueStateResource::get()));
+  EXPECT_TRUE(hasResource(awaitEvent, ModuleStateResource::get()));
+  EXPECT_TRUE(hasResource(yield, ModuleStateResource::get()));
   EXPECT_TRUE(hasResource(cursor, TracePositionResource::get()));
   EXPECT_TRUE(hasResource(cursor, ExternalIOResource::get()));
+  EXPECT_TRUE(hasResource(next, TracePositionResource::get()));
+  EXPECT_TRUE(hasResource(next, ExternalIOResource::get()));
+  EXPECT_TRUE(hasResource(position, TracePositionResource::get()));
+  EXPECT_TRUE(hasResource(eof, TracePositionResource::get()));
+  EXPECT_TRUE(hasResource(probe, QueueStateResource::get()));
   EXPECT_TRUE(hasResource(stat, StatisticsResource::get()));
+  EXPECT_TRUE(hasResource(statAdd, StatisticsResource::get()));
   auto runtimeContractEffects = effectsOf(runtimeRequire);
   ASSERT_EQ(runtimeContractEffects.size(), 1u);
   auto runtimeContractParameters = mlir::cast<mlir::DictionaryAttr>(
@@ -502,6 +545,11 @@ TEST(ACIROpsTest, PublicBuildersConstructEveryTaskEightOperation) {
                 .getAs<mlir::StringAttr>("contract_phase")
                 .getValue(),
             "runtime");
+  EXPECT_TRUE(hasResource(runtimeEnsure, ExternalIOResource::get()));
+  EXPECT_TRUE(hasResource(runtimeAssert, ExternalIOResource::get()));
+  EXPECT_TRUE(mlir::isMemoryEffectFree(decoded));
+  EXPECT_TRUE(mlir::isa<ObservationOpInterface>(*instrumentation));
+  EXPECT_FALSE(mlir::isMemoryEffectFree(process));
   EXPECT_FALSE(mlir::isMemoryEffectFree(send));
   EXPECT_FALSE(mlir::isMemoryEffectFree(next));
   EXPECT_FALSE(mlir::isMemoryEffectFree(position));
@@ -532,6 +580,29 @@ TEST(ACIROpsTest, PublicBuildersConstructEveryTaskEightOperation) {
   });
   EXPECT_EQ(positionWrites, 0u);
   EXPECT_EQ(eofWrites, 0u);
+}
+
+TEST(ACIROpsTest, UnresolvedRuntimeReferencesDoNotInventEffects) {
+  mlir::MLIRContext context;
+  context.loadDialect<ACIRDialect, mlir::arith::ArithDialect>();
+  mlir::OpBuilder builder(&context);
+  auto loc = builder.getUnknownLoc();
+  auto file = mlir::ModuleOp::create(loc);
+  builder.setInsertionPointToStart(file.getBody());
+  auto module =
+      ModuleOp::create(builder, loc, "M", builder.getFunctionType({}, {}),
+                       builder.getDictionaryAttr({}));
+  builder.setInsertionPointToStart(module.addEntryBlock());
+  auto process =
+      ProcessOp::create(builder, loc, "p", "control", mlir::ValueRange{});
+  builder.setInsertionPointToStart(&process.getBody().emplaceBlock());
+  auto value = mlir::arith::ConstantOp::create(builder, loc,
+                                               builder.getI32IntegerAttr(1));
+  auto send =
+      TrySendOp::create(builder, loc, builder.getI1Type(), value, "missing");
+  llvm::SmallVector<mlir::MemoryEffects::EffectInstance> effects;
+  mlir::cast<mlir::MemoryEffectOpInterface>(*send).getEffects(effects);
+  EXPECT_TRUE(effects.empty());
 }
 
 TEST(ACIROpsTest, TaskEightRegistryDeltaIsExactlyTwentyOperations) {
