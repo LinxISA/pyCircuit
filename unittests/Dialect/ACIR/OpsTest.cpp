@@ -502,51 +502,125 @@ TEST(ACIROpsTest, PublicBuildersConstructEveryTaskEightOperation) {
   auto yield = YieldSimOp::create(builder, loc);
   EXPECT_TRUE(yield);
   EXPECT_TRUE(mlir::succeeded(mlir::verify(*file)));
+  std::string printed;
+  llvm::raw_string_ostream(printed) << *file;
+  auto reparsed = mlir::parseSourceString<mlir::ModuleOp>(printed, &context);
+  ASSERT_TRUE(reparsed);
+  EXPECT_TRUE(mlir::succeeded(mlir::verify(*reparsed)));
 
   auto effectsOf = [](mlir::Operation *operation) {
     llvm::SmallVector<mlir::MemoryEffects::EffectInstance> effects;
     mlir::cast<mlir::MemoryEffectOpInterface>(operation).getEffects(effects);
     return effects;
   };
-  auto hasResource = [&](mlir::Operation *operation,
-                         mlir::SideEffects::Resource *resource) {
-    return llvm::any_of(effectsOf(operation), [&](const auto &effect) {
-      return effect.getResource() == resource && effect.getSymbolRef();
-    });
+  struct ExpectedEffect {
+    bool write;
+    mlir::SideEffects::Resource *resource;
+    mlir::SymbolRefAttr symbol;
+    mlir::DictionaryAttr parameters;
   };
-  EXPECT_TRUE(hasResource(send, QueueStateResource::get()));
-  EXPECT_TRUE(hasResource(send, ProtocolStateResource::get()));
-  EXPECT_TRUE(hasResource(recv, QueueStateResource::get()));
-  EXPECT_TRUE(hasResource(recv, ProtocolStateResource::get()));
-  EXPECT_TRUE(hasResource(waitFor, ReservationStateResource::get()));
-  EXPECT_TRUE(hasResource(schedule, ModuleStateResource::get()));
-  EXPECT_TRUE(hasResource(schedule, EventQueueStateResource::get()));
-  EXPECT_TRUE(hasResource(waitUntil, EventQueueStateResource::get()));
-  EXPECT_TRUE(hasResource(waitUntil, ModuleStateResource::get()));
-  EXPECT_TRUE(hasResource(waitFor, ModuleStateResource::get()));
-  EXPECT_TRUE(hasResource(storageProbe, StorageStateResource::get()));
-  EXPECT_TRUE(hasResource(awaitEvent, EventQueueStateResource::get()));
-  EXPECT_TRUE(hasResource(awaitEvent, ModuleStateResource::get()));
-  EXPECT_TRUE(hasResource(yield, ModuleStateResource::get()));
-  EXPECT_TRUE(hasResource(cursor, TracePositionResource::get()));
-  EXPECT_TRUE(hasResource(cursor, ExternalIOResource::get()));
-  EXPECT_TRUE(hasResource(next, TracePositionResource::get()));
-  EXPECT_TRUE(hasResource(next, ExternalIOResource::get()));
-  EXPECT_TRUE(hasResource(position, TracePositionResource::get()));
-  EXPECT_TRUE(hasResource(eof, TracePositionResource::get()));
-  EXPECT_TRUE(hasResource(probe, QueueStateResource::get()));
-  EXPECT_TRUE(hasResource(stat, StatisticsResource::get()));
-  EXPECT_TRUE(hasResource(statAdd, StatisticsResource::get()));
-  auto runtimeContractEffects = effectsOf(runtimeRequire);
-  ASSERT_EQ(runtimeContractEffects.size(), 1u);
-  auto runtimeContractParameters = mlir::cast<mlir::DictionaryAttr>(
-      runtimeContractEffects.front().getParameters());
-  EXPECT_EQ(runtimeContractParameters
-                .getAs<mlir::StringAttr>("contract_phase")
-                .getValue(),
-            "runtime");
-  EXPECT_TRUE(hasResource(runtimeEnsure, ExternalIOResource::get()));
-  EXPECT_TRUE(hasResource(runtimeAssert, ExternalIOResource::get()));
+  auto expectedEffect = [&](bool write, mlir::SideEffects::Resource *resource,
+                            llvm::StringRef identity, llvm::StringRef kind,
+                            llvm::StringRef contractPhase = "") {
+    llvm::SmallVector<mlir::NamedAttribute> parameters = {
+        builder.getNamedAttr("identity_phase",
+                             builder.getStringAttr("definition_pre_freeze")),
+        builder.getNamedAttr("owner_kind", builder.getStringAttr(kind)),
+        builder.getNamedAttr("identity", builder.getStringAttr(identity)),
+    };
+    if (!contractPhase.empty())
+      parameters.push_back(builder.getNamedAttr(
+          "contract_phase", builder.getStringAttr(contractPhase)));
+    return ExpectedEffect{
+        write, resource,
+        mlir::SymbolRefAttr::get(
+            &context, "M", {mlir::FlatSymbolRefAttr::get(&context, identity)}),
+        builder.getDictionaryAttr(parameters)};
+  };
+  auto expectExactEffects =
+      [&](mlir::Operation *operation,
+          std::initializer_list<ExpectedEffect> expected) {
+        auto actual = effectsOf(operation);
+        ASSERT_EQ(actual.size(), expected.size())
+            << operation->getName().getStringRef().str();
+        llvm::SmallVector<bool> matched(actual.size());
+        for (const ExpectedEffect &want : expected) {
+          bool found = false;
+          for (auto [index, got] : llvm::enumerate(actual)) {
+            bool effectMatches =
+                want.write
+                    ? mlir::isa<mlir::MemoryEffects::Write>(got.getEffect())
+                    : mlir::isa<mlir::MemoryEffects::Read>(got.getEffect());
+            if (!matched[index] && effectMatches &&
+                got.getResource() == want.resource &&
+                got.getSymbolRef() == want.symbol &&
+                got.getParameters() == want.parameters) {
+              matched[index] = true;
+              found = true;
+              break;
+            }
+          }
+          EXPECT_TRUE(found)
+              << operation->getName().getStringRef().str() << " missing exact "
+              << (want.write ? "write" : "read") << " effect";
+        }
+      };
+  auto read = [&](mlir::SideEffects::Resource *resource,
+                  llvm::StringRef identity, llvm::StringRef kind,
+                  llvm::StringRef contractPhase = "") {
+    return expectedEffect(false, resource, identity, kind, contractPhase);
+  };
+  auto write = [&](mlir::SideEffects::Resource *resource,
+                   llvm::StringRef identity, llvm::StringRef kind,
+                   llvm::StringRef contractPhase = "") {
+    return expectedEffect(true, resource, identity, kind, contractPhase);
+  };
+
+  for (mlir::Operation *operation : {send.getOperation(), recv.getOperation()})
+    expectExactEffects(operation,
+                       {read(QueueStateResource::get(), "q", "queue"),
+                        write(QueueStateResource::get(), "q", "queue"),
+                        read(ProtocolStateResource::get(), "q", "protocol"),
+                        write(ProtocolStateResource::get(), "q", "protocol")});
+  expectExactEffects(
+      schedule,
+      {write(ModuleStateResource::get(), "worker", "module"),
+       write(EventQueueStateResource::get(), "worker", "event_queue")});
+  expectExactEffects(waitUntil,
+                     {read(EventQueueStateResource::get(), "p", "event_queue"),
+                      write(ModuleStateResource::get(), "p", "module")});
+  expectExactEffects(
+      waitFor, {read(ReservationStateResource::get(), "resource", "resource"),
+                write(ModuleStateResource::get(), "p", "module")});
+  expectExactEffects(
+      awaitEvent,
+      {read(EventQueueStateResource::get(), "events", "event_queue"),
+       write(ModuleStateResource::get(), "p", "module")});
+  expectExactEffects(yield, {write(ModuleStateResource::get(), "p", "module")});
+  expectExactEffects(cursor,
+                     {read(ExternalIOResource::get(), "p/pto", "external_io"),
+                      write(TracePositionResource::get(), "p/pto", "trace")});
+  expectExactEffects(next,
+                     {read(TracePositionResource::get(), "p/pto", "trace"),
+                      write(TracePositionResource::get(), "p/pto", "trace"),
+                      read(ExternalIOResource::get(), "p/pto", "external_io")});
+  for (mlir::Operation *operation :
+       {position.getOperation(), eof.getOperation()})
+    expectExactEffects(operation,
+                       {read(TracePositionResource::get(), "p/pto", "trace")});
+  for (mlir::Operation *operation :
+       {runtimeRequire.getOperation(), runtimeEnsure.getOperation(),
+        runtimeAssert.getOperation()})
+    expectExactEffects(operation, {write(ExternalIOResource::get(), "p",
+                                         "contract", "runtime")});
+  expectExactEffects(probe, {read(QueueStateResource::get(), "q", "queue")});
+  expectExactEffects(storageProbe,
+                     {read(StorageStateResource::get(), "memory", "storage")});
+  expectExactEffects(stat,
+                     {write(StatisticsResource::get(), "count", "statistics")});
+  expectExactEffects(statAdd,
+                     {read(StatisticsResource::get(), "count", "statistics"),
+                      write(StatisticsResource::get(), "count", "statistics")});
   EXPECT_TRUE(mlir::isMemoryEffectFree(decoded));
   EXPECT_TRUE(mlir::isa<ObservationOpInterface>(*instrumentation));
   EXPECT_FALSE(mlir::isMemoryEffectFree(process));
@@ -555,31 +629,6 @@ TEST(ACIROpsTest, PublicBuildersConstructEveryTaskEightOperation) {
   EXPECT_FALSE(mlir::isMemoryEffectFree(position));
   EXPECT_FALSE(mlir::isMemoryEffectFree(eof));
   EXPECT_FALSE(mlir::isMemoryEffectFree(statAdd));
-
-  auto traceSymbol = [&](mlir::Operation *operation) {
-    for (const auto &effect : effectsOf(operation))
-      if (effect.getResource() == TracePositionResource::get())
-        return effect.getSymbolRef();
-    return mlir::SymbolRefAttr();
-  };
-  EXPECT_EQ(traceSymbol(cursor), traceSymbol(next));
-  EXPECT_EQ(traceSymbol(cursor), traceSymbol(position));
-  EXPECT_EQ(traceSymbol(cursor), traceSymbol(eof));
-  EXPECT_EQ(traceSymbol(cursor),
-            mlir::SymbolRefAttr::get(
-                &context, "M",
-                {mlir::FlatSymbolRefAttr::get(&context, "p/pto")}));
-  unsigned positionWrites = llvm::count_if(
-      effectsOf(position), [](const auto &effect) {
-        return effect.getResource() == TracePositionResource::get() &&
-               mlir::isa<mlir::MemoryEffects::Write>(effect.getEffect());
-      });
-  unsigned eofWrites = llvm::count_if(effectsOf(eof), [](const auto &effect) {
-    return effect.getResource() == TracePositionResource::get() &&
-           mlir::isa<mlir::MemoryEffects::Write>(effect.getEffect());
-  });
-  EXPECT_EQ(positionWrites, 0u);
-  EXPECT_EQ(eofWrites, 0u);
 }
 
 TEST(ACIROpsTest, UnresolvedRuntimeReferencesDoNotInventEffects) {
@@ -623,6 +672,68 @@ TEST(ACIROpsTest, TaskEightRegistryDeltaIsExactlyTwentyOperations) {
   EXPECT_FALSE(mlir::OperationName("ac.try_issue", &context).isRegistered());
   EXPECT_FALSE(mlir::OperationName("ac.connect", &context).isRegistered());
   EXPECT_EQ(context.getRegisteredOperationsByDialect("ac").size(), 55u);
+}
+
+TEST(ACIROpsTest, ProcessLinearLivenessScalesNearLinearly) {
+  mlir::MLIRContext context;
+  context.loadDialect<ACIRDialect, mlir::arith::ArithDialect,
+                      mlir::scf::SCFDialect>();
+
+  auto buildProcess = [&](unsigned valueCount) {
+    std::string source;
+    llvm::raw_string_ostream os(source);
+    os << "builtin.module attributes {ac.contract_epoch = \"0.1\"} {\n"
+          "  ac.module @Scale() parameters {} graph {\n"
+          "    ac.process @worker kind \"control\" {\n";
+    for (unsigned index = 0; index != valueCount; ++index)
+      os << "      %cursor" << index << " = ac.trace.open source \"source"
+         << index << "\"\n"
+         << "      %next" << index << ", %value" << index << ", %advanced"
+         << index << " = ac.trace.next %cursor" << index
+         << " from source \"source" << index
+         << "\" : !ac.resource_token<@resource>\n";
+    for (unsigned index = 0; index != valueCount; ++index)
+      os << "      %decoded" << index << " = ac.trace.decode %value" << index
+         << " : !ac.resource_token<@resource> to i64\n";
+    os << "      ac.yield_sim\n"
+          "    }\n"
+          "    ac.return\n"
+          "  }\n"
+          "}\n";
+    auto file = mlir::parseSourceString<mlir::ModuleOp>(source, &context);
+    EXPECT_TRUE(file);
+    return file;
+  };
+  auto verifyTimed = [&](unsigned valueCount) {
+    auto file = buildProcess(valueCount);
+    if (!file)
+      return int64_t{0};
+    ProcessOp process;
+    file->walk([&](ProcessOp candidate) { process = candidate; });
+    EXPECT_TRUE(process);
+    EXPECT_TRUE(mlir::succeeded(process.verify()));
+    int64_t bestMicros = std::numeric_limits<int64_t>::max();
+    for (unsigned repetition = 0; repetition != 3; ++repetition) {
+      auto start = std::chrono::steady_clock::now();
+      EXPECT_TRUE(mlir::succeeded(process.verify()));
+      auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(
+                         std::chrono::steady_clock::now() - start)
+                         .count();
+      bestMicros = std::min(bestMicros, elapsed);
+    }
+    return bestMicros;
+  };
+
+  constexpr unsigned smallSize = 1000;
+  constexpr unsigned largeSize = 4000;
+  int64_t smallMicros = verifyTimed(smallSize);
+  int64_t largeMicros = verifyTimed(largeSize);
+  RecordProperty("small_values", smallSize);
+  RecordProperty("large_values", largeSize);
+  RecordProperty("small_microseconds", smallMicros);
+  RecordProperty("large_microseconds", largeMicros);
+  EXPECT_GT(smallMicros, 0);
+  EXPECT_LT(largeMicros, smallMicros * 6 + 1000);
 }
 
 TEST(ACIROpsTest, LargeArrayVerificationIsDeterministic) {

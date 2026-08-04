@@ -10,6 +10,9 @@
 // RUN: %not %acir_opt %t/unstable-owner-segment.mlir 2>&1 | %FileCheck %s --check-prefix=OWNER-SEGMENT
 // RUN: %not %acir_opt %t/unreachable-suspension.mlir 2>&1 | %FileCheck %s --check-prefix=BACKEDGE
 // RUN: %not %acir_opt %t/for-iter-arg-live.mlir 2>&1 | %FileCheck %s --check-prefix=ITER-LIVE
+// RUN: %not %acir_opt %t/if-path-live.mlir 2>&1 | %FileCheck %s --check-prefix=IF-LIVE
+// RUN: %not %acir_opt %t/while-iter-arg-live.mlir 2>&1 | %FileCheck %s --check-prefix=WHILE-LIVE
+// RUN: %not %acir_opt %t/malformed-scf.mlir 2>&1 | %FileCheck %s --check-prefix=MALFORMED
 
 //--- bad-kind.mlir
 builtin.module attributes {ac.contract_epoch = "0.1"} {
@@ -164,3 +167,66 @@ builtin.module attributes {ac.contract_epoch = "0.1"} {
   }
 }
 // ITER-LIVE: cannot remain live across suspension
+
+//--- if-path-live.mlir
+builtin.module attributes {ac.contract_epoch = "0.1"} {
+  ac.module @M(!ac.resource_token<@r>, !ac.resource_token<@r>, i1)
+      parameters {} graph {
+  ^bb0(%token : !ac.resource_token<@r>, %worker_token : !ac.resource_token<@r>,
+       %condition : i1):
+    ac.process @worker kind "workload"
+        captures(%worker_token : !ac.resource_token<@r>) {
+    ^bb0(%value : !ac.resource_token<@r>):
+      ac.yield_sim
+    }
+    ac.process @p kind "control"
+        captures(%token, %condition : !ac.resource_token<@r>, i1) {
+    ^bb0(%captured : !ac.resource_token<@r>, %branch : i1):
+      %delay = arith.constant 1 : i64
+      scf.if %branch {
+        ac.wait_until %branch
+        ac.schedule @worker %captured after %delay : !ac.resource_token<@r>
+      }
+      ac.yield_sim
+    }
+    ac.return
+  }
+}
+// IF-LIVE: cannot remain live across suspension
+
+//--- while-iter-arg-live.mlir
+builtin.module attributes {ac.contract_epoch = "0.1"} {
+  ac.module @M(!ac.resource_token<@r>, i1) parameters {} graph {
+  ^bb0(%token : !ac.resource_token<@r>, %condition : i1):
+    ac.process @p kind "control"
+        captures(%token, %condition : !ac.resource_token<@r>, i1) {
+    ^bb0(%captured : !ac.resource_token<@r>, %keep_running : i1):
+      %result = scf.while (%iter = %captured)
+          : (!ac.resource_token<@r>) -> !ac.resource_token<@r> {
+        scf.condition(%keep_running) %iter : !ac.resource_token<@r>
+      } do {
+      ^bb0(%after : !ac.resource_token<@r>):
+        ac.wait_until %keep_running
+        scf.yield %after : !ac.resource_token<@r>
+      }
+      ac.yield_sim
+    }
+    ac.return
+  }
+}
+// WHILE-LIVE: cannot remain live across suspension
+
+//--- malformed-scf.mlir
+builtin.module attributes {ac.contract_epoch = "0.1"} {
+  "ac.module"() <{sym_name = "M", function_type = () -> (), static_params = {}}> ({
+    "ac.process"() <{kind = "control", sym_name = "p"}> ({
+      %true = "arith.constant"() <{value = true}> : () -> i1
+      "scf.if"(%true) ({
+        "ac.wait_until"(%true) : (i1) -> ()
+      }) : (i1) -> ()
+      "ac.yield_sim"() : () -> ()
+    }) : () -> ()
+    "ac.return"() : () -> ()
+  }) : () -> ()
+}
+// MALFORMED: malformed scf.if region must terminate with scf.yield

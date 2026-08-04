@@ -48,6 +48,21 @@ builtin.module attributes {ac.contract_epoch = "0.1"} {
     }
     ac.return
   }
+  ac.module @MergedTrace(i1) parameters {} graph {
+  ^bb0(%condition : i1):
+    ac.process @workload kind "workload" captures(%condition : i1) {
+    ^bb0(%branch : i1):
+      %cursor = ac.trace.open source "merged"
+      %merged = scf.if %branch -> index {
+        scf.yield %cursor : index
+      } else {
+        scf.yield %cursor : index
+      }
+      %next, %raw, %advanced = ac.trace.next %merged from source "merged" : i32
+      ac.yield_sim
+    }
+    ac.return
+  }
 }
 
 // CHECK: ac.trace.open source "pto"
@@ -58,6 +73,7 @@ builtin.module attributes {ac.contract_epoch = "0.1"} {
 // CHECK: ac.module @LoopTrace
 // CHECK: scf.while
 // CHECK: ac.trace.next
+// CHECK: ac.module @MergedTrace
 // EFFECTS: ac.trace.open
 // EFFECTS: ac.trace.next
 // EFFECTS: ac.trace.position

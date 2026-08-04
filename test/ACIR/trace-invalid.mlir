@@ -7,6 +7,7 @@
 // RUN: %not %acir_opt %t/source-is-not-path.mlir 2>&1 | %FileCheck %s --check-prefix=SOURCE-ID
 // RUN: %not %acir_opt %t/forwarded-fork.mlir 2>&1 | %FileCheck %s --check-prefix=FORWARDED-FORK
 // RUN: %not %acir_opt %t/ambiguous-merge.mlir 2>&1 | %FileCheck %s --check-prefix=AMBIGUOUS
+// RUN: %not %acir_opt %t/cursor-noncursor-merge.mlir 2>&1 | %FileCheck %s --check-prefix=NONCURSOR-MERGE
 
 //--- forked-cursor.mlir
 builtin.module attributes {ac.contract_epoch = "0.1"} {
@@ -130,3 +131,24 @@ builtin.module attributes {ac.contract_epoch = "0.1"} {
   }
 }
 // AMBIGUOUS: trace cursor forwarding merges distinct provenance
+
+//--- cursor-noncursor-merge.mlir
+builtin.module attributes {ac.contract_epoch = "0.1"} {
+  ac.module @M(i1) parameters {} graph {
+  ^bb0(%condition : i1):
+    ac.process @p kind "workload" captures(%condition : i1) {
+    ^bb0(%branch : i1):
+      %cursor = ac.trace.open source "pto"
+      %ordinary = index.constant 0
+      %merged = scf.if %branch -> index {
+        scf.yield %cursor : index
+      } else {
+        scf.yield %ordinary : index
+      }
+      %next, %raw, %advanced = ac.trace.next %merged from source "pto" : i32
+      ac.yield_sim
+    }
+    ac.return
+  }
+}
+// NONCURSOR-MERGE: trace cursor forwarding merges cursor and non-cursor values

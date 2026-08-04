@@ -2305,107 +2305,205 @@ std::optional<bool> constantBool(Value value) {
   return std::nullopt;
 }
 
-bool regionMaySuspend(Region &region);
-
-bool operationMaySuspend(Operation *operation) {
-  if (isSuspension(operation))
-    return true;
-  if (auto ifOp = dyn_cast<scf::IfOp>(operation)) {
-    if (std::optional<bool> condition = constantBool(ifOp.getCondition()))
-      return *condition ? regionMaySuspend(ifOp.getThenRegion())
-                        : regionMaySuspend(ifOp.getElseRegion());
-  }
-  for (Region &region : operation->getRegions())
-    if (regionMaySuspend(region))
-      return true;
-  return false;
-}
-
-bool regionMaySuspend(Region &region) {
-  for (Block &block : region)
-    for (Operation &operation : block)
-      if (operationMaySuspend(&operation))
-        return true;
-  return false;
-}
-
-bool regionGuaranteesSuspend(Region &region) {
-  if (region.empty())
-    return false;
-  for (Operation &operation : region.front()) {
-    if (isSuspension(&operation))
-      return true;
-    auto ifOp = dyn_cast<scf::IfOp>(operation);
-    if (!ifOp)
-      continue;
-    if (std::optional<bool> condition = constantBool(ifOp.getCondition())) {
-      Region &taken = *condition ? ifOp.getThenRegion() : ifOp.getElseRegion();
-      if (regionGuaranteesSuspend(taken))
-        return true;
-      continue;
-    }
-    if (!ifOp.getElseRegion().empty() &&
-        regionGuaranteesSuspend(ifOp.getThenRegion()) &&
-        regionGuaranteesSuspend(ifOp.getElseRegion()))
-      return true;
-  }
-  return false;
-}
-
-Operation *ancestorInBlock(Operation *operation, Block *block) {
-  while (operation && operation->getBlock() != block)
-    operation = operation->getParentOp();
-  return operation;
-}
-
-LogicalResult verifyLinearLiveness(ProcessOp process) {
+LogicalResult verifySupportedSCFShape(ProcessOp process) {
   LogicalResult result = success();
-  process.getBody().walk([&](Block *block) {
-    if (failed(result))
-      return WalkResult::interrupt();
-    llvm::DenseMap<Operation *, unsigned> order;
-    unsigned ordinal = 0;
-    for (Operation &operation : *block)
-      order.try_emplace(&operation, ordinal++);
-
-    auto verifyValue = [&](Value value,
-                           int64_t definitionOrder) -> LogicalResult {
-      if (!isLinearAcrossSuspension(value.getType()))
-        return success();
-      for (OpOperand &use : value.getUses()) {
-        Operation *usePosition = ancestorInBlock(use.getOwner(), block);
-        if (!usePosition)
-          continue;
-        unsigned useOrder = order.lookup(usePosition);
-        for (Operation &candidate : *block) {
-          unsigned candidateOrder = order.lookup(&candidate);
-          if (candidateOrder <= definitionOrder || candidateOrder > useOrder)
-            continue;
-          if (operationMaySuspend(&candidate) &&
-              (candidateOrder < useOrder || use.getOwner() != usePosition))
-            return process.emitOpError()
-                   << "value of type " << value.getType()
-                   << " cannot remain live across suspension";
-        }
+  process.getBody().walk([&](Operation *operation) {
+    auto requireTerminator = [&](Region &region, StringRef owner,
+                                 StringRef terminator) {
+      if (region.empty() || !llvm::hasSingleElement(region) ||
+          region.front().empty() ||
+          region.front().back().getName().getStringRef() != terminator) {
+        operation->emitOpError()
+            << "malformed " << owner << " region must terminate with "
+            << terminator;
+        result = failure();
+        return false;
       }
-      return success();
+      return true;
     };
-
-    for (BlockArgument argument : block->getArguments())
-      if (failed(verifyValue(argument, -1))) {
+    if (isa<scf::IfOp>(operation)) {
+      if (operation->getNumRegions() != 2) {
+        operation->emitOpError(
+            "malformed scf.if region must terminate with scf.yield");
         result = failure();
         return WalkResult::interrupt();
       }
-    for (Operation &operation : *block)
-      for (Value value : operation.getResults())
-        if (failed(verifyValue(value, order.lookup(&operation)))) {
-          result = failure();
-          return WalkResult::interrupt();
-        }
+      Region &elseRegion = operation->getRegion(1);
+      if (!requireTerminator(operation->getRegion(0), "scf.if", "scf.yield") ||
+          (!elseRegion.empty() &&
+           !requireTerminator(elseRegion, "scf.if", "scf.yield")))
+        return WalkResult::interrupt();
+      if (elseRegion.empty() && operation->getNumResults() != 0) {
+        operation->emitOpError(
+            "malformed scf.if region must terminate with scf.yield");
+        result = failure();
+        return WalkResult::interrupt();
+      }
+    } else if (isa<scf::ForOp>(operation)) {
+      if (operation->getNumRegions() != 1 ||
+          !requireTerminator(operation->getRegion(0), "scf.for", "scf.yield"))
+        return WalkResult::interrupt();
+    } else if (isa<scf::WhileOp>(operation)) {
+      if (operation->getNumRegions() != 2 ||
+          !requireTerminator(operation->getRegion(0), "scf.while before",
+                             "scf.condition") ||
+          !requireTerminator(operation->getRegion(1), "scf.while after",
+                             "scf.yield"))
+        return WalkResult::interrupt();
+    }
     return WalkResult::advance();
   });
   return result;
 }
+
+class StructuredSuspensionAnalysis {
+public:
+  explicit StructuredSuspensionAnalysis(ProcessOp process) {
+    buildSummaries(process.getBody());
+    buildEpochs(process.getBody());
+  }
+
+  bool guaranteesSuspend(Region &region) const {
+    return regionGuarantees.lookup(&region);
+  }
+
+  LogicalResult verifyLinearLiveness(ProcessOp process) const {
+    LogicalResult result = success();
+    process.getBody().walk([&](Block *block) {
+      if (failed(result) || !reachableBlocks.contains(block))
+        return failed(result) ? WalkResult::interrupt() : WalkResult::advance();
+      auto verifyValue = [&](Value value,
+                             uint64_t definitionEpoch) -> LogicalResult {
+        if (!isLinearAcrossSuspension(value.getType()))
+          return success();
+        for (OpOperand &use : value.getUses()) {
+          if (!reachableBlocks.contains(use.getOwner()->getBlock()))
+            continue;
+          if (beforeEpoch.lookup(use.getOwner()) > definitionEpoch)
+            return process.emitOpError()
+                   << "value of type " << value.getType()
+                   << " cannot remain live across suspension";
+        }
+        return success();
+      };
+      uint64_t entryEpoch = blockEntryEpoch.lookup(block);
+      for (BlockArgument argument : block->getArguments())
+        if (failed(verifyValue(argument, entryEpoch))) {
+          result = failure();
+          return WalkResult::interrupt();
+        }
+      for (Operation &operation : *block)
+        for (Value value : operation.getResults())
+          if (failed(verifyValue(value, afterEpoch.lookup(&operation)))) {
+            result = failure();
+            return WalkResult::interrupt();
+          }
+      return WalkResult::advance();
+    });
+    return result;
+  }
+
+private:
+  void buildSummaries(Region &root) {
+    SmallVector<std::pair<Operation *, bool>> worklist;
+    for (Block &block : llvm::reverse(root))
+      for (Operation &operation : llvm::reverse(block))
+        worklist.emplace_back(&operation, false);
+    while (!worklist.empty()) {
+      auto [operation, visited] = worklist.pop_back_val();
+      if (!visited) {
+        worklist.emplace_back(operation, true);
+        for (Region &region : llvm::reverse(operation->getRegions()))
+          for (Block &block : llvm::reverse(region))
+            for (Operation &nested : llvm::reverse(block))
+              worklist.emplace_back(&nested, false);
+        continue;
+      }
+      for (Region &region : operation->getRegions()) {
+        bool may = false;
+        bool guarantees = false;
+        for (Block &block : region)
+          for (Operation &nested : block) {
+            may |= operationMaySuspend.lookup(&nested);
+            guarantees |= operationGuaranteesSuspend.lookup(&nested);
+          }
+        regionMaySuspend.try_emplace(&region, may);
+        regionGuarantees.try_emplace(&region, guarantees);
+      }
+      bool may = isSuspension(operation);
+      bool guarantees = isSuspension(operation);
+      if (auto ifOp = dyn_cast<scf::IfOp>(operation)) {
+        if (std::optional<bool> condition = constantBool(ifOp.getCondition())) {
+          Region &taken = operation->getRegion(*condition ? 0 : 1);
+          may |= regionMaySuspend.lookup(&taken);
+          guarantees |= regionGuarantees.lookup(&taken);
+        } else {
+          Region &thenRegion = operation->getRegion(0);
+          Region &elseRegion = operation->getRegion(1);
+          may |= regionMaySuspend.lookup(&thenRegion) ||
+                 regionMaySuspend.lookup(&elseRegion);
+          guarantees |= !elseRegion.empty() &&
+                        regionGuarantees.lookup(&thenRegion) &&
+                        regionGuarantees.lookup(&elseRegion);
+        }
+      } else {
+        for (Region &region : operation->getRegions())
+          may |= regionMaySuspend.lookup(&region);
+      }
+      operationMaySuspend.try_emplace(operation, may);
+      operationGuaranteesSuspend.try_emplace(operation, guarantees);
+    }
+    bool may = false;
+    bool guarantees = false;
+    for (Block &block : root)
+      for (Operation &operation : block) {
+        may |= operationMaySuspend.lookup(&operation);
+        guarantees |= operationGuaranteesSuspend.lookup(&operation);
+      }
+    regionMaySuspend.try_emplace(&root, may);
+    regionGuarantees.try_emplace(&root, guarantees);
+  }
+
+  void buildEpochs(Region &root) {
+    SmallVector<std::pair<Block *, uint64_t>> worklist;
+    for (Block &block : root)
+      worklist.emplace_back(&block, 0);
+    while (!worklist.empty()) {
+      auto [block, entryEpoch] = worklist.pop_back_val();
+      if (!reachableBlocks.insert(block).second)
+        continue;
+      blockEntryEpoch.try_emplace(block, entryEpoch);
+      uint64_t epoch = entryEpoch;
+      for (Operation &operation : *block) {
+        beforeEpoch.try_emplace(&operation, epoch);
+        SmallVector<unsigned> reachableRegions;
+        if (auto ifOp = dyn_cast<scf::IfOp>(operation)) {
+          if (std::optional<bool> condition = constantBool(ifOp.getCondition()))
+            reachableRegions.push_back(*condition ? 0 : 1);
+          else
+            reachableRegions.append({0, 1});
+        } else {
+          for (unsigned index = 0; index < operation.getNumRegions(); ++index)
+            reachableRegions.push_back(index);
+        }
+        for (unsigned index : llvm::reverse(reachableRegions))
+          for (Block &nested : llvm::reverse(operation.getRegion(index)))
+            worklist.emplace_back(&nested, epoch);
+        epoch += operationMaySuspend.lookup(&operation) ? 1 : 0;
+        afterEpoch.try_emplace(&operation, epoch);
+      }
+    }
+  }
+
+  llvm::DenseMap<Operation *, bool> operationMaySuspend;
+  llvm::DenseMap<Operation *, bool> operationGuaranteesSuspend;
+  llvm::DenseMap<Region *, bool> regionMaySuspend;
+  llvm::DenseMap<Region *, bool> regionGuarantees;
+  llvm::DenseMap<Block *, uint64_t> blockEntryEpoch;
+  llvm::DenseMap<Operation *, uint64_t> beforeEpoch;
+  llvm::DenseMap<Operation *, uint64_t> afterEpoch;
+  llvm::DenseSet<Block *> reachableBlocks;
+};
 
 LogicalResult verifyTraceProvenance(ProcessOp process) {
   llvm::DenseMap<Value, SmallVector<Value>> forwarding;
@@ -2480,32 +2578,63 @@ LogicalResult verifyTraceProvenance(ProcessOp process) {
     return it->second;
   };
 
-  SmallVector<StringAttr> owners(nextComponent);
+  SmallVector<TraceOpenOp> openOps;
   SmallVector<TraceNextOp> nextOps;
-  LogicalResult result = success();
   process.getBody().walk([&](Operation *operation) {
     if (auto open = dyn_cast<TraceOpenOp>(operation)) {
-      unsigned id = getComponent(open.getCursor());
-      if (id >= owners.size())
-        owners.resize(nextComponent);
-      if (owners[id] && owners[id] != open.getSourceAttr()) {
-        operation->emitOpError(
-            "trace cursor forwarding merges distinct provenance");
-        result = failure();
-        return WalkResult::interrupt();
-      }
-      owners[id] = open.getSourceAttr();
+      openOps.push_back(open);
+      (void)getComponent(open.getCursor());
     } else if (auto next = dyn_cast<TraceNextOp>(operation)) {
       nextOps.push_back(next);
       (void)getComponent(next.getInputCursor());
       (void)getComponent(next.getCursor());
-      if (owners.size() < nextComponent)
-        owners.resize(nextComponent);
+    } else if (auto eof = dyn_cast<TraceEofOp>(operation)) {
+      (void)getComponent(eof.getInputCursor());
+    } else if (auto position = dyn_cast<TracePositionOp>(operation)) {
+      (void)getComponent(position.getInputCursor());
     }
     return WalkResult::advance();
   });
-  if (failed(result))
-    return failure();
+
+  enum class CursorLattice { Unknown, NonCursor, SingleSource, Conflict };
+  struct CursorState {
+    CursorLattice lattice = CursorLattice::Unknown;
+    StringAttr source;
+  };
+  SmallVector<CursorState> states(nextComponent);
+  auto isConcreteNonCursor = [](Value value) {
+    if (isa_and_nonnull<TraceOpenOp>(value.getDefiningOp()))
+      return false;
+    if (auto next = dyn_cast_or_null<TraceNextOp>(value.getDefiningOp()))
+      return value != next.getCursor();
+    if (isa_and_nonnull<scf::IfOp, scf::ForOp, scf::WhileOp>(
+            value.getDefiningOp()))
+      return false;
+    if (auto argument = dyn_cast<BlockArgument>(value)) {
+      Operation *parent = argument.getOwner()->getParentOp();
+      return !isa_and_nonnull<scf::IfOp, scf::ForOp, scf::WhileOp>(parent);
+    }
+    return true;
+  };
+  for (auto &[value, id] : component)
+    if (isConcreteNonCursor(value))
+      states[id].lattice = CursorLattice::NonCursor;
+
+  for (TraceOpenOp open : openOps) {
+    unsigned id = getComponent(open.getCursor());
+    if (states[id].lattice == CursorLattice::NonCursor) {
+      states[id].lattice = CursorLattice::Conflict;
+      return open.emitOpError(
+          "trace cursor forwarding merges cursor and non-cursor values");
+    }
+    if (states[id].lattice == CursorLattice::SingleSource &&
+        states[id].source != open.getSourceAttr()) {
+      states[id].lattice = CursorLattice::Conflict;
+      return open.emitOpError(
+          "trace cursor forwarding merges distinct provenance");
+    }
+    states[id] = {CursorLattice::SingleSource, open.getSourceAttr()};
+  }
 
   bool changed = true;
   while (changed) {
@@ -2513,26 +2642,36 @@ LogicalResult verifyTraceProvenance(ProcessOp process) {
     for (TraceNextOp next : nextOps) {
       unsigned input = getComponent(next.getInputCursor());
       unsigned output = getComponent(next.getCursor());
-      if (!owners[input])
+      if (states[input].lattice != CursorLattice::SingleSource)
         continue;
-      if (owners[output] && owners[output] != owners[input])
+      if (states[output].lattice == CursorLattice::NonCursor) {
+        states[output].lattice = CursorLattice::Conflict;
+        return next.emitOpError(
+            "trace cursor forwarding merges cursor and non-cursor values");
+      }
+      if (states[output].lattice == CursorLattice::SingleSource &&
+          states[output].source != states[input].source) {
+        states[output].lattice = CursorLattice::Conflict;
         return next.emitOpError(
             "trace cursor forwarding merges distinct provenance");
-      if (!owners[output]) {
-        owners[output] = owners[input];
+      }
+      if (states[output].lattice == CursorLattice::Unknown) {
+        states[output] = states[input];
         changed = true;
       }
     }
   }
 
   SmallVector<unsigned> advancing(nextComponent);
+  LogicalResult result = success();
   auto verifyConsumer = [&](Operation *operation, Value cursor,
                             StringRef source, bool advances) -> LogicalResult {
     unsigned id = getComponent(cursor);
-    if (id >= owners.size() || !owners[id])
+    if (id >= states.size() ||
+        states[id].lattice != CursorLattice::SingleSource)
       return operation->emitOpError(
           "trace cursor must originate from ac.trace.open or ac.trace.next");
-    if (owners[id].getValue() != source)
+    if (states[id].source.getValue() != source)
       return operation->emitOpError(
           "trace cursor owner does not match 'from source'");
     if (advances && ++advancing[id] > 1)
@@ -2559,7 +2698,8 @@ LogicalResult verifyTraceProvenance(ProcessOp process) {
     return failure();
 
   for (auto &[value, id] : component) {
-    if (id >= owners.size() || !owners[id])
+    if (id >= states.size() ||
+        states[id].lattice != CursorLattice::SingleSource)
       continue;
     for (OpOperand &use : value.getUses()) {
       if (forwardingUses.contains(&use) ||
@@ -2628,6 +2768,10 @@ LogicalResult ProcessOp::verify() {
     return emitOpError("body arguments must exactly match capture types");
   if (!isa<YieldSimOp>(getBody().front().back()))
     return emitOpError("body must terminate with ac.yield_sim");
+  if (failed(verifySupportedSCFShape(*this)))
+    return failure();
+
+  StructuredSuspensionAnalysis suspensionAnalysis(*this);
 
   LogicalResult result = success();
   walkOperationsIterative(getBody(), [&](Operation *operation) {
@@ -2655,8 +2799,9 @@ LogicalResult ProcessOp::verify() {
     if (auto whileOp = dyn_cast<scf::WhileOp>(operation)) {
       std::optional<bool> condition =
           constantBool(whileOp.getConditionOp().getCondition());
-      if (condition != false && !regionGuaranteesSuspend(whileOp.getBefore()) &&
-          !regionGuaranteesSuspend(whileOp.getAfter())) {
+      if (condition != false &&
+          !suspensionAnalysis.guaranteesSuspend(whileOp.getBefore()) &&
+          !suspensionAnalysis.guaranteesSuspend(whileOp.getAfter())) {
         operation->emitOpError(
             "every scf.while backedge must suspend or prove bounded progress");
         result = failure();
@@ -2668,7 +2813,7 @@ LogicalResult ProcessOp::verify() {
   if (failed(result))
     return failure();
 
-  if (failed(verifyLinearLiveness(*this)))
+  if (failed(suspensionAnalysis.verifyLinearLiveness(*this)))
     return failure();
   llvm::StringSet<> instrumentationNames;
   WalkResult instrumentationResult =
