@@ -1211,5 +1211,71 @@ TEST(ACIRResourcesTest, LargeAddressMapAndParentGraphScaleNearLinearly) {
   EXPECT_LT(graphElapsed, std::chrono::seconds(5));
 }
 
+TEST(ACIRResourcesTest, MixedGeometryDistinctPrioritiesScaleNearLinearly) {
+  mlir::MLIRContext context;
+  context.loadDialect<ACIRDialect>();
+  mlir::OpBuilder builder(&context);
+  auto location = builder.getUnknownLoc();
+  auto buildMap = [&](unsigned entryCount) {
+    auto file = mlir::ModuleOp::create(location);
+    builder.setInsertionPointToStart(file.getBody());
+    auto module = ModuleOp::create(builder, location, "M",
+                                   builder.getFunctionType({}, {}),
+                                   builder.getDictionaryAttr({}));
+    builder.setInsertionPointToStart(module.addEntryBlock());
+    AddressSpaceOp::create(
+        builder, location, builder.getStringAttr("space"),
+        builder.getStringAttr("space"), builder.getStringAttr("space"),
+        builder.getI64IntegerAttr(32), builder.getStringAttr("byte"),
+        mlir::Attribute(), mlir::FlatSymbolRefAttr(), mlir::DictionaryAttr());
+    llvm::SmallVector<mlir::Attribute> entries;
+    entries.reserve(entryCount);
+    for (uint64_t priority = 1; priority <= entryCount; ++priority) {
+      entries.push_back(builder.getDictionaryAttr({
+          builder.getNamedAttr("base", builder.getI64IntegerAttr(0)),
+          builder.getNamedAttr("size", builder.getI64IntegerAttr(priority)),
+          builder.getNamedAttr("target",
+                               mlir::FlatSymbolRefAttr::get(&context, "space")),
+          builder.getNamedAttr("offset", builder.getI64IntegerAttr(0)),
+          builder.getNamedAttr(
+              "permissions",
+              builder.getArrayAttr({builder.getStringAttr("read")})),
+          builder.getNamedAttr("classes", builder.getArrayAttr({})),
+          builder.getNamedAttr("priority", builder.getI64IntegerAttr(priority)),
+          builder.getNamedAttr(
+              "interleave",
+              builder.getDictionaryAttr({
+                  builder.getNamedAttr("granularity",
+                                       builder.getI64IntegerAttr(1)),
+                  builder.getNamedAttr("banks",
+                                       builder.getI64IntegerAttr(priority)),
+                  builder.getNamedAttr("bank", builder.getI64IntegerAttr(0)),
+              })),
+      }));
+    }
+    AddressMapOp::create(
+        builder, location, "map", "space", builder.getArrayAttr(entries),
+        builder.getDictionaryAttr(
+            {builder.getNamedAttr("kind", builder.getStringAttr("unmapped"))}));
+    ReturnOp::create(builder, location, mlir::ValueRange{});
+    return file;
+  };
+  auto verifyTimed = [&](unsigned entryCount) {
+    mlir::ModuleOp file = buildMap(entryCount);
+    auto start = std::chrono::steady_clock::now();
+    EXPECT_TRUE(mlir::succeeded(mlir::verify(file)));
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+               std::chrono::steady_clock::now() - start)
+        .count();
+  };
+
+  int64_t fiveThousandMs = verifyTimed(5000);
+  int64_t tenThousandMs = verifyTimed(10000);
+  RecordProperty("five_thousand_ms", fiveThousandMs);
+  RecordProperty("ten_thousand_ms", tenThousandMs);
+  EXPECT_LT(tenThousandMs, 5000);
+  EXPECT_LT(tenThousandMs, std::max<int64_t>(100, fiveThousandMs * 3));
+}
+
 } // namespace
 } // namespace acir::ac

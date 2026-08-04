@@ -663,12 +663,6 @@ int compareNormalizedMapEntries(DictionaryAttr left, DictionaryAttr right) {
                          unsignedEntryValue(right, "offset"));
 }
 
-struct SelectorSummary {
-  std::multiset<WideAddress> allEnds;
-  std::multiset<WideAddress> withoutPriorityEnds;
-  std::map<uint64_t, std::multiset<WideAddress>> priorityEnds;
-};
-
 struct InterleaveLane {
   uint64_t granularity;
   uint64_t banks;
@@ -682,9 +676,16 @@ struct InterleaveGeometry {
   auto operator<=>(const InterleaveGeometry &) const = default;
 };
 
+struct LaneEndIndex {
+  std::multiset<WideAddress> wildcardEnds;
+  std::map<InterleaveGeometry, std::map<uint64_t, std::multiset<WideAddress>>>
+      lanes;
+};
+
 struct SelectorIndex {
-  SelectorSummary wildcard;
-  std::map<InterleaveGeometry, std::map<uint64_t, SelectorSummary>> lanes;
+  LaneEndIndex allPriorities;
+  LaneEndIndex withoutPriority;
+  std::map<uint64_t, LaneEndIndex> byPriority;
 };
 
 struct MapEntry {
@@ -771,21 +772,23 @@ bool interleaveSetsIntersect(const InterleaveLane &left,
   return !set.isIntegerEmpty();
 }
 
-void updateSummary(SelectorSummary &summary, const MapEntry &entry, bool add) {
-  auto updateSet = [&](std::multiset<WideAddress> &ends) {
-    if (add) {
-      ends.insert(entry.interval.end);
-      return;
-    }
-    auto found = ends.find(entry.interval.end);
-    assert(found != ends.end());
-    ends.erase(found);
-  };
-  updateSet(summary.allEnds);
-  if (entry.priority)
-    updateSet(summary.priorityEnds[*entry.priority]);
-  else
-    updateSet(summary.withoutPriorityEnds);
+void updateEnds(std::multiset<WideAddress> &ends, WideAddress end, bool add) {
+  if (add) {
+    ends.insert(end);
+    return;
+  }
+  auto found = ends.find(end);
+  assert(found != ends.end());
+  ends.erase(found);
+}
+
+void updateLaneIndex(LaneEndIndex &index, const MapEntry &entry, bool add) {
+  std::multiset<WideAddress> *ends = &index.wildcardEnds;
+  if (entry.lane) {
+    InterleaveGeometry geometry{entry.lane->granularity, entry.lane->banks};
+    ends = &index.lanes[geometry][entry.lane->bank];
+  }
+  updateEnds(*ends, entry.interval.end, add);
 }
 
 WideAddress maximumEnd(const std::multiset<WideAddress> &ends) {
@@ -967,17 +970,16 @@ verifyAddressMap(AddressMapOp map,
   auto update = [&](const MapEntry &entry, bool add) {
     for (const std::string &key : entry.registrationKeys) {
       SelectorIndex &index = selectorIndex[key];
-      SelectorSummary *summary = &index.wildcard;
-      if (entry.lane) {
-        InterleaveGeometry geometry{entry.lane->granularity, entry.lane->banks};
-        summary = &index.lanes[geometry][entry.lane->bank];
-      }
-      updateSummary(*summary, entry, add);
+      updateLaneIndex(index.allPriorities, entry, add);
+      if (entry.priority)
+        updateLaneIndex(index.byPriority[*entry.priority], entry, add);
+      else
+        updateLaneIndex(index.withoutPriority, entry, add);
     }
   };
-  auto diagnoseSummary =
-      [&](const MapEntry &entry, const SelectorSummary &summary,
-          std::optional<InterleaveLane> otherLane) -> LogicalResult {
+  auto intersectsEnds = [&](const MapEntry &entry,
+                            const std::multiset<WideAddress> &ends,
+                            std::optional<InterleaveLane> otherLane) {
     auto intersectsBefore = [&](WideAddress candidateEnd) {
       WideAddress end = std::min(entry.interval.end, candidateEnd);
       if (entry.interval.begin >= end)
@@ -987,21 +989,37 @@ verifyAddressMap(AddressMapOp map,
       return interleaveSetsIntersect(*entry.lane, *otherLane,
                                      entry.interval.begin, end);
     };
-    if (!entry.priority) {
-      if (intersectsBefore(maximumEnd(summary.allEnds)))
-        return map.emitOpError("overlapping selector intersections require "
-                               "explicit distinct priorities");
-      return success();
+    return intersectsBefore(maximumEnd(ends));
+  };
+  auto indexIntersects = [&](const MapEntry &entry, const LaneEndIndex &index) {
+    if (intersectsEnds(entry, index.wildcardEnds, std::nullopt))
+      return true;
+    if (!entry.lane) {
+      for (const auto &[geometry, banks] : index.lanes)
+        for (const auto &[bank, ends] : banks)
+          if (intersectsEnds(
+                  entry, ends,
+                  InterleaveLane{geometry.granularity, geometry.banks, bank}))
+            return true;
+      return false;
     }
-    if (intersectsBefore(maximumEnd(summary.withoutPriorityEnds)))
-      return map.emitOpError("overlapping selector intersections require "
-                             "explicit distinct priorities");
-    auto samePriority = summary.priorityEnds.find(*entry.priority);
-    if (samePriority != summary.priorityEnds.end() &&
-        intersectsBefore(maximumEnd(samePriority->second)))
-      return map.emitOpError(
-          "overlapping selector intersections have equal priority");
-    return success();
+    InterleaveGeometry currentGeometry{entry.lane->granularity,
+                                       entry.lane->banks};
+    for (const auto &[geometry, banks] : index.lanes) {
+      if (geometry == currentGeometry) {
+        auto sameBank = banks.find(entry.lane->bank);
+        if (sameBank != banks.end() &&
+            intersectsEnds(entry, sameBank->second, *entry.lane))
+          return true;
+        continue;
+      }
+      for (const auto &[bank, ends] : banks)
+        if (intersectsEnds(
+                entry, ends,
+                InterleaveLane{geometry.granularity, geometry.banks, bank}))
+          return true;
+    }
+    return false;
   };
   for (const MapEntry &entry : entries) {
     while (!activeByEnd.empty() &&
@@ -1014,33 +1032,20 @@ verifyAddressMap(AddressMapOp map,
       if (found == selectorIndex.end())
         continue;
       SelectorIndex &index = found->second;
-      if (failed(diagnoseSummary(entry, index.wildcard, std::nullopt)))
-        return failure();
-      if (!entry.lane) {
-        for (const auto &[geometry, banks] : index.lanes)
-          for (const auto &[bank, summary] : banks)
-            if (failed(diagnoseSummary(entry, summary,
-                                       InterleaveLane{geometry.granularity,
-                                                      geometry.banks, bank})))
-              return failure();
+      if (!entry.priority) {
+        if (indexIntersects(entry, index.allPriorities))
+          return map.emitOpError("overlapping selector intersections require "
+                                 "explicit distinct priorities");
         continue;
       }
-      InterleaveGeometry currentGeometry{entry.lane->granularity,
-                                         entry.lane->banks};
-      for (const auto &[geometry, banks] : index.lanes) {
-        if (geometry == currentGeometry) {
-          auto sameBank = banks.find(entry.lane->bank);
-          if (sameBank != banks.end() &&
-              failed(diagnoseSummary(entry, sameBank->second, *entry.lane)))
-            return failure();
-          continue;
-        }
-        for (const auto &[bank, summary] : banks)
-          if (failed(diagnoseSummary(
-                  entry, summary,
-                  InterleaveLane{geometry.granularity, geometry.banks, bank})))
-            return failure();
-      }
+      if (indexIntersects(entry, index.withoutPriority))
+        return map.emitOpError("overlapping selector intersections require "
+                               "explicit distinct priorities");
+      auto samePriority = index.byPriority.find(*entry.priority);
+      if (samePriority != index.byPriority.end() &&
+          indexIntersects(entry, samePriority->second))
+        return map.emitOpError(
+            "overlapping selector intersections have equal priority");
     }
     update(entry, true);
     activeByEnd.emplace(entry.interval.end, &entry);
