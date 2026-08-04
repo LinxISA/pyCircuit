@@ -1,4 +1,5 @@
 #include "acir/Analysis/ModelAnalysis.h"
+#include "Analysis/ModelAnalysisTestHooks.h"
 #include "acir/Dialect/ACIR/ACIROps.h"
 #include "acir/Dialect/ACIR/GraphRegion.h"
 #include "acir/InitAllDialects.h"
@@ -18,6 +19,27 @@ namespace {
 
 using namespace mlir;
 using namespace acir::ac;
+
+template <typename Analysis>
+concept ExposesTopologyDigest =
+    requires(Analysis &analysis) { analysis.computeTopologyDigest(); };
+
+template <typename Analysis>
+concept ExposesOwnerManifest =
+    requires(Analysis &analysis) { analysis.buildFrozenOwnerManifest(); };
+
+template <typename Analysis>
+concept ExposesOwnerWork =
+    requires(Analysis &analysis) { analysis.getLastOwnerManifestWork(); };
+
+template <typename Process>
+concept ExposesProcessSkeleton =
+    requires(Process process) { buildFrozenProcessSkeleton(process); };
+
+static_assert(!ExposesTopologyDigest<ModelAnalysis>);
+static_assert(!ExposesOwnerManifest<ModelAnalysis>);
+static_assert(!ExposesOwnerWork<ModelAnalysis>);
+static_assert(!ExposesProcessSkeleton<ProcessOp>);
 
 constexpr llvm::StringLiteral kProcessModel = R"mlir(
   builtin.module attributes {ac.contract_epoch = "0.1"} {
@@ -106,6 +128,19 @@ OwningOpRef<mlir::ModuleOp> parseAndFreeze(MLIRContext &context,
   return model;
 }
 
+std::string runFreeze(MLIRContext &context, mlir::ModuleOp model) {
+  std::string diagnostic;
+  ScopedDiagnosticHandler handler(&context, [&](Diagnostic &value) {
+    llvm::raw_string_ostream(diagnostic) << value;
+    return success();
+  });
+  PassManager manager(&context);
+  manager.addPass(createFreezeTopologyPass());
+  if (succeeded(manager.run(model)))
+    return "freeze unexpectedly succeeded";
+  return diagnostic;
+}
+
 std::string
 verifyAfterMutation(MLIRContext &context,
                     const std::function<void(mlir::ModuleOp)> &mutate) {
@@ -148,6 +183,7 @@ OwningOpRef<mlir::ModuleOp> makeFlatAddressModel(MLIRContext &context,
   OpBuilder builder(&context);
   Location loc = builder.getUnknownLoc();
   auto model = mlir::ModuleOp::create(loc);
+  model->setAttr("ac.contract_epoch", builder.getStringAttr("0.1"));
   builder.setInsertionPointToStart(model.getBody());
   auto top =
       ac::ModuleOp::create(builder, loc, "Top", builder.getFunctionType({}, {}),
@@ -158,21 +194,66 @@ OwningOpRef<mlir::ModuleOp> makeFlatAddressModel(MLIRContext &context,
     AddressSpaceOp::create(builder, loc, name, name, name, 32, "byte",
                            Attribute(), FlatSymbolRefAttr(), DictionaryAttr());
   }
+  auto workload =
+      ProcessOp::create(builder, loc, "workload", "workload", ValueRange{});
+  builder.setInsertionPointToStart(&workload.getBody().emplaceBlock());
+  auto instrumentation = InstrumentationOp::create(builder, loc, "trace");
+  instrumentation.getBody().emplaceBlock();
+  TraceOpenOp::create(builder, loc, builder.getIndexType(), "pto");
+  YieldSimOp::create(builder, loc);
+  builder.setInsertionPointToEnd(&top.getBody().front());
   ReturnOp::create(builder, loc, ValueRange{});
   builder.setInsertionPointToEnd(model.getBody());
+  auto workloadRef = SymbolRefAttr::get(
+      &context, "Top", {FlatSymbolRefAttr::get(&context, "workload")});
+  auto instrumentationRef =
+      SymbolRefAttr::get(&context, "Top",
+                         {FlatSymbolRefAttr::get(&context, "workload"),
+                          FlatSymbolRefAttr::get(&context, "trace")});
   SystemOp::create(
-      builder, loc, "owners", "Top", "root", 0, "cycle", FlatSymbolRefAttr(),
+      builder, loc, "owners", "Top", "root", 0, "cycle", workloadRef,
       builder.getDictionaryAttr({
           builder.getNamedAttr("kind", builder.getStringAttr("fixed")),
           builder.getNamedAttr("value", builder.getI64IntegerAttr(0)),
       }),
-      builder.getArrayAttr({}),
+      builder.getArrayAttr({instrumentationRef}),
       builder.getDictionaryAttr({
           builder.getNamedAttr("id", builder.getStringAttr("owners")),
           builder.getNamedAttr("format", builder.getStringAttr("json")),
       }),
       true);
   return OwningOpRef<mlir::ModuleOp>(model);
+}
+
+OwningOpRef<mlir::ModuleOp> makeDeepProcessModel(MLIRContext &context,
+                                                 uint64_t depth) {
+  context.loadDialect<arith::ArithDialect>();
+  auto model = parseSourceString<mlir::ModuleOp>(R"mlir(
+    builtin.module attributes {ac.contract_epoch = "0.1"} {
+      ac.system @soc root @Top as "root" tick 0 "cycle"
+          workload @Top::@workload seed {kind = "fixed", value = 0 : i64}
+          instrumentation [] results {id = "default", format = "json"}
+          selected true
+      ac.module @Top() parameters {} graph {
+        ac.process @workload kind "workload" { ac.yield_sim }
+        ac.return
+      }
+    }
+  )mlir",
+                                                 &context);
+  if (!model)
+    return {};
+  ProcessOp process = one<ProcessOp>(*model);
+  Operation *yield = &process.getBody().front().front();
+  OpBuilder builder(yield);
+  Location loc = builder.getUnknownLoc();
+  Value constant =
+      arith::ConstantOp::create(builder, loc, builder.getBoolAttr(true));
+  Value current = constant;
+  for (uint64_t index = 0; index < depth; ++index)
+    current = arith::XOrIOp::create(builder, loc, current, constant);
+  WaitUntilOp::create(builder, loc, current);
+  return model;
 }
 
 TEST(ModelAnalysisTest, FrozenProcessSkeletonRejectsEffectSemanticMutation) {
@@ -273,6 +354,59 @@ TEST(ModelAnalysisTest,
   ASSERT_TRUE(unused);
   unused.setValueAttr(IntegerAttr::get(unused.getType(), 202));
   EXPECT_TRUE(succeeded(verifyModel(*model)));
+}
+
+TEST(ModelAnalysisTest, FrozenMutationCannotBeResealedThroughPublicRoutes) {
+  DialectRegistry registry;
+  registerAllDialects(registry);
+  MLIRContext context(registry);
+  OwningOpRef<mlir::ModuleOp> frozen = parseAndFreeze(context, kProcessModel);
+  ASSERT_TRUE(frozen);
+
+  auto retarget = [&](mlir::ModuleOp model) {
+    one<TrySendOp>(model).setQueueAttr(FlatSymbolRefAttr::get(&context, "q1"));
+  };
+  auto cloneFrozen = [&]() {
+    return OwningOpRef<mlir::ModuleOp>(cast<mlir::ModuleOp>(frozen->clone()));
+  };
+
+  OwningOpRef<mlir::ModuleOp> direct = cloneFrozen();
+  retarget(*direct);
+  {
+    ScopedDiagnosticHandler handler(&context,
+                                    [](Diagnostic &) { return success(); });
+    EXPECT_TRUE(failed(verifyModel(*direct)));
+    ModelAnalysis analysis(*direct);
+    EXPECT_TRUE(failed(analysis.verify()));
+  }
+  EXPECT_NE(
+      runFreeze(context, *direct).find("frozen process skeleton mismatch"),
+      std::string::npos);
+
+  OwningOpRef<mlir::ModuleOp> missingMarker = cloneFrozen();
+  retarget(*missingMarker);
+  (*missingMarker)->removeAttr("ac.topology_frozen");
+  EXPECT_NE(runFreeze(context, *missingMarker)
+                .find("malformed topology freeze marker"),
+            std::string::npos);
+
+  OwningOpRef<mlir::ModuleOp> nestedEvidenceOnly = cloneFrozen();
+  retarget(*nestedEvidenceOnly);
+  for (StringRef name :
+       {"ac.freeze_epoch", "ac.frozen_system", "ac.frozen_owners",
+        "ac.frozen_primary_workload", "ac.frozen_instrumentation",
+        "ac.topology_frozen", "ac.topology_digest"})
+    (*nestedEvidenceOnly)->removeAttr(name);
+  EXPECT_NE(runFreeze(context, *nestedEvidenceOnly)
+                .find("malformed topology freeze marker"),
+            std::string::npos);
+
+  auto partial = parseSourceString<mlir::ModuleOp>(kProcessModel, &context);
+  ASSERT_TRUE(partial);
+  (*partial)->setAttr("ac.freeze_epoch", StringAttr::get(&context, "0.1"));
+  EXPECT_NE(
+      runFreeze(context, *partial).find("malformed topology freeze marker"),
+      std::string::npos);
 }
 
 TEST(ModelAnalysisTest, FrozenDigestCommitsNestedGuardParentage) {
@@ -461,24 +595,116 @@ TEST(ModelAnalysisTest, AddressSpacesParticipateInSaturatedOwnerBudget) {
             std::string::npos);
 }
 
-TEST(ModelAnalysisTest, OwnerManifestJoinHasExactLinearWork) {
+TEST(ModelAnalysisTest, FullFreezePathHasExactLinearIndexedWork) {
   MLIRContext context;
   context.loadDialect<ACIRDialect>();
   auto measure = [&](uint64_t ownerCount) {
     OwningOpRef<mlir::ModuleOp> model =
         makeFlatAddressModel(context, ownerCount);
-    ModelAnalysis analysis(*model);
-    EXPECT_TRUE(succeeded(analysis.buildFrozenOwnerManifest()));
-    OwnerManifestWork work = analysis.getLastOwnerManifestWork();
-    EXPECT_EQ(work.stateIndexInsertions, ownerCount);
-    EXPECT_EQ(work.topologyIndexLookups, ownerCount);
+    acir::detail::FreezeWork work;
+    acir::detail::ScopedFreezeWorkRecorder recorder(work);
+    PassManager manager(&context);
+    manager.addPass(createFreezeTopologyPass());
+    EXPECT_TRUE(succeeded(manager.run(*model)));
+    // The complete path constructs the seal, then independently reconstructs
+    // the manifest during final frozen verification.
+    EXPECT_EQ(work.stateIndexInsertions, 2 * (ownerCount + 1));
+    EXPECT_EQ(work.topologyIndexLookups, 2 * (ownerCount + 1));
+    EXPECT_EQ(work.manifestIndexInsertions, ownerCount + 2);
+    EXPECT_EQ(work.manifestOwnerLookups, 2u);
+    EXPECT_EQ(work.declarationIndexInsertions, ownerCount + 1);
+    EXPECT_EQ(work.declarationLookups, ownerCount + 1);
     return work.total();
   };
   uint64_t work1000 = measure(1000);
   uint64_t work4000 = measure(4000);
-  EXPECT_EQ(work1000, 2000u);
-  EXPECT_EQ(work4000, 8000u);
-  EXPECT_EQ(work4000, 4 * work1000);
+  EXPECT_EQ(work1000, 7010u);
+  EXPECT_EQ(work4000, 28010u);
+  EXPECT_EQ(work4000 - 10, 4 * (work1000 - 10));
+}
+
+TEST(ModelAnalysisTest, DeepProcessDependencyChainsFreezeWithoutStackGrowth) {
+  DialectRegistry registry;
+  registerAllDialects(registry);
+  MLIRContext context(registry);
+  for (uint64_t depth : {30000u, 200000u}) {
+    OwningOpRef<mlir::ModuleOp> model = makeDeepProcessModel(context, depth);
+    ASSERT_TRUE(model) << depth;
+    PassManager manager(&context);
+    manager.addPass(createFreezeTopologyPass());
+    EXPECT_TRUE(succeeded(manager.run(*model))) << depth;
+  }
+}
+
+TEST(ModelAnalysisTest, ProcessDependencyCapabilityIsCheckedBeforeGrowth) {
+  DialectRegistry registry;
+  registerAllDialects(registry);
+  MLIRContext context(registry);
+  OwningOpRef<mlir::ModuleOp> model = makeDeepProcessModel(context, 1025);
+  ASSERT_TRUE(model);
+  acir::detail::ScopedProcessSkeletonLimits limits(/*nodes=*/1024,
+                                                   /*edges=*/4096);
+  std::string diagnostic = runFreeze(context, *model);
+  EXPECT_NE(diagnostic.find(
+                "process skeleton dependency node count exceeds bound 1024"),
+            std::string::npos)
+      << diagnostic;
+}
+
+TEST(ModelAnalysisTest, ProcessDependencyEdgeCapabilityIsCheckedBeforeGrowth) {
+  DialectRegistry registry;
+  registerAllDialects(registry);
+  MLIRContext context(registry);
+  OwningOpRef<mlir::ModuleOp> model = makeDeepProcessModel(context, 16);
+  ASSERT_TRUE(model);
+  acir::detail::ScopedProcessSkeletonLimits limits(/*nodes=*/64, /*edges=*/8);
+  std::string diagnostic = runFreeze(context, *model);
+  EXPECT_NE(
+      diagnostic.find("process skeleton dependency edge count exceeds bound 8"),
+      std::string::npos)
+      << diagnostic;
+}
+
+TEST(ModelAnalysisTest, ProcessSkeletonIncludesNestedControlParents) {
+  DialectRegistry registry;
+  registerAllDialects(registry);
+  MLIRContext context(registry);
+  OwningOpRef<mlir::ModuleOp> model = parseAndFreeze(context, R"mlir(
+    builtin.module attributes {ac.contract_epoch = "0.1"} {
+      ac.system @soc root @Top as "root" tick 0 "cycle"
+          workload @Top::@workload seed {kind = "fixed", value = 0 : i64}
+          instrumentation [] results {id = "default", format = "json"}
+          selected true
+      ac.module @Top() parameters {} graph {
+        ac.stat @count kind "counter"
+        ac.process @workload kind "workload" {
+          %condition = arith.constant true
+          scf.if %condition {
+            %one = arith.constant 1 : i32
+            ac.stat.add @count %one : i32
+          }
+          ac.yield_sim
+        }
+        ac.return
+      }
+    }
+  )mlir");
+  ASSERT_TRUE(model);
+  arith::ConstantOp condition;
+  model->walk([&](arith::ConstantOp candidate) {
+    if (candidate.getType().isInteger(1))
+      condition = candidate;
+  });
+  ASSERT_TRUE(condition);
+  condition.setValueAttr(IntegerAttr::get(condition.getType(), 0));
+  std::string diagnostic;
+  ScopedDiagnosticHandler handler(&context, [&](Diagnostic &value) {
+    llvm::raw_string_ostream(diagnostic) << value;
+    return success();
+  });
+  EXPECT_TRUE(failed(verifyModel(*model)));
+  EXPECT_NE(diagnostic.find("frozen process skeleton mismatch"),
+            std::string::npos);
 }
 
 } // namespace

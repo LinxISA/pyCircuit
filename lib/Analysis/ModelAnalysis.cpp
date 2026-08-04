@@ -1,5 +1,7 @@
 #include "acir/Analysis/ModelAnalysis.h"
 
+#include "ModelAnalysisInternal.h"
+#include "ModelAnalysisTestHooks.h"
 #include "acir/Dialect/ACIR/ACIROps.h"
 #include "acir/Dialect/ACIR/GraphRegion.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
@@ -199,11 +201,36 @@ public:
   explicit ProcessSkeletonSerializer(ac::ProcessOp process)
       : process(process), builder(process.getContext()) {}
 
-  ArrayAttr run() {
-    process.getBody().walk([&](Operation *operation) {
-      if (isProcessSkeletonOperation(operation))
-        include(operation);
+  FailureOr<ArrayAttr> run() {
+    WalkResult seeds = process.getBody().walk([&](Operation *operation) {
+      if (isProcessSkeletonOperation(operation) &&
+          failed(enqueue(operation, operation, /*dependency=*/false)))
+        return WalkResult::interrupt();
+      return WalkResult::advance();
     });
+    if (seeds.wasInterrupted())
+      return failure();
+
+    for (size_t cursor = 0; cursor < worklist.size(); ++cursor) {
+      Operation *operation = worklist[cursor];
+      for (Value operand : operation->getOperands())
+        if (Operation *producer = operand.getDefiningOp();
+            producer && failed(enqueue(producer, operation,
+                                       /*dependency=*/true)))
+          return failure();
+      if (failed(enqueue(operation->getParentOp(), operation,
+                         /*dependency=*/true)))
+        return failure();
+      // Region results are defined by terminator operands. Commit those
+      // dependencies whenever a region-bearing producer/control ancestor is
+      // part of the semantic closure.
+      for (Region &region : operation->getRegions())
+        for (Block &block : region)
+          if (!block.empty() && failed(enqueue(&block.back(), operation,
+                                               /*dependency=*/true)))
+            return failure();
+    }
+
     indexRegion(process.getBody(), "process/r0");
     serializeRegion(process.getBody());
     return builder.getArrayAttr(entries);
@@ -215,21 +242,30 @@ private:
            operation->getParentOfType<ac::ProcessOp>() == process;
   }
 
-  void include(Operation *operation) {
-    if (!isInsideProcess(operation) || !included.insert(operation).second)
-      return;
-    for (Value operand : operation->getOperands())
-      if (Operation *producer = operand.getDefiningOp())
-        include(producer);
-    if (Operation *parent = operation->getParentOp())
-      include(parent);
-    // Region results are defined by terminator operands. Commit those
-    // dependencies whenever a region-bearing producer/control ancestor is
-    // part of the semantic closure.
-    for (Region &region : operation->getRegions())
-      for (Block &block : region)
-        if (!block.empty())
-          include(&block.back());
+  LogicalResult enqueue(Operation *candidate, Operation *origin,
+                        bool dependency) {
+    if (!isInsideProcess(candidate))
+      return success();
+
+    if (dependency) {
+      uint64_t limit = detail::processSkeletonEdgeLimit();
+      if (dependencyEdges >= limit)
+        return origin->emitOpError()
+               << "process skeleton dependency edge count exceeds bound "
+               << limit;
+      ++dependencyEdges;
+    }
+
+    if (included.contains(candidate))
+      return success();
+    uint64_t limit = detail::processSkeletonNodeLimit();
+    if (included.size() >= limit)
+      return origin->emitOpError()
+             << "process skeleton dependency node count exceeds bound "
+             << limit;
+    included.insert(candidate);
+    worklist.push_back(candidate);
+    return success();
   }
 
   void indexRegion(Region &region, StringRef regionPath) {
@@ -308,6 +344,8 @@ private:
   ac::ProcessOp process;
   Builder builder;
   DenseSet<Operation *> included;
+  SmallVector<Operation *> worklist;
+  uint64_t dependencyEdges = 0;
   DenseMap<Operation *, std::string> operationPaths;
   DenseMap<Value, std::string> valueIds;
   SmallVector<Attribute> entries;
@@ -340,8 +378,24 @@ std::optional<bool> constantBoolean(Value value) {
 
 } // namespace
 
-ArrayAttr buildFrozenProcessSkeleton(ac::ProcessOp process) {
+FailureOr<ArrayAttr> detail::buildFrozenProcessSkeleton(ac::ProcessOp process) {
   return ProcessSkeletonSerializer(process).run();
+}
+
+bool detail::hasTopologyFreezeEvidence(ModuleOp model) {
+  bool evidence = false;
+  model.walk([&](Operation *operation) {
+    for (NamedAttribute attribute : operation->getAttrs()) {
+      StringRef name = attribute.getName().getValue();
+      if (name == "ac.freeze_epoch" || name == "ac.freeze_proven" ||
+          name.starts_with("ac.frozen_") || name.starts_with("ac.topology_")) {
+        evidence = true;
+        return WalkResult::interrupt();
+      }
+    }
+    return WalkResult::advance();
+  });
+  return evidence;
 }
 
 bool isTopologyFrozen(ModuleOp model) {
@@ -667,8 +721,7 @@ LogicalResult ModelAnalysis::verifyFreezeContracts() {
   return success();
 }
 
-FailureOr<ArrayAttr> ModelAnalysis::buildFrozenOwnerManifest() {
-  lastOwnerManifestWork = {};
+FailureOr<ArrayAttr> detail::buildFrozenOwnerManifest(ModuleOp model) {
   SmallVector<ac::ElaboratedTopologyOwner> topologyOwners;
   SmallVector<ac::ElaboratedStateOwner> stateOwners;
   if (failed(ac::collectElaboratedTopologyOwners(model, topologyOwners)) ||
@@ -684,7 +737,8 @@ FailureOr<ArrayAttr> ModelAnalysis::buildFrozenOwnerManifest() {
   };
   llvm::StringMap<SmallVector<std::string>> stateOwnerIndex;
   for (const ac::ElaboratedStateOwner &owner : stateOwners) {
-    ++lastOwnerManifestWork.stateIndexInsertions;
+    if (activeFreezeWork)
+      ++activeFreezeWork->stateIndexInsertions;
     std::string key =
         ownerJoinKey(owner.declaration, owner.path, owner.stableId);
     bool inserted = stateOwnerIndex.try_emplace(key, owner.traceSources).second;
@@ -715,7 +769,8 @@ FailureOr<ArrayAttr> ModelAnalysis::buildFrozenOwnerManifest() {
     else if (definition)
       reference =
           FlatSymbolRefAttr::get(model.getContext(), definition.getSymName());
-    ++lastOwnerManifestWork.topologyIndexLookups;
+    if (activeFreezeWork)
+      ++activeFreezeWork->topologyIndexLookups;
     SmallVector<std::string> traces;
     auto state = stateOwnerIndex.find(
         ownerJoinKey(declaration, owner.path, owner.stableId));
@@ -754,7 +809,7 @@ FailureOr<ArrayAttr> ModelAnalysis::buildFrozenOwnerManifest() {
   return builder.getArrayAttr(manifest);
 }
 
-std::string ModelAnalysis::computeTopologyDigest() {
+std::string detail::computeTopologyDigest(ModuleOp model) {
   std::string serialized;
   llvm::raw_string_ostream stream(serialized);
   serializeTopology(model, stream);
@@ -765,9 +820,7 @@ std::string ModelAnalysis::computeTopologyDigest() {
 }
 
 LogicalResult ModelAnalysis::verifyFrozenIntegrity() {
-  if (!model->hasAttr("ac.topology_frozen") &&
-      !model->hasAttr("ac.topology_digest") &&
-      !model->hasAttr("ac.freeze_epoch") && !model->hasAttr("ac.frozen_owners"))
+  if (!detail::hasTopologyFreezeEvidence(model))
     return success();
   auto marker = model->getAttrOfType<BoolAttr>("ac.topology_frozen");
   auto epoch = model->getAttrOfType<StringAttr>("ac.freeze_epoch");
@@ -784,7 +837,12 @@ LogicalResult ModelAnalysis::verifyFrozenIntegrity() {
       return;
     ArrayAttr frozen =
         process->getAttrOfType<ArrayAttr>("ac.frozen_process_skeleton");
-    if (!frozen || frozen != buildFrozenProcessSkeleton(process)) {
+    FailureOr<ArrayAttr> expected = detail::buildFrozenProcessSkeleton(process);
+    if (failed(expected)) {
+      skeletonResult = failure();
+      return;
+    }
+    if (!frozen || frozen != *expected) {
       process.emitOpError(
           "frozen process skeleton mismatch; effect semantics were mutated "
           "after ac-freeze-topology");
@@ -793,12 +851,12 @@ LogicalResult ModelAnalysis::verifyFrozenIntegrity() {
   });
   if (failed(skeletonResult))
     return failure();
-  std::string actual = computeTopologyDigest();
+  std::string actual = detail::computeTopologyDigest(model);
   if (digest.getValue() != actual)
     return model.emitError(
         "frozen topology digest mismatch; topology was mutated after "
         "ac-freeze-topology");
-  FailureOr<ArrayAttr> expectedOwners = buildFrozenOwnerManifest();
+  FailureOr<ArrayAttr> expectedOwners = detail::buildFrozenOwnerManifest(model);
   if (failed(expectedOwners))
     return failure();
   if (owners != *expectedOwners)
