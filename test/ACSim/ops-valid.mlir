@@ -8,8 +8,8 @@
 
 builtin.module attributes {ac.contract_epoch = "0.1"} {
   acsim.model @demo epoch "0.1" root @Top
-      construction [@Top::@fifo, @Top::@lanes, @Top::@tick]
-      destruction [@Top::@tick, @Top::@lanes, @Top::@fifo]
+      construction ["Top.fifo", "Top.lanes[0]", "Top.lanes[1]", "Top.tick"]
+      destruction ["Top.tick", "Top.lanes[1]", "Top.lanes[0]", "Top.fifo"]
       fingerprints {
         frozen_acir = "sha256:0000000000000000000000000000000000000000000000000000000000000001",
         binding_lock = "sha256:0000000000000000000000000000000000000000000000000000000000000002",
@@ -49,7 +49,7 @@ builtin.module attributes {ac.contract_epoch = "0.1"} {
       cpp_type = @cpp_bool, effect = "pure", fingerprint = "sha256:1100000000000000000000000000000000000000000000000000000000000000",
       implementation = @pure_impl, ownership = {kind = "none", placement = "inline"},
       parameters = [], ports = [], provider = @gfsim,
-      provider_implementation_fingerprint = "sha256:3000000000000000000000000000000000000000000000000000000000000000",
+      provider_implementation_fingerprint = "sha256:8000000000000000000000000000000000000000000000000000000000000000",
       resources = [], results = [{cpp_type = @cpp_bool, name = "result"}]
     }
     acsim.binding @stateful record {
@@ -62,13 +62,13 @@ builtin.module attributes {ac.contract_epoch = "0.1"} {
       implementation = @stateful_impl, ownership = {kind = "unique", placement = "member_or_array"},
       parameters = [],
       ports = [
-        {accessor = @port_accessor, cardinality = "exclusive", delegation = false, direction = "output", interface = @interface, ownership = "borrowed", payload = @payload, protocol = @protocol, role = @role, time_domain = "combinational"},
-        {accessor = @port_in_accessor, cardinality = "exclusive", delegation = false, direction = "input", interface = @interface, ownership = "borrowed", payload = @payload, protocol = @protocol, role = @consumer, time_domain = "combinational"}
+        {accessor = @port_accessor, cardinality = "exclusive", delegation = "forbidden", direction = "output", interface = @interface, ownership = "borrowed", payload = @payload, protocol = @protocol, role = @role, time_domain = "combinational"},
+        {accessor = @port_in_accessor, cardinality = "exclusive", delegation = "forbidden", direction = "input", interface = @interface, ownership = "borrowed", payload = @payload, protocol = @protocol, role = @consumer, time_domain = "combinational"}
       ], provider = @gfsim,
-      provider_implementation_fingerprint = "sha256:3000000000000000000000000000000000000000000000000000000000000000",
+      provider_implementation_fingerprint = "sha256:d000000000000000000000000000000000000000000000000000000000000000",
       resources = [
-        {accessor = @resource_accessor, delegation = false, mode = "initiator", ownership = "borrowed", resource = @resource_kind, role = @initiator, time_domain = "combinational"},
-        {accessor = @resource_in_accessor, delegation = false, mode = "target", ownership = "borrowed", resource = @resource_kind, role = @target, time_domain = "combinational"}
+        {accessor = @resource_accessor, delegation = "forbidden", mode = "initiator", ownership = "borrowed", resource = @resource_kind, role = @initiator, time_domain = "combinational"},
+        {accessor = @resource_in_accessor, delegation = "forbidden", mode = "target", ownership = "borrowed", resource = @resource_kind, role = @target, time_domain = "combinational"}
       ], results = []
     }
     acsim.binding @top record {
@@ -80,15 +80,14 @@ builtin.module attributes {ac.contract_epoch = "0.1"} {
       cpp_type = @cpp_bool, effect = "stateful", fingerprint = "sha256:1300000000000000000000000000000000000000000000000000000000000000",
       implementation = @top_impl, ownership = {kind = "unique", placement = "root_or_process"},
       parameters = [], ports = [], provider = @gfsim,
-      provider_implementation_fingerprint = "sha256:3000000000000000000000000000000000000000000000000000000000000000",
+      provider_implementation_fingerprint = "sha256:f000000000000000000000000000000000000000000000000000000000000000",
       resources = [], results = []
     }
 
-    acsim.module @Top binding @top path "Top" static [] specialization "sha256:2100000000000000000000000000000000000000000000000000000000000000" exports [@out] {
-      %fifo = acsim.instance @fifo binding @stateful target @stateful args [] specialization "sha256:2200000000000000000000000000000000000000000000000000000000000000" owner @Top object 0
-        activation 0 path "Top.fifo" : !acsim.owner<@stateful>
-      %lanes = acsim.array @lanes binding @stateful target @stateful args [] specialization "sha256:2200000000000000000000000000000000000000000000000000000000000000" owner @Top shape [2]
-        objects [1, 2] activations [1, 2] path "Top.lanes"
+    acsim.module @Top binding @top static [] specialization "sha256:2100000000000000000000000000000000000000000000000000000000000000" exports [@out] {
+      %fifo = acsim.instance @fifo binding @stateful target @stateful args [] specialization "sha256:2200000000000000000000000000000000000000000000000000000000000000"
+        : !acsim.owner<@stateful>
+      %lanes = acsim.array @lanes binding @stateful target @stateful args [] specialization "sha256:2200000000000000000000000000000000000000000000000000000000000000" shape [2]
         : !acsim.array<[2], !acsim.owner<@stateful>>
       %lane0 = acsim.element %lanes indices [0]
         : !acsim.array<[2], !acsim.owner<@stateful>> -> !acsim.ref<@stateful>
@@ -116,7 +115,7 @@ builtin.module attributes {ac.contract_epoch = "0.1"} {
         : !acsim.expr<@cpp_bool> to !acsim.expr<@cpp_bool>
       %out = acsim.export @out %expr2 role @role
         : !acsim.expr<@cpp_bool> -> !acsim.expr<@cpp_bool>
-      acsim.process @tick binding @top captures(%lane0 : !acsim.ref<@stateful>) names ["lane"] owner @Top path "Top.tick" object 3 activation 3 entry @entry
+      acsim.process @tick binding @top captures(%lane0 : !acsim.ref<@stateful>) names ["lane"] entry @entry
           pcs [@entry, @wait, @done]
           live [{name = "counter", type = !acsim.value<@cpp_bool>}]
           fairness 8 specialization "sha256:2300000000000000000000000000000000000000000000000000000000000000" {
@@ -143,16 +142,16 @@ builtin.module attributes {ac.contract_epoch = "0.1"} {
       acsim.return %out : !acsim.expr<@cpp_bool>
     }
 
-    %obj0, %act0 = acsim.dispatch @Top::@fifo indices [] object 0 activation 0
+    %obj0, %act0 = acsim.dispatch @Top::@fifo path "Top.fifo" indices [] object 0 activation 0
       work "fifo_work" xfer "fifo_xfer" reset "fifo_reset" validate "fifo_validate"
       : !acsim.object_id, !acsim.activation_id
-    %obj1, %act1 = acsim.dispatch @Top::@lanes indices [0] object 1 activation 1
+    %obj1, %act1 = acsim.dispatch @Top::@lanes path "Top.lanes[0]" indices [0] object 1 activation 1
       work "fifo_work" xfer "fifo_xfer" reset "fifo_reset" validate "fifo_validate"
       : !acsim.object_id, !acsim.activation_id
-    %obj2, %act2 = acsim.dispatch @Top::@lanes indices [1] object 2 activation 2
+    %obj2, %act2 = acsim.dispatch @Top::@lanes path "Top.lanes[1]" indices [1] object 2 activation 2
       work "fifo_work" xfer "fifo_xfer" reset "fifo_reset" validate "fifo_validate"
       : !acsim.object_id, !acsim.activation_id
-    %obj3, %act3 = acsim.dispatch @Top::@tick indices [] object 3 activation 3
+    %obj3, %act3 = acsim.dispatch @Top::@tick path "Top.tick" indices [] object 3 activation 3
       work "tick_work" xfer "tick_xfer" reset "tick_reset" validate "tick_validate"
       : !acsim.object_id, !acsim.activation_id
     acsim.activate %act0 to %obj0 : !acsim.activation_id to !acsim.object_id

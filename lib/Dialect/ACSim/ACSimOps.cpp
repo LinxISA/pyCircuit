@@ -108,6 +108,48 @@ bool isCppQualifiedSymbol(StringRef value) {
   return true;
 }
 
+bool isCanonicalIdentifier(StringRef value) {
+  if (value.empty() ||
+      !(std::isalpha(static_cast<unsigned char>(value.front())) ||
+        value.front() == '_'))
+    return false;
+  return llvm::all_of(value.drop_front(), [](char character) {
+    return std::isalnum(static_cast<unsigned char>(character)) ||
+           character == '_';
+  });
+}
+
+bool isCanonicalStaticData(Attribute root) {
+  SmallVector<Attribute> stack{root};
+  while (!stack.empty()) {
+    Attribute attribute = stack.pop_back_val();
+    if (isa<IntegerAttr, FloatAttr, BoolAttr, TypeAttr, SymbolRefAttr>(
+            attribute))
+      continue;
+    if (auto string = dyn_cast<StringAttr>(attribute)) {
+      if (hasRawCppFragment(string.getValue()) ||
+          string.getValue().contains('(') || string.getValue().contains(')') ||
+          string.getValue().contains('='))
+        return false;
+      continue;
+    }
+    if (auto array = dyn_cast<ArrayAttr>(attribute)) {
+      stack.append(array.begin(), array.end());
+      continue;
+    }
+    if (auto dictionary = dyn_cast<DictionaryAttr>(attribute)) {
+      for (NamedAttribute named : dictionary) {
+        if (!isCanonicalIdentifier(named.getName().getValue()))
+          return false;
+        stack.push_back(named.getValue());
+      }
+      continue;
+    }
+    return false;
+  }
+  return true;
+}
+
 bool hasExactKeys(DictionaryAttr dictionary, ArrayRef<StringLiteral> keys) {
   if (!dictionary || dictionary.size() != keys.size())
     return false;
@@ -183,6 +225,17 @@ LogicalResult verifyBindingLockShape(BindingOp binding) {
       return binding.emitOpError(
           "binding metadata cannot contain raw C++ or emitter behavior");
   }
+  StringRef header = cpp.getAs<StringAttr>("header").getValue();
+  if (header.starts_with('/') || header.contains('\\') ||
+      header.starts_with("../") || header.contains("/../") ||
+      header.ends_with("/..") || header == "..")
+    return binding.emitOpError(
+        "cpp.header must be a repository-relative header path");
+  if (!isCppQualifiedSymbol(cpp.getAs<StringAttr>("concept").getValue()) ||
+      !isCppQualifiedSymbol(cpp.getAs<StringAttr>("symbol").getValue()) ||
+      !isCanonicalIdentifier(cpp.getAs<StringAttr>("target").getValue()))
+    return binding.emitOpError(
+        "C++ concept, symbol, and target must be declarative qualified names");
   for (StringLiteral field : entryKeys) {
     auto value = entries.getAs<StringAttr>(field);
     if (!value ||
@@ -191,9 +244,14 @@ LogicalResult verifyBindingLockShape(BindingOp binding) {
           "binding entry points must be empty or qualified C++ symbols");
   }
   if ((binding.getEffect() == "pure" &&
-       entries.getAs<StringAttr>("pure").getValue().empty()) ||
+       (entries.getAs<StringAttr>("pure").getValue().empty() ||
+        !entries.getAs<StringAttr>("reset").getValue().empty() ||
+        !entries.getAs<StringAttr>("validate").getValue().empty() ||
+        !entries.getAs<StringAttr>("work").getValue().empty() ||
+        !entries.getAs<StringAttr>("xfer").getValue().empty())) ||
       (binding.getEffect() == "stateful" &&
-       (entries.getAs<StringAttr>("work").getValue().empty() ||
+       (!entries.getAs<StringAttr>("pure").getValue().empty() ||
+        entries.getAs<StringAttr>("work").getValue().empty() ||
         entries.getAs<StringAttr>("xfer").getValue().empty())))
     return binding.emitOpError(
         "binding effect requires its exact executable entry points");
@@ -211,6 +269,27 @@ LogicalResult verifyBindingLockShape(BindingOp binding) {
       !ownership.getAs<StringAttr>("placement"))
     return binding.emitOpError(
         "binding construction and ownership records must be exact");
+  auto constructionKind = construction.getAs<StringAttr>("kind");
+  if (!isCanonicalIdentifier(constructionKind.getValue()))
+    return binding.emitOpError("construction kind must be non-empty and "
+                               "canonical");
+  for (Attribute argument : construction.getAs<ArrayAttr>("arguments"))
+    if (!isCanonicalStaticData(argument))
+      return binding.emitOpError(
+          "construction arguments must be canonical static data");
+  auto ownershipKind = ownership.getAs<StringAttr>("kind");
+  auto ownershipPlacement = ownership.getAs<StringAttr>("placement");
+  if (!isCanonicalIdentifier(ownershipKind.getValue()) ||
+      !isCanonicalIdentifier(ownershipPlacement.getValue()))
+    return binding.emitOpError(
+        "binding ownership kind and placement must be canonical identifiers");
+  if ((binding.getEffect() == "pure" &&
+       (ownershipKind.getValue() != "none" ||
+        ownershipPlacement.getValue() != "inline")) ||
+      (binding.getEffect() == "stateful" &&
+       (ownershipKind.getValue() == "none" ||
+        ownershipPlacement.getValue() == "inline")))
+    return binding.emitOpError("binding ownership is inconsistent with effect");
 
   constexpr std::array<StringLiteral, 6> parameterKeys = {
       "acir_type", "cpp_type", "mapping", "name", "ordinal", "value"};
@@ -233,6 +312,14 @@ LogicalResult verifyBindingLockShape(BindingOp binding) {
         !parameterNames.insert(name.getValue()).second)
       return binding.emitOpError(
           "binding lock parameter must contain exact static fields");
+    if (!isCanonicalIdentifier(name.getValue()))
+      return binding.emitOpError(
+          "parameter name must be a canonical identifier");
+    if (parameter.getAs<StringAttr>("acir_type").getValue().empty() ||
+        parameter.getAs<StringAttr>("cpp_type").getValue().empty() ||
+        !isCanonicalStaticData(parameter.get("value")))
+      return binding.emitOpError(
+          "parameter types and value must be non-empty canonical static data");
     if (!llvm::is_contained({StringRef("template_argument"),
                              StringRef("constexpr_argument"),
                              StringRef("constructor_constant")},
@@ -266,6 +353,10 @@ LogicalResult verifyBindingLockShape(BindingOp binding) {
       failed(verifyRecordArray("results", resultKeys)) ||
       failed(verifyRecordArray("activation_sources", activationKeys)))
     return failure();
+  if (binding.getEffect() == "pure" &&
+      !record.getAs<ArrayAttr>("activation_sources").empty())
+    return binding.emitOpError(
+        "pure binding cannot contain activation or wakeup metadata");
   llvm::StringSet<> portAccessors;
   for (Attribute attribute : record.getAs<ArrayAttr>("ports")) {
     auto port = cast<DictionaryAttr>(attribute);
@@ -278,12 +369,35 @@ LogicalResult verifyBindingLockShape(BindingOp binding) {
         !port.getAs<FlatSymbolRefAttr>("protocol") || !direction ||
         !llvm::is_contained({StringRef("input"), StringRef("output")},
                             direction.getValue()) ||
-        !port.getAs<StringAttr>("cardinality") ||
-        !port.getAs<BoolAttr>("delegation") ||
+        !port.get("cardinality") || !port.getAs<StringAttr>("delegation") ||
         !port.getAs<StringAttr>("ownership") ||
         !port.getAs<StringAttr>("time_domain"))
       return binding.emitOpError(
           "binding port records require exact typed endpoint metadata");
+    Attribute cardinality = port.get("cardinality");
+    auto cardinalityInteger = dyn_cast<IntegerAttr>(cardinality);
+    auto cardinalityExpression = dyn_cast<StringAttr>(cardinality);
+    if ((!cardinalityInteger || cardinalityInteger.getInt() < 0) &&
+        (!cardinalityExpression || cardinalityExpression.getValue().empty() ||
+         !isCanonicalStaticData(cardinalityExpression)))
+      return binding.emitOpError(
+          "cardinality must be a non-negative integer or non-empty normalized "
+          "static expression");
+    auto delegation = port.getAs<StringAttr>("delegation");
+    if (!llvm::is_contained({StringRef("forbidden"), StringRef("allowed"),
+                             StringRef("required")},
+                            delegation.getValue()))
+      return binding.emitOpError(
+          "delegation must be forbidden, allowed, or required");
+    auto endpointOwnership = port.getAs<StringAttr>("ownership");
+    if (!llvm::is_contained(
+            {StringRef("owned"), StringRef("borrowed"), StringRef("shared")},
+            endpointOwnership.getValue()))
+      return binding.emitOpError(
+          "endpoint ownership must be owned, borrowed, or shared");
+    if (!isCanonicalIdentifier(
+            port.getAs<StringAttr>("time_domain").getValue()))
+      return binding.emitOpError("time domain must be a canonical identifier");
   }
   llvm::StringSet<> resourceAccessors;
   for (Attribute attribute : record.getAs<ArrayAttr>("resources")) {
@@ -295,29 +409,48 @@ LogicalResult verifyBindingLockShape(BindingOp binding) {
         !resource.getAs<FlatSymbolRefAttr>("role") || !mode ||
         !llvm::is_contained({StringRef("initiator"), StringRef("target")},
                             mode.getValue()) ||
-        !resource.getAs<BoolAttr>("delegation") ||
+        !resource.getAs<StringAttr>("delegation") ||
         !resource.getAs<StringAttr>("ownership") ||
         !resource.getAs<StringAttr>("time_domain"))
       return binding.emitOpError(
           "binding resource records require exact typed endpoint metadata");
+    auto delegation = resource.getAs<StringAttr>("delegation");
+    if (!llvm::is_contained({StringRef("forbidden"), StringRef("allowed"),
+                             StringRef("required")},
+                            delegation.getValue()))
+      return binding.emitOpError(
+          "delegation must be forbidden, allowed, or required");
+    auto endpointOwnership = resource.getAs<StringAttr>("ownership");
+    if (!llvm::is_contained(
+            {StringRef("owned"), StringRef("borrowed"), StringRef("shared")},
+            endpointOwnership.getValue()))
+      return binding.emitOpError(
+          "endpoint ownership must be owned, borrowed, or shared");
+    if (!isCanonicalIdentifier(
+            resource.getAs<StringAttr>("time_domain").getValue()))
+      return binding.emitOpError("time domain must be a canonical identifier");
   }
   llvm::StringSet<> resultNames;
   for (Attribute attribute : record.getAs<ArrayAttr>("results")) {
     auto result = cast<DictionaryAttr>(attribute);
     auto name = result.getAs<StringAttr>("name");
     if (!result.getAs<FlatSymbolRefAttr>("cpp_type") || !name ||
+        !isCanonicalIdentifier(name.getValue()) ||
         !resultNames.insert(name.getValue()).second)
       return binding.emitOpError(
-          "binding result records require exact typed metadata");
+          "result name must be a canonical identifier and result metadata "
+          "must be exact");
   }
   llvm::StringSet<> activationNames;
   for (Attribute attribute : record.getAs<ArrayAttr>("activation_sources")) {
     auto source = cast<DictionaryAttr>(attribute);
     auto name = source.getAs<StringAttr>("name");
     if (!source.getAs<FlatSymbolRefAttr>("kind") || !name ||
+        !isCanonicalIdentifier(name.getValue()) ||
         !activationNames.insert(name.getValue()).second)
       return binding.emitOpError(
-          "binding activation-source records require exact typed metadata");
+          "activation-source name must be a canonical identifier and source "
+          "metadata must be exact");
   }
   return success();
 }
@@ -388,7 +521,6 @@ bool lexicographicallyLess(ArrayRef<int64_t> left, ArrayRef<int64_t> right) {
 
 struct ModelIndex {
   SmallVector<Operation *> ordered;
-  SmallVector<Operation *> ownedPreorder;
   llvm::StringMap<Operation *> definitions;
   llvm::DenseMap<Operation *, uint64_t> positions;
 };
@@ -822,15 +954,20 @@ unsigned modelRank(Operation *operation) {
 }
 
 unsigned moduleRank(Operation *operation) {
-  if (auto bind = dyn_cast<BindOp>(operation))
-    return bind.getKind() == "pure_view" ? 5 : 3;
+  if (auto bind = dyn_cast<BindOp>(operation)) {
+    if (bind.getKind() == "pure_view")
+      return 5;
+    if (bind.getKind() == "export")
+      return 7;
+    return 3;
+  }
   return llvm::TypeSwitch<Operation *, unsigned>(operation)
       .Case<InstanceOp, ArrayOp>([](auto) { return 0; })
       .Case<ElementOp>([](auto) { return 1; })
       .Case<PortOp, ResourceOp>([](auto) { return 2; })
       .Case<InlineOp>([](auto) { return 4; })
       .Case<ExportOp>([](auto) { return 6; })
-      .Case<ProcessOp>([](auto) { return 7; })
+      .Case<ProcessOp>([](auto) { return 8; })
       .Case<ReturnOp>([](auto) { return 100; })
       .Default([](auto) { return 99; });
 }
@@ -885,89 +1022,211 @@ LogicalResult verifyDeterministicOrder(ModelOp model) {
   return success();
 }
 
-LogicalResult verifyConstructionOrder(ModelOp model, ModelIndex &index) {
+struct ExpandedRuntimeRow {
+  Operation *placement = nullptr;
+  unsigned context = 0;
+  std::string target;
+  std::string path;
+  SmallVector<int64_t> indices;
+  FlatSymbolRefAttr binding;
+  int64_t objectId = -1;
+  int64_t activationId = -1;
+};
+
+struct ExpansionContext {
+  ModuleOp module;
+  std::string path;
+  llvm::DenseMap<Operation *, SmallVector<int64_t>> objectIds;
+
+  ExpansionContext(ModuleOp module, std::string path)
+      : module(module), path(std::move(path)) {}
+};
+
+struct HierarchyExpansion {
+  SmallVector<ExpandedRuntimeRow> rows;
+  SmallVector<ExpansionContext> contexts;
+  llvm::StringMap<unsigned> rowByPath;
+};
+
+std::string expandedPath(StringRef parent, StringRef name,
+                         ArrayRef<int64_t> indices = {}) {
+  std::string path = parent.str();
+  if (!path.empty())
+    path.push_back('.');
+  path.append(name);
+  if (!indices.empty()) {
+    path.push_back('[');
+    llvm::raw_string_ostream os(path);
+    llvm::interleaveComma(indices, os);
+    os << ']';
+  }
+  return path;
+}
+
+std::string moduleSpecializationKey(ModuleOp module) {
+  std::string key = module.getSymName().str();
+  key.push_back(':');
+  key.append(module.getSpecializationFingerprint());
+  key.push_back(':');
+  llvm::raw_string_ostream(key) << module.getStaticParams();
+  return key;
+}
+
+LogicalResult expandSelectedRoot(ModelOp model, const ModelIndex &index,
+                                 HierarchyExpansion &expansion) {
   FailureOr<Operation *> root = requireReference<ModuleOp>(
       index, model, model.getRootAttr(), "root", false);
   if (failed(root))
     return failure();
 
-  llvm::StringSet<> paths;
-  llvm::DenseMap<Operation *, SmallVector<Operation *>> children;
-  for (Operation *operation : index.ordered) {
-    if (modelVerificationWorkCollector)
-      ++modelVerificationWorkCollector->constructionOperationVisits;
-    if (!isa<InstanceOp, ArrayOp, ProcessOp>(operation))
-      continue;
-    StringAttr path = operation->getAttrOfType<StringAttr>("path");
-    if (!path || path.getValue().empty())
-      return operation->emitOpError(
-          "owned placement requires a non-empty path");
-    if (!paths.insert(path.getValue()).second)
-      return operation->emitOpError()
-             << "duplicate hierarchy path '" << path << "'";
+  enum class ActionKind { Enter, Exit, Row };
+  struct Action {
+    ActionKind kind;
+    ModuleOp module;
+    Operation *placement = nullptr;
+    unsigned context = 0;
+    std::string path;
+    SmallVector<int64_t> indices;
+    std::string specializationKey;
+  };
+  SmallVector<Action> stack;
+  ModuleOp rootModule = cast<ModuleOp>(*root);
+  stack.push_back({ActionKind::Enter,
+                   rootModule,
+                   nullptr,
+                   0,
+                   rootModule.getSymName().str(),
+                   {},
+                   moduleSpecializationKey(rootModule)});
+  llvm::StringSet<> activeSpecializations;
+  const uint64_t expansionLimit =
+      currentModelVerificationLimits().maxExpandedObjects;
 
-    auto owner = operation->getAttrOfType<SymbolRefAttr>("owner");
-    FailureOr<Operation *> ownerDefinition =
-        requireReference<ModuleOp, InstanceOp, ArrayOp>(index, operation, owner,
-                                                        "owner");
-    if (failed(ownerDefinition))
-      return failure();
-    children[*ownerDefinition].push_back(operation);
-    StringAttr ownerPath =
-        (*ownerDefinition)->getAttrOfType<StringAttr>("path");
-    if (!ownerPath && isa<ModuleOp>(*ownerDefinition))
-      ownerPath = cast<ModuleOp>(*ownerDefinition).getPathAttr();
-    if (!ownerPath || !path.getValue().starts_with(ownerPath.getValue()) ||
-        path.getValue().size() <= ownerPath.getValue().size() ||
-        path.getValue()[ownerPath.getValue().size()] != '.')
-      return operation->emitOpError()
-             << "hierarchy path must be a named child of owner path '"
-             << ownerPath << "'";
-  }
-
-  for (auto &entry : children)
-    llvm::sort(entry.second, [](Operation *left, Operation *right) {
-      return definitionKey(left) < definitionKey(right);
-    });
-  SmallVector<std::string> actual;
-  SmallVector<Operation *> stack;
-  for (Operation *child : llvm::reverse(children.lookup(*root)))
-    stack.push_back(child);
   while (!stack.empty()) {
-    Operation *operation = stack.pop_back_val();
-    index.ownedPreorder.push_back(operation);
-    actual.push_back(definitionKey(operation));
-    for (Operation *child : llvm::reverse(children.lookup(operation)))
-      stack.push_back(child);
-  }
-  size_t placementCount = llvm::count_if(index.ordered, [](Operation *op) {
-    return isa<InstanceOp, ArrayOp, ProcessOp>(op);
-  });
-  if (index.ownedPreorder.size() != placementCount)
-    return model.emitOpError(
-        "every ownership chain must descend from the model root");
+    Action action = std::move(stack.back());
+    stack.pop_back();
+    if (action.kind == ActionKind::Exit) {
+      activeSpecializations.erase(action.specializationKey);
+      continue;
+    }
+    if (action.kind == ActionKind::Row) {
+      if (expansion.rows.size() >= expansionLimit)
+        return action.placement->emitOpError()
+               << "expanded hierarchy exceeds ACSim v0.1 capability "
+               << expansionLimit;
+      if (expansion.rowByPath.contains(action.path))
+        return action.placement->emitOpError()
+               << "derived hierarchy path is not unique: '" << action.path
+               << "'";
+      FlatSymbolRefAttr binding;
+      SymbolRefAttr target;
+      if (auto instance = dyn_cast<InstanceOp>(action.placement)) {
+        binding = instance.getBindingAttr();
+        target = instance.getTargetAttr();
+      } else if (auto array = dyn_cast<ArrayOp>(action.placement)) {
+        binding = array.getBindingAttr();
+        target = array.getTargetAttr();
+      } else {
+        binding = cast<ProcessOp>(action.placement).getBindingAttr();
+      }
+      int64_t id = static_cast<int64_t>(expansion.rows.size());
+      ExpandedRuntimeRow row{action.placement,
+                             action.context,
+                             definitionKey(action.placement),
+                             action.path,
+                             std::move(action.indices),
+                             binding,
+                             id,
+                             id};
+      expansion.rowByPath.try_emplace(
+          row.path, static_cast<unsigned>(expansion.rows.size()));
+      expansion.contexts[action.context].objectIds[action.placement].push_back(
+          id);
+      expansion.rows.push_back(std::move(row));
+      if (modelVerificationWorkCollector)
+        ++modelVerificationWorkCollector->expandedRuntimeRows;
 
+      Operation *targetDefinition =
+          target ? index.definitions.lookup(symbolKey(target)) : nullptr;
+      if (auto childModule = dyn_cast_or_null<ModuleOp>(targetDefinition))
+        stack.push_back({ActionKind::Enter,
+                         childModule,
+                         nullptr,
+                         0,
+                         action.path,
+                         {},
+                         moduleSpecializationKey(childModule)});
+      continue;
+    }
+
+    if (!activeSpecializations.insert(action.specializationKey).second)
+      return action.module.emitOpError(
+          "active module specialization cycle in selected hierarchy");
+    unsigned context = expansion.contexts.size();
+    expansion.contexts.emplace_back(action.module, action.path);
+    stack.push_back({ActionKind::Exit,
+                     action.module,
+                     nullptr,
+                     context,
+                     {},
+                     {},
+                     action.specializationKey});
+    SmallVector<Operation *> placements;
+    for (Operation &operation : action.module.getBody().front())
+      if (isa<InstanceOp, ArrayOp, ProcessOp>(operation))
+        placements.push_back(&operation);
+    for (Operation *placement : llvm::reverse(placements)) {
+      if (auto array = dyn_cast<ArrayOp>(placement)) {
+        uint64_t volume = arrayVolume(array.getShape());
+        for (uint64_t ordinal = volume; ordinal > 0; --ordinal) {
+          SmallVector<int64_t> indices =
+              lexicographicIndices(array.getShape(), ordinal - 1);
+          stack.push_back(
+              {ActionKind::Row,
+               {},
+               placement,
+               context,
+               expandedPath(action.path, array.getSymName(), indices),
+               std::move(indices),
+               {}});
+        }
+      } else {
+        StringRef name = cast<StringAttr>(symbolName(placement)).getValue();
+        stack.push_back({ActionKind::Row,
+                         {},
+                         placement,
+                         context,
+                         expandedPath(action.path, name),
+                         {},
+                         {}});
+      }
+    }
+  }
+  return success();
+}
+
+LogicalResult verifyConstructionOrder(ModelOp model,
+                                      const HierarchyExpansion &expansion) {
   auto readOrder = [&](ArrayAttr order, StringRef label,
-                       SmallVectorImpl<std::string> &keys) -> LogicalResult {
+                       SmallVectorImpl<std::string> &paths) -> LogicalResult {
     llvm::StringSet<> unique;
     for (Attribute attribute : order) {
-      auto reference = dyn_cast<SymbolRefAttr>(attribute);
-      if (!reference)
+      auto path = dyn_cast<StringAttr>(attribute);
+      if (!path || path.getValue().empty())
         return model.emitOpError()
-               << label << " entries must be symbol references";
-      std::string key = symbolKey(reference);
-      if (!unique.insert(key).second)
+               << label << " entries must be concrete hierarchy-path strings";
+      if (!unique.insert(path.getValue()).second)
         return model.emitOpError()
-               << label << " contains duplicate '" << key << "'";
-      Operation *definition = index.definitions.lookup(key);
-      if (!definition || !isa<InstanceOp, ArrayOp, ProcessOp>(definition))
-        return model.emitOpError()
-               << label << " reference '" << reference << "' is unresolved";
-      keys.push_back(std::move(key));
+               << label << " contains duplicate '" << path << "'";
+      paths.push_back(path.getValue().str());
     }
     return success();
   };
 
+  SmallVector<std::string> actual;
+  actual.reserve(expansion.rows.size());
+  for (const ExpandedRuntimeRow &row : expansion.rows)
+    actual.push_back(row.path);
   SmallVector<std::string> construction;
   SmallVector<std::string> destruction;
   if (failed(readOrder(model.getConstructionOrder(), "construction order",
@@ -1118,50 +1377,73 @@ LogicalResult verifyProcess(ProcessOp process, const ModelIndex &index) {
   llvm::StringMap<unsigned> pcOrdinals;
   for (auto [ordinal, pc] : llvm::enumerate(pcs))
     pcOrdinals[pc] = ordinal;
-  SmallVector<std::optional<uint64_t>> memo(pcs.size());
-  SmallVector<bool> active(pcs.size(), false);
-  std::function<FailureOr<uint64_t>(unsigned)> longestState =
-      [&](unsigned stateOrdinal) -> FailureOr<uint64_t> {
-    if (memo[stateOrdinal])
-      return *memo[stateOrdinal];
-    if (active[stateOrdinal])
-      return process.emitOpError(
-          "process continue graph must prove bounded acyclic progress");
-    active[stateOrdinal] = true;
+  const uint64_t dependencyLimit =
+      currentModelVerificationLimits().maxDependencyNodes;
+  if (pcs.size() > dependencyLimit)
+    return process.emitOpError()
+           << "dependency graph exceeds ACSim v0.1 capability "
+           << dependencyLimit;
+  SmallVector<SmallVector<unsigned>> successors(pcs.size());
+  SmallVector<unsigned> indegree(pcs.size(), 0);
+  uint64_t dependencyNodes = pcs.size();
+  for (auto [ordinal, state] : llvm::enumerate(process.getStates())) {
+    llvm::SmallSet<unsigned, 4> unique;
+    for (Block &block : state) {
+      auto next = dyn_cast<ContinueOp>(block.getTerminator());
+      if (!next)
+        continue;
+      auto found = pcOrdinals.find(next.getTargetPc());
+      if (found == pcOrdinals.end())
+        return next.emitOpError("target PC is not in the closed PC list");
+      if (unique.insert(found->second).second) {
+        if (++dependencyNodes > dependencyLimit)
+          return process.emitOpError()
+                 << "dependency graph exceeds ACSim v0.1 capability "
+                 << dependencyLimit;
+        successors[ordinal].push_back(found->second);
+        ++indegree[found->second];
+      }
+    }
+  }
+  std::set<unsigned> ready;
+  for (auto [ordinal, degree] : llvm::enumerate(indegree))
+    if (degree == 0)
+      ready.insert(ordinal);
+  SmallVector<unsigned> topological;
+  while (!ready.empty()) {
+    unsigned ordinal = *ready.begin();
+    ready.erase(ready.begin());
+    topological.push_back(ordinal);
+    for (unsigned successor : successors[ordinal])
+      if (--indegree[successor] == 0)
+        ready.insert(successor);
+  }
+  if (topological.size() != pcs.size())
+    return process.emitOpError(
+        "process continue graph must prove bounded acyclic progress");
+
+  SmallVector<uint64_t> memo(pcs.size(), 0);
+  uint64_t maximumPath = 0;
+  for (unsigned stateOrdinal : llvm::reverse(topological)) {
     Region &state = process.getStates()[stateOrdinal];
     llvm::DenseMap<Block *, uint64_t> blockCost;
     uint64_t stateMaximum = 0;
     for (Block &block : llvm::reverse(state)) {
       uint64_t suffix = 0;
       Operation *terminator = block.getTerminator();
-      if (auto next = dyn_cast<ContinueOp>(terminator)) {
-        auto found = pcOrdinals.find(next.getTargetPc());
-        if (found == pcOrdinals.end())
-          return next.emitOpError("target PC is not in the closed PC list");
-        FailureOr<uint64_t> downstream = longestState(found->second);
-        if (failed(downstream))
-          return failure();
-        suffix = *downstream;
-      } else {
+      if (auto next = dyn_cast<ContinueOp>(terminator))
+        suffix = memo[pcOrdinals.lookup(next.getTargetPc())];
+      else
         for (Block *successor : terminator->getSuccessors())
           suffix = std::max(suffix, blockCost.lookup(successor));
-      }
       uint64_t own = block.getOperations().size();
       if (suffix > kMaxModelNodes - own)
         return process.emitOpError("process fairness work count overflows");
       blockCost[&block] = own + suffix;
       stateMaximum = std::max(stateMaximum, own + suffix);
     }
-    active[stateOrdinal] = false;
     memo[stateOrdinal] = stateMaximum;
-    return stateMaximum;
-  };
-  uint64_t maximumPath = 0;
-  for (unsigned ordinal = 0; ordinal != pcs.size(); ++ordinal) {
-    FailureOr<uint64_t> cost = longestState(ordinal);
-    if (failed(cost))
-      return failure();
-    maximumPath = std::max(maximumPath, *cost);
+    maximumPath = std::max(maximumPath, stateMaximum);
   }
   if (maximumPath > static_cast<uint64_t>(process.getFairnessCap()))
     return process.emitOpError()
@@ -1259,36 +1541,52 @@ verifyPlacementTarget(Operation *operation, FlatSymbolRefAttr bindingReference,
   return success();
 }
 
-Operation *capturedPlacement(Value value) {
-  if (Operation *definition = value.getDefiningOp()) {
+FailureOr<Operation *> capturedPlacement(Value value, Operation *reporter) {
+  llvm::SmallPtrSet<void *, 16> visited;
+  uint64_t nodes = 0;
+  const uint64_t limit = currentModelVerificationLimits().maxDependencyNodes;
+  while (value) {
+    if (++nodes > limit)
+      return reporter->emitOpError()
+             << "dependency graph exceeds ACSim v0.1 capability " << limit;
+    void *key = value.getAsOpaquePointer();
+    if (!visited.insert(key).second)
+      return reporter->emitOpError(
+          "typed SSA dependency graph contains a cycle");
+    Operation *definition = value.getDefiningOp();
+    if (!definition)
+      return static_cast<Operation *>(nullptr);
     if (isa<InstanceOp, ArrayOp>(definition))
       return definition;
-    if (auto element = dyn_cast<ElementOp>(definition))
-      return element.getArray().getDefiningOp();
-    if (auto port = dyn_cast<PortOp>(definition))
-      return capturedPlacement(port.getBase());
-    if (auto resource = dyn_cast<ResourceOp>(definition))
-      return capturedPlacement(resource.getBase());
+    if (auto element = dyn_cast<ElementOp>(definition)) {
+      value = element.getArray();
+      continue;
+    }
+    if (auto port = dyn_cast<PortOp>(definition)) {
+      value = port.getBase();
+      continue;
+    }
+    if (auto resource = dyn_cast<ResourceOp>(definition)) {
+      value = resource.getBase();
+      continue;
+    }
+    return static_cast<Operation *>(nullptr);
   }
-  return nullptr;
+  return static_cast<Operation *>(nullptr);
 }
 
 LogicalResult verifyCaptureBoundary(ProcessOp process, Value capture,
                                     const ModelIndex &index) {
   if (!isa<OwnerType, RefType>(capture.getType()))
     return success();
-  Operation *placement = capturedPlacement(capture);
-  Operation *boundary =
-      resolveReference(index, process, process.getOwnerAttr());
-  llvm::SmallPtrSet<Operation *, 16> visited;
-  while (placement && visited.insert(placement).second) {
-    if (placement == boundary)
-      return success();
-    auto owner = placement->getAttrOfType<SymbolRefAttr>("owner");
-    placement = owner ? resolveReference(index, placement, owner) : nullptr;
-  }
-  return process.emitOpError(
-      "captured owner/ref must remain within the process ownership boundary");
+  FailureOr<Operation *> placement = capturedPlacement(capture, process);
+  if (failed(placement))
+    return failure();
+  if (*placement && (*placement)->getParentOfType<ModuleOp>() ==
+                        process->getParentOfType<ModuleOp>())
+    return success();
+  return process.emitOpError("captured owner/ref must remain within the "
+                             "lexically enclosing module boundary");
 }
 
 LogicalResult verifyModulesAndTypedGraph(ModelOp model,
@@ -1352,8 +1650,8 @@ LogicalResult verifyModulesAndTypedGraph(ModelOp model,
               binding, index, binding.getSchemaAttr(),
               "component_schema_fingerprint", "component schema")) ||
           failed(verifyBindingReferenceFingerprint(
-              binding, index, binding.getProviderAttr(),
-              "provider_implementation_fingerprint", "provider")))
+              binding, index, binding.getImplementationAttr(),
+              "provider_implementation_fingerprint", "implementation")))
         return failure();
       for (StringRef field : {StringRef("ports"), StringRef("resources")})
         for (Attribute item : binding.getRecord().getAs<ArrayAttr>(field)) {
@@ -1447,11 +1745,6 @@ LogicalResult verifyModulesAndTypedGraph(ModelOp model,
           !element || element.getSymbol() != array.getBindingAttr())
         return array.emitOpError(
             "array result shape and owning element binding must be exact");
-      uint64_t volume = arrayVolume(array.getShape());
-      if (array.getObjectIds().size() != volume ||
-          array.getActivationIds().size() != volume)
-        return array.emitOpError(
-            "array object and activation IDs must cover every element");
     } else if (auto element = dyn_cast<ElementOp>(operation)) {
       auto arrayType = dyn_cast<ArrayType>(element.getArray().getType());
       auto owner = arrayType ? dyn_cast<OwnerType>(arrayType.getElementType())
@@ -1652,82 +1945,9 @@ LogicalResult verifyModulesAndTypedGraph(ModelOp model,
   return success();
 }
 
-struct RuntimeRow {
-  std::string target;
-  SmallVector<int64_t> indices;
-  int64_t activationId = -1;
-  Operation *placement = nullptr;
-};
-
 LogicalResult verifyDispatchAndActivation(ModelOp model,
-                                          const ModelIndex &index) {
-  llvm::DenseMap<int64_t, RuntimeRow> objects;
-  llvm::DenseMap<int64_t, int64_t> activations;
-  int64_t nextObjectId = 0;
-  int64_t nextActivationId = 0;
-
-  auto addRuntime = [&](Operation *operation, int64_t objectId,
-                        int64_t activationId,
-                        ArrayRef<int64_t> indices) -> LogicalResult {
-    if (objectId < 0 || activationId < 0)
-      return operation->emitOpError(
-          "object and activation IDs must be non-negative");
-    if (objectId != nextObjectId)
-      return operation->emitOpError(
-          "runtime object IDs must equal canonical ownership preorder");
-    if (activationId != nextActivationId)
-      return operation->emitOpError(
-          "activation-source IDs must equal canonical ownership preorder");
-    RuntimeRow row{definitionKey(operation), SmallVector<int64_t>(indices),
-                   activationId, operation};
-    if (modelVerificationWorkCollector)
-      ++modelVerificationWorkCollector->expandedRuntimeRows;
-    if (!objects.try_emplace(objectId, std::move(row)).second)
-      return operation->emitOpError("duplicate runtime object ID");
-    if (!activations.try_emplace(activationId, objectId).second)
-      return operation->emitOpError("duplicate activation-source ID");
-    ++nextObjectId;
-    ++nextActivationId;
-    return success();
-  };
-
-  if (modelVerificationWorkCollector)
-    modelVerificationWorkCollector->runtimeOperationVisits +=
-        index.ordered.size();
-  for (Operation *operation : index.ownedPreorder) {
-    if (auto instance = dyn_cast<InstanceOp>(operation)) {
-      if (failed(addRuntime(instance, instance.getObjectId(),
-                            instance.getActivationId(), {})))
-        return failure();
-    } else if (auto process = dyn_cast<ProcessOp>(operation)) {
-      if (failed(addRuntime(process, process.getObjectId(),
-                            process.getActivationId(), {})))
-        return failure();
-    } else if (auto array = dyn_cast<ArrayOp>(operation)) {
-      uint64_t volume = arrayVolume(array.getShape());
-      for (uint64_t ordinal = 0; ordinal < volume; ++ordinal) {
-        SmallVector<int64_t> indices =
-            lexicographicIndices(array.getShape(), ordinal);
-        if (failed(addRuntime(array, array.getObjectIds()[ordinal],
-                              array.getActivationIds()[ordinal], indices)))
-          return failure();
-      }
-    }
-  }
-  if (objects.size() > kMaxExpandedObjects)
-    return model.emitOpError() << "expanded object count exceeds ACSim v0.1 "
-                                  "capability "
-                               << kMaxExpandedObjects;
-  for (int64_t id = 0, end = static_cast<int64_t>(objects.size()); id < end;
-       ++id)
-    if (!objects.contains(id))
-      return model.emitOpError(
-          "runtime object IDs must be dense canonical ownership preorder");
-  for (int64_t id = 0, end = static_cast<int64_t>(activations.size()); id < end;
-       ++id)
-    if (!activations.contains(id))
-      return model.emitOpError("activation-source IDs must be dense");
-
+                                          const ModelIndex &index,
+                                          HierarchyExpansion &expansion) {
   llvm::DenseMap<int64_t, DispatchOp> dispatchByObject;
   for (Operation &operation : model.getBody().front()) {
     if (modelVerificationWorkCollector)
@@ -1736,28 +1956,22 @@ LogicalResult verifyDispatchAndActivation(ModelOp model,
     if (!dispatch)
       continue;
     int64_t id = dispatch.getObjectId();
-    auto found = objects.find(id);
-    if (found == objects.end())
+    if (id < 0 || static_cast<uint64_t>(id) >= expansion.rows.size())
       return dispatch.emitOpError(
-          "dispatch object ID has no owned runtime object");
+          "dispatch object ID has no expanded runtime object");
+    const ExpandedRuntimeRow &row = expansion.rows[id];
     std::string target = symbolKey(dispatch.getTargetAttr());
-    if (target != found->second.target ||
-        dispatch.getIndices() != ArrayRef<int64_t>(found->second.indices) ||
-        dispatch.getActivationId() != found->second.activationId)
+    if (target != row.target || dispatch.getPath() != row.path ||
+        dispatch.getIndices() != ArrayRef<int64_t>(row.indices) ||
+        dispatch.getActivationId() != row.activationId)
       return dispatch.emitOpError(
-          "dispatch target, indices, and IDs must match canonical ownership");
+          "dispatch target, path, indices, and IDs must jointly match one "
+          "derived expanded row");
     if (!dispatchByObject.try_emplace(id, dispatch).second)
       return dispatch.emitOpError(
           "runtime object has more than one dispatch row");
-    FlatSymbolRefAttr bindingReference;
-    if (auto instance = dyn_cast<InstanceOp>(found->second.placement))
-      bindingReference = instance.getBindingAttr();
-    else if (auto array = dyn_cast<ArrayOp>(found->second.placement))
-      bindingReference = array.getBindingAttr();
-    else if (auto process = dyn_cast<ProcessOp>(found->second.placement))
-      bindingReference = process.getBindingAttr();
     auto binding = dyn_cast_or_null<BindingOp>(
-        index.definitions.lookup(symbolKey(bindingReference)));
+        index.definitions.lookup(symbolKey(row.binding)));
     auto entryPoints =
         binding ? binding.getCppRecord().getAs<DictionaryAttr>("entry_points")
                 : DictionaryAttr();
@@ -1769,84 +1983,141 @@ LogicalResult verifyDispatchAndActivation(ModelOp model,
       return dispatch.emitOpError(
           "dispatch thunks must exactly match the placement binding lock");
   }
-  if (dispatchByObject.size() != objects.size())
+  if (dispatchByObject.size() != expansion.rows.size())
     return model.emitOpError(
         "every runtime object requires exactly one typed dispatch row");
 
-  llvm::DenseMap<Operation *, SmallVector<int64_t>> placementObjects;
-  for (auto &[id, row] : objects)
-    placementObjects[row.placement].push_back(id);
-  for (auto &entry : placementObjects)
-    llvm::sort(entry.second);
-
-  std::function<std::set<int64_t>(Value, llvm::SmallPtrSetImpl<void *> &)>
-      idsForValue;
-  idsForValue =
-      [&](Value value,
-          llvm::SmallPtrSetImpl<void *> &active) -> std::set<int64_t> {
-    void *key = value.getAsOpaquePointer();
-    if (!active.insert(key).second)
-      return {};
-    std::set<int64_t> result;
-    if (auto argument = dyn_cast<BlockArgument>(value)) {
-      if (auto process =
-              dyn_cast<ProcessOp>(argument.getOwner()->getParentOp())) {
-        if (argument.getArgNumber() < process.getCaptures().size()) {
-          auto nested = idsForValue(
-              process.getCaptures()[argument.getArgNumber()], active);
-          result.insert(nested.begin(), nested.end());
+  using DependencyKey = std::pair<unsigned, void *>;
+  std::map<DependencyKey, std::set<int64_t>> dependencyMemo;
+  uint64_t dependencyNodes = 0;
+  auto collectIds = [&](Value rootValue, unsigned context,
+                        Operation *reporter) -> FailureOr<std::set<int64_t>> {
+    struct Frame {
+      DependencyKey key;
+      Value value;
+      SmallVector<Value> dependencies;
+      size_t next = 0;
+      std::set<int64_t> result;
+      bool initialized = false;
+    };
+    DependencyKey rootKey{context, rootValue.getAsOpaquePointer()};
+    if (auto found = dependencyMemo.find(rootKey);
+        found != dependencyMemo.end())
+      return found->second;
+    SmallVector<Frame> stack{{rootKey, rootValue}};
+    std::set<DependencyKey> active;
+    const uint64_t limit = currentModelVerificationLimits().maxDependencyNodes;
+    while (!stack.empty()) {
+      Frame &frame = stack.back();
+      if (!frame.initialized) {
+        if (!active.insert(frame.key).second)
+          return reporter->emitOpError(
+              "typed SSA dependency graph contains a cycle");
+        if (++dependencyNodes > limit)
+          return reporter->emitOpError()
+                 << "dependency graph exceeds ACSim v0.1 capability " << limit;
+        frame.initialized = true;
+        if (auto argument = dyn_cast<BlockArgument>(frame.value)) {
+          if (auto process =
+                  dyn_cast<ProcessOp>(argument.getOwner()->getParentOp()))
+            if (argument.getArgNumber() < process.getCaptures().size())
+              frame.dependencies.push_back(
+                  process.getCaptures()[argument.getArgNumber()]);
+        } else if (Operation *definition = frame.value.getDefiningOp()) {
+          auto found = expansion.contexts[context].objectIds.find(definition);
+          if (isa<InstanceOp, ArrayOp>(definition) &&
+              found != expansion.contexts[context].objectIds.end()) {
+            frame.result.insert(found->second.begin(), found->second.end());
+          } else if (auto element = dyn_cast<ElementOp>(definition)) {
+            auto array = element.getArray().getDefiningOp<ArrayOp>();
+            auto rows = array
+                            ? expansion.contexts[context].objectIds.find(array)
+                            : expansion.contexts[context].objectIds.end();
+            if (rows != expansion.contexts[context].objectIds.end()) {
+              uint64_t ordinal = 0;
+              for (auto [indexValue, extent] :
+                   llvm::zip_equal(element.getIndices(), array.getShape()))
+                ordinal = ordinal * static_cast<uint64_t>(extent) +
+                          static_cast<uint64_t>(indexValue);
+              if (ordinal < rows->second.size())
+                frame.result.insert(rows->second[ordinal]);
+            }
+          } else {
+            frame.dependencies.append(definition->operand_begin(),
+                                      definition->operand_end());
+          }
         }
       }
-    } else if (Operation *definition = value.getDefiningOp()) {
-      if (auto instance = dyn_cast<InstanceOp>(definition)) {
-        result.insert(instance.getObjectId());
-      } else if (auto element = dyn_cast<ElementOp>(definition)) {
-        auto array = element.getArray().getDefiningOp<ArrayOp>();
-        if (array) {
-          uint64_t ordinal = 0;
-          for (auto [indexValue, extent] :
-               llvm::zip_equal(element.getIndices(), array.getShape()))
-            ordinal = ordinal * static_cast<uint64_t>(extent) +
-                      static_cast<uint64_t>(indexValue);
-          if (ordinal < array.getObjectIds().size())
-            result.insert(array.getObjectIds()[ordinal]);
+      if (frame.next < frame.dependencies.size()) {
+        Value dependency = frame.dependencies[frame.next];
+        DependencyKey key{context, dependency.getAsOpaquePointer()};
+        if (auto found = dependencyMemo.find(key);
+            found != dependencyMemo.end()) {
+          frame.result.insert(found->second.begin(), found->second.end());
+          ++frame.next;
+          continue;
         }
-      } else if (auto process = dyn_cast<ProcessOp>(definition)) {
-        result.insert(process.getObjectId());
-      } else {
-        for (Value operand : definition->getOperands()) {
-          auto nested = idsForValue(operand, active);
-          result.insert(nested.begin(), nested.end());
-        }
+        if (active.contains(key))
+          return reporter->emitOpError(
+              "typed SSA dependency graph contains a cycle");
+        stack.push_back({key, dependency});
+        continue;
       }
+      dependencyMemo[frame.key] = frame.result;
+      active.erase(frame.key);
+      stack.pop_back();
     }
-    active.erase(key);
-    return result;
-  };
-  auto collectIds = [&](Value value) {
-    llvm::SmallPtrSet<void *, 16> active;
-    return idsForValue(value, active);
+    return dependencyMemo.find(rootKey)->second;
   };
 
   std::set<std::pair<int64_t, int64_t>> expected;
-  for (auto &[id, row] : objects)
-    expected.insert({row.activationId, id});
-  for (Operation *operation : index.ordered) {
-    if (auto bind = dyn_cast<BindOp>(operation)) {
-      for (int64_t source : collectIds(bind.getSource()))
-        for (int64_t target : collectIds(bind.getTarget()))
-          expected.insert({objects.lookup(source).activationId, target});
-    } else if (auto process = dyn_cast<ProcessOp>(operation)) {
-      for (Value capture : process.getCaptures())
-        for (int64_t source : collectIds(capture))
-          expected.insert(
-              {objects.lookup(source).activationId, process.getObjectId()});
-    } else if (auto invoke = dyn_cast<InvokeOp>(operation)) {
-      if (auto process = invoke->getParentOfType<ProcessOp>())
-        for (Value argument : invoke.getArgs())
-          for (int64_t source : collectIds(argument))
-            expected.insert(
-                {objects.lookup(source).activationId, process.getObjectId()});
+  for (const ExpandedRuntimeRow &row : expansion.rows)
+    expected.insert({row.activationId, row.objectId});
+  for (auto [contextOrdinal, expansionContext] :
+       llvm::enumerate(expansion.contexts)) {
+    for (Operation &operation : expansionContext.module.getBody().front()) {
+      if (auto bind = dyn_cast<BindOp>(operation)) {
+        FailureOr<std::set<int64_t>> sources =
+            collectIds(bind.getSource(), contextOrdinal, bind);
+        FailureOr<std::set<int64_t>> targets =
+            collectIds(bind.getTarget(), contextOrdinal, bind);
+        if (failed(sources) || failed(targets))
+          return failure();
+        for (int64_t source : *sources)
+          for (int64_t target : *targets)
+            expected.insert({expansion.rows[source].activationId, target});
+      } else if (auto process = dyn_cast<ProcessOp>(operation)) {
+        auto rows = expansionContext.objectIds.find(process);
+        if (rows == expansionContext.objectIds.end() ||
+            rows->second.size() != 1)
+          return process.emitOpError(
+              "process must instantiate once per concrete module context");
+        int64_t processId = rows->second.front();
+        for (Value capture : process.getCaptures()) {
+          FailureOr<std::set<int64_t>> sources =
+              collectIds(capture, contextOrdinal, process);
+          if (failed(sources))
+            return failure();
+          for (int64_t source : *sources)
+            expected.insert({expansion.rows[source].activationId, processId});
+        }
+        LogicalResult invokeStatus = success();
+        process.walk([&](InvokeOp invoke) -> WalkResult {
+          for (Value argument : invoke.getArgs()) {
+            FailureOr<std::set<int64_t>> sources =
+                collectIds(argument, contextOrdinal, invoke);
+            if (failed(sources)) {
+              invokeStatus = failure();
+              return WalkResult::interrupt();
+            }
+            for (int64_t source : *sources)
+              expected.insert({expansion.rows[source].activationId, processId});
+          }
+          return WalkResult::advance();
+        });
+        if (failed(invokeStatus))
+          return failure();
+      }
     }
   }
 
@@ -1888,13 +2159,9 @@ ParseResult ProcessOp::parse(OpAsmParser &parser, OperationState &result) {
   SmallVector<OpAsmParser::UnresolvedOperand> captures;
   SmallVector<Type> captureTypes;
   ArrayAttr captureNames;
-  FlatSymbolRefAttr owner;
-  StringAttr path;
   FlatSymbolRefAttr entryPc;
   ArrayAttr pcs;
   ArrayAttr liveSlots;
-  int64_t objectId;
-  int64_t activationId;
   int64_t fairnessCap;
   StringAttr specializationFingerprint;
 
@@ -1917,10 +2184,6 @@ ParseResult ProcessOp::parse(OpAsmParser &parser, OperationState &result) {
   if (parser.resolveOperands(captures, captureTypes,
                              parser.getCurrentLocation(), result.operands) ||
       parser.parseKeyword("names") || parser.parseAttribute(captureNames) ||
-      parser.parseKeyword("owner") || parser.parseAttribute(owner) ||
-      parser.parseKeyword("path") || parser.parseAttribute(path) ||
-      parser.parseKeyword("object") || parser.parseInteger(objectId) ||
-      parser.parseKeyword("activation") || parser.parseInteger(activationId) ||
       parser.parseKeyword("entry") || parser.parseAttribute(entryPc) ||
       parser.parseKeyword("pcs") || parser.parseAttribute(pcs) ||
       parser.parseKeyword("live") || parser.parseAttribute(liveSlots) ||
@@ -1931,10 +2194,6 @@ ParseResult ProcessOp::parse(OpAsmParser &parser, OperationState &result) {
 
   result.addAttribute("binding", binding);
   result.addAttribute("capture_names", captureNames);
-  result.addAttribute("owner", owner);
-  result.addAttribute("path", path);
-  result.addAttribute("object_id", builder.getI64IntegerAttr(objectId));
-  result.addAttribute("activation_id", builder.getI64IntegerAttr(activationId));
   result.addAttribute("entry_pc", entryPc);
   result.addAttribute("pcs", pcs);
   result.addAttribute("live_slots", liveSlots);
@@ -1969,17 +2228,14 @@ void ProcessOp::print(OpAsmPrinter &printer) {
   llvm::interleaveComma(getCaptures(), printer, [&](Value capture) {
     printer << capture << " : " << capture.getType();
   });
-  printer << ") names " << getCaptureNamesAttr() << " owner " << getOwnerAttr()
-          << " path " << getPathAttr() << " object " << getObjectId()
-          << " activation " << getActivationId() << " entry "
+  printer << ") names " << getCaptureNamesAttr() << " entry "
           << getEntryPcAttr() << " pcs " << getPcsAttr() << " live "
           << getLiveSlotsAttr() << " fairness " << getFairnessCap()
           << " specialization " << getSpecializationFingerprintAttr();
   printer.printOptionalAttrDictWithKeyword(
       (*this)->getAttrs(),
-      {SymbolTable::getSymbolAttrName(), "binding", "capture_names", "owner",
-       "path", "object_id", "activation_id", "entry_pc", "pcs", "live_slots",
-       "fairness_cap", "specialization_fingerprint"});
+      {SymbolTable::getSymbolAttrName(), "binding", "capture_names", "entry_pc",
+       "pcs", "live_slots", "fairness_cap", "specialization_fingerprint"});
   printer << " {";
   for (auto [pc, state] : llvm::zip(getPcs(), getStates())) {
     printer << "\nstate " << pc << ' ';
@@ -2012,12 +2268,14 @@ LogicalResult ModelOp::verify() {
   if (failed(preflightModel(*this)))
     return failure();
   ModelIndex index;
+  HierarchyExpansion expansion;
   if (failed(buildIndex(*this, index)) ||
       failed(verifyClosedLegality(*this, index.ordered)) ||
       failed(verifyDeterministicOrder(*this)) ||
-      failed(verifyConstructionOrder(*this, index)) ||
+      failed(expandSelectedRoot(*this, index, expansion)) ||
+      failed(verifyConstructionOrder(*this, expansion)) ||
       failed(verifyModulesAndTypedGraph(*this, index)) ||
-      failed(verifyDispatchAndActivation(*this, index)))
+      failed(verifyDispatchAndActivation(*this, index, expansion)))
     return failure();
   return success();
 }
@@ -2038,8 +2296,6 @@ LogicalResult TypeOp::verify() {
 LogicalResult BindingOp::verify() { return verifyBindingLockShape(*this); }
 
 LogicalResult ModuleOp::verify() {
-  if (getPath().empty())
-    return emitOpError("module path must be non-empty");
   if (failed(verifyFingerprint(*this, getSpecializationFingerprintAttr(),
                                "specialization fingerprint")))
     return failure();
@@ -2050,9 +2306,6 @@ LogicalResult ModuleOp::verify() {
 }
 
 LogicalResult InstanceOp::verify() {
-  if (getObjectId() < 0 || getActivationId() < 0 || getPath().empty())
-    return emitOpError(
-        "instance requires non-negative IDs and a non-empty path");
   if (failed(verifyFingerprint(*this, getSpecializationFingerprintAttr(),
                                "specialization fingerprint")))
     return failure();
@@ -2069,9 +2322,6 @@ LogicalResult ArrayOp::verify() {
   auto type = dyn_cast<ArrayType>(getResult().getType());
   if (!type || type.getShape().asArrayRef() != getShape())
     return emitOpError("result array type must exactly match shape metadata");
-  uint64_t volume = arrayVolume(getShape());
-  if (getObjectIds().size() != volume || getActivationIds().size() != volume)
-    return emitOpError("object and activation IDs must cover array volume");
   return success();
 }
 
@@ -2097,24 +2347,96 @@ LogicalResult ResourceOp::verify() {
 }
 
 LogicalResult BindOp::verify() {
+  auto findBinding = [&](Value base) -> BindingOp {
+    SymbolRefAttr reference;
+    if (auto owner = dyn_cast<OwnerType>(base.getType()))
+      reference = owner.getSymbol();
+    else if (auto ref = dyn_cast<RefType>(base.getType()))
+      reference = ref.getSymbol();
+    if (!reference)
+      return {};
+    ModelOp model = (*this)->getParentOfType<ModelOp>();
+    if (!model)
+      return {};
+    for (Operation &operation : model.getBody().front())
+      if (auto binding = dyn_cast<BindingOp>(operation))
+        if (binding.getSymName() == reference.getRootReference().getValue())
+          return binding;
+    return {};
+  };
   if (getKind() == "port") {
+    auto sourceOp = getSource().getDefiningOp<PortOp>();
+    auto targetOp = getTarget().getDefiningOp<PortOp>();
     auto source = dyn_cast<PortType>(getSource().getType());
     auto target = dyn_cast<PortType>(getTarget().getType());
-    if (source && target && source.getInterface() == target.getInterface() &&
-        source.getPayload() == target.getPayload() &&
-        source.getProtocol() == target.getProtocol() &&
-        source.getRole() != target.getRole())
+    DictionaryAttr sourceRecord =
+        sourceOp ? findEndpoint(findBinding(sourceOp.getBase()), "ports",
+                                sourceOp.getAccessorAttr())
+                 : DictionaryAttr();
+    DictionaryAttr targetRecord =
+        targetOp ? findEndpoint(findBinding(targetOp.getBase()), "ports",
+                                targetOp.getAccessorAttr())
+                 : DictionaryAttr();
+    if (source && target && sourceRecord && targetRecord &&
+        sourceRecord.getAs<StringAttr>("direction").getValue() == "output" &&
+        targetRecord.getAs<StringAttr>("direction").getValue() == "input" &&
+        sourceRecord.getAs<FlatSymbolRefAttr>("interface") ==
+            source.getInterface() &&
+        sourceRecord.getAs<FlatSymbolRefAttr>("role") == source.getRole() &&
+        sourceRecord.getAs<FlatSymbolRefAttr>("payload") ==
+            source.getPayload() &&
+        sourceRecord.getAs<FlatSymbolRefAttr>("protocol") ==
+            source.getProtocol() &&
+        targetRecord.getAs<FlatSymbolRefAttr>("interface") ==
+            target.getInterface() &&
+        targetRecord.getAs<FlatSymbolRefAttr>("role") == target.getRole() &&
+        targetRecord.getAs<FlatSymbolRefAttr>("payload") ==
+            target.getPayload() &&
+        targetRecord.getAs<FlatSymbolRefAttr>("protocol") ==
+            target.getProtocol() &&
+        sourceRecord.get("cardinality") == targetRecord.get("cardinality") &&
+        sourceRecord.get("delegation") == targetRecord.get("delegation") &&
+        sourceRecord.get("ownership") == targetRecord.get("ownership") &&
+        sourceRecord.get("time_domain") == targetRecord.get("time_domain"))
       return success();
+    return emitOpError("port bind endpoints must match exact output/input "
+                       "binding-lock records");
   } else if (getKind() == "resource") {
+    auto sourceOp = getSource().getDefiningOp<ResourceOp>();
+    auto targetOp = getTarget().getDefiningOp<ResourceOp>();
     auto source = dyn_cast<ResourceType>(getSource().getType());
     auto target = dyn_cast<ResourceType>(getTarget().getType());
-    if (source && target && source.getResource() == target.getResource() &&
-        source.getRole() != target.getRole())
+    DictionaryAttr sourceRecord =
+        sourceOp ? findEndpoint(findBinding(sourceOp.getBase()), "resources",
+                                sourceOp.getAccessorAttr())
+                 : DictionaryAttr();
+    DictionaryAttr targetRecord =
+        targetOp ? findEndpoint(findBinding(targetOp.getBase()), "resources",
+                                targetOp.getAccessorAttr())
+                 : DictionaryAttr();
+    if (source && target && sourceRecord && targetRecord &&
+        sourceRecord.getAs<StringAttr>("mode").getValue() == "initiator" &&
+        targetRecord.getAs<StringAttr>("mode").getValue() == "target" &&
+        sourceRecord.getAs<FlatSymbolRefAttr>("resource") ==
+            source.getResource() &&
+        sourceRecord.getAs<FlatSymbolRefAttr>("role") == source.getRole() &&
+        targetRecord.getAs<FlatSymbolRefAttr>("resource") ==
+            target.getResource() &&
+        targetRecord.getAs<FlatSymbolRefAttr>("role") == target.getRole() &&
+        sourceRecord.get("delegation") == targetRecord.get("delegation") &&
+        sourceRecord.get("ownership") == targetRecord.get("ownership") &&
+        sourceRecord.get("time_domain") == targetRecord.get("time_domain"))
       return success();
+    return emitOpError("resource bind endpoints must match exact "
+                       "initiator/target binding-lock records");
   } else if (getKind() == "pure_view") {
     if (getSource() != getTarget() &&
         getSource().getType() == getTarget().getType() &&
         isa<ExprType>(getSource().getType()))
+      return success();
+  } else if (getKind() == "export") {
+    if (getSource() != getTarget() &&
+        getSource().getType() == getTarget().getType())
       return success();
   }
   return emitOpError("typed binding endpoints are not exactly compatible");
@@ -2127,9 +2449,6 @@ LogicalResult InlineOp::verify() {
 }
 
 LogicalResult ProcessOp::verify() {
-  if (getObjectId() < 0 || getActivationId() < 0 || getPath().empty())
-    return emitOpError(
-        "process requires non-negative IDs and a non-empty path");
   return verifyFingerprint(*this, getSpecializationFingerprintAttr(),
                            "specialization fingerprint");
 }
@@ -2177,8 +2496,9 @@ LogicalResult ExportOp::verify() {
 }
 
 LogicalResult DispatchOp::verify() {
-  if (getObjectId() < 0 || getActivationId() < 0)
-    return emitOpError("object and activation IDs must be non-negative");
+  if (getObjectId() < 0 || getActivationId() < 0 || getPath().empty())
+    return emitOpError(
+        "object and activation IDs must be non-negative and path non-empty");
   for (StringRef thunk : {getWork(), getXfer(), getReset(), getValidate()})
     if (!isCppQualifiedSymbol(thunk))
       return emitOpError(

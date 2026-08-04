@@ -48,6 +48,7 @@ struct ModelVerificationLimits {
   uint64_t maxExpandedObjects = 1ULL << 20;
   uint64_t maxAttributeElements = 1ULL << 20;
   uint64_t maxAttributeStringBytes = 1ULL << 24;
+  uint64_t maxDependencyNodes = 1ULL << 20;
 };
 
 class ScopedModelVerificationLimits {

@@ -15,6 +15,7 @@ target_include_directories(ACSimOpsTests PRIVATE
 )
 target_compile_definitions(ACSimOpsTests PRIVATE
   ACSIM_VALID_TEST_FILE="${PROJECT_SOURCE_DIR}/test/ACSim/ops-valid.mlir"
+  ACSIM_REUSABLE_TEST_FILE="${PROJECT_SOURCE_DIR}/test/ACSim/reusable-modules.mlir"
 )
 target_link_libraries(ACSimOpsTests PRIVATE
   ACSimDialect

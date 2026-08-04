@@ -91,7 +91,7 @@ builtin.module attributes {ac.contract_epoch = "0.1"} {
 //--- illegal-process-scf.mlir
 builtin.module attributes {ac.contract_epoch = "0.1"} {
   acsim.model @m epoch "0.1" root @Top
-      construction [@Top::@p] destruction [@Top::@p] fingerprints {
+      construction ["Top.p"] destruction ["Top.p"] fingerprints {
       frozen_acir = "sha256:0000000000000000000000000000000000000000000000000000000000000000",
       binding_lock = "sha256:0000000000000000000000000000000000000000000000000000000000000000",
       provider = "sha256:0000000000000000000000000000000000000000000000000000000000000000",
@@ -99,8 +99,8 @@ builtin.module attributes {ac.contract_epoch = "0.1"} {
       toolchain = "sha256:0000000000000000000000000000000000000000000000000000000000000000",
       schema_set = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
     } {
-    acsim.module @Top binding @missing path "Top" static [] specialization "sha256:0000000000000000000000000000000000000000000000000000000000000000" exports [] {
-      acsim.process @p binding @missing captures() names [] owner @Top path "Top.p" object 0 activation 0
+    acsim.module @Top binding @missing static [] specialization "sha256:0000000000000000000000000000000000000000000000000000000000000000" exports [] {
+      acsim.process @p binding @missing captures() names []
           entry @entry pcs [@entry] live [] fairness 1 specialization "sha256:0000000000000000000000000000000000000000000000000000000000000000" {
         state @entry {
           "scf.yield"() : () -> ()
@@ -131,8 +131,8 @@ builtin.module attributes {ac.contract_epoch = "0.1"} {
 //--- nonreverse-destruction.mlir
 builtin.module attributes {ac.contract_epoch = "0.1"} {
   "acsim.model"() <{sym_name = "m", contract_epoch = "0.1", root = @Top,
-    construction_order = [@Top::@a, @Top::@b],
-    destruction_order = [@Top::@a, @Top::@b], fingerprints = {
+    construction_order = ["Top.a", "Top.b"],
+    destruction_order = ["Top.a", "Top.b"], fingerprints = {
       frozen_acir = "sha256:0000000000000000000000000000000000000000000000000000000000000000",
       binding_lock = "sha256:0000000000000000000000000000000000000000000000000000000000000000",
       provider = "sha256:0000000000000000000000000000000000000000000000000000000000000000",
@@ -140,15 +140,13 @@ builtin.module attributes {ac.contract_epoch = "0.1"} {
       toolchain = "sha256:0000000000000000000000000000000000000000000000000000000000000000",
       schema_set = "sha256:0000000000000000000000000000000000000000000000000000000000000000"}}>
     ({
-      "acsim.module"() <{sym_name = "Top", binding = @missing, path = "Top",
+      "acsim.module"() <{sym_name = "Top", binding = @missing,
         static_params = [], specialization_fingerprint = "sha256:0000000000000000000000000000000000000000000000000000000000000000", exports = []}> ({
-        %a = "acsim.instance"() <{sym_name = "a", binding = @missing, owner = @Top,
-          target = @missing, static_args = [], specialization_fingerprint = "sha256:0000000000000000000000000000000000000000000000000000000000000000",
-          object_id = 0 : i64, activation_id = 0 : i64, path = "Top.a"}>
+        %a = "acsim.instance"() <{sym_name = "a", binding = @missing,
+          target = @missing, static_args = [], specialization_fingerprint = "sha256:0000000000000000000000000000000000000000000000000000000000000000"}>
           : () -> !acsim.owner<@missing>
-        %b = "acsim.instance"() <{sym_name = "b", binding = @missing, owner = @Top,
-          target = @missing, static_args = [], specialization_fingerprint = "sha256:0000000000000000000000000000000000000000000000000000000000000000",
-          object_id = 1 : i64, activation_id = 1 : i64, path = "Top.b"}>
+        %b = "acsim.instance"() <{sym_name = "b", binding = @missing,
+          target = @missing, static_args = [], specialization_fingerprint = "sha256:0000000000000000000000000000000000000000000000000000000000000000"}>
           : () -> !acsim.owner<@missing>
         "acsim.return"() : () -> ()
       }) : () -> ()

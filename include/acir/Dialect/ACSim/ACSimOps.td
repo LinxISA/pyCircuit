@@ -79,12 +79,12 @@ def ACSim_ModuleOp : ACSim_Op<"module", [
     Symbol, SymbolTable, SingleBlock, RecursiveMemoryEffects
   ]> {
   let arguments = (ins SymbolNameAttr:$sym_name, FlatSymbolRefAttr:$binding,
-                       StrAttr:$path, ArrayAttr:$static_params,
+                       ArrayAttr:$static_params,
                        StrAttr:$specialization_fingerprint,
                        ArrayAttr:$exports);
   let regions = (region SizedRegion<1>:$body);
   let assemblyFormat = [{
-    $sym_name `binding` $binding `path` $path `static` $static_params
+    $sym_name `binding` $binding `static` $static_params
     `specialization` $specialization_fingerprint `exports` $exports
     attr-dict-with-keyword $body
   }];
@@ -94,15 +94,11 @@ def ACSim_ModuleOp : ACSim_Op<"module", [
 def ACSim_InstanceOp : ACSim_Op<"instance"> {
   let arguments = (ins SymbolNameAttr:$sym_name, FlatSymbolRefAttr:$binding,
                        SymbolRefAttr:$target, ArrayAttr:$static_args,
-                       StrAttr:$specialization_fingerprint,
-                       FlatSymbolRefAttr:$owner, I64Attr:$object_id,
-                       I64Attr:$activation_id, StrAttr:$path);
+                       StrAttr:$specialization_fingerprint);
   let results = (outs AnyType:$result);
   let assemblyFormat = [{
     $sym_name `binding` $binding `target` $target `args` $static_args
-    `specialization` $specialization_fingerprint
-    `owner` $owner `object` $object_id
-    `activation` $activation_id `path` $path attr-dict `:` type($result)
+    `specialization` $specialization_fingerprint attr-dict `:` type($result)
   }];
   let hasVerifier = 1;
 }
@@ -111,16 +107,12 @@ def ACSim_ArrayOp : ACSim_Op<"array"> {
   let arguments = (ins SymbolNameAttr:$sym_name, FlatSymbolRefAttr:$binding,
                        SymbolRefAttr:$target, ArrayAttr:$static_args,
                        StrAttr:$specialization_fingerprint,
-                       FlatSymbolRefAttr:$owner, DenseI64ArrayAttr:$shape,
-                       DenseI64ArrayAttr:$object_ids,
-                       DenseI64ArrayAttr:$activation_ids, StrAttr:$path);
+                       DenseI64ArrayAttr:$shape);
   let results = (outs AnyType:$result);
   let assemblyFormat = [{
     $sym_name `binding` $binding `target` $target `args` $static_args
     `specialization` $specialization_fingerprint
-    `owner` $owner `shape` $shape
-    `objects` $object_ids `activations` $activation_ids `path` $path
-    attr-dict `:` type($result)
+    `shape` $shape attr-dict `:` type($result)
   }];
   let hasVerifier = 1;
 }
@@ -176,9 +168,6 @@ def ACSim_ProcessOp : ACSim_Op<"process", [
   let arguments = (ins Variadic<AnyType>:$captures,
                        SymbolNameAttr:$sym_name, FlatSymbolRefAttr:$binding,
                        ArrayAttr:$capture_names,
-                       FlatSymbolRefAttr:$owner,
-                       StrAttr:$path,
-                       I64Attr:$object_id, I64Attr:$activation_id,
                        FlatSymbolRefAttr:$entry_pc, ArrayAttr:$pcs,
                        ArrayAttr:$live_slots, I64Attr:$fairness_cap,
                        StrAttr:$specialization_fingerprint);
@@ -243,14 +232,16 @@ def ACSim_ExportOp : ACSim_Op<"export", [Pure]> {
 }
 
 def ACSim_DispatchOp : ACSim_Op<"dispatch"> {
-  let arguments = (ins SymbolRefAttr:$target, DenseI64ArrayAttr:$indices,
+  let arguments = (ins SymbolRefAttr:$target, StrAttr:$path,
+                       DenseI64ArrayAttr:$indices,
                        I64Attr:$object_id, I64Attr:$activation_id,
                        StrAttr:$work, StrAttr:$xfer, StrAttr:$reset,
                        StrAttr:$validate);
   let results = (outs ACSim_ObjectIdType:$object,
                       ACSim_ActivationIdType:$activation);
   let assemblyFormat = [{
-    $target `indices` $indices `object` $object_id `activation` $activation_id
+    $target `path` $path `indices` $indices
+    `object` $object_id `activation` $activation_id
     `work` $work `xfer` $xfer `reset` $reset `validate` $validate attr-dict
     `:` type($object) `,` type($activation)
   }];
