@@ -12,7 +12,6 @@
 // RUN: %not %acir_opt %t/overlap.mlir > /dev/null 2> %t/overlap.second
 // RUN: diff %t/overlap.first %t/overlap.second
 // RUN: %not %acir_opt %t/equal-priority.mlir 2>&1 | %FileCheck %s --check-prefix=PRIORITY
-// RUN: %not %acir_opt %t/map-order.mlir 2>&1 | %FileCheck %s --check-prefix=ORDER
 // RUN: %not %acir_opt %t/interleave.mlir 2>&1 | %FileCheck %s --check-prefix=INTERLEAVE
 // RUN: %not %acir_opt %t/default.mlir 2>&1 | %FileCheck %s --check-prefix=DEFAULT
 // RUN: %not %acir_opt %t/address-segment.mlir 2>&1 | %FileCheck %s --check-prefix=ADDRESS-SEGMENT
@@ -44,6 +43,8 @@
 // RUN: %not %acir_opt %t/fractional-bad-alignment.mlir 2>&1 | %FileCheck %s --check-prefix=BAD-ALIGNMENT
 // RUN: %not %acir_opt %t/zero-size.mlir 2>&1 | %FileCheck %s --check-prefix=ZERO-SIZE
 // RUN: %not %acir_opt %t/interleave-alignment.mlir 2>&1 | %FileCheck %s --check-prefix=INTERLEAVE-ALIGNMENT
+// RUN: %not %acir_opt %t/mixed-interleave-overlap.mlir 2>&1 | %FileCheck %s --check-prefix=MIXED-INTERLEAVE-OVERLAP
+// RUN: %not %acir_opt %t/different-granularity-overlap.mlir 2>&1 | %FileCheck %s --check-prefix=DIFFERENT-GRANULARITY-OVERLAP
 
 //--- period-zero.mlir
 builtin.module attributes {ac.contract_epoch = "0.1"} {
@@ -144,16 +145,6 @@ builtin.module attributes {ac.contract_epoch = "0.1"} {
   }) : () -> ()
 }
 // PRIORITY: overlapping selector intersections have equal priority
-
-//--- map-order.mlir
-builtin.module attributes {ac.contract_epoch = "0.1"} {
-  "ac.module"() <{sym_name = "M", function_type = () -> (), static_params = {}}> ({
-    "ac.address_space"() <{sym_name = "a", stable_id = "a", path = "a", address_width = 32 : i64, address_unit = "byte"}> : () -> ()
-    "ac.address_map"() <{sym_name = "m", source = @a, entries = [{base = 8 : i64, size = 4 : i64, target = @a, offset = 0 : i64, permissions = ["read"], classes = []}, {base = 0 : i64, size = 4 : i64, target = @a, offset = 0 : i64, permissions = ["read"], classes = []}], default_behavior = {kind = "unmapped"}}> : () -> ()
-    "ac.return"() : () -> ()
-  }) : () -> ()
-}
-// ORDER: address-map entries must be in deterministic base order
 
 //--- interleave.mlir
 builtin.module attributes {ac.contract_epoch = "0.1"} {
@@ -462,3 +453,37 @@ builtin.module attributes {ac.contract_epoch = "0.1"} {
   }) : () -> ()
 }
 // INTERLEAVE-ALIGNMENT: interleave base/size/offset must satisfy stripe alignment and geometry
+
+//--- mixed-interleave-overlap.mlir
+builtin.module attributes {ac.contract_epoch = "0.1"} {
+  "ac.module"() <{sym_name = "M", function_type = () -> (), static_params = {}}> ({
+    "ac.address_space"() <{sym_name = "space", stable_id = "space", path = "space", address_width = 8 : i64, address_unit = "byte"}> : () -> ()
+    "ac.address_map"() <{sym_name = "m", source = @space, entries = [
+      {base = 0 : i64, size = 16 : i64, target = @space, offset = 0 : i64,
+       permissions = ["read"], classes = [],
+       interleave = {granularity = 1 : i64, banks = 2 : i64, bank = 0 : i64}},
+      {base = 0 : i64, size = 16 : i64, target = @space, offset = 0 : i64,
+       permissions = ["read"], classes = [],
+       interleave = {granularity = 1 : i64, banks = 4 : i64, bank = 2 : i64}}
+    ], default_behavior = {kind = "unmapped"}}> : () -> ()
+    "ac.return"() : () -> ()
+  }) : () -> ()
+}
+// MIXED-INTERLEAVE-OVERLAP: overlapping selector intersections require explicit distinct priorities
+
+//--- different-granularity-overlap.mlir
+builtin.module attributes {ac.contract_epoch = "0.1"} {
+  "ac.module"() <{sym_name = "M", function_type = () -> (), static_params = {}}> ({
+    "ac.address_space"() <{sym_name = "space", stable_id = "space", path = "space", address_width = 8 : i64, address_unit = "byte"}> : () -> ()
+    "ac.address_map"() <{sym_name = "m", source = @space, entries = [
+      {base = 0 : i64, size = 16 : i64, target = @space, offset = 0 : i64,
+       permissions = ["read"], classes = [],
+       interleave = {granularity = 2 : i64, banks = 2 : i64, bank = 0 : i64}},
+      {base = 0 : i64, size = 16 : i64, target = @space, offset = 0 : i64,
+       permissions = ["read"], classes = [],
+       interleave = {granularity = 1 : i64, banks = 4 : i64, bank = 1 : i64}}
+    ], default_behavior = {kind = "unmapped"}}> : () -> ()
+    "ac.return"() : () -> ()
+  }) : () -> ()
+}
+// DIFFERENT-GRANULARITY-OVERLAP: overlapping selector intersections require explicit distinct priorities

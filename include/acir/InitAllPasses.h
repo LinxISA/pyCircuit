@@ -2,6 +2,7 @@
 #define ACIR_INITALLPASSES_H
 
 #include "acir/Dialect/ACIR/ACIROps.h"
+#include "acir/Dialect/ACIR/ACIRResources.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Pass/PassRegistry.h"
@@ -9,6 +10,23 @@
 #include <memory>
 
 namespace acir {
+
+class NormalizeACIRFilePass
+    : public mlir::PassWrapper<NormalizeACIRFilePass,
+                               mlir::OperationPass<mlir::ModuleOp>> {
+public:
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(NormalizeACIRFilePass)
+
+  llvm::StringRef getArgument() const override { return "normalize-ac-file"; }
+
+  llvm::StringRef getDescription() const override {
+    return "Normalize deterministic Agentic Circuit declaration order";
+  }
+
+  void runOnOperation() override {
+    acir::ac::normalizeAddressMaps(getOperation());
+  }
+};
 
 class VerifyACIRFilePass
     : public mlir::PassWrapper<VerifyACIRFilePass,
@@ -93,6 +111,9 @@ public:
 };
 
 inline void registerAllPasses() {
+  mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
+    return std::make_unique<NormalizeACIRFilePass>();
+  });
   mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
     return std::make_unique<VerifyACIRFilePass>();
   });

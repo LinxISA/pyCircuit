@@ -5,6 +5,7 @@
 #include "mlir/IR/DialectInterface.h"
 #include "mlir/Support/LogicalResult.h"
 #include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/StringSet.h"
 
@@ -17,6 +18,15 @@ class Operation;
 namespace acir::ac {
 
 class ACIRDialect;
+
+/// Absolute identity assigned to a Task 7 state owner by static hierarchy
+/// elaboration. This is intentionally distinct from the pre-freeze,
+/// definition-qualified identity exposed by the declaration's effect.
+struct ElaboratedStateOwner {
+  mlir::Operation *declaration;
+  std::string path;
+  std::string stableId;
+};
 
 /// Context-owned registry of exact build-time structural providers. The
 /// registry is populated by dialect-registry extensions before parsing and is
@@ -50,6 +60,12 @@ getStructuralProviderRegistry(mlir::MLIRContext *context);
 /// Verifies whole-file hierarchy selection, stable ownership identities and
 /// the statically-resolved subset of topology freeze implemented by ACIR v0.1.
 mlir::LogicalResult verifyGraphStructure(mlir::Operation *topLevel);
+
+/// Verifies the graph and returns every elaborated queue/event/resource owner
+/// in deterministic hierarchy order.
+mlir::LogicalResult collectElaboratedStateOwners(
+    mlir::Operation *topLevel,
+    llvm::SmallVectorImpl<ElaboratedStateOwner> &owners);
 
 /// Returns true for concrete builtin static parameter values admitted by the
 /// public v0.1 graph contract.

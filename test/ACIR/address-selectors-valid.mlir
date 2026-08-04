@@ -14,8 +14,26 @@ builtin.module attributes {ac.contract_epoch = "0.1"} {
       {base = 0 : i64, size = 32 : i64, target = @space, offset = 0 : i64,
        permissions = ["read"], classes = [@types::@B]}
     ] default {kind = "unmapped"}
+    ac.address_map @mixed_disjoint source @space entries [
+      {base = 0 : i64, size = 16 : i64, target = @space, offset = 0 : i64,
+       permissions = ["read"], classes = [],
+       interleave = {granularity = 2 : i64, banks = 2 : i64, bank = 0 : i64}},
+      {base = 0 : i64, size = 16 : i64, target = @space, offset = 0 : i64,
+       permissions = ["read"], classes = [],
+       interleave = {granularity = 1 : i64, banks = 4 : i64, bank = 2 : i64}}
+    ] default {kind = "unmapped"}
+    ac.address_map @mixed_priority source @space entries [
+      {base = 0 : i64, size = 16 : i64, target = @space, offset = 0 : i64,
+       permissions = ["read"], classes = [], priority = 2 : i64,
+       interleave = {granularity = 2 : i64, banks = 2 : i64, bank = 0 : i64}},
+      {base = 0 : i64, size = 16 : i64, target = @space, offset = 0 : i64,
+       permissions = ["read"], classes = [], priority = 1 : i64,
+       interleave = {granularity = 1 : i64, banks = 4 : i64, bank = 1 : i64}}
+    ] default {kind = "unmapped"}
     ac.return
   }
 }
 
 // CHECK: ac.address_map @class_split
+// CHECK: ac.address_map @mixed_disjoint
+// CHECK: ac.address_map @mixed_priority

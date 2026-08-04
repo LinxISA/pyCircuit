@@ -594,14 +594,14 @@ TEST(ACIROpsTest, NestedArraysCountTaskSevenOwnersBeforeElaboration) {
   ReturnOp::create(builder, loc, mlir::ValueRange{});
 
   llvm::SmallVector<mlir::Attribute> staticArgs(
-      1024, mlir::Attribute(emptyDictionary));
+      512, mlir::Attribute(emptyDictionary));
   builder.setInsertionPointToEnd(file.getBody());
   auto middle =
       ModuleOp::create(builder, loc, "Middle", emptyType, emptyDictionary);
   builder.setInsertionPointToStart(middle.addEntryBlock());
   ArrayOp::create(builder, loc, mlir::TypeRange{}, mlir::ValueRange{}, "Leaf",
                   "leaves", "leaves", "leaves",
-                  builder.getDenseI64ArrayAttr({1024}),
+                  builder.getDenseI64ArrayAttr({512}),
                   builder.getArrayAttr(staticArgs));
   ReturnOp::create(builder, loc, mlir::ValueRange{});
 
@@ -610,7 +610,7 @@ TEST(ACIROpsTest, NestedArraysCountTaskSevenOwnersBeforeElaboration) {
   builder.setInsertionPointToStart(top.addEntryBlock());
   ArrayOp::create(builder, loc, mlir::TypeRange{}, mlir::ValueRange{}, "Middle",
                   "middles", "middles", "middles",
-                  builder.getDenseI64ArrayAttr({1024}),
+                  builder.getDenseI64ArrayAttr({512}),
                   builder.getArrayAttr(staticArgs));
   ReturnOp::create(builder, loc, mlir::ValueRange{});
 
@@ -626,6 +626,14 @@ TEST(ACIROpsTest, NestedArraysCountTaskSevenOwnersBeforeElaboration) {
   SystemOp::create(builder, loc, "owners", "Top", "root", 0, "cycle",
                    mlir::FlatSymbolRefAttr(), seed, builder.getArrayAttr({}),
                    results, true);
+
+  auto structureOnly = mlir::cast<mlir::ModuleOp>(file->clone());
+  auto structureLeaf = *structureOnly.getOps<ModuleOp>().begin();
+  for (mlir::Operation &operation :
+       llvm::make_early_inc_range(structureLeaf.getBody().front()))
+    if (mlir::isa<QueueOp, EventQueueOp, ResourceOp>(operation))
+      operation.erase();
+  EXPECT_TRUE(mlir::succeeded(verifyGraphStructure(structureOnly)));
 
   std::string diagnostic;
   mlir::ScopedDiagnosticHandler handler(&context, [&](mlir::Diagnostic &value) {
@@ -700,7 +708,21 @@ TEST(ACIROpsTest, TaskSevenOwnersRegisterAtDistinctAbsoluteInstancePaths) {
   SystemOp::create(builder, loc, "owners", "Top", "root", 0, "cycle",
                    mlir::FlatSymbolRefAttr(), seed, builder.getArrayAttr({}),
                    results, true);
-  EXPECT_TRUE(mlir::succeeded(verifyGraphStructure(file)));
+  llvm::SmallVector<ElaboratedStateOwner> owners;
+  ASSERT_TRUE(mlir::succeeded(collectElaboratedStateOwners(file, owners)));
+  ASSERT_EQ(owners.size(), 6u);
+  EXPECT_EQ(owners[0].path, "root.left.queue");
+  EXPECT_EQ(owners[0].stableId, "root/left/queue");
+  EXPECT_EQ(owners[1].path, "root.left.events");
+  EXPECT_EQ(owners[1].stableId, "root/left/events");
+  EXPECT_EQ(owners[2].path, "root.left.state");
+  EXPECT_EQ(owners[2].stableId, "root/left/state");
+  EXPECT_EQ(owners[3].path, "root.right.queue");
+  EXPECT_EQ(owners[3].stableId, "root/right/queue");
+  EXPECT_EQ(owners[4].path, "root.right.events");
+  EXPECT_EQ(owners[4].stableId, "root/right/events");
+  EXPECT_EQ(owners[5].path, "root.right.state");
+  EXPECT_EQ(owners[5].stableId, "root/right/state");
 }
 
 TEST(ACIROpsTest, ExplicitViewProvenanceScalesNearLinearly) {
@@ -905,17 +927,23 @@ TEST(ACIRResourcesTest, RationalNormalizationIsExactAndBounded) {
   EXPECT_FALSE(normalizeRationalToTicks(1, 0, 1, 1, ticks));
   EXPECT_FALSE(normalizeRationalToTicks(std::numeric_limits<uint64_t>::max(), 1,
                                         1, 2, ticks));
-  EXPECT_TRUE(normalizeRationalToTicks(1, 1000000000, 1, 1000000000000, ticks));
-  EXPECT_EQ(ticks, 1000u);
   EXPECT_TRUE(normalizeRationalToTicks(0, 1, 1, 1, ticks));
   EXPECT_EQ(ticks, 0u);
   EXPECT_TRUE(normalizeRationalToTicks(std::numeric_limits<int64_t>::max(), 1,
-                                       uint64_t{1} << 63, uint64_t{1} << 63,
-                                       ticks));
+                                       1, 1, ticks));
   EXPECT_EQ(ticks, static_cast<uint64_t>(std::numeric_limits<int64_t>::max()));
+  EXPECT_FALSE(normalizeRationalToTicks(
+      static_cast<uint64_t>(std::numeric_limits<int64_t>::max()) + 1, 1, 1, 1,
+      ticks));
   EXPECT_TRUE(normalizeRationalToTicks(1, 1, 1, kMaxTickScale, ticks));
   EXPECT_EQ(ticks, kMaxTickScale);
   EXPECT_FALSE(normalizeRationalToTicks(1, 1, 1, kMaxTickScale + 1, ticks));
+  EXPECT_FALSE(normalizeRationalToTicks(1, kMaxTickScale + 1, 1,
+                                        kMaxTickScale + 1, ticks));
+  EXPECT_TRUE(normalizeRationalToTicks(3, 2, 3, 4, ticks));
+  EXPECT_EQ(ticks, 2u);
+  EXPECT_FALSE(normalizeRationalToTicks(std::numeric_limits<uint64_t>::max(), 1,
+                                        1, 2, ticks));
 }
 
 TEST(ACIRResourcesTest, DomainTickUsesNormativePhasePlusCycleTimesPeriod) {
@@ -1024,8 +1052,12 @@ TEST(ACIRResourcesTest, PublicBuildersAndTypedEffectsCoverAllSixOperations) {
   auto queueEffect = effectOf(queue);
   auto eventEffect = effectOf(eventQueue);
   auto queueEffectAgain = effectOf(queue);
-  EXPECT_EQ(queueEffect.getSymbolRef(), symbol("q"));
-  EXPECT_EQ(eventEffect.getSymbolRef(), symbol("events"));
+  auto qualified = [&](llvm::StringRef local) {
+    return mlir::SymbolRefAttr::get(
+        &context, "M", {mlir::FlatSymbolRefAttr::get(&context, local)});
+  };
+  EXPECT_EQ(queueEffect.getSymbolRef(), qualified("q"));
+  EXPECT_EQ(eventEffect.getSymbolRef(), qualified("events"));
   EXPECT_EQ(queueEffect.getSymbolRef(), queueEffectAgain.getSymbolRef());
   EXPECT_EQ(queueEffect.getParameters(), queueEffectAgain.getParameters());
   EXPECT_NE(queueEffect.getSymbolRef(), eventEffect.getSymbolRef());
@@ -1033,6 +1065,56 @@ TEST(ACIRResourcesTest, PublicBuildersAndTypedEffectsCoverAllSixOperations) {
       mlir::cast<mlir::DictionaryAttr>(queueEffect.getParameters());
   EXPECT_EQ(parameters.getAs<mlir::StringAttr>("stable_id").getValue(), "q");
   EXPECT_EQ(parameters.getAs<mlir::StringAttr>("path").getValue(), "q");
+}
+
+TEST(ACIRResourcesTest, EffectsUseDefinitionQualifiedPreFreezeIdentity) {
+  mlir::MLIRContext context;
+  context.loadDialect<ACIRDialect>();
+  mlir::OpBuilder builder(&context);
+  auto location = builder.getUnknownLoc();
+  auto file = mlir::ModuleOp::create(location);
+  auto buildQueue = [&](llvm::StringRef definition) {
+    builder.setInsertionPointToEnd(file.getBody());
+    auto module = ModuleOp::create(builder, location, definition,
+                                   builder.getFunctionType({}, {}),
+                                   builder.getDictionaryAttr({}));
+    builder.setInsertionPointToStart(module.addEntryBlock());
+    auto queue = QueueOp::create(
+        builder, location, builder.getStringAttr("q"),
+        builder.getStringAttr("q"), builder.getStringAttr("q"),
+        mlir::TypeAttr::get(builder.getI32Type()), builder.getI64IntegerAttr(1),
+        mlir::IntegerAttr(), builder.getStringAttr("fifo"),
+        mlir::FlatSymbolRefAttr::get(&context, "p"),
+        builder.getStringAttr("exclusive"), mlir::DictionaryAttr(),
+        builder.getI64IntegerAttr(1));
+    ReturnOp::create(builder, location, mlir::ValueRange{});
+    return queue;
+  };
+  QueueOp left = buildQueue("Left");
+  QueueOp right = buildQueue("Right");
+  auto effectOf = [](QueueOp queue) {
+    llvm::SmallVector<mlir::MemoryEffects::EffectInstance> effects;
+    mlir::cast<mlir::MemoryEffectOpInterface>(*queue).getEffects(effects);
+    EXPECT_EQ(effects.size(), 1u);
+    return effects.front();
+  };
+  auto leftEffect = effectOf(left);
+  auto leftAgain = effectOf(left);
+  auto rightEffect = effectOf(right);
+  auto qualified = [&](llvm::StringRef definition) {
+    return mlir::SymbolRefAttr::get(
+        &context, definition, {mlir::FlatSymbolRefAttr::get(&context, "q")});
+  };
+  EXPECT_EQ(leftEffect.getSymbolRef(), qualified("Left"));
+  EXPECT_EQ(rightEffect.getSymbolRef(), qualified("Right"));
+  EXPECT_NE(leftEffect.getSymbolRef(), rightEffect.getSymbolRef());
+  EXPECT_EQ(leftEffect.getSymbolRef(), leftAgain.getSymbolRef());
+  EXPECT_EQ(leftEffect.getParameters(), leftAgain.getParameters());
+  auto parameters =
+      mlir::cast<mlir::DictionaryAttr>(leftEffect.getParameters());
+  auto identityPhase = parameters.getAs<mlir::StringAttr>("identity_phase");
+  ASSERT_TRUE(identityPhase);
+  EXPECT_EQ(identityPhase.getValue(), "definition_pre_freeze");
 }
 
 TEST(ACIRResourcesTest, LargeAddressMapAndParentGraphScaleNearLinearly) {

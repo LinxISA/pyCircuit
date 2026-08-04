@@ -149,7 +149,9 @@ std::string buildArrayElementPath(StringRef base, ArrayRef<int64_t> indices) {
   return path;
 }
 
-LogicalResult verifyGraphStructure(Operation *topLevel) {
+static LogicalResult verifyGraphStructureImpl(
+    Operation *topLevel,
+    SmallVectorImpl<ElaboratedStateOwner> *elaboratedStateOwners) {
   auto file = dyn_cast<mlir::ModuleOp>(topLevel);
   if (!file)
     return success();
@@ -423,16 +425,22 @@ LogicalResult verifyGraphStructure(Operation *topLevel) {
         std::string id = (parentId + "/" + queue.getStableId()).str();
         if (failed(registerOwner(&child, path, id)))
           return failure();
+        if (elaboratedStateOwners)
+          elaboratedStateOwners->push_back({&child, path, id});
       } else if (auto eventQueue = dyn_cast<EventQueueOp>(child)) {
         std::string path = (parentPath + "." + eventQueue.getPath()).str();
         std::string id = (parentId + "/" + eventQueue.getStableId()).str();
         if (failed(registerOwner(&child, path, id)))
           return failure();
+        if (elaboratedStateOwners)
+          elaboratedStateOwners->push_back({&child, path, id});
       } else if (auto resource = dyn_cast<ResourceOp>(child)) {
         std::string path = (parentPath + "." + resource.getPath()).str();
         std::string id = (parentId + "/" + resource.getStableId()).str();
         if (failed(registerOwner(&child, path, id)))
           return failure();
+        if (elaboratedStateOwners)
+          elaboratedStateOwners->push_back({&child, path, id});
       }
     }
     return success();
@@ -446,6 +454,21 @@ LogicalResult verifyGraphStructure(Operation *topLevel) {
   stableIds.insert(root);
   return elaborate(lookupDefinition(symbols, selectedSystem.getRootAttr()),
                    root, root);
+}
+
+LogicalResult verifyGraphStructure(Operation *topLevel) {
+  return verifyGraphStructureImpl(topLevel, nullptr);
+}
+
+LogicalResult
+collectElaboratedStateOwners(Operation *topLevel,
+                             SmallVectorImpl<ElaboratedStateOwner> &owners) {
+  owners.clear();
+  if (failed(verifyGraphStructureImpl(topLevel, &owners))) {
+    owners.clear();
+    return failure();
+  }
+  return success();
 }
 
 } // namespace acir::ac

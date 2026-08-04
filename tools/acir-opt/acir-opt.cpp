@@ -99,11 +99,12 @@ int main(int argc, char **argv) {
   mlir::MlirOptMainConfig commandLineConfig = config;
   config.allowUnregisteredDialects(false)
       .useExplicitModule(true)
-      .setPassPipelineSetupFn(
-          [commandLineConfig](mlir::PassManager &passManager) {
-            passManager.addPass(std::make_unique<acir::VerifyACIRFilePass>());
-            return commandLineConfig.setupPassPipeline(passManager);
-          });
+      .setPassPipelineSetupFn([commandLineConfig](
+                                  mlir::PassManager &passManager) {
+        passManager.addPass(std::make_unique<acir::NormalizeACIRFilePass>());
+        passManager.addPass(std::make_unique<acir::VerifyACIRFilePass>());
+        return commandLineConfig.setupPassPipeline(passManager);
+      });
 
   std::string errorMessage;
   std::unique_ptr<llvm::MemoryBuffer> input =

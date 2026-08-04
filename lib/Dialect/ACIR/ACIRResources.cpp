@@ -2,6 +2,7 @@
 
 #include "acir/Dialect/ACIR/ACIROps.h"
 #include "acir/Dialect/ACIR/ACIRTypes.h"
+#include "mlir/Analysis/Presburger/IntegerRelation.h"
 #include "mlir/Dialect/DLTI/DLTI.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/SymbolTable.h"
@@ -213,6 +214,11 @@ bool normalizeRationalToTicks(uint64_t numerator, uint64_t denominator,
   uint64_t quantumGcd = std::gcd(quantumNumerator, quantumDenominator);
   quantumNumerator /= quantumGcd;
   quantumDenominator /= quantumGcd;
+  // The declared global quantum is an implementation capability boundary.
+  // Validate its independently reduced denominator before duration/quantum
+  // cross-cancellation can hide an unsupported declaration.
+  if (quantumDenominator > kMaxTickScale)
+    return false;
   uint64_t crossGcd = std::gcd(numerator, quantumNumerator);
   numerator /= crossGcd;
   quantumNumerator /= crossGcd;
@@ -229,21 +235,32 @@ bool normalizeRationalToTicks(uint64_t numerator, uint64_t denominator,
       product % divisor != 0)
     return false;
   ticks = product / divisor;
-  return true;
+  return ticks <= static_cast<uint64_t>(std::numeric_limits<int64_t>::max());
 }
 
 DictionaryAttr ownerEffectParameters(Operation *operation, StringAttr stableId,
                                      StringAttr path) {
   Builder builder(operation->getContext());
-  return builder.getDictionaryAttr({builder.getNamedAttr("stable_id", stableId),
-                                    builder.getNamedAttr("path", path)});
+  return builder.getDictionaryAttr({
+      builder.getNamedAttr("identity_phase",
+                           builder.getStringAttr("definition_pre_freeze")),
+      builder.getNamedAttr("stable_id", stableId),
+      builder.getNamedAttr("path", path),
+  });
+}
+
+SymbolRefAttr ownerEffectReference(Operation *operation, StringRef localName) {
+  ModuleOp definition = operation->getParentOfType<ModuleOp>();
+  assert(definition && "Task 7 owner placement verifier requires ac.module");
+  return SymbolRefAttr::get(
+      operation->getContext(), definition.getSymName(),
+      {FlatSymbolRefAttr::get(operation->getContext(), localName)});
 }
 
 void QueueOp::getEffects(
     SmallVectorImpl<MemoryEffects::EffectInstance> &effects) {
   effects.emplace_back(
-      MemoryEffects::Write::get(),
-      FlatSymbolRefAttr::get(getContext(), getSymName()),
+      MemoryEffects::Write::get(), ownerEffectReference(*this, getSymName()),
       ownerEffectParameters(*this, getStableIdAttr(), getPathAttr()),
       QueueStateResource::get());
 }
@@ -251,8 +268,7 @@ void QueueOp::getEffects(
 void EventQueueOp::getEffects(
     SmallVectorImpl<MemoryEffects::EffectInstance> &effects) {
   effects.emplace_back(
-      MemoryEffects::Write::get(),
-      FlatSymbolRefAttr::get(getContext(), getSymName()),
+      MemoryEffects::Write::get(), ownerEffectReference(*this, getSymName()),
       ownerEffectParameters(*this, getStableIdAttr(), getPathAttr()),
       EventQueueStateResource::get());
 }
@@ -260,8 +276,7 @@ void EventQueueOp::getEffects(
 void ResourceOp::getEffects(
     SmallVectorImpl<MemoryEffects::EffectInstance> &effects) {
   effects.emplace_back(
-      MemoryEffects::Write::get(),
-      FlatSymbolRefAttr::get(getContext(), getSymName()),
+      MemoryEffects::Write::get(), ownerEffectReference(*this, getSymName()),
       ownerEffectParameters(*this, getStableIdAttr(), getPathAttr()),
       ReservationStateResource::get());
 }
@@ -302,10 +317,18 @@ LogicalResult QueueOp::verify() {
     auto guarantee = dyn_cast<GuaranteeOp>(operation);
     if (!guarantee)
       continue;
-    if (guarantee.getKind() == "ordering")
-      protocolOrdering = cast<StringAttr>(guarantee.getValue()).getValue();
-    else if (guarantee.getKind() == "correlation")
+    if (guarantee.getKind() == "ordering") {
+      auto ordering = dyn_cast<StringAttr>(guarantee.getValue());
+      if (!ordering)
+        return emitOpError("protocol ordering guarantee must be a string");
+      protocolOrdering = ordering.getValue();
+    } else if (guarantee.getKind() == "correlation") {
+      auto correlation = dyn_cast<StringAttr>(guarantee.getValue());
+      if (!correlation || correlation.getValue().empty())
+        return emitOpError(
+            "protocol correlation guarantee must be a non-empty string");
       hasCorrelation = true;
+    }
   }
   auto orderingStrength = [](StringRef ordering) {
     return ordering == "fifo" ? 2 : ordering == "per_key" ? 1 : 0;
@@ -568,16 +591,107 @@ std::string attributeToken(Attribute attribute) {
   return storage;
 }
 
+ArrayAttr sortedSetAttribute(MLIRContext *context, ArrayAttr values) {
+  SmallVector<Attribute> sorted(values.begin(), values.end());
+  llvm::sort(sorted, [](Attribute left, Attribute right) {
+    return attributeToken(left) < attributeToken(right);
+  });
+  return ArrayAttr::get(context, sorted);
+}
+
+DictionaryAttr normalizedMapEntry(DictionaryAttr entry) {
+  MLIRContext *context = entry.getContext();
+  NamedAttrList attributes(entry);
+  attributes.set(
+      "permissions",
+      sortedSetAttribute(context, entry.getAs<ArrayAttr>("permissions")));
+  attributes.set("classes", sortedSetAttribute(
+                                context, entry.getAs<ArrayAttr>("classes")));
+  return DictionaryAttr::get(context, attributes);
+}
+
+uint64_t unsignedEntryValue(DictionaryAttr entry, StringRef key) {
+  return entry.getAs<IntegerAttr>(key).getValue().getZExtValue();
+}
+
+int compareAttributeToken(Attribute left, Attribute right) {
+  std::string leftToken = attributeToken(left);
+  std::string rightToken = attributeToken(right);
+  return leftToken < rightToken ? -1 : leftToken > rightToken ? 1 : 0;
+}
+
+int compareNormalizedMapEntries(DictionaryAttr left, DictionaryAttr right) {
+  auto compareUnsigned = [](uint64_t leftValue, uint64_t rightValue) {
+    return leftValue < rightValue ? -1 : leftValue > rightValue ? 1 : 0;
+  };
+  if (int order = compareUnsigned(unsignedEntryValue(left, "base"),
+                                  unsignedEntryValue(right, "base")))
+    return order;
+  IntegerAttr leftPriority = left.getAs<IntegerAttr>("priority");
+  IntegerAttr rightPriority = right.getAs<IntegerAttr>("priority");
+  if (static_cast<bool>(leftPriority) != static_cast<bool>(rightPriority))
+    return leftPriority ? -1 : 1;
+  if (leftPriority) {
+    int order = compareUnsigned(leftPriority.getValue().getZExtValue(),
+                                rightPriority.getValue().getZExtValue());
+    if (order)
+      return -order;
+  }
+  if (int order = compareUnsigned(unsignedEntryValue(left, "size"),
+                                  unsignedEntryValue(right, "size")))
+    return order;
+  if (int order = compareAttributeToken(left.get("permissions"),
+                                        right.get("permissions")))
+    return order;
+  if (int order =
+          compareAttributeToken(left.get("classes"), right.get("classes")))
+    return order;
+  DictionaryAttr leftInterleave = left.getAs<DictionaryAttr>("interleave");
+  DictionaryAttr rightInterleave = right.getAs<DictionaryAttr>("interleave");
+  if (static_cast<bool>(leftInterleave) != static_cast<bool>(rightInterleave))
+    return leftInterleave ? 1 : -1;
+  if (leftInterleave) {
+    for (StringRef key : {"granularity", "banks", "bank"})
+      if (int order = compareUnsigned(unsignedEntryValue(leftInterleave, key),
+                                      unsignedEntryValue(rightInterleave, key)))
+        return order;
+  }
+  if (int order =
+          compareAttributeToken(left.get("target"), right.get("target")))
+    return order;
+  return compareUnsigned(unsignedEntryValue(left, "offset"),
+                         unsignedEntryValue(right, "offset"));
+}
+
 struct SelectorSummary {
-  uint64_t count = 0;
-  uint64_t withoutPriority = 0;
-  std::map<uint64_t, uint64_t> priorities;
+  std::multiset<WideAddress> allEnds;
+  std::multiset<WideAddress> withoutPriorityEnds;
+  std::map<uint64_t, std::multiset<WideAddress>> priorityEnds;
+};
+
+struct InterleaveLane {
+  uint64_t granularity;
+  uint64_t banks;
+  uint64_t bank;
+};
+
+struct InterleaveGeometry {
+  uint64_t granularity;
+  uint64_t banks;
+
+  auto operator<=>(const InterleaveGeometry &) const = default;
+};
+
+struct SelectorIndex {
+  SelectorSummary wildcard;
+  std::map<InterleaveGeometry, std::map<uint64_t, SelectorSummary>> lanes;
 };
 
 struct MapEntry {
   AddressInterval interval;
   AddressMapOrderKey order;
   std::optional<uint64_t> priority;
+  std::optional<InterleaveLane> lane;
   SmallVector<std::string> registrationKeys;
   SmallVector<std::string> queryKeys;
 };
@@ -588,49 +702,94 @@ void appendUnique(SmallVectorImpl<std::string> &keys, std::string key) {
 }
 
 void buildSelectorKeys(ArrayRef<unsigned> permissions,
-                       ArrayRef<std::string> classes,
-                       std::optional<std::string> lane, MapEntry &entry) {
+                       ArrayRef<std::string> classes, MapEntry &entry) {
   bool wildcardClass = classes.empty();
-  bool wildcardLane = !lane;
   for (unsigned permission : permissions) {
     std::string prefix = std::to_string(permission) + "|";
-    appendUnique(entry.registrationKeys, "G|" + prefix);
-    if (wildcardClass)
+    appendUnique(entry.registrationKeys, "P|" + prefix);
+    if (wildcardClass) {
       appendUnique(entry.registrationKeys, "CW|" + prefix);
-    else
+      appendUnique(entry.queryKeys, "P|" + prefix);
+    } else {
       for (const std::string &className : classes)
         appendUnique(entry.registrationKeys, "C|" + prefix + className);
-    if (wildcardLane)
-      appendUnique(entry.registrationKeys, "LW|" + prefix);
-    else
-      appendUnique(entry.registrationKeys, "L|" + prefix + *lane);
-
-    if (wildcardClass && wildcardLane) {
-      appendUnique(entry.registrationKeys, "CW_LW|" + prefix);
-      appendUnique(entry.queryKeys, "G|" + prefix);
-    } else if (wildcardClass) {
-      appendUnique(entry.registrationKeys, "CW_L|" + prefix + *lane);
-      appendUnique(entry.queryKeys, "LW|" + prefix);
-      appendUnique(entry.queryKeys, "L|" + prefix + *lane);
-    } else if (wildcardLane) {
-      for (const std::string &className : classes)
-        appendUnique(entry.registrationKeys, "C_LW|" + prefix + className);
       appendUnique(entry.queryKeys, "CW|" + prefix);
       for (const std::string &className : classes)
         appendUnique(entry.queryKeys, "C|" + prefix + className);
-    } else {
-      for (const std::string &className : classes)
-        appendUnique(entry.registrationKeys,
-                     "C_L|" + prefix + className + "|" + *lane);
-      appendUnique(entry.queryKeys, "CW_LW|" + prefix);
-      appendUnique(entry.queryKeys, "CW_L|" + prefix + *lane);
-      for (const std::string &className : classes) {
-        appendUnique(entry.queryKeys, "C_LW|" + prefix + className);
-        appendUnique(entry.queryKeys,
-                     "C_L|" + prefix + className + "|" + *lane);
-      }
     }
   }
+}
+
+llvm::DynamicAPInt asDynamicInt(WideAddress value) {
+  uint64_t words[] = {static_cast<uint64_t>(value),
+                      static_cast<uint64_t>(value >> 64)};
+  return llvm::DynamicAPInt(llvm::APInt(128, words));
+}
+
+bool interleaveSetsIntersect(const InterleaveLane &left,
+                             const InterleaveLane &right, WideAddress begin,
+                             WideAddress end) {
+  if (begin >= end)
+    return false;
+  using namespace mlir::presburger;
+  // Variables are x, q_left, u_left, q_right, u_right. The fixed-dimensional
+  // Presburger query is the exact periodic block intersection:
+  // x = q * (granularity*banks) + granularity*bank + u,
+  // 0 <= u < granularity, begin <= x < end.
+  IntegerPolyhedron set(PresburgerSpace::getSetSpace(5));
+  auto row = [] { return SmallVector<llvm::DynamicAPInt, 6>(6); };
+  auto addLane = [&](const InterleaveLane &lane, unsigned quotient,
+                     unsigned within) {
+    WideAddress period =
+        static_cast<WideAddress>(lane.granularity) * lane.banks;
+    WideAddress residue =
+        static_cast<WideAddress>(lane.granularity) * lane.bank;
+    auto equality = row();
+    equality[0] = llvm::DynamicAPInt(1);
+    equality[quotient] = -asDynamicInt(period);
+    equality[within] = llvm::DynamicAPInt(-1);
+    equality[5] = -asDynamicInt(residue);
+    set.addEquality(equality);
+    auto lower = row();
+    lower[within] = llvm::DynamicAPInt(1);
+    set.addInequality(lower);
+    auto upper = row();
+    upper[within] = llvm::DynamicAPInt(-1);
+    upper[5] = asDynamicInt(lane.granularity - 1);
+    set.addInequality(upper);
+  };
+  addLane(left, 1, 2);
+  addLane(right, 3, 4);
+  auto lower = row();
+  lower[0] = llvm::DynamicAPInt(1);
+  lower[5] = -asDynamicInt(begin);
+  set.addInequality(lower);
+  auto upper = row();
+  upper[0] = llvm::DynamicAPInt(-1);
+  upper[5] = asDynamicInt(end - 1);
+  set.addInequality(upper);
+  return !set.isIntegerEmpty();
+}
+
+void updateSummary(SelectorSummary &summary, const MapEntry &entry, bool add) {
+  auto updateSet = [&](std::multiset<WideAddress> &ends) {
+    if (add) {
+      ends.insert(entry.interval.end);
+      return;
+    }
+    auto found = ends.find(entry.interval.end);
+    assert(found != ends.end());
+    ends.erase(found);
+  };
+  updateSet(summary.allEnds);
+  if (entry.priority)
+    updateSet(summary.priorityEnds[*entry.priority]);
+  else
+    updateSet(summary.withoutPriorityEnds);
+}
+
+WideAddress maximumEnd(const std::multiset<WideAddress> &ends) {
+  return ends.empty() ? 0 : *ends.rbegin();
 }
 
 LogicalResult
@@ -661,8 +820,6 @@ verifyAddressMap(AddressMapOp map,
 
   SmallVector<MapEntry> entries;
   entries.reserve(map.getEntries().size());
-  AddressMapOrderKey previous{};
-  bool hasPrevious = false;
   WideAddress sourceLimit = addressLimit(source.getAddressWidthAttr().getInt());
 
   for (Attribute attribute : map.getEntries()) {
@@ -748,7 +905,7 @@ verifyAddressMap(AddressMapOp map,
     }
 
     uint64_t targetSpan = size;
-    std::optional<std::string> lane;
+    std::optional<InterleaveLane> lane;
     if (auto interleave = dictionary.getAs<DictionaryAttr>("interleave")) {
       if (!hasExactKeys(interleave, {"granularity", "banks", "bank"}))
         return map.emitOpError(
@@ -777,11 +934,7 @@ verifyAddressMap(AddressMapOp map,
         return map.emitOpError("interleave base/size/offset must satisfy "
                                "stripe alignment and geometry");
       targetSpan = size / banks;
-      // ACIR v0.1 defines an interleave lane by the exact canonical
-      // (granularity, banks, bank) tuple. A non-interleaved selector is the
-      // wildcard over all such lane identities.
-      lane = std::to_string(granularity) + ":" + std::to_string(banks) + ":" +
-             std::to_string(bank);
+      lane = InterleaveLane{granularity, banks, bank};
     }
 
     WideAddress targetEnd = static_cast<WideAddress>(offset) + targetSpan;
@@ -801,37 +954,54 @@ verifyAddressMap(AddressMapOp map,
     }
     AddressMapOrderKey order{base, size, priority.has_value(),
                              priority.value_or(0)};
-    if (hasPrevious && compareAddressMapOrder(previous, order) > 0)
-      return map.emitOpError(
-          "address-map entries must be in deterministic base order");
-    previous = order;
-    hasPrevious = true;
-    entries.push_back({{base, end}, order, priority});
-    buildSelectorKeys(permissionIds, classTokens, lane, entries.back());
+    entries.push_back({{base, end}, order, priority, lane});
+    buildSelectorKeys(permissionIds, classTokens, entries.back());
   }
 
-  std::map<std::string, SelectorSummary> selectorIndex;
+  llvm::stable_sort(entries, [](const MapEntry &left, const MapEntry &right) {
+    return compareAddressMapOrder(left.order, right.order) < 0;
+  });
+
+  std::map<std::string, SelectorIndex> selectorIndex;
   std::multimap<WideAddress, const MapEntry *> activeByEnd;
   auto update = [&](const MapEntry &entry, bool add) {
     for (const std::string &key : entry.registrationKeys) {
-      SelectorSummary &summary = selectorIndex[key];
-      if (add) {
-        ++summary.count;
-        if (entry.priority)
-          ++summary.priorities[*entry.priority];
-        else
-          ++summary.withoutPriority;
-      } else {
-        --summary.count;
-        if (entry.priority) {
-          auto priority = summary.priorities.find(*entry.priority);
-          if (--priority->second == 0)
-            summary.priorities.erase(priority);
-        } else {
-          --summary.withoutPriority;
-        }
+      SelectorIndex &index = selectorIndex[key];
+      SelectorSummary *summary = &index.wildcard;
+      if (entry.lane) {
+        InterleaveGeometry geometry{entry.lane->granularity, entry.lane->banks};
+        summary = &index.lanes[geometry][entry.lane->bank];
       }
+      updateSummary(*summary, entry, add);
     }
+  };
+  auto diagnoseSummary =
+      [&](const MapEntry &entry, const SelectorSummary &summary,
+          std::optional<InterleaveLane> otherLane) -> LogicalResult {
+    auto intersectsBefore = [&](WideAddress candidateEnd) {
+      WideAddress end = std::min(entry.interval.end, candidateEnd);
+      if (entry.interval.begin >= end)
+        return false;
+      if (!entry.lane || !otherLane)
+        return true;
+      return interleaveSetsIntersect(*entry.lane, *otherLane,
+                                     entry.interval.begin, end);
+    };
+    if (!entry.priority) {
+      if (intersectsBefore(maximumEnd(summary.allEnds)))
+        return map.emitOpError("overlapping selector intersections require "
+                               "explicit distinct priorities");
+      return success();
+    }
+    if (intersectsBefore(maximumEnd(summary.withoutPriorityEnds)))
+      return map.emitOpError("overlapping selector intersections require "
+                             "explicit distinct priorities");
+    auto samePriority = summary.priorityEnds.find(*entry.priority);
+    if (samePriority != summary.priorityEnds.end() &&
+        intersectsBefore(maximumEnd(samePriority->second)))
+      return map.emitOpError(
+          "overlapping selector intersections have equal priority");
+    return success();
   };
   for (const MapEntry &entry : entries) {
     while (!activeByEnd.empty() &&
@@ -841,14 +1011,36 @@ verifyAddressMap(AddressMapOp map,
     }
     for (const std::string &key : entry.queryKeys) {
       auto found = selectorIndex.find(key);
-      if (found == selectorIndex.end() || found->second.count == 0)
+      if (found == selectorIndex.end())
         continue;
-      if (!entry.priority || found->second.withoutPriority)
-        return map.emitOpError("overlapping selector intersections require "
-                               "explicit distinct priorities");
-      if (found->second.priorities.contains(*entry.priority))
-        return map.emitOpError(
-            "overlapping selector intersections have equal priority");
+      SelectorIndex &index = found->second;
+      if (failed(diagnoseSummary(entry, index.wildcard, std::nullopt)))
+        return failure();
+      if (!entry.lane) {
+        for (const auto &[geometry, banks] : index.lanes)
+          for (const auto &[bank, summary] : banks)
+            if (failed(diagnoseSummary(entry, summary,
+                                       InterleaveLane{geometry.granularity,
+                                                      geometry.banks, bank})))
+              return failure();
+        continue;
+      }
+      InterleaveGeometry currentGeometry{entry.lane->granularity,
+                                         entry.lane->banks};
+      for (const auto &[geometry, banks] : index.lanes) {
+        if (geometry == currentGeometry) {
+          auto sameBank = banks.find(entry.lane->bank);
+          if (sameBank != banks.end() &&
+              failed(diagnoseSummary(entry, sameBank->second, *entry.lane)))
+            return failure();
+          continue;
+        }
+        for (const auto &[bank, summary] : banks)
+          if (failed(diagnoseSummary(
+                  entry, summary,
+                  InterleaveLane{geometry.granularity, geometry.banks, bank})))
+            return failure();
+      }
     }
     update(entry, true);
     activeByEnd.emplace(entry.interval.end, &entry);
@@ -857,6 +1049,20 @@ verifyAddressMap(AddressMapOp map,
 }
 
 } // namespace
+
+void normalizeAddressMaps(Operation *topLevel) {
+  topLevel->walk([](AddressMapOp map) {
+    SmallVector<Attribute> entries;
+    entries.reserve(map.getEntries().size());
+    for (Attribute attribute : map.getEntries())
+      entries.push_back(normalizedMapEntry(cast<DictionaryAttr>(attribute)));
+    llvm::stable_sort(entries, [](Attribute left, Attribute right) {
+      return compareNormalizedMapEntries(cast<DictionaryAttr>(left),
+                                         cast<DictionaryAttr>(right)) < 0;
+    });
+    map.setEntriesAttr(ArrayAttr::get(map.getContext(), entries));
+  });
+}
 
 LogicalResult verifyModuleResourceReferences(
     Operation *operation, const llvm::StringMap<Operation *> &producerIndex) {
