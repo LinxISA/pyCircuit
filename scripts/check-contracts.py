@@ -41,8 +41,8 @@ def check_governance(errors):
 
 def check_epochs(errors):
     schemas = sorted((ROOT / "schemas").glob("*.schema.json"))
-    if len(schemas) != 8:
-        errors.append(f"expected 8 JSON schemas, found {len(schemas)}")
+    if len(schemas) != 9:
+        errors.append(f"expected 9 JSON schemas, found {len(schemas)}")
     for path in schemas:
         document = json.loads(path.read_text())
         actual = document.get("properties", {}).get("contract_epoch", {}).get("const")
@@ -205,7 +205,7 @@ def main():
         for error in errors:
             print(f"error: {error}", file=sys.stderr)
         return 1
-    print("repository contracts: OK (8 schemas, epoch 0.1, LLVM 22.1.8)")
+    print("repository contracts: OK (9 schemas, epoch 0.1, LLVM 22.1.8)")
     return 0
 
 

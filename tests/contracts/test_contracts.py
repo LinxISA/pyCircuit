@@ -244,7 +244,7 @@ class RepositoryContractsTest(unittest.TestCase):
             r'^contract-epoch\s*=\s*"([^"]+)"\s*$', pyproject, re.MULTILINE
         )
 
-        self.assertEqual(8, len(schema_epochs))
+        self.assertEqual(9, len(schema_epochs))
         self.assertEqual(
             {CONTRACT_EPOCH}, set(schema_epochs.values()), schema_epochs
         )
@@ -268,7 +268,78 @@ class RepositoryContractsTest(unittest.TestCase):
             )
             Draft202012Validator.check_schema(document)
             checked.append(path.name)
-        self.assertEqual(8, len(checked), checked)
+        self.assertEqual(9, len(checked), checked)
+
+    def test_acsim_binding_schema_is_closed_and_accepts_only_lock_records(self):
+        self.assertIsNotNone(
+            importlib.util.find_spec("jsonschema"),
+            "install the locked development requirements before running contracts",
+        )
+        from jsonschema import ValidationError
+        from jsonschema.validators import Draft202012Validator
+
+        schema = json.loads(
+            (ROOT / "schemas/acsim-binding.schema.json").read_text()
+        )
+        registry = json.loads(
+            (ROOT / "test/Bindings/Inputs/leaf-fast.json").read_text()
+        )
+        candidate = registry["candidates"][0]
+        record = candidate["record"]
+        validator = Draft202012Validator(schema)
+        validator.validate(record)
+        unit_record = json.loads(json.dumps(record))
+        unit_record["parameters"][0]["value"] = {"unit": "cycles", "value": 4}
+        unit_record["construction"]["arguments"][0] = {
+            "unit": "cycles",
+            "value": 4,
+        }
+        validator.validate(unit_record)
+
+        def assert_closed_objects(fragment, path="#"):
+            if isinstance(fragment, list):
+                for index, value in enumerate(fragment):
+                    assert_closed_objects(value, f"{path}/{index}")
+                return
+            if not isinstance(fragment, dict):
+                return
+            if fragment.get("type") == "object":
+                self.assertIs(
+                    False,
+                    fragment.get("additionalProperties"),
+                    f"open object schema at {path}",
+                )
+            for key, value in fragment.items():
+                assert_closed_objects(value, f"{path}/{key}")
+
+        assert_closed_objects(schema)
+
+        mutations = []
+        unknown = dict(record)
+        unknown["emitter_callback"] = "emitLeaf"
+        mutations.append(unknown)
+        unavailable = dict(record)
+        unavailable["availability"] = "unavailable"
+        mutations.append(unavailable)
+        wrong_epoch = dict(record)
+        wrong_epoch["contract_epoch"] = "0.2"
+        mutations.append(wrong_epoch)
+        wrong_schema = dict(record)
+        wrong_schema["binding_schema"] = "acsim-binding-0.2"
+        mutations.append(wrong_schema)
+        wrong_cardinality = dict(record)
+        wrong_cardinality["ports"] = [dict(record["ports"][0])]
+        wrong_cardinality["ports"][0]["cardinality"] = "many"
+        mutations.append(wrong_cardinality)
+        raw_parameter_type = json.loads(json.dumps(record))
+        raw_parameter_type["parameters"][0]["cpp_type"] = "int; emit()"
+        mutations.append(raw_parameter_type)
+        invalid_static_key = json.loads(json.dumps(unit_record))
+        invalid_static_key["parameters"][0]["value"] = {"not-valid": 4}
+        mutations.append(invalid_static_key)
+        for mutation in mutations:
+            with self.assertRaises(ValidationError):
+                validator.validate(mutation)
 
     def test_markdown_local_links_resolve(self):
         broken = []

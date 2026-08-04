@@ -2,10 +2,12 @@ add_acir_library(ACIRTransforms SOURCES
   VerifyModel.cpp
   FreezeTopology.cpp
   CanonicalizeModel.cpp
+  ResolveBindings.cpp
 )
 add_dependencies(ACIRTransforms ACIRTransformsIncGen)
 target_link_libraries(ACIRTransforms PUBLIC
   ACIRAnalysis
+  ACIRBindings
   ACIRDialect
   MLIRPass
 )

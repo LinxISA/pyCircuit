@@ -2,6 +2,8 @@
 #include "acir/Dialect/ACIR/GraphRegion.h"
 #include "acir/InitAllDialects.h"
 #include "acir/InitAllPasses.h"
+#include "acir/Transforms/ResolveBindings.h"
+#include "BindingOptions.h"
 #include "mlir/AsmParser/AsmParser.h"
 #include "mlir/IR/Diagnostics.h"
 #include "mlir/Pass/PassManager.h"
@@ -94,17 +96,26 @@ int main(int argc, char **argv) {
 
   auto [inputFilename, outputFilename] = mlir::registerAndParseCLIOptions(
       argc, argv, "Agentic Circuit optimizer driver\n", registry);
+  auto bindingOptions = acir::opt::loadBindingCommandLineOptions();
+  if (!bindingOptions) {
+    llvm::errs() << "error: " << llvm::toString(bindingOptions.takeError())
+                 << '\n';
+    return EXIT_FAILURE;
+  }
   mlir::MlirOptMainConfig config =
       mlir::MlirOptMainConfig::createFromCLOptions();
   mlir::MlirOptMainConfig commandLineConfig = config;
   config.allowUnregisteredDialects(false)
       .useExplicitModule(true)
-      .setPassPipelineSetupFn([commandLineConfig](
+      .setPassPipelineSetupFn([commandLineConfig, bindingOptions =
+                                                      std::move(*bindingOptions)](
                                   mlir::PassManager &passManager) {
         passManager.addPass(std::make_unique<acir::NormalizeACIRFilePass>());
         passManager.addPass(std::make_unique<acir::VerifyACIRFilePass>());
         if (mlir::failed(commandLineConfig.setupPassPipeline(passManager)))
           return mlir::failure();
+        if (bindingOptions)
+          passManager.addPass(acir::createResolveBindingsPass(*bindingOptions));
         // The final whole-model gate makes a persisted freeze digest effective
         // across every user-supplied pipeline: any topology mutation after
         // ac-freeze-topology is diagnosed before output is committed.
