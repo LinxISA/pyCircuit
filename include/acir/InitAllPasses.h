@@ -3,6 +3,7 @@
 
 #include "acir/Dialect/ACIR/ACIROps.h"
 #include "acir/Dialect/ACIR/ACIRResources.h"
+#include "acir/Dialect/ACSim/ACSimOps.h"
 #include "acir/Transforms/Passes.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/Pass/Pass.h"
@@ -49,6 +50,11 @@ public:
       module.emitError(
           "expected top-level 'ac.contract_epoch' string attribute "
           "equal to \"0.1\"");
+      signalPassFailure();
+      return;
+    }
+
+    if (mlir::failed(acir::acsim::verifyCanonicalACSimFile(module))) {
       signalPassFailure();
       return;
     }
