@@ -1,4 +1,5 @@
 #include "acir/Dialect/ACIR/ACIRResources.h"
+#include "ACIRResourcesTestHooks.h"
 
 #include "acir/Dialect/ACIR/ACIROps.h"
 #include "acir/Dialect/ACIR/ACIRTypes.h"
@@ -21,6 +22,14 @@ using namespace mlir;
 
 namespace acir::ac {
 namespace {
+
+thread_local detail::AddressMapVerificationWork
+    *addressMapVerificationWorkCollector = nullptr;
+
+void recordAddressMapWork(uint64_t detail::AddressMapVerificationWork::*field) {
+  if (addressMapVerificationWorkCollector)
+    ++(addressMapVerificationWorkCollector->*field);
+}
 
 bool isStableSegment(StringRef value) {
   return !value.empty() && llvm::all_of(value, [](char c) {
@@ -163,6 +172,22 @@ verifyParentCycles(ModuleOp module, bool timeDomains,
 }
 
 } // namespace
+
+namespace detail {
+
+ScopedAddressMapVerificationWorkCollector::
+    ScopedAddressMapVerificationWorkCollector(AddressMapVerificationWork &work)
+    : previous(addressMapVerificationWorkCollector) {
+  work = {};
+  addressMapVerificationWorkCollector = &work;
+}
+
+ScopedAddressMapVerificationWorkCollector::
+    ~ScopedAddressMapVerificationWorkCollector() {
+  addressMapVerificationWorkCollector = previous;
+}
+
+} // namespace detail
 
 bool checkedAdd(uint64_t left, uint64_t right, uint64_t &result) {
   if (left > std::numeric_limits<uint64_t>::max() - right)
@@ -890,6 +915,8 @@ verifyAddressMap(AddressMapOp map,
   WideAddress sourceLimit = addressLimit(source.getAddressWidthAttr().getInt());
 
   for (Attribute attribute : map.getEntries()) {
+    recordAddressMapWork(
+        &detail::AddressMapVerificationWork::entryNormalizationVisits);
     auto dictionary = dyn_cast<DictionaryAttr>(attribute);
     if (!dictionary)
       return map.emitOpError("address-map entries must be dictionaries");
@@ -1058,18 +1085,26 @@ verifyAddressMap(AddressMapOp map,
   std::multimap<WideAddress, const MapEntry *> activeConcrete;
   auto updateConcrete = [&](const MapEntry &entry, bool add) {
     for (const std::string &key : entry.registrationKeys) {
+      recordAddressMapWork(
+          &detail::AddressMapVerificationWork::selectorUpdateVisits);
       updatePartitions(concreteIndex[key], entry, [&](auto &ends) {
         updateEnds(ends, entry.concreteSelection->end, add);
       });
     }
   };
   for (const MapEntry *entry : concreteEntries) {
+    recordAddressMapWork(
+        &detail::AddressMapVerificationWork::concreteEntryVisits);
     WideAddress begin = entry->concreteSelection->begin;
     while (!activeConcrete.empty() && activeConcrete.begin()->first <= begin) {
+      recordAddressMapWork(
+          &detail::AddressMapVerificationWork::concreteExpirationVisits);
       updateConcrete(*activeConcrete.begin()->second, false);
       activeConcrete.erase(activeConcrete.begin());
     }
     for (const std::string &key : entry->queryKeys) {
+      recordAddressMapWork(
+          &detail::AddressMapVerificationWork::selectorQueryVisits);
       auto found = concreteIndex.find(key);
       if (found == concreteIndex.end())
         continue;
@@ -1098,6 +1133,8 @@ verifyAddressMap(AddressMapOp map,
     assert(entry.generalSelection && entry.lane);
     InterleaveGeometry geometry{entry.lane->granularity, entry.lane->banks};
     for (const std::string &key : entry.registrationKeys) {
+      recordAddressMapWork(
+          &detail::AddressMapVerificationWork::selectorUpdateVisits);
       auto &partitions = index[key].lanes[geometry][entry.lane->bank];
       updatePartitions(partitions, entry, [&](EntrySet &set) {
         if (add)
@@ -1112,6 +1149,8 @@ verifyAddressMap(AddressMapOp map,
     InterleaveGeometry current{entry.lane->granularity, entry.lane->banks};
     llvm::SmallPtrSet<const MapEntry *, 16> visited;
     for (const std::string &key : entry.queryKeys) {
+      recordAddressMapWork(
+          &detail::AddressMapVerificationWork::selectorQueryVisits);
       auto found = index.find(key);
       if (found == index.end())
         continue;
@@ -1177,6 +1216,8 @@ verifyAddressMap(AddressMapOp map,
       if (leftGeometry == rightGeometry)
         return left.lane->bank == right.lane->bank &&
                laneIntersectsInterval(*left.lane, begin, end);
+      recordAddressMapWork(
+          &detail::AddressMapVerificationWork::generalRelationChecks);
       return interleaveSetsIntersect(*left.lane, *right.lane, begin, end);
     }
     const MapEntry &general = left.generalSelection ? left : right;
@@ -1200,13 +1241,16 @@ verifyAddressMap(AddressMapOp map,
     }
     if (!entry.concreteSelection)
       return;
-    for (const std::string &key : entry.registrationKeys)
+    for (const std::string &key : entry.registrationKeys) {
+      recordAddressMapWork(
+          &detail::AddressMapVerificationWork::selectorUpdateVisits);
       updatePartitions(fastIndex[key], entry, [&](EntrySet &set) {
         if (add)
           set.insert(&entry);
         else
           set.erase(&entry);
       });
+    }
   };
   for (const MapEntry &entry : entries) {
     while (!activeEntries.empty() &&
@@ -1218,6 +1262,8 @@ verifyAddressMap(AddressMapOp map,
     auto check = [&](const MapEntry &candidate) -> LogicalResult {
       if (!candidates.insert(&candidate).second)
         return success();
+      recordAddressMapWork(
+          &detail::AddressMapVerificationWork::candidateIntersectionChecks);
       if (selectionsIntersect(entry, candidate))
         return emitConflict(entry, candidate);
       return success();
@@ -1235,6 +1281,8 @@ verifyAddressMap(AddressMapOp map,
         return !conflict;
       });
       for (const std::string &key : entry.queryKeys) {
+        recordAddressMapWork(
+            &detail::AddressMapVerificationWork::selectorQueryVisits);
         auto found = fastIndex.find(key);
         if (found == fastIndex.end())
           continue;
@@ -1250,6 +1298,8 @@ verifyAddressMap(AddressMapOp map,
     } else if (entry.concreteSelection) {
       bool conflict = false;
       for (const std::string &key : entry.queryKeys) {
+        recordAddressMapWork(
+            &detail::AddressMapVerificationWork::selectorQueryVisits);
         auto found = generalIndex.find(key);
         if (found == generalIndex.end())
           continue;

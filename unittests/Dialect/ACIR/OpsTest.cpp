@@ -1,4 +1,5 @@
 #include "Dialect/ACIR/ACIROpsTestHooks.h"
+#include "Dialect/ACIR/ACIRResourcesTestHooks.h"
 #include "acir/Analysis/ModelAnalysis.h"
 #include "acir/Dialect/ACIR/ACIRDialect.h"
 #include "acir/Dialect/ACIR/ACIROps.h"
@@ -1017,8 +1018,8 @@ TEST(ACIROpsTest, TaskSevenOwnersRegisterAtDistinctAbsoluteInstancePaths) {
   auto emptyDictionary = builder.getDictionaryAttr({});
   auto file = mlir::ModuleOp::create(loc);
   builder.setInsertionPointToStart(file.getBody());
-  auto leaf =
-      ModuleOp::create(builder, loc, "Leaf", emptyType, emptyDictionary);
+  auto leaf = ModuleOp::create(builder, loc, "Leaf", emptyType,
+                               emptyDictionary);
   builder.setInsertionPointToStart(leaf.addEntryBlock());
   auto latency = builder.getDictionaryAttr({
       builder.getNamedAttr("kind", builder.getStringAttr("fixed")),
@@ -1095,8 +1096,8 @@ TEST(ACIROpsTest, TaskEightOwnersRegisterAtDistinctAbsoluteInstancePaths) {
   auto emptyDictionary = builder.getDictionaryAttr({});
   auto file = mlir::ModuleOp::create(loc);
   builder.setInsertionPointToStart(file.getBody());
-  auto leaf = ModuleOp::create(builder, loc, "Leaf", emptyType,
-                               emptyDictionary);
+  auto leaf =
+      ModuleOp::create(builder, loc, "Leaf", emptyType, emptyDictionary);
   builder.setInsertionPointToStart(leaf.addEntryBlock());
   auto process = ProcessOp::create(builder, loc, "worker", "workload",
                                    mlir::ValueRange{});
@@ -1954,7 +1955,7 @@ TEST(ACIRResourcesTest, SingleSelectedStripeMixedGeometriesScaleNearLinearly) {
   context.loadDialect<ACIRDialect>();
   mlir::OpBuilder builder(&context);
   auto location = builder.getUnknownLoc();
-  auto verifyTimed = [&](unsigned entryCount) {
+  auto measureWork = [&](unsigned entryCount) {
     auto file = mlir::ModuleOp::create(location);
     builder.setInsertionPointToStart(file.getBody());
     auto module = ModuleOp::create(builder, location, "M",
@@ -1997,19 +1998,38 @@ TEST(ACIRResourcesTest, SingleSelectedStripeMixedGeometriesScaleNearLinearly) {
         builder.getDictionaryAttr(
             {builder.getNamedAttr("kind", builder.getStringAttr("unmapped"))}));
     ReturnOp::create(builder, location, mlir::ValueRange{});
-    auto start = std::chrono::steady_clock::now();
-    EXPECT_TRUE(mlir::succeeded(mlir::verify(file)));
-    return std::chrono::duration_cast<std::chrono::milliseconds>(
-               std::chrono::steady_clock::now() - start)
-        .count();
+    detail::AddressMapVerificationWork work;
+    {
+      detail::ScopedAddressMapVerificationWorkCollector collector(work);
+      EXPECT_TRUE(mlir::succeeded(mlir::verify(file)));
+    }
+    return work;
   };
 
-  int64_t fiveThousandMs = verifyTimed(5000);
-  int64_t tenThousandMs = verifyTimed(10000);
-  RecordProperty("five_thousand_ms", fiveThousandMs);
-  RecordProperty("ten_thousand_ms", tenThousandMs);
-  EXPECT_LT(tenThousandMs, 5000);
-  EXPECT_LT(tenThousandMs, std::max<int64_t>(100, fiveThousandMs * 3));
+  auto expectSingleStripeWork =
+      [](const detail::AddressMapVerificationWork &work, uint64_t entryCount) {
+        // Each entry is parsed and swept once. Adjacent one-address selections
+        // expire N-1 prior entries; the concrete and mixed sweeps make two
+        // queries per entry and six key updates per entry minus the two absent
+        // first-entry removals. This reaches no candidate or general relation.
+        EXPECT_EQ(work.entryNormalizationVisits, entryCount);
+        EXPECT_EQ(work.concreteEntryVisits, entryCount);
+        EXPECT_EQ(work.concreteExpirationVisits, entryCount - 1);
+        EXPECT_EQ(work.selectorQueryVisits, entryCount * 2);
+        EXPECT_EQ(work.selectorUpdateVisits, entryCount * 6 - 2);
+        EXPECT_EQ(work.candidateIntersectionChecks, 0u);
+        EXPECT_EQ(work.generalRelationChecks, 0u);
+        EXPECT_EQ(work.total(), entryCount * 11 - 3);
+      };
+
+  constexpr uint64_t smallSize = 5000;
+  constexpr uint64_t largeSize = 10000;
+  detail::AddressMapVerificationWork smallWork = measureWork(smallSize);
+  detail::AddressMapVerificationWork largeWork = measureWork(largeSize);
+  expectSingleStripeWork(smallWork, smallSize);
+  expectSingleStripeWork(largeWork, largeSize);
+  EXPECT_EQ(largeWork.total() - smallWork.total(),
+            uint64_t{11} * (largeSize - smallSize));
 }
 
 TEST(ACIRResourcesTest,
