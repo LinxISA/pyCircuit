@@ -244,7 +244,7 @@ class RepositoryContractsTest(unittest.TestCase):
             r'^contract-epoch\s*=\s*"([^"]+)"\s*$', pyproject, re.MULTILINE
         )
 
-        self.assertEqual(9, len(schema_epochs))
+        self.assertEqual(10, len(schema_epochs))
         self.assertEqual(
             {CONTRACT_EPOCH}, set(schema_epochs.values()), schema_epochs
         )
@@ -268,7 +268,86 @@ class RepositoryContractsTest(unittest.TestCase):
             )
             Draft202012Validator.check_schema(document)
             checked.append(path.name)
-        self.assertEqual(9, len(checked), checked)
+        self.assertEqual(10, len(checked), checked)
+
+    def test_process_state_plan_schema_is_closed_and_accepts_exact_baseline(self):
+        self.assertIsNotNone(importlib.util.find_spec("jsonschema"))
+        from jsonschema import ValidationError
+        from jsonschema.validators import Draft202012Validator
+
+        schema = json.loads(
+            (ROOT / "schemas/acir-process-state-plan.schema.json").read_text()
+        )
+        validator = Draft202012Validator(schema)
+        occurrence = {
+            "call_sites": [],
+            "iteration_vector": [],
+            "kind": "original",
+            "operation_path": "@Top::@workload/r0/b0/o0",
+        }
+        descriptor = {
+            "cpp": "acir::generated::impl_wake_next_delta_63cacba5c3eb82976464804b4aeaa17d43b445733efaddfad7c7bec1ab650269",
+            "effect": "stateful",
+            "fingerprint": "sha256:63cacba5c3eb82976464804b4aeaa17d43b445733efaddfad7c7bec1ab650269",
+            "inputs": [],
+            "kind": "implementation",
+            "ordinal": 0,
+            "payload": {"wake_kind": "next_delta", "wake_type": "@acir_wake_next_delta"},
+            "results": ["@acir_wake_next_delta"],
+            "role": "wake_next_delta",
+            "source_paths": [],
+            "symbol": "@acir_impl_wake_next_delta_63cacba5c3eb82976464804b4aeaa17d43b445733efaddfad7c7bec1ab650269",
+        }
+        fixture = {
+            "callees": [descriptor],
+            "contract_epoch": "0.1",
+            "processes": [{
+                "blocks": [{"actions": [], "cost": 2, "edge": {"kind": "suspend", "transition": 0}, "frames": [], "loads": [], "ordinal": 0, "path": "@Top::@workload/plan/pc/entry/b00000000", "pc": 0}],
+                "captures": [], "definition_key": "@Top::@workload", "entry_pc": 0,
+                "fairness_work": 2, "live_slots": [], "pc_bit_width": 1,
+                "pcs": [{"blocks": [0], "entry_path": "@Top::@workload/plan/pc/entry/b00000000", "name": "entry", "ordinal": 0}],
+                "transitions": [{"iteration_vector": [], "loads": [], "ordinal": 0, "source_pc": 0, "stores": [], "target_pc": 0, "wake": 0}],
+                "wakes": [{"callee": 0, "iteration_vector": [], "kind": "next_delta", "occurrence": occurrence, "operation_path": "@Top::@workload/r0/b0/o0", "ordinal": 0, "sources": [], "target": "", "type_key": "@acir_wake_next_delta"}],
+            }],
+            "schema": "acir-process-state-plan-0.1",
+            "value_types": [],
+        }
+        validator.validate(fixture)
+
+        branch = schema["$defs"]["edge_branch"]
+        self.assertEqual(
+            {"condition", "false_bindings", "false_block", "kind", "true_bindings", "true_block"},
+            set(branch["properties"]),
+        )
+        self.assertEqual(set(branch["properties"]), set(branch["required"]))
+
+        object_definitions = [schema]
+        object_definitions.extend(
+            value for value in schema["$defs"].values()
+            if isinstance(value, dict) and value.get("type") == "object"
+        )
+        for object_schema in object_definitions:
+            self.assertIs(False, object_schema.get("additionalProperties"))
+
+        def reject_unknown(path):
+            mutated = json.loads(json.dumps(fixture))
+            node = mutated
+            for key in path:
+                node = node[key]
+            node["unknown"] = True
+            with self.assertRaises(ValidationError):
+                validator.validate(mutated)
+
+        for path in (
+            (), ("callees", 0), ("callees", 0, "payload"),
+            ("processes", 0), ("processes", 0, "blocks", 0),
+            ("processes", 0, "blocks", 0, "edge"),
+            ("processes", 0, "pcs", 0),
+            ("processes", 0, "transitions", 0),
+            ("processes", 0, "wakes", 0),
+            ("processes", 0, "wakes", 0, "occurrence"),
+        ):
+            reject_unknown(path)
 
     def test_acsim_binding_schema_is_closed_and_accepts_only_lock_records(self):
         self.assertIsNotNone(

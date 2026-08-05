@@ -33,6 +33,7 @@ Normative specifications:
 - [ACSim and gfsim Lowering v0.1](docs/specs/acsim-gfsim-lowering-v0.1.md)
 - [gfsim Model Library Contract v0.1](docs/specs/gfsim-runtime-abi-v0.1.md)
 - [PTO Trace Schema v0.1](docs/specs/pto-trace-schema-v0.1.md)
+- [ACIR Process-State Plan v0.1](docs/specs/acir-process-state-plan-v0.1.md)
 
 Canonical machine-readable schemas:
 
@@ -44,6 +45,8 @@ Canonical machine-readable schemas:
 - [Run manifest](schemas/run-manifest.schema.json)
 - [Run result](schemas/run-result.schema.json)
 - [Diagnostic](schemas/diagnostic.schema.json)
+- [ACSim binding](schemas/acsim-binding.schema.json)
+- [ACIR process-state plan](schemas/acir-process-state-plan.schema.json)
 
 ## Project policies
 

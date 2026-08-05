@@ -1,7 +1,7 @@
 # Agentic Circuit v0.1 Delivery Roadmap
 
-> Status: approved for implementation. The eight documents in `docs/specs/`
-> and the eight schemas in `schemas/` are normative. This roadmap schedules
+> Status: approved for implementation. The nine documents in `docs/specs/`
+> and the ten schemas in `schemas/` are normative. This roadmap schedules
 > their complete implementation without narrowing the public v0.1 contract.
 
 ## Outcome
@@ -61,6 +61,7 @@ defined exclusively by this repository's specifications.
 | Python language and CLI | `docs/specs/agentic-python-cli-v0.1.md` | 4 |
 | Python AST, ACPy, and ACIR lowering | `docs/specs/python-to-acir-lowering-v0.1.md` | 4 |
 | PTO trace representation and streaming | `docs/specs/pto-trace-schema-v0.1.md` | 2, 5 |
+| Immutable process-state plan and canonical report | `docs/specs/acir-process-state-plan-v0.1.md` | 1, 3 |
 | Hard-break evolution and conformance | `docs/specs/interface-evolution-v0.1.md` | all |
 | Machine-readable public artifacts | `schemas/*.schema.json` | all |
 
