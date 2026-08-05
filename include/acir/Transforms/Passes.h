@@ -9,6 +9,9 @@
 
 namespace acir {
 
+std::unique_ptr<mlir::Pass> createNormalizeACIRFilePass();
+std::unique_ptr<mlir::Pass> createVerifyACIRFilePass();
+
 #define GEN_PASS_DECL_VERIFYMODELPASS
 #define GEN_PASS_DECL_CANONICALIZEMODELPASS
 #define GEN_PASS_DECL_FREEZETOPOLOGYPASS

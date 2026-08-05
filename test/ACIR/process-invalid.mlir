@@ -19,6 +19,7 @@
 // RUN: %FileCheck %s --check-prefix=MALFORMED-FOR-ARITY < %t/malformed-for-arity.out
 // RUN: /bin/sh -c '%acir_opt %t/malformed-while-arity.mlir > %t/malformed-while-arity.out 2>&1; status=$?; test $status -gt 0 && test $status -lt 128'
 // RUN: %FileCheck %s --check-prefix=MALFORMED-WHILE-ARITY < %t/malformed-while-arity.out
+// RUN: %not %acir_opt %t/dynamic-for-no-suspend.mlir 2>&1 | %FileCheck %s --check-prefix=DYNAMIC-FOR
 
 //--- bad-kind.mlir
 builtin.module attributes {ac.contract_epoch = "0.1"} {
@@ -293,3 +294,18 @@ builtin.module attributes {ac.contract_epoch = "0.1"} {
   }) : () -> ()
 }
 // MALFORMED-WHILE-ARITY: malformed scf.while operand/result/block argument/yield arity or type mismatch
+
+//--- dynamic-for-no-suspend.mlir
+builtin.module attributes {ac.contract_epoch = "0.1"} {
+  ac.module @M(index, index, index) parameters {} graph {
+  ^bb0(%lb : index, %ub : index, %step : index):
+    ac.process @p kind "control"
+        captures(%lb, %ub, %step : index, index, index) {
+    ^bb0(%l : index, %u : index, %s : index):
+      scf.for %i = %l to %u step %s { scf.yield }
+      ac.yield_sim
+    }
+    ac.return
+  }
+}
+// DYNAMIC-FOR: dynamic scf.for requires every reachable backedge to suspend

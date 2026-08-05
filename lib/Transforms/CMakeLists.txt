@@ -3,6 +3,8 @@ add_acir_library(ACIRTransforms SOURCES
   FreezeTopology.cpp
   CanonicalizeModel.cpp
   ResolveBindings.cpp
+  NormalizeACIRFile.cpp
+  VerifyACIRFile.cpp
 )
 add_dependencies(ACIRTransforms ACIRTransformsIncGen)
 target_link_libraries(ACIRTransforms PUBLIC

@@ -5,6 +5,7 @@ add_acir_library(ACIRDialect SOURCES
   ACIRResources.cpp
   ACIRTypes.cpp
   GraphRegion.cpp
+  ProcessLowerability.cpp
 )
 add_dependencies(ACIRDialect
   ACIRDialectIncGen

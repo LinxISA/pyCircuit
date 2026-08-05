@@ -611,6 +611,12 @@ runtime operations.
 Python loops that create topology execute during elaboration. Runtime loops may
 remain as `scf` inside a process.
 
+An `scf.for` is lowerable only when its lower bound, upper bound, and positive
+step define an exact finite static trip count within the ACIR v0.1 capability
+limit, or when every reachable backedge suspends. A dynamic non-suspending
+`scf.for`, a non-positive static step, or a static trip-count overflow is a
+hard verification error; there is no compatibility lowering.
+
 Every `ac.process` body MUST be constructed and verified for allowed operations,
 effects, ownership, suspension, and captured types before topology freeze.
 Continuation lowering MUST run only after topology freeze, when captures,

@@ -20,7 +20,10 @@ target_link_libraries(ACIRModelAnalysisTests PRIVATE
 )
 add_test(NAME ACIRModelAnalysisTests COMMAND ACIRModelAnalysisTests)
 
-add_executable(ACIRProcessStatePlanTests ProcessStatePlanBasicTest.cpp)
+add_executable(ACIRProcessStatePlanTests
+  ProcessStatePlanBasicTest.cpp
+  ProcessStatePlanVerifierTest.cpp
+)
 target_include_directories(ACIRProcessStatePlanTests PRIVATE
   "${PROJECT_SOURCE_DIR}/lib"
 )
@@ -34,6 +37,7 @@ target_link_libraries(ACIRProcessStatePlanTests PRIVATE
   MLIRIndexDialect
   MLIRIR
   MLIRParser
+  MLIRPass
   GTest::gtest_main
 )
 add_test(NAME ACIRProcessStatePlanTests COMMAND ACIRProcessStatePlanTests)

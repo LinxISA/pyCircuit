@@ -1,6 +1,7 @@
 #ifndef ACIR_ANALYSIS_PROCESSSTATEPLANINTERNAL_H
 #define ACIR_ANALYSIS_PROCESSSTATEPLANINTERNAL_H
 
+#include "Dialect/ACIR/ProcessLowerability.h"
 #include "ProcessStatePlanTestHooks.h"
 
 #include <vector>
@@ -380,6 +381,35 @@ struct ProcessStatePlanSet::Impl {
 
 namespace detail {
 
+struct ExpandedForwarding {
+  ProcessPlannedValue from;
+  ProcessPlannedValue to;
+};
+
+struct ExpandedAction {
+  ProcessActionKind kind = ProcessActionKind::Original;
+  mlir::Operation *operation = nullptr;
+  std::string operationPath;
+  std::optional<ProcessOccurrenceId> occurrence;
+  std::vector<ProcessCallSitePlan> callSites;
+  std::vector<uint64_t> iterationVector;
+  std::vector<ProcessPlannedValue> operands;
+  std::vector<ProcessPlannedValue> results;
+  std::string scalarOperation;
+  std::string scalarPredicate;
+};
+
+struct ExpandedProcess {
+  ac::ProcessOp process;
+  std::string definitionKey;
+  std::vector<ExpandedAction> actions;
+  std::vector<ExpandedForwarding> forwarding;
+};
+
+mlir::FailureOr<ExpandedProcess> expandProcessForPlanning(
+    ac::ProcessOp process,
+    const ac::RawModelStructureLimits &limits = ac::RawModelStructureLimits());
+
 class PlanSetBuilder {
 public:
   enum class LoopActionMutationForTest {
@@ -469,6 +499,9 @@ public:
   static llvm::StringRef specializationBytes(const ProcessValueTypePlan &type);
   static bool validEdgeShape(const ProcessControlEdgePlan &edge);
   static llvm::StringRef structuralError(const ProcessStatePlanSet &plans);
+  static mlir::FailureOr<ExpandedProcess>
+  expandProcess(ac::ProcessOp process,
+                const ac::RawModelStructureLimits &limits);
 
 private:
   static mlir::FailureOr<ProcessStatePlanSet>

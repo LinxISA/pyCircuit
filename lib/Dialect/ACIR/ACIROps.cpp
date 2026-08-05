@@ -1,5 +1,6 @@
 #include "acir/Dialect/ACIR/ACIROps.h"
 #include "ACIROpsTestHooks.h"
+#include "ProcessLowerability.h"
 #include "acir/Dialect/ACIR/ACIRResources.h"
 #include "acir/Dialect/ACIR/GraphRegion.h"
 
@@ -2311,9 +2312,8 @@ StringRef processIdentity(Operation *operation) {
   return process ? process.getSymName() : StringRef("invalid_process");
 }
 
-void addContractEffect(
-    SmallVectorImpl<MemoryEffects::EffectInstance> &effects,
-    Operation *operation) {
+void addContractEffect(SmallVectorImpl<MemoryEffects::EffectInstance> &effects,
+                       Operation *operation) {
   if (!isa<AssertOp>(operation) &&
       isa_and_nonnull<ModuleOp>(operation->getParentOp())) {
     constexpr StringLiteral identity = "contracts";
@@ -2324,10 +2324,10 @@ void addContractEffect(
     return;
   }
   StringRef identity = processIdentity(operation);
-  effects.emplace_back(
-      MemoryEffects::Write::get(), qualifiedRuntimeOwner(operation, identity),
-      contractEffectParameters(operation, "runtime", identity),
-      ExternalIOResource::get());
+  effects.emplace_back(MemoryEffects::Write::get(),
+                       qualifiedRuntimeOwner(operation, identity),
+                       contractEffectParameters(operation, "runtime", identity),
+                       ExternalIOResource::get());
 }
 
 std::string traceOwnerIdentity(Operation *operation, StringRef trace) {
@@ -2350,11 +2350,10 @@ bool isAllowedProcessOperation(Operation *operation) {
           operation))
     return true;
   return isa<RecordCreateOp, RecordGetOp, RecordWithOp, PacketSerializeOp,
-             PacketDeserializeOp, TrySendOp, TryRecvOp, ScheduleOp,
-             WaitUntilOp, WaitForOp, AwaitEventOp, YieldSimOp, TraceOpenOp,
-             TraceNextOp, TraceDecodeOp, TraceEofOp, TracePositionOp,
-             RequireOp, EnsureOp, AssertOp, ProbeOp, StatAddOp,
-             InstrumentationOp>(operation);
+             PacketDeserializeOp, TrySendOp, TryRecvOp, ScheduleOp, WaitUntilOp,
+             WaitForOp, AwaitEventOp, YieldSimOp, TraceOpenOp, TraceNextOp,
+             TraceDecodeOp, TraceEofOp, TracePositionOp, RequireOp, EnsureOp,
+             AssertOp, ProbeOp, StatAddOp, InstrumentationOp>(operation);
 }
 
 std::optional<bool> constantBool(Value value) {
@@ -2896,8 +2895,7 @@ LogicalResult ProcessOp::verify() {
         "symbol name must be one stable hierarchy owner segment");
   if (getKind() != "control" && getKind() != "workload" &&
       getKind() != "monitor")
-    return emitOpError(
-        "kind must be 'control', 'workload', or 'monitor'");
+    return emitOpError("kind must be 'control', 'workload', or 'monitor'");
   if (getBody().empty())
     return emitOpError("requires one non-empty body block");
   if (!llvm::equal(getBody().front().getArgumentTypes(),
@@ -2905,27 +2903,13 @@ LogicalResult ProcessOp::verify() {
     return emitOpError("body arguments must exactly match capture types");
   if (!isa<YieldSimOp>(getBody().front().back()))
     return emitOpError("body must terminate with ac.yield_sim");
-  if (failed(verifySupportedSCFShape(*this)))
+  if (failed(verifyProcessLowerability(getOperation())))
     return failure();
 
   StructuredSuspensionAnalysis suspensionAnalysis(*this);
 
   LogicalResult result = success();
   walkOperationsIterative(getBody(), [&](Operation *operation) {
-    if (!isAllowedProcessOperation(operation)) {
-      operation->emitOpError() << "ac.process contains unsupported operation "
-                               << operation->getName();
-      result = failure();
-      return WalkResult::interrupt();
-    }
-    StringRef name = operation->getName().getStringRef();
-    if ((name.starts_with("arith.") || name.starts_with("index.")) &&
-        !isMemoryEffectFree(operation)) {
-      operation->emitOpError(
-          "arith/index operation in ac.process must be memory-effect free");
-      result = failure();
-      return WalkResult::interrupt();
-    }
     if (getKind() == "monitor" &&
         isa<TrySendOp, TryRecvOp, ScheduleOp, WaitForOp>(operation)) {
       operation->emitOpError(
@@ -3030,17 +3014,15 @@ LogicalResult AssertOp::verify() { return requireProcess(*this); }
 
 LogicalResult ProbeOp::verify() {
   if (!probeResource(getKind()) ||
-      !hasStringValue(getKind(), {"queue", "resource", "module", "storage",
-                                  "protocol", "trace", "event_queue",
-                                  "external_io", "statistics"}))
-    return emitOpError("unsupported probe resource kind '")
-           << getKind() << "'";
+      !hasStringValue(getKind(),
+                      {"queue", "resource", "module", "storage", "protocol",
+                       "trace", "event_queue", "external_io", "statistics"}))
+    return emitOpError("unsupported probe resource kind '") << getKind() << "'";
   if (failed(requireProcess(*this)))
     return failure();
   for (Operation *user : getValue().getUsers())
     if (!isObservationConsumer(user))
-      return emitOpError(
-          "probe result may only feed observation operations");
+      return emitOpError("probe result may only feed observation operations");
   return success();
 }
 
@@ -3156,8 +3138,8 @@ void YieldSimOp::getEffects(
 void TraceOpenOp::getEffects(
     SmallVectorImpl<MemoryEffects::EffectInstance> &effects) {
   std::string identity = traceOwnerIdentity(*this, getSource());
-  addEffect(effects, *this, MemoryEffects::Read::get(), identity,
-            "external_io", ExternalIOResource::get());
+  addEffect(effects, *this, MemoryEffects::Read::get(), identity, "external_io",
+            ExternalIOResource::get());
   addEffect(effects, *this, MemoryEffects::Write::get(), identity, "trace",
             TracePositionResource::get());
 }
@@ -3169,8 +3151,8 @@ void TraceNextOp::getEffects(
             TracePositionResource::get());
   addEffect(effects, *this, MemoryEffects::Write::get(), identity, "trace",
             TracePositionResource::get());
-  addEffect(effects, *this, MemoryEffects::Read::get(), identity,
-            "external_io", ExternalIOResource::get());
+  addEffect(effects, *this, MemoryEffects::Read::get(), identity, "external_io",
+            ExternalIOResource::get());
 }
 
 void TraceEofOp::getEffects(
@@ -3232,8 +3214,8 @@ void StatAddOp::getEffects(
     SmallVectorImpl<MemoryEffects::EffectInstance> &effects) {
   if (!isa_and_nonnull<StatOp>(resolvedRuntimeTarget(*this, getStat())))
     return;
-  addEffect(effects, *this, MemoryEffects::Read::get(), getStat(),
-            "statistics", StatisticsResource::get());
+  addEffect(effects, *this, MemoryEffects::Read::get(), getStat(), "statistics",
+            StatisticsResource::get());
   addEffect(effects, *this, MemoryEffects::Write::get(), getStat(),
             "statistics", StatisticsResource::get());
 }

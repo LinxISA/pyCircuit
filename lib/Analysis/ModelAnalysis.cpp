@@ -1,5 +1,6 @@
 #include "acir/Analysis/ModelAnalysis.h"
 
+#include "Dialect/ACIR/ProcessLowerability.h"
 #include "ModelAnalysisInternal.h"
 #include "ModelAnalysisTestHooks.h"
 #include "acir/Dialect/ACIR/ACIROps.h"
@@ -437,75 +438,7 @@ std::optional<bool> constantBoolean(Value value) {
 } // namespace
 
 LogicalResult detail::preflightModelStructure(ModuleOp model) {
-  struct TraversalFrame {
-    Operation *operation;
-    uint64_t depth;
-    unsigned nextRegion = 0;
-    Region::iterator nextBlock;
-    Block::iterator nextOperation;
-    bool regionInitialized = false;
-    bool blockInitialized = false;
-  };
-
-  uint64_t nodes = 0;
-  uint64_t edges = 0;
-  auto checkOperation = [&](Operation *operation,
-                            uint64_t depth) -> LogicalResult {
-    if (depth > kMaxModelRegionNesting)
-      return mlir::emitError(model.getLoc())
-             << "whole-model region nesting exceeds ACIR v0.1 capability "
-                "limit "
-             << kMaxModelRegionNesting;
-    if (nodes == kMaxModelAnalysisNodes ||
-        operation->getNumOperands() > kMaxModelAnalysisEdges - edges)
-      return mlir::emitError(model.getLoc())
-             << "whole-model indexed analysis exceeds ACIR v0.1 capability "
-                "limits (nodes "
-             << kMaxModelAnalysisNodes << ", edges " << kMaxModelAnalysisEdges
-             << ')';
-    ++nodes;
-    edges += operation->getNumOperands();
-    return success();
-  };
-
-  if (failed(checkOperation(model.getOperation(), 0)))
-    return failure();
-  SmallVector<TraversalFrame> pending{{model.getOperation(), 0}};
-  while (!pending.empty()) {
-    TraversalFrame &frame = pending.back();
-    if (frame.nextRegion == frame.operation->getNumRegions()) {
-      pending.pop_back();
-      continue;
-    }
-
-    Region &region = frame.operation->getRegion(frame.nextRegion);
-    if (!frame.regionInitialized) {
-      frame.nextBlock = region.begin();
-      frame.regionInitialized = true;
-    }
-    if (frame.nextBlock == region.end()) {
-      ++frame.nextRegion;
-      frame.regionInitialized = false;
-      frame.blockInitialized = false;
-      continue;
-    }
-    if (!frame.blockInitialized) {
-      frame.nextOperation = frame.nextBlock->begin();
-      frame.blockInitialized = true;
-    }
-    if (frame.nextOperation == frame.nextBlock->end()) {
-      ++frame.nextBlock;
-      frame.blockInitialized = false;
-      continue;
-    }
-
-    Operation *child = &*frame.nextOperation++;
-    uint64_t childDepth = frame.depth + 1;
-    if (failed(checkOperation(child, childDepth)))
-      return failure();
-    pending.push_back({child, childDepth});
-  }
-  return success();
+  return ac::preflightRawModelStructure(model);
 }
 
 FailureOr<ArrayAttr> detail::buildFrozenProcessSkeleton(ac::ProcessOp process) {
@@ -584,6 +517,13 @@ LogicalResult ModelAnalysis::verifyPureProcessCalls() {
       if (auto call = dyn_cast<func::CallOp>(operation)) {
         calls.push_back(call);
         return WalkResult::advance();
+      }
+      if (operation->getName().getStringRef().starts_with("cf.")) {
+        operation->emitOpError(
+            "function reachable from ac.process contains unsupported "
+            "control-flow operation");
+        local = failure();
+        return WalkResult::interrupt();
       }
       if (isa<func::ReturnOp>(operation) || isMemoryEffectFree(operation))
         return WalkResult::advance();

@@ -1,9 +1,9 @@
+#include "BindingOptions.h"
 #include "acir/Dialect/ACIR/ACIRDialect.h"
 #include "acir/Dialect/ACIR/GraphRegion.h"
 #include "acir/InitAllDialects.h"
 #include "acir/InitAllPasses.h"
 #include "acir/Transforms/ResolveBindings.h"
-#include "BindingOptions.h"
 #include "mlir/AsmParser/AsmParser.h"
 #include "mlir/IR/Diagnostics.h"
 #include "mlir/Pass/PassManager.h"
@@ -78,6 +78,58 @@ CanonicalScanResult scanCanonicalAssembly(llvm::StringRef input) {
   return CanonicalScanResult::Canonical;
 }
 
+bool exceedsSafeTextualDelimiterDepth(llvm::StringRef input) {
+  constexpr unsigned kParserSafetyDepth = 2048;
+  unsigned depth = 0;
+  bool quoted = false;
+  bool escaped = false;
+  for (size_t index = 0; index < input.size(); ++index) {
+    if (!quoted && input.substr(index).starts_with("//")) {
+      index = input.find('\n', index);
+      if (index == llvm::StringRef::npos)
+        return false;
+      continue;
+    }
+    if (!quoted && input.substr(index).starts_with("/*")) {
+      unsigned commentDepth = 1;
+      index += 2;
+      while (index < input.size() && commentDepth) {
+        if (input.substr(index).starts_with("/*")) {
+          ++commentDepth;
+          index += 2;
+        } else if (input.substr(index).starts_with("*/")) {
+          --commentDepth;
+          index += 2;
+        } else {
+          ++index;
+        }
+      }
+      --index;
+      continue;
+    }
+    char value = input[index];
+    if (quoted) {
+      if (!escaped && value == '"')
+        quoted = false;
+      escaped = !escaped && value == '\\';
+      if (value != '\\')
+        escaped = false;
+      continue;
+    }
+    if (value == '"') {
+      quoted = true;
+      continue;
+    }
+    if (value == '{') {
+      if (++depth > kParserSafetyDepth)
+        return true;
+    } else if (value == '}' && depth) {
+      --depth;
+    }
+  }
+  return false;
+}
+
 } // namespace
 
 int main(int argc, char **argv) {
@@ -107,11 +159,11 @@ int main(int argc, char **argv) {
   mlir::MlirOptMainConfig commandLineConfig = config;
   config.allowUnregisteredDialects(false)
       .useExplicitModule(true)
-      .setPassPipelineSetupFn([commandLineConfig, bindingOptions =
-                                                      std::move(*bindingOptions)](
+      .setPassPipelineSetupFn([commandLineConfig,
+                               bindingOptions = std::move(*bindingOptions)](
                                   mlir::PassManager &passManager) {
-        passManager.addPass(std::make_unique<acir::NormalizeACIRFilePass>());
-        passManager.addPass(std::make_unique<acir::VerifyACIRFilePass>());
+        passManager.addPass(acir::createNormalizeACIRFilePass());
+        passManager.addPass(acir::createVerifyACIRFilePass());
         if (mlir::failed(commandLineConfig.setupPassPipeline(passManager)))
           return mlir::failure();
         if (bindingOptions)
@@ -131,10 +183,15 @@ int main(int argc, char **argv) {
     return EXIT_FAILURE;
   }
 
-#ifndef ACIR_INTERNAL_TEST_TOOL
   llvm::StringRef contents = input->getBuffer();
   bool isBytecode = contents.size() >= 4 &&
                     contents.take_front(4) == llvm::StringRef("ML\xefR", 4);
+  if (!isBytecode && exceedsSafeTextualDelimiterDepth(contents)) {
+    llvm::errs() << "error: whole-model region nesting exceeds ACIR v0.1 "
+                    "capability limit 512\n";
+    return EXIT_FAILURE;
+  }
+#ifndef ACIR_INTERNAL_TEST_TOOL
   if (!isBytecode) {
     switch (scanCanonicalAssembly(contents)) {
     case CanonicalScanResult::Canonical:
