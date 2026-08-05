@@ -2167,7 +2167,7 @@ LogicalResult verifyModulesAndTypedGraph(ModelOp model,
          llvm::zip_equal(module.getExports(), exports, interfaceRecords)) {
       auto reference = dyn_cast<FlatSymbolRefAttr>(attribute);
       DictionaryAttr record = interfaceRecord.second;
-      StringRef exportName = exportOp.getExportNameAttr().getValue();
+      StringRef exportName = exportOp.getSymName();
       if (!reference || reference.getValue() != exportName ||
           record.getAs<StringAttr>("name").getValue() != exportName)
         return module.emitOpError(
@@ -2246,6 +2246,7 @@ std::string generatedProcessThunk(ProcessOp process, StringRef kind) {
 }
 
 LogicalResult verifyDispatchAndActivation(ModelOp model,
+                                          const ModelIndex &index,
                                           HierarchyExpansion &expansion) {
   llvm::DenseMap<int64_t, DispatchOp> dispatchByObject;
   for (Operation &operation : model.getBody().front()) {
@@ -2259,8 +2260,14 @@ LogicalResult verifyDispatchAndActivation(ModelOp model,
       return dispatch.emitOpError(
           "dispatch object ID has no expanded runtime object");
     const ExpandedRuntimeRow &row = expansion.runtimeRows[id];
+    FailureOr<Operation *> targetDefinition =
+        requireReference<InstanceOp, ArrayOp, ProcessOp>(
+            index, dispatch, dispatch.getTargetAttr(), "dispatch target");
+    if (failed(targetDefinition))
+      return failure();
     std::string target = symbolKey(dispatch.getTargetAttr());
-    if (target != row.target || dispatch.getPath() != row.path ||
+    if (*targetDefinition != row.placement || target != row.target ||
+        dispatch.getPath() != row.path ||
         dispatch.getIndices() != ArrayRef<int64_t>(row.indices) ||
         dispatch.getActivationId() != row.activationId)
       return dispatch.emitOpError(
@@ -2631,7 +2638,7 @@ LogicalResult ModelOp::verify() {
       failed(expandRuntime(index, expansion)) ||
       failed(verifyConstructionOrder(*this, expansion)) ||
       failed(verifyModulesAndTypedGraph(*this, index)) ||
-      failed(verifyDispatchAndActivation(*this, expansion)))
+      failed(verifyDispatchAndActivation(*this, index, expansion)))
     return failure();
   return success();
 }

@@ -76,7 +76,7 @@ def ACSim_BindingOp : ACSim_Op<"binding", [Symbol, Pure]> {
 }
 
 def ACSim_ModuleOp : ACSim_Op<"module", [
-    Symbol, SymbolTable, SingleBlock, RecursiveMemoryEffects
+    Symbol, SingleBlock, RecursiveMemoryEffects
   ]> {
   let arguments = (ins SymbolNameAttr:$sym_name, DictionaryAttr:$interface,
                        ArrayAttr:$static_params,
@@ -163,7 +163,7 @@ def ACSim_InlineOp : ACSim_Op<"inline", [Pure]> {
 }
 
 def ACSim_ProcessOp : ACSim_Op<"process", [
-    Symbol, IsolatedFromAbove, RecursiveMemoryEffects
+    IsolatedFromAbove, RecursiveMemoryEffects
   ]> {
   let arguments = (ins Variadic<AnyType>:$captures,
                        SymbolNameAttr:$sym_name,
@@ -222,11 +222,11 @@ def ACSim_TerminateOp : ACSim_Op<"terminate", [Terminator]> {
 }
 
 def ACSim_ExportOp : ACSim_Op<"export", [Pure]> {
-  let arguments = (ins AnyType:$value, FlatSymbolRefAttr:$export_name,
+  let arguments = (ins AnyType:$value, SymbolNameAttr:$sym_name,
                        FlatSymbolRefAttr:$role);
   let results = (outs AnyType:$result);
   let assemblyFormat = [{
-    $export_name $value `role` $role attr-dict `:` type($value) `->` type($result)
+    $sym_name $value `role` $role attr-dict `:` type($value) `->` type($result)
   }];
   let hasVerifier = 1;
 }

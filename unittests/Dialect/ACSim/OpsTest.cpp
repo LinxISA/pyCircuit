@@ -22,6 +22,8 @@
 #include <array>
 #include <functional>
 #include <string>
+#include <type_traits>
+#include <utility>
 #include <vector>
 
 namespace acir::acsim {
@@ -41,6 +43,15 @@ template <typename Op> Op firstOp(mlir::ModuleOp file) {
   });
   return result;
 }
+
+template <typename Op, typename = void>
+struct HasPublicSymbolNameAccessor : std::false_type {};
+
+template <typename Op>
+struct HasPublicSymbolNameAccessor<
+    Op, std::void_t<decltype(std::declval<Op>().getSymName())>>
+    : std::is_same<decltype(std::declval<Op>().getSymName()), llvm::StringRef> {
+};
 
 void replaceDictionaryField(BindingOp binding, llvm::StringRef name,
                             mlir::Attribute value) {
@@ -236,6 +247,20 @@ builtin.module {
   EXPECT_FALSE(file);
 }
 
+TEST(ACSimOpsTest, ExportRetainsItsPublicSymbolNameApi) {
+  mlir::MLIRContext context;
+  loadTestDialects(context);
+  auto file = parseValidModel(context);
+  ASSERT_TRUE(file);
+  ExportOp exportOp = firstOp<ExportOp>(*file);
+  ASSERT_TRUE(exportOp);
+
+  EXPECT_TRUE(HasPublicSymbolNameAccessor<ExportOp>::value);
+  EXPECT_TRUE(exportOp->getAttrOfType<mlir::StringAttr>(
+      mlir::SymbolTable::getSymbolAttrName()));
+  EXPECT_FALSE(exportOp->hasAttr("export_name"));
+}
+
 TEST(ACSimOpsTest, ModuleInterfaceRecordsAreClosedOrderedAndExact) {
   mlir::MLIRContext context;
   loadTestDialects(context);
@@ -368,10 +393,8 @@ TEST(ACSimOpsTest, PortAndResourceExportsMayShareAnInterfaceName) {
   llvm::SmallVector<ExportOp> exports;
   module.walk([&](ExportOp exportOp) { exports.push_back(exportOp); });
   ASSERT_GE(exports.size(), 2u);
-  exports[0].setExportNameAttr(
-      mlir::FlatSymbolRefAttr::get(&context, "shared"));
-  exports[1].setExportNameAttr(
-      mlir::FlatSymbolRefAttr::get(&context, "shared"));
+  exports[0].setSymName("shared");
+  exports[1].setSymName("shared");
   module.setExportsAttr(mlir::ArrayAttr::get(
       &context, {mlir::FlatSymbolRefAttr::get(&context, "shared"),
                  mlir::FlatSymbolRefAttr::get(&context, "shared"),
@@ -502,6 +525,106 @@ TEST(ACSimOpsTest,
   EXPECT_EQ(first, second);
   EXPECT_TRUE(llvm::StringRef(first).contains(
       "process declarations must be strictly symbol-sorted"));
+}
+
+TEST(ACSimOpsTest, CustomModelIndexOwnsProcessReferenceResolution) {
+  mlir::MLIRContext context;
+  loadTestDialects(context);
+  auto file = parseValidModel(context);
+  ASSERT_TRUE(file);
+  ASSERT_TRUE(mlir::succeeded(mlir::verify(*file)));
+
+  ProcessOp process = firstOp<ProcessOp>(*file);
+  LiveLoadOp load = firstOp<LiveLoadOp>(*file);
+  LiveStoreOp store = firstOp<LiveStoreOp>(*file);
+  DispatchOp processDispatch;
+  file->walk([&](DispatchOp dispatch) {
+    if (dispatch.getTarget().getLeafReference().getValue() == "tick")
+      processDispatch = dispatch;
+  });
+  ASSERT_TRUE(process);
+  ASSERT_TRUE(load);
+  ASSERT_TRUE(store);
+  ASSERT_TRUE(processDispatch);
+  EXPECT_EQ(load.getProcess(), process.getSymName());
+  EXPECT_EQ(store.getProcess(), process.getSymName());
+  EXPECT_EQ(processDispatch.getTarget().getRootReference().getValue(), "Top");
+  EXPECT_EQ(processDispatch.getTarget().getLeafReference().getValue(),
+            process.getSymName());
+}
+
+TEST(ACSimOpsTest,
+     CustomModelIndexRejectsDuplicateLocalPlacementsAndProcesses) {
+  mlir::MLIRContext context;
+  loadTestDialects(context);
+
+  auto instanceFile = parseReusableModel(context);
+  ASSERT_TRUE(instanceFile);
+  InstanceOp left;
+  instanceFile->walk([&](InstanceOp instance) {
+    if (instance.getSymName() == "left")
+      left = instance;
+  });
+  ASSERT_TRUE(left);
+  left->getBlock()->getOperations().insert(left->getIterator(), left->clone());
+  std::string instanceDiagnostic = expectVerificationFailure(*instanceFile);
+  EXPECT_TRUE(llvm::StringRef(instanceDiagnostic)
+                  .contains("duplicate canonical symbol or placement "
+                            "'Top::left'"))
+      << instanceDiagnostic;
+
+  auto arrayFile = parseReusableModel(context);
+  ASSERT_TRUE(arrayFile);
+  ArrayOp right = firstOp<ArrayOp>(*arrayFile);
+  right->getBlock()->getOperations().insert(right->getIterator(),
+                                            right->clone());
+  std::string arrayDiagnostic = expectVerificationFailure(*arrayFile);
+  EXPECT_TRUE(llvm::StringRef(arrayDiagnostic)
+                  .contains("duplicate canonical symbol or placement "
+                            "'Top::right'"))
+      << arrayDiagnostic;
+
+  auto processFile = parseReusableModel(context);
+  ASSERT_TRUE(processFile);
+  ProcessOp pulse = firstOp<ProcessOp>(*processFile);
+  auto *duplicate = pulse->clone();
+  pulse->getBlock()->getOperations().insert(pulse->getIterator(), duplicate);
+  std::string processDiagnostic = expectVerificationFailure(*processFile);
+  EXPECT_TRUE(llvm::StringRef(processDiagnostic)
+                  .contains("duplicate canonical symbol or placement "
+                            "'Leaf::pulse'"))
+      << processDiagnostic;
+}
+
+TEST(ACSimOpsTest, CustomModelIndexRejectsUnresolvedProcessReferences) {
+  mlir::MLIRContext context;
+  loadTestDialects(context);
+
+  auto localFile = parseValidModel(context);
+  ASSERT_TRUE(localFile);
+  firstOp<LiveLoadOp>(*localFile)
+      .setProcessAttr(mlir::FlatSymbolRefAttr::get(&context, "missing"));
+  std::string localDiagnostic = expectVerificationFailure(*localFile);
+  EXPECT_TRUE(llvm::StringRef(localDiagnostic)
+                  .contains("live load must resolve to an exact typed slot of "
+                            "this process"))
+      << localDiagnostic;
+
+  auto nestedFile = parseValidModel(context);
+  ASSERT_TRUE(nestedFile);
+  DispatchOp processDispatch;
+  nestedFile->walk([&](DispatchOp dispatch) {
+    if (dispatch.getTarget().getLeafReference().getValue() == "tick")
+      processDispatch = dispatch;
+  });
+  ASSERT_TRUE(processDispatch);
+  processDispatch.setTargetAttr(mlir::SymbolRefAttr::get(
+      &context, "Top", {mlir::FlatSymbolRefAttr::get(&context, "missing")}));
+  std::string nestedDiagnostic = expectVerificationFailure(*nestedFile);
+  EXPECT_TRUE(llvm::StringRef(nestedDiagnostic)
+                  .contains("dispatch target reference '@Top::@missing' is "
+                            "unresolved"))
+      << nestedDiagnostic;
 }
 
 TEST(ACSimOpsTest, EveryPublicOperationHasItsTypedCppClass) {
