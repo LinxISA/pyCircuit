@@ -222,11 +222,11 @@ def ACSim_TerminateOp : ACSim_Op<"terminate", [Terminator]> {
 }
 
 def ACSim_ExportOp : ACSim_Op<"export", [Pure]> {
-  let arguments = (ins AnyType:$value, SymbolNameAttr:$sym_name,
+  let arguments = (ins AnyType:$value, FlatSymbolRefAttr:$export_name,
                        FlatSymbolRefAttr:$role);
   let results = (outs AnyType:$result);
   let assemblyFormat = [{
-    $sym_name $value `role` $role attr-dict `:` type($value) `->` type($result)
+    $export_name $value `role` $role attr-dict `:` type($value) `->` type($result)
   }];
   let hasVerifier = 1;
 }

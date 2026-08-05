@@ -138,6 +138,12 @@ parseReusableModel(mlir::MLIRContext &context) {
                                                &context);
 }
 
+mlir::OwningOpRef<mlir::ModuleOp>
+parseWrapperActivationModel(mlir::MLIRContext &context) {
+  return mlir::parseSourceFile<mlir::ModuleOp>(
+      ACSIM_WRAPPER_ACTIVATION_TEST_FILE, &context);
+}
+
 std::string expectVerificationFailure(mlir::ModuleOp file) {
   std::string diagnostic;
   mlir::ScopedDiagnosticHandler handler(
@@ -329,6 +335,67 @@ TEST(ACSimOpsTest, ModuleInterfaceRecordsAreClosedOrderedAndExact) {
                   .contains("port export must exactly match"));
 }
 
+TEST(ACSimOpsTest, ModuleExportsRequireExactEndpointDelegation) {
+  mlir::MLIRContext context;
+  loadTestDialects(context);
+
+  auto portFile = parseValidModel(context);
+  ASSERT_TRUE(portFile);
+  ModuleOp module = firstOp<ModuleOp>(*portFile);
+  replaceModuleInterfaceRecordField(module, "ports", 0, "delegation",
+                                    mlir::StringAttr::get(&context, "allowed"));
+  EXPECT_TRUE(llvm::StringRef(expectVerificationFailure(*portFile))
+                  .contains("port export must exactly match"));
+
+  auto resourceFile = parseValidModel(context);
+  ASSERT_TRUE(resourceFile);
+  module = firstOp<ModuleOp>(*resourceFile);
+  replaceModuleInterfaceRecordField(module, "resources", 0, "delegation",
+                                    mlir::StringAttr::get(&context, "allowed"));
+  EXPECT_TRUE(llvm::StringRef(expectVerificationFailure(*resourceFile))
+                  .contains("resource export must exactly match"));
+}
+
+TEST(ACSimOpsTest, PortAndResourceExportsMayShareAnInterfaceName) {
+  mlir::MLIRContext context;
+  loadTestDialects(context);
+  auto file = parseValidModel(context);
+  ASSERT_TRUE(file);
+  ModuleOp module = firstOp<ModuleOp>(*file);
+  auto shared = mlir::StringAttr::get(&context, "shared");
+  replaceModuleInterfaceRecordField(module, "ports", 0, "name", shared);
+  replaceModuleInterfaceRecordField(module, "resources", 0, "name", shared);
+  llvm::SmallVector<ExportOp> exports;
+  module.walk([&](ExportOp exportOp) { exports.push_back(exportOp); });
+  ASSERT_GE(exports.size(), 2u);
+  exports[0].setExportNameAttr(
+      mlir::FlatSymbolRefAttr::get(&context, "shared"));
+  exports[1].setExportNameAttr(
+      mlir::FlatSymbolRefAttr::get(&context, "shared"));
+  module.setExportsAttr(mlir::ArrayAttr::get(
+      &context, {mlir::FlatSymbolRefAttr::get(&context, "shared"),
+                 mlir::FlatSymbolRefAttr::get(&context, "shared"),
+                 mlir::FlatSymbolRefAttr::get(&context, "out")}));
+  EXPECT_TRUE(mlir::succeeded(mlir::verify(*file)));
+}
+
+TEST(ACSimOpsTest, GeneratedWrapperEndpointsReachChildRuntimeObjects) {
+  mlir::MLIRContext context;
+  loadTestDialects(context);
+  auto file = parseWrapperActivationModel(context);
+  ASSERT_TRUE(file);
+  EXPECT_TRUE(mlir::succeeded(mlir::verify(*file)));
+
+  llvm::SmallVector<std::pair<int64_t, int64_t>> edges;
+  file->walk([&](ActivateOp activate) {
+    edges.emplace_back(
+        activate.getSource().getDefiningOp<DispatchOp>().getObjectId(),
+        activate.getTarget().getDefiningOp<DispatchOp>().getObjectId());
+  });
+  EXPECT_TRUE(llvm::is_contained(edges, std::pair<int64_t, int64_t>{0, 1}));
+  EXPECT_TRUE(llvm::is_contained(edges, std::pair<int64_t, int64_t>{0, 2}));
+}
+
 TEST(ACSimOpsTest, GeneratedModuleWrappersOwnChildrenButHaveNoRuntimeRows) {
   mlir::MLIRContext context;
   loadTestDialects(context);
@@ -410,6 +477,31 @@ TEST(ACSimOpsTest,
   EXPECT_EQ(first, second);
   EXPECT_TRUE(llvm::StringRef(first).contains(
       "owned placements must be strictly symbol-sorted"));
+}
+
+TEST(ACSimOpsTest,
+     ProcessDeclarationPermutationsFailBeforeExpansionDeterministically) {
+  mlir::MLIRContext context;
+  loadTestDialects(context);
+  auto diagnose = [&]() {
+    auto file = parseReusableModel(context);
+    EXPECT_TRUE(file);
+    ProcessOp pulse = firstOp<ProcessOp>(*file);
+    auto *zetaOperation = pulse->clone();
+    auto zeta = mlir::cast<ProcessOp>(zetaOperation);
+    zeta.setSymName("zeta");
+    zeta.setSpecializationFingerprint(
+        "sha256:"
+        "c000000000000000000000000000000000000000000000000000000000000000");
+    pulse->getBlock()->getOperations().insert(pulse->getIterator(),
+                                              zetaOperation);
+    return expectVerificationFailure(*file);
+  };
+  std::string first = diagnose();
+  std::string second = diagnose();
+  EXPECT_EQ(first, second);
+  EXPECT_TRUE(llvm::StringRef(first).contains(
+      "process declarations must be strictly symbol-sorted"));
 }
 
 TEST(ACSimOpsTest, EveryPublicOperationHasItsTypedCppClass) {

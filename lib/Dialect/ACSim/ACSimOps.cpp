@@ -896,8 +896,8 @@ LogicalResult buildIndex(ModelOp model, ModelIndex &index) {
   for (Operation *operation : index.ordered) {
     if (modelVerificationWorkCollector)
       ++modelVerificationWorkCollector->indexOperationVisits;
-    if (isa<TypeOp, BindingOp, ModuleOp, InstanceOp, ArrayOp, ProcessOp,
-            ExportOp>(operation) &&
+    if (isa<TypeOp, BindingOp, ModuleOp, InstanceOp, ArrayOp, ProcessOp>(
+            operation) &&
         failed(addDefinition(operation)))
       return failure();
   }
@@ -1101,6 +1101,7 @@ LogicalResult verifyDeterministicOrder(ModelOp model) {
     unsigned prior = 0;
     bool moduleFirst = true;
     std::string priorPlacement;
+    std::string priorProcess;
     for (Operation &child : module.getBody().front()) {
       if (modelVerificationWorkCollector)
         ++modelVerificationWorkCollector->orderingOperationVisits;
@@ -1115,6 +1116,13 @@ LogicalResult verifyDeterministicOrder(ModelOp model) {
           return child.emitOpError(
               "owned placements must be strictly symbol-sorted");
         priorPlacement = name ? name.getValue().str() : std::string();
+      } else if (rank == 8) {
+        StringAttr name = symbolName(&child);
+        if (!moduleFirst && prior == rank && name &&
+            name.getValue() <= priorProcess)
+          return child.emitOpError(
+              "process declarations must be strictly symbol-sorted");
+        priorProcess = name ? name.getValue().str() : std::string();
       }
       prior = rank;
       moduleFirst = false;
@@ -1145,6 +1153,7 @@ struct ExpansionContext {
   ModuleOp module;
   std::string path;
   llvm::DenseMap<Operation *, SmallVector<int64_t>> objectIds;
+  llvm::DenseMap<Operation *, SmallVector<unsigned>> childContexts;
 
   ExpansionContext(ModuleOp module, std::string path)
       : module(module), path(std::move(path)) {}
@@ -1248,12 +1257,8 @@ LogicalResult expandSelectedRootOwners(ModelOp model, const ModelIndex &index,
         ++modelVerificationWorkCollector->expandedOwnerRows;
 
       if (auto childModule = dyn_cast_or_null<ModuleOp>(targetDefinition))
-        stack.push_back({ActionKind::Enter,
-                         childModule,
-                         nullptr,
-                         0,
-                         action.path,
-                         {},
+        stack.push_back({ActionKind::Enter, childModule, action.placement,
+                         action.context, action.path, action.indices,
                          moduleSpecializationKey(childModule)});
       continue;
     }
@@ -1263,6 +1268,10 @@ LogicalResult expandSelectedRootOwners(ModelOp model, const ModelIndex &index,
           "active module specialization cycle in selected hierarchy");
     unsigned context = expansion.contexts.size();
     expansion.contexts.emplace_back(action.module, action.path);
+    if (action.placement)
+      expansion.contexts[action.context]
+          .childContexts[action.placement]
+          .push_back(context);
     stack.push_back({ActionKind::Exit,
                      action.module,
                      nullptr,
@@ -1615,6 +1624,38 @@ DictionaryAttr findEndpoint(Operation *realization, StringRef field,
     auto record = dyn_cast<DictionaryAttr>(attribute);
     if (record && record.getAs<FlatSymbolRefAttr>("accessor") == accessor)
       return record;
+  }
+  return {};
+}
+
+DictionaryAttr findProjectedEndpoint(Value value, const ModelIndex &index) {
+  if (auto port = value.getDefiningOp<PortOp>())
+    return findEndpoint(realizationForBase(port.getBase(), index), "ports",
+                        port.getAccessorAttr());
+  if (auto resource = value.getDefiningOp<ResourceOp>())
+    return findEndpoint(realizationForBase(resource.getBase(), index),
+                        "resources", resource.getAccessorAttr());
+  return {};
+}
+
+ExportOp findModuleEndpointExport(ModuleOp module, StringRef field,
+                                  FlatSymbolRefAttr accessor) {
+  SmallVector<ExportOp> exports;
+  for (Operation &operation : module.getBody().front())
+    if (auto exportOp = dyn_cast<ExportOp>(operation))
+      exports.push_back(exportOp);
+
+  unsigned ordinal = 0;
+  for (StringRef candidateField :
+       {StringRef("ports"), StringRef("resources"), StringRef("results")}) {
+    for (Attribute attribute :
+         module.getInterface().getAs<ArrayAttr>(candidateField)) {
+      auto record = cast<DictionaryAttr>(attribute);
+      if (candidateField == field &&
+          record.getAs<FlatSymbolRefAttr>("accessor") == accessor)
+        return ordinal < exports.size() ? exports[ordinal] : ExportOp();
+      ++ordinal;
+    }
   }
   return {};
 }
@@ -2126,17 +2167,22 @@ LogicalResult verifyModulesAndTypedGraph(ModelOp model,
          llvm::zip_equal(module.getExports(), exports, interfaceRecords)) {
       auto reference = dyn_cast<FlatSymbolRefAttr>(attribute);
       DictionaryAttr record = interfaceRecord.second;
-      if (!reference || reference.getValue() != exportOp.getSymName() ||
-          record.getAs<StringAttr>("name").getValue() != exportOp.getSymName())
+      StringRef exportName = exportOp.getExportNameAttr().getValue();
+      if (!reference || reference.getValue() != exportName ||
+          record.getAs<StringAttr>("name").getValue() != exportName)
         return module.emitOpError(
             "module export names must match ordered interface records and "
             "acsim.export declarations");
       if (interfaceRecord.first == "ports") {
         auto projection = exportOp.getValue().getDefiningOp<PortOp>();
         auto type = dyn_cast<PortType>(exportOp.getValue().getType());
-        if (!projection || !type ||
+        DictionaryAttr endpoint =
+            findProjectedEndpoint(exportOp.getValue(), index);
+        if (!projection || !type || !endpoint ||
             projection.getAccessorAttr() !=
                 record.getAs<FlatSymbolRefAttr>("accessor") ||
+            endpoint.getAs<StringAttr>("delegation") !=
+                record.getAs<StringAttr>("delegation") ||
             exportOp.getRoleAttr() != record.getAs<FlatSymbolRefAttr>("role") ||
             type.getInterface() !=
                 record.getAs<FlatSymbolRefAttr>("interface") ||
@@ -2148,9 +2194,13 @@ LogicalResult verifyModulesAndTypedGraph(ModelOp model,
       } else if (interfaceRecord.first == "resources") {
         auto projection = exportOp.getValue().getDefiningOp<ResourceOp>();
         auto type = dyn_cast<ResourceType>(exportOp.getValue().getType());
-        if (!projection || !type ||
+        DictionaryAttr endpoint =
+            findProjectedEndpoint(exportOp.getValue(), index);
+        if (!projection || !type || !endpoint ||
             projection.getAccessorAttr() !=
                 record.getAs<FlatSymbolRefAttr>("accessor") ||
+            endpoint.getAs<StringAttr>("delegation") !=
+                record.getAs<StringAttr>("delegation") ||
             exportOp.getRoleAttr() != record.getAs<FlatSymbolRefAttr>("role") ||
             type.getResource() != record.getAs<FlatSymbolRefAttr>("resource") ||
             type.getRole() != record.getAs<FlatSymbolRefAttr>("role"))
@@ -2249,10 +2299,14 @@ LogicalResult verifyDispatchAndActivation(ModelOp model,
   uint64_t dependencyNodes = 0;
   auto collectIds = [&](Value rootValue, unsigned context,
                         Operation *reporter) -> FailureOr<std::set<int64_t>> {
+    struct Dependency {
+      unsigned context;
+      Value value;
+    };
     struct Frame {
       DependencyKey key;
       Value value;
-      SmallVector<Value> dependencies;
+      SmallVector<Dependency> dependencies;
       size_t next = 0;
       std::set<int64_t> result;
       bool initialized = false;
@@ -2279,18 +2333,52 @@ LogicalResult verifyDispatchAndActivation(ModelOp model,
                   dyn_cast<ProcessOp>(argument.getOwner()->getParentOp()))
             if (argument.getArgNumber() < process.getCaptures().size())
               frame.dependencies.push_back(
-                  process.getCaptures()[argument.getArgNumber()]);
+                  {frame.key.first,
+                   process.getCaptures()[argument.getArgNumber()]});
         } else if (Operation *definition = frame.value.getDefiningOp()) {
-          auto found = expansion.contexts[context].objectIds.find(definition);
+          unsigned currentContext = frame.key.first;
+          auto appendGeneratedEndpoint = [&](Value base, StringRef field,
+                                             FlatSymbolRefAttr accessor) {
+            Operation *wrapper = base.getDefiningOp();
+            std::optional<uint64_t> elementOrdinal;
+            if (auto element = dyn_cast_or_null<ElementOp>(wrapper)) {
+              auto array = element.getArray().getDefiningOp<ArrayOp>();
+              wrapper = array;
+              if (array) {
+                uint64_t ordinal = 0;
+                for (auto [indexValue, extent] :
+                     llvm::zip_equal(element.getIndices(), array.getShape()))
+                  ordinal = ordinal * static_cast<uint64_t>(extent) +
+                            static_cast<uint64_t>(indexValue);
+                elementOrdinal = ordinal;
+              }
+            }
+            auto children =
+                expansion.contexts[currentContext].childContexts.find(wrapper);
+            if (children ==
+                expansion.contexts[currentContext].childContexts.end())
+              return false;
+            uint64_t ordinal = elementOrdinal.value_or(0);
+            if (ordinal >= children->second.size())
+              return true;
+            unsigned childContext = children->second[ordinal];
+            ExportOp exportOp = findModuleEndpointExport(
+                expansion.contexts[childContext].module, field, accessor);
+            if (exportOp)
+              frame.dependencies.push_back({childContext, exportOp.getValue()});
+            return true;
+          };
+          auto found =
+              expansion.contexts[currentContext].objectIds.find(definition);
           if (isa<InstanceOp, ArrayOp>(definition) &&
-              found != expansion.contexts[context].objectIds.end()) {
+              found != expansion.contexts[currentContext].objectIds.end()) {
             frame.result.insert(found->second.begin(), found->second.end());
           } else if (auto element = dyn_cast<ElementOp>(definition)) {
             auto array = element.getArray().getDefiningOp<ArrayOp>();
-            auto rows = array
-                            ? expansion.contexts[context].objectIds.find(array)
-                            : expansion.contexts[context].objectIds.end();
-            if (rows != expansion.contexts[context].objectIds.end()) {
+            auto rows =
+                array ? expansion.contexts[currentContext].objectIds.find(array)
+                      : expansion.contexts[currentContext].objectIds.end();
+            if (rows != expansion.contexts[currentContext].objectIds.end()) {
               uint64_t ordinal = 0;
               for (auto [indexValue, extent] :
                    llvm::zip_equal(element.getIndices(), array.getShape()))
@@ -2299,15 +2387,25 @@ LogicalResult verifyDispatchAndActivation(ModelOp model,
               if (ordinal < rows->second.size())
                 frame.result.insert(rows->second[ordinal]);
             }
+          } else if (auto port = dyn_cast<PortOp>(definition)) {
+            if (!appendGeneratedEndpoint(port.getBase(), "ports",
+                                         port.getAccessorAttr()))
+              frame.dependencies.push_back({currentContext, port.getBase()});
+          } else if (auto resource = dyn_cast<ResourceOp>(definition)) {
+            if (!appendGeneratedEndpoint(resource.getBase(), "resources",
+                                         resource.getAccessorAttr()))
+              frame.dependencies.push_back(
+                  {currentContext, resource.getBase()});
           } else {
-            frame.dependencies.append(definition->operand_begin(),
-                                      definition->operand_end());
+            for (Value operand : definition->getOperands())
+              frame.dependencies.push_back({currentContext, operand});
           }
         }
       }
       if (frame.next < frame.dependencies.size()) {
-        Value dependency = frame.dependencies[frame.next];
-        DependencyKey key{context, dependency.getAsOpaquePointer()};
+        Dependency dependency = frame.dependencies[frame.next];
+        DependencyKey key{dependency.context,
+                          dependency.value.getAsOpaquePointer()};
         if (auto found = dependencyMemo.find(key);
             found != dependencyMemo.end()) {
           frame.result.insert(found->second.begin(), found->second.end());
@@ -2317,7 +2415,7 @@ LogicalResult verifyDispatchAndActivation(ModelOp model,
         if (active.contains(key))
           return reporter->emitOpError(
               "typed SSA dependency graph contains a cycle");
-        stack.push_back({key, dependency});
+        stack.push_back({key, dependency.value});
         continue;
       }
       dependencyMemo[frame.key] = frame.result;
