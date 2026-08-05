@@ -185,10 +185,10 @@ int main(int argc, char **argv) {
     return EXIT_FAILURE;
   }
 
+#ifndef ACIR_INTERNAL_TEST_TOOL
   llvm::StringRef contents = input->getBuffer();
   bool isBytecode = contents.size() >= 4 &&
                     contents.take_front(4) == llvm::StringRef("ML\xefR", 4);
-#ifndef ACIR_INTERNAL_TEST_TOOL
   if (!isBytecode) {
     switch (scanCanonicalAssembly(contents)) {
     case CanonicalScanResult::Canonical:
