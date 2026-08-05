@@ -435,6 +435,66 @@ std::optional<bool> constantBoolean(Value value) {
   return std::nullopt;
 }
 
+FailureOr<std::vector<func::CallOp>>
+verifyFunctionEffectsIterative(func::FuncOp function) {
+  struct EffectTask {
+    Operation *operation;
+    bool expanded;
+  };
+  SmallVector<EffectTask> pending{{function, false}};
+  DenseMap<Operation *, bool> subtreeEffectFree;
+  std::vector<func::CallOp> calls;
+  while (!pending.empty()) {
+    EffectTask task = pending.pop_back_val();
+    if (!task.expanded) {
+      pending.push_back({task.operation, true});
+      SmallVector<Operation *> children;
+      for (Region &region : task.operation->getRegions())
+        for (Block &block : region)
+          for (Operation &child : block)
+            children.push_back(&child);
+      for (Operation *child : children)
+        pending.push_back({child, false});
+      continue;
+    }
+
+    bool localEffectFree = true;
+    if (auto call = dyn_cast<func::CallOp>(task.operation)) {
+      calls.push_back(call);
+    } else if (task.operation != function.getOperation() &&
+               !isa<func::ReturnOp>(task.operation)) {
+      if (task.operation->hasTrait<OpTrait::HasRecursiveMemoryEffects>()) {
+        // Region effects are aggregated explicitly from the postorder summary
+        // below. Do not invoke a recursive interface implementation here.
+        localEffectFree = true;
+      } else if (auto effects =
+                     dyn_cast<MemoryEffectOpInterface>(task.operation)) {
+        SmallVector<MemoryEffects::EffectInstance> localEffects;
+        effects.getEffects(localEffects);
+        localEffectFree = localEffects.empty();
+      } else {
+        localEffectFree = false;
+      }
+      if (!localEffectFree) {
+        task.operation->emitOpError(
+            "function reachable from ac.process is not effect-free");
+        return failure();
+      }
+    }
+
+    bool childrenEffectFree = true;
+    for (Region &region : task.operation->getRegions())
+      for (Block &block : region)
+        for (Operation &child : block)
+          childrenEffectFree &= subtreeEffectFree.lookup(&child);
+    subtreeEffectFree[task.operation] = localEffectFree && childrenEffectFree;
+  }
+  llvm::sort(calls, [](func::CallOp left, func::CallOp right) {
+    return left.getCallee() < right.getCallee();
+  });
+  return calls;
+}
+
 } // namespace
 
 LogicalResult detail::preflightModelStructure(ModuleOp model) {
@@ -442,14 +502,23 @@ LogicalResult detail::preflightModelStructure(ModuleOp model) {
 }
 
 const detail::ValidatedPureFunction *
-detail::ValidatedPureCallGraph::lookup(StringRef name) const {
-  auto found =
-      llvm::find_if(functions, [&](const ValidatedPureFunction &entry) {
-        return cast<StringAttr>(
-                   entry.function->getAttr(SymbolTable::getSymbolAttrName()))
-                   .getValue() == name;
-      });
-  return found == functions.end() ? nullptr : &*found;
+detail::ValidatedPureCallGraph::lookup(StringRef name, uint64_t *probes) const {
+  size_t begin = 0;
+  size_t end = functions.size();
+  while (begin < end) {
+    if (probes)
+      ++*probes;
+    size_t middle = begin + (end - begin) / 2;
+    func::FuncOp function = functions[middle].function;
+    StringRef candidate = function.getSymName();
+    if (candidate < name)
+      begin = middle + 1;
+    else if (name < candidate)
+      end = middle;
+    else
+      return &functions[middle];
+  }
+  return nullptr;
 }
 
 FailureOr<detail::ValidatedPureCallGraph>
@@ -457,8 +526,15 @@ detail::validatePureProcessCallGraph(ModuleOp model,
                                      const ac::RawModelStructureLimits &limits,
                                      const PureCallGraphLimits &callLimits) {
   std::map<std::string, func::FuncOp> symbols;
-  for (func::FuncOp function : model.getOps<func::FuncOp>())
-    symbols.emplace(function.getSymName().str(), function);
+  for (func::FuncOp function : model.getOps<func::FuncOp>()) {
+    auto [position, inserted] =
+        symbols.emplace(function.getSymName().str(), function);
+    if (!inserted) {
+      function.emitOpError()
+          << "duplicate pure func.call symbol '@" << position->first << "'";
+      return failure();
+    }
+  }
   if (symbols.size() > callLimits.maxFunctions) {
     model.emitError() << "pure func.call analysis exceeds ACIR v0.1 function "
                          "limit "
@@ -528,29 +604,11 @@ detail::validatePureProcessCallGraph(ModuleOp model,
         }
         if (failed(ac::verifyProcessLowerability(frame.function, limits)))
           return failure();
-        std::vector<func::CallOp> calls;
-        if (failed(ac::walkStructuredOperationsIterative(
-                frame.function,
-                [&](Operation *operation) -> LogicalResult {
-                  if (operation == frame.function.getOperation() ||
-                      isa<func::ReturnOp>(operation))
-                    return success();
-                  if (auto call = dyn_cast<func::CallOp>(operation)) {
-                    calls.push_back(call);
-                    return success();
-                  }
-                  if (!isMemoryEffectFree(operation))
-                    return operation->emitOpError(
-                        "function reachable from ac.process is not "
-                        "effect-free");
-                  return success();
-                },
-                limits)))
+        FailureOr<std::vector<func::CallOp>> calls =
+            verifyFunctionEffectsIterative(frame.function);
+        if (failed(calls))
           return failure();
-        llvm::sort(calls, [](func::CallOp left, func::CallOp right) {
-          return left.getCallee() < right.getCallee();
-        });
-        indexedCalls[name] = std::move(calls);
+        indexedCalls[name] = std::move(*calls);
         states[name] = State::Active;
         frame.entered = true;
       }

@@ -8,6 +8,8 @@
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallVector.h"
 
+#include <map>
+
 using namespace mlir;
 
 namespace acir::detail {
@@ -23,18 +25,21 @@ struct ExpansionTask {
   ExpansionContext context;
 };
 
-bool isContextPrefix(const ExpansionContext &definition,
-                     const ExpansionContext &consumer) {
-  if (definition.callSites.size() > consumer.callSites.size() ||
-      definition.iterations.size() > consumer.iterations.size())
-    return false;
-  for (auto [left, right] : llvm::zip(definition.callSites, consumer.callSites))
-    if (left.operation() != right.operation() ||
-        !llvm::equal(left.iterationVector(), right.iterationVector()))
-      return false;
-  return llvm::equal(definition.iterations,
-                     llvm::ArrayRef(consumer.iterations)
-                         .take_front(definition.iterations.size()));
+std::string contextKey(const ExpansionContext &context, size_t iterationCount) {
+  std::string key;
+  llvm::raw_string_ostream stream(key);
+  stream << 'c' << context.callSites.size() << ':';
+  for (const ProcessCallSitePlan &site : context.callSites) {
+    stream << site.operationPath().size() << ':' << site.operationPath() << '[';
+    for (uint64_t iteration : site.iterationVector())
+      stream << iteration << ',';
+    stream << "]";
+  }
+  stream << "i" << iterationCount << ':';
+  for (uint64_t iteration :
+       llvm::ArrayRef(context.iterations).take_front(iterationCount))
+    stream << iteration << ',';
+  return key;
 }
 
 std::string processDefinitionKey(ac::ProcessOp process) {
@@ -202,29 +207,38 @@ PlanSetBuilder::expandProcess(ac::ProcessOp process,
     planned->original = ProcessOriginalPlannedValue(originalImpl);
     return ProcessPlannedValue(planned);
   };
-  struct ValueBinding {
-    ExpansionContext context;
-    ProcessPlannedValue planned;
-  };
-  DenseMap<Value, std::vector<ValueBinding>> valueEnvironment;
+  DenseMap<Value, std::map<std::string, ProcessPlannedValue>> valueEnvironment;
+  uint64_t valueLookupProbes = 0;
+  uint64_t maxValueLookupProbes = 0;
   auto defineValue = [&](Value value, const ExpansionContext &context) {
+    std::string key = contextKey(context, context.iterations.size());
+    auto &bindings = valueEnvironment[value];
+    if (auto found = bindings.find(key); found != bindings.end())
+      return found->second;
     ProcessPlannedValue planned = makeValueAtDefinition(value, context);
-    valueEnvironment[value].push_back({context, planned});
+    bindings.emplace(std::move(key), planned);
     return planned;
   };
   auto resolveValue = [&](Value value, const ExpansionContext &context) {
     auto found = valueEnvironment.find(value);
-    const ValueBinding *best = nullptr;
-    if (found != valueEnvironment.end())
-      for (const ValueBinding &binding : found->second)
-        if (isContextPrefix(binding.context, context) &&
-            (!best || binding.context.callSites.size() +
-                              binding.context.iterations.size() >
-                          best->context.callSites.size() +
-                              best->context.iterations.size()))
-          best = &binding;
-    if (best)
-      return best->planned;
+    uint64_t probes = 0;
+    if (found != valueEnvironment.end()) {
+      size_t iterationCount = context.iterations.size();
+      while (true) {
+        ++probes;
+        auto binding = found->second.find(contextKey(context, iterationCount));
+        if (binding != found->second.end()) {
+          valueLookupProbes += probes;
+          maxValueLookupProbes = std::max(maxValueLookupProbes, probes);
+          return binding->second;
+        }
+        if (iterationCount == 0)
+          break;
+        --iterationCount;
+      }
+    }
+    valueLookupProbes += probes;
+    maxValueLookupProbes = std::max(maxValueLookupProbes, probes);
     return defineValue(value, context);
   };
   auto makeSyntheticValue = [&](scf::ForOp loop,
@@ -465,6 +479,9 @@ PlanSetBuilder::expandProcess(ac::ProcessOp process,
       for (auto [init, argument] :
            llvm::zip(forOp.getInitArgs(), forOp.getRegionIterArgs()))
         addForwarding(init, task.context, argument, task.context);
+      for (auto [yielded, argument] :
+           llvm::zip(yield.getOperands(), forOp.getRegionIterArgs()))
+        addForwarding(yielded, task.context, argument, task.context);
       for (auto [yielded, result] :
            llvm::zip(yield.getOperands(), forOp.getResults()))
         addForwarding(yielded, task.context, result, task.context);
@@ -493,6 +510,8 @@ PlanSetBuilder::expandProcess(ac::ProcessOp process,
 
   expanded.expandedNodes = expansionNodes;
   expanded.expandedEdges = expansionEdges;
+  expanded.valueLookupProbes = valueLookupProbes;
+  expanded.maxValueLookupProbes = maxValueLookupProbes;
   return budgetFailed ? FailureOr<ExpandedProcess>(failure())
                       : FailureOr<ExpandedProcess>(std::move(expanded));
 }

@@ -27,7 +27,8 @@ struct ValidatedPureFunction {
 struct ValidatedPureCallGraph {
   std::vector<ValidatedPureFunction> functions;
 
-  const ValidatedPureFunction *lookup(llvm::StringRef name) const;
+  const ValidatedPureFunction *lookup(llvm::StringRef name,
+                                      uint64_t *probes = nullptr) const;
 };
 
 /// The single lowerability and purity authority for process-reachable calls.

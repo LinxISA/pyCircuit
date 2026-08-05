@@ -405,6 +405,8 @@ struct ExpandedProcess {
   std::vector<ExpandedForwarding> forwarding;
   uint64_t expandedNodes = 0;
   uint64_t expandedEdges = 0;
+  uint64_t valueLookupProbes = 0;
+  uint64_t maxValueLookupProbes = 0;
 };
 
 mlir::FailureOr<ExpandedProcess> expandProcessForPlanning(
