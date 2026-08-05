@@ -413,7 +413,6 @@ that analysis failure publishes neither mutations nor partial output.
 
 **Files:**
 
-- Create: `lib/Transforms/LowerProcessState.cpp`
 - Create: `lib/Conversion/ACIRToACSim/ACIRToACSim.cpp`
 - Create: `lib/Conversion/ACIRToACSim/TypeConverter.cpp`
 - Create: `include/acir/Conversion/ACIRToACSim/ACIRToACSim.h`
@@ -423,6 +422,12 @@ that analysis failure publishes neither mutations nor partial output.
 - Create: `test/Conversion/process-control-flow.mlir`
 - Create: `test/Conversion/process-live-values.mlir`
 - Create: `test/Conversion/process-invalid.mlir`
+
+Task 12 owns `lib/Transforms/LowerProcessState.cpp`, the non-mutating
+`ac-lower-process-state` pass, and the complete public ProcessStatePlan API.
+Task 13 consumes that public header and a separate exact
+`BindingResolutionResult`; it must not recreate process analysis, report
+parsing, or pass ownership.
 
 **Red:** Test one atomic conversion containing generated module interfaces,
 nested ownership, homogeneous arrays, library bindings, typed graph edges,
@@ -464,10 +469,14 @@ epoch entries.
 manifests, lit test annotations, and C++ registration tables. Add CI jobs for
 Debug assertions, Release, lit/FileCheck, unit tests, schema/contracts,
 clang-format, clang-tidy on owned sources, and clean-install consumer configure.
+Task 14, not Task 12, owns installation/export of the ProcessStatePlan public
+header and library targets, package configuration, and a separate installed-
+tree ProcessStatePlan consumer.
 
 **Verify:** Run every Phase 1 gate locally, configure from a clean build tree,
 install to a temporary prefix, build a tiny consumer against the installed
-package, and perform a fresh-clone CI-equivalent check.
+package, build the installed-tree ProcessStatePlan consumer without source-tree
+include paths, and perform a fresh-clone CI-equivalent check.
 
 **Commit:** `test(ir): enforce complete ACIR and ACSim coverage`
 
