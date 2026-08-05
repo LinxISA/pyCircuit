@@ -6,6 +6,13 @@
 // RUN:   --ac-binding-profile=fast \
 // RUN:   --ac-binding-target=arm64-apple-darwin %s 2>&1 | %FileCheck %s
 // RUN: test ! -e %t.lock
+// RUN: rm -f %t.no-registry.lock
+// RUN: %not %acir_opt --verify-each=false --pass-pipeline='builtin.module(ac-freeze-topology)' \
+// RUN:   --ac-resolve-gfsim-bindings \
+// RUN:   --ac-binding-lock-output=%t.no-registry.lock \
+// RUN:   --ac-binding-profile=fast \
+// RUN:   --ac-binding-target=arm64-apple-darwin %s 2>&1 | %FileCheck %s --check-prefix=NO-REGISTRY
+// RUN: test ! -e %t.no-registry.lock
 // RUN: rm -f %t.profile.lock
 // RUN: %not %acir_opt --verify-each=false --pass-pipeline='builtin.module(ac-freeze-topology)' \
 // RUN:   --ac-resolve-gfsim-bindings \
@@ -33,6 +40,9 @@ builtin.module attributes {ac.contract_epoch = "0.1"} {
 // CHECK: ACLOWER-BINDING-MISSING
 // CHECK-SAME: key=@Leaf
 // CHECK-NOT: acsim.
+// NO-REGISTRY: ACLOWER-BINDING-MISSING
+// NO-REGISTRY-SAME: key=@Leaf
+// NO-REGISTRY-NOT: ACLOWER-BINDING-OPTIONS
 // PROFILE: ACLOWER-BINDING-MISSING
 // PROFILE-SAME: key=@Leaf
 // PROFILE-SAME: reason=ACLOWER-PROFILE

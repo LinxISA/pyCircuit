@@ -773,6 +773,36 @@ TEST(BindingRegistryTest, ExactSelectionIsIndependentOfProviderOrder) {
   EXPECT_EQ("Leaf", first->selections().front().record().binding());
 }
 
+TEST(BindingResolutionResultTest, LooksUpSelectionsOnlyByExactResolutionKey) {
+  auto candidates = parseCandidates(registryJson({candidateJson()}));
+  auto result = resolveBindings(candidates, {exactRequest()}, "fast",
+                                "arm64-apple-darwin");
+  ASSERT_TRUE(static_cast<bool>(result)) << takeError(result.takeError());
+
+  const ResolvedBinding *selection = result->selectionForResolutionKey("@Leaf");
+  ASSERT_NE(nullptr, selection);
+  EXPECT_EQ("Leaf", selection->record().binding());
+  EXPECT_EQ(nullptr, result->selectionForResolutionKey("Leaf"));
+  EXPECT_EQ(nullptr, result->selectionForResolutionKey("@Top::@Leaf"));
+  EXPECT_EQ(nullptr, result->selectionForResolutionKey("@Missing"));
+}
+
+TEST(BindingResolutionResultTest, EmptyResultIsCanonicalAndLookupIsMissing) {
+  auto first = resolveBindings({}, {}, "fast", "arm64-apple-darwin");
+  auto second = resolveBindings({}, {}, "fast", "arm64-apple-darwin");
+  ASSERT_TRUE(static_cast<bool>(first)) << takeError(first.takeError());
+  ASSERT_TRUE(static_cast<bool>(second)) << takeError(second.takeError());
+
+  EXPECT_TRUE(first->selections().empty());
+  EXPECT_EQ(nullptr, first->selectionForResolutionKey("@Anything"));
+  EXPECT_EQ("[]", first->canonicalLock());
+  EXPECT_EQ("sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11b"
+            "a873c2f11161202b945",
+            first->lockFingerprint().str());
+  EXPECT_EQ(first->canonicalLock(), second->canonicalLock());
+  EXPECT_EQ(first->lockFingerprint(), second->lockFingerprint());
+}
+
 TEST(BindingRegistryTest, MissingUnavailableAndAmbiguousAreHardFailures) {
   auto candidates = parseCandidates(registryJson({candidateJson()}));
   BindingRequest request = exactRequest();

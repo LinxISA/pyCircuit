@@ -673,6 +673,14 @@ BindingResolutionResult::BindingResolutionResult(
     : selected(std::move(selections)), lock(std::move(canonicalLock)),
       fingerprint(std::move(lockFingerprint)) {}
 
+const ResolvedBinding *BindingResolutionResult::selectionForResolutionKey(
+    llvm::StringRef resolutionKey) const {
+  for (const ResolvedBinding &selection : selected)
+    if (selection.resolutionKey() == resolutionKey)
+      return &selection;
+  return nullptr;
+}
+
 llvm::Expected<BindingResolutionResult>
 resolveBindings(llvm::ArrayRef<BindingCandidate> candidates,
                 llvm::ArrayRef<BindingRequest> requests,

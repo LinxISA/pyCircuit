@@ -63,8 +63,6 @@ loadBindingCommandLineOptions() {
       return optionError("binding options require --ac-resolve-gfsim-bindings");
     return std::optional<ResolveBindingsPassOptions>();
   }
-  if (BindingRegistries.empty())
-    return optionError("--ac-binding-registry is required");
   if (BindingLockOutput.empty())
     return optionError("--ac-binding-lock-output is required");
   if (BindingProfile.empty())

@@ -148,6 +148,8 @@ public:
                           std::string lockFingerprint);
 
   llvm::ArrayRef<ResolvedBinding> selections() const { return selected; }
+  const ResolvedBinding *
+  selectionForResolutionKey(llvm::StringRef resolutionKey) const;
   llvm::StringRef canonicalLock() const { return lock; }
   llvm::StringRef lockFingerprint() const { return fingerprint; }
 

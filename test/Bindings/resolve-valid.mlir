@@ -22,7 +22,6 @@
 // RUN:   --ac-binding-target=arm64-apple-darwin %s -o /dev/null
 // RUN: diff %t.forward.lock %t.reverse.lock
 // RUN: %acir_opt %s | %FileCheck %s --check-prefix=ORDINARY
-// RUN: %not %acir_opt --ac-resolve-gfsim-bindings %s 2>&1 | %FileCheck %s --check-prefix=OPTIONS
 // RUN: %acir_opt --help | %FileCheck %s --check-prefix=HELP
 
 builtin.module attributes {ac.contract_epoch = "0.1"} {
@@ -50,7 +49,6 @@ builtin.module attributes {ac.contract_epoch = "0.1"} {
 // LOCK-SAME: "binding_schema":"acsim-binding-0.1"
 // LOCK-SAME: "contract_epoch":"0.1"
 // LOCK-SAME: "fingerprint":"sha256:{{[0-9a-f]+}}"
-// OPTIONS: error: ACLOWER-BINDING-OPTIONS: --ac-binding-registry is required
 // HELP: Exact binding resolution options:
 // HELP-EMPTY:
 // HELP-NEXT: --ac-binding-lock-output=<file>
