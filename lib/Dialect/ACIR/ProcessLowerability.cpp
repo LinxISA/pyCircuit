@@ -4,6 +4,7 @@
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallVector.h"
 
 #include <limits>
@@ -31,34 +32,11 @@ std::optional<bool> constantBoolean(Value value) {
   return std::nullopt;
 }
 
-bool regionGuaranteesSuspension(Region &region) {
-  if (region.empty())
-    return false;
-  for (Operation &operation : region.front()) {
-    if (isSuspension(&operation))
-      return true;
-    if (auto ifOp = dyn_cast<scf::IfOp>(operation)) {
-      if (std::optional<bool> condition =
-              constantBoolean(ifOp.getCondition())) {
-        Region &taken =
-            *condition ? ifOp.getThenRegion() : ifOp.getElseRegion();
-        if (regionGuaranteesSuspension(taken))
-          return true;
-      } else if (!ifOp.getElseRegion().empty() &&
-                 regionGuaranteesSuspension(ifOp.getThenRegion()) &&
-                 regionGuaranteesSuspension(ifOp.getElseRegion())) {
-        return true;
-      }
-    }
-  }
-  return false;
-}
-
 bool isAllowedProcessOperation(Operation *operation) {
   StringRef name = operation->getName().getStringRef();
   if (name.starts_with("arith.") || name.starts_with("index.") ||
-      isa<func::CallOp, scf::IfOp, scf::ForOp, scf::WhileOp, scf::ConditionOp,
-          scf::YieldOp>(operation))
+      isa<func::CallOp, func::ReturnOp, scf::IfOp, scf::ForOp, scf::WhileOp,
+          scf::ConditionOp, scf::YieldOp>(operation))
     return true;
   return isa<RecordCreateOp, RecordGetOp, RecordWithOp, PacketSerializeOp,
              PacketDeserializeOp, TrySendOp, TryRecvOp, ScheduleOp, WaitUntilOp,
@@ -250,40 +228,93 @@ FailureOr<StaticForTripCount> analyzeStaticFor(scf::ForOp op) {
 
 LogicalResult verifyProcessLowerability(Operation *processLikeOp,
                                         const RawModelStructureLimits &limits) {
-  return walkStructuredOperationsIterative(
-      processLikeOp,
-      [&](Operation *operation) -> LogicalResult {
-        if (operation == processLikeOp)
-          return success();
-        if (!isAllowedProcessOperation(operation))
-          return operation->emitOpError()
-                 << "ac.process contains unsupported operation "
-                 << operation->getName();
-        StringRef name = operation->getName().getStringRef();
-        if ((name.starts_with("arith.") || name.starts_with("index.")) &&
-            (!operation->getRegions().empty() ||
-             !isMemoryEffectFree(operation)))
-          return operation->emitOpError(
-              "arith/index operation in ac.process must be regionless and "
-              "memory-effect free");
-        if (failed(verifySCFShape(operation)))
-          return failure();
-        if (auto forOp = dyn_cast<scf::ForOp>(operation)) {
-          bool allConstant = isIntegerConstant(forOp.getLowerBound()) &&
-                             isIntegerConstant(forOp.getUpperBound()) &&
-                             isIntegerConstant(forOp.getStep());
-          if (allConstant) {
-            if (failed(analyzeStaticFor(forOp)))
+  SmallVector<scf::ForOp> dynamicLoops;
+  if (failed(walkStructuredOperationsIterative(
+          processLikeOp,
+          [&](Operation *operation) -> LogicalResult {
+            if (operation == processLikeOp)
+              return success();
+            if (!isAllowedProcessOperation(operation))
+              return operation->emitOpError()
+                     << "ac.process contains unsupported operation "
+                     << operation->getName();
+            StringRef name = operation->getName().getStringRef();
+            if ((name.starts_with("arith.") || name.starts_with("index.")) &&
+                (!operation->getRegions().empty() ||
+                 !isMemoryEffectFree(operation)))
+              return operation->emitOpError(
+                  "arith/index operation in ac.process must be regionless and "
+                  "memory-effect free");
+            if (failed(verifySCFShape(operation)))
               return failure();
-          } else if (!regionGuaranteesSuspension(forOp.getRegion())) {
-            return forOp.emitOpError(
-                "dynamic scf.for requires every reachable backedge to "
-                "suspend");
+            if (auto forOp = dyn_cast<scf::ForOp>(operation)) {
+              bool allConstant = isIntegerConstant(forOp.getLowerBound()) &&
+                                 isIntegerConstant(forOp.getUpperBound()) &&
+                                 isIntegerConstant(forOp.getStep());
+              if (allConstant) {
+                if (failed(analyzeStaticFor(forOp)))
+                  return failure();
+              } else
+                dynamicLoops.push_back(forOp);
+            }
+            return success();
+          },
+          limits)))
+    return failure();
+
+  // Compute suspension guarantees bottom-up without consuming the native
+  // stack. The preceding bounded walk has already validated every node.
+  DenseMap<Region *, bool> guarantees;
+  struct SummaryTask {
+    Operation *operation;
+    bool expanded;
+  };
+  SmallVector<SummaryTask> pending{{processLikeOp, false}};
+  while (!pending.empty()) {
+    SummaryTask task = pending.pop_back_val();
+    if (!task.expanded) {
+      pending.push_back({task.operation, true});
+      SmallVector<Operation *> children;
+      for (Region &region : task.operation->getRegions())
+        for (Block &block : region)
+          for (Operation &child : block)
+            children.push_back(&child);
+      for (Operation *child : children)
+        pending.push_back({child, false});
+      continue;
+    }
+    for (Region &region : task.operation->getRegions()) {
+      bool regionGuarantee = false;
+      if (!region.empty()) {
+        for (Operation &operation : region.front()) {
+          if (isSuspension(&operation)) {
+            regionGuarantee = true;
+            break;
           }
+          auto ifOp = dyn_cast<scf::IfOp>(operation);
+          if (!ifOp)
+            continue;
+          if (std::optional<bool> condition =
+                  constantBoolean(ifOp.getCondition())) {
+            Region &taken =
+                *condition ? ifOp.getThenRegion() : ifOp.getElseRegion();
+            regionGuarantee = guarantees.lookup(&taken);
+          } else
+            regionGuarantee = !ifOp.getElseRegion().empty() &&
+                              guarantees.lookup(&ifOp.getThenRegion()) &&
+                              guarantees.lookup(&ifOp.getElseRegion());
+          if (regionGuarantee)
+            break;
         }
-        return success();
-      },
-      limits);
+      }
+      guarantees[&region] = regionGuarantee;
+    }
+  }
+  for (scf::ForOp loop : dynamicLoops)
+    if (!guarantees.lookup(&loop.getRegion()))
+      return loop.emitOpError(
+          "dynamic scf.for requires every reachable backedge to suspend");
+  return success();
 }
 
 } // namespace acir::ac

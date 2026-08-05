@@ -2,7 +2,9 @@
 
 #include "acir/Bindings/Binding.h"
 
+#include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/JSON.h"
+#include "llvm/Support/SHA256.h"
 #include "llvm/Support/raw_ostream.h"
 
 namespace acir {
@@ -643,6 +645,21 @@ Value json(const ProcessStatePlan &plan) {
 }
 
 } // namespace
+
+llvm::Expected<std::string>
+detail::canonicalProcessOccurrenceJSON(const ProcessOccurrenceId &occurrence) {
+  return bindings::canonicalizeJson(json(occurrence));
+}
+
+llvm::Expected<std::string>
+detail::hashProcessOccurrence(const ProcessOccurrenceId &occurrence) {
+  auto canonical = canonicalProcessOccurrenceJSON(occurrence);
+  if (!canonical)
+    return canonical.takeError();
+  llvm::SHA256 hasher;
+  hasher.update(*canonical);
+  return llvm::toHex(hasher.final(), /*LowerCase=*/true);
+}
 
 llvm::Expected<std::string> detail::canonicalGeneratedCalleeSpecialization(
     const ProcessGeneratedCalleePlan &callee) {

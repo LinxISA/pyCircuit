@@ -441,6 +441,172 @@ LogicalResult detail::preflightModelStructure(ModuleOp model) {
   return ac::preflightRawModelStructure(model);
 }
 
+const detail::ValidatedPureFunction *
+detail::ValidatedPureCallGraph::lookup(StringRef name) const {
+  auto found =
+      llvm::find_if(functions, [&](const ValidatedPureFunction &entry) {
+        return cast<StringAttr>(
+                   entry.function->getAttr(SymbolTable::getSymbolAttrName()))
+                   .getValue() == name;
+      });
+  return found == functions.end() ? nullptr : &*found;
+}
+
+FailureOr<detail::ValidatedPureCallGraph>
+detail::validatePureProcessCallGraph(ModuleOp model,
+                                     const ac::RawModelStructureLimits &limits,
+                                     const PureCallGraphLimits &callLimits) {
+  std::map<std::string, func::FuncOp> symbols;
+  for (func::FuncOp function : model.getOps<func::FuncOp>())
+    symbols.emplace(function.getSymName().str(), function);
+  if (symbols.size() > callLimits.maxFunctions) {
+    model.emitError() << "pure func.call analysis exceeds ACIR v0.1 function "
+                         "limit "
+                      << callLimits.maxFunctions;
+    return failure();
+  }
+
+  SmallVector<std::pair<std::string, func::CallOp>> roots;
+  if (failed(ac::walkStructuredOperationsIterative(
+          model,
+          [&](Operation *operation) -> LogicalResult {
+            auto call = dyn_cast<func::CallOp>(operation);
+            if (!call || !operation->getParentOfType<ac::ProcessOp>())
+              return success();
+            ac::ProcessOp process = operation->getParentOfType<ac::ProcessOp>();
+            ac::ModuleOp owner = process->getParentOfType<ac::ModuleOp>();
+            roots.push_back({(owner.getSymName() + "::" + process.getSymName() +
+                              "::" + call.getCallee())
+                                 .str(),
+                             call});
+            return success();
+          },
+          limits)))
+    return failure();
+  llvm::sort(roots, [](const auto &left, const auto &right) {
+    return left.first < right.first;
+  });
+
+  enum class State : uint8_t { Unvisited, Active, Pure };
+  std::map<std::string, State> states;
+  std::map<std::string, std::vector<func::CallOp>> indexedCalls;
+  ValidatedPureCallGraph graph;
+  uint64_t edges = 0;
+  struct Frame {
+    func::FuncOp function;
+    Operation *origin;
+    size_t nextCall = 0;
+    bool entered = false;
+  };
+
+  for (auto &[key, root] : roots) {
+    (void)key;
+    auto rootFunction = symbols.find(root.getCallee().str());
+    if (rootFunction == symbols.end()) {
+      root.emitOpError() << "process func.call callee '@" << root.getCallee()
+                         << "' is unresolved";
+      return failure();
+    }
+    if (states[rootFunction->first] == State::Pure)
+      continue;
+    SmallVector<Frame> stack{{rootFunction->second, root, 0, false}};
+    while (!stack.empty()) {
+      Frame &frame = stack.back();
+      std::string name = frame.function.getSymName().str();
+      if (!frame.entered) {
+        if (frame.function.isExternal()) {
+          frame.origin->emitOpError()
+              << "process func.call callee '@" << name
+              << "' has no body and cannot be proven effect-free";
+          return failure();
+        }
+        if (stack.size() > callLimits.maxDepth) {
+          frame.origin->emitOpError()
+              << "pure func.call analysis exceeds ACIR v0.1 depth limit "
+              << callLimits.maxDepth;
+          return failure();
+        }
+        if (failed(ac::verifyProcessLowerability(frame.function, limits)))
+          return failure();
+        std::vector<func::CallOp> calls;
+        if (failed(ac::walkStructuredOperationsIterative(
+                frame.function,
+                [&](Operation *operation) -> LogicalResult {
+                  if (operation == frame.function.getOperation() ||
+                      isa<func::ReturnOp>(operation))
+                    return success();
+                  if (auto call = dyn_cast<func::CallOp>(operation)) {
+                    calls.push_back(call);
+                    return success();
+                  }
+                  if (!isMemoryEffectFree(operation))
+                    return operation->emitOpError(
+                        "function reachable from ac.process is not "
+                        "effect-free");
+                  return success();
+                },
+                limits)))
+          return failure();
+        llvm::sort(calls, [](func::CallOp left, func::CallOp right) {
+          return left.getCallee() < right.getCallee();
+        });
+        indexedCalls[name] = std::move(calls);
+        states[name] = State::Active;
+        frame.entered = true;
+      }
+
+      auto &calls = indexedCalls[name];
+      if (frame.nextCall == calls.size()) {
+        states[name] = State::Pure;
+        graph.functions.push_back({frame.function, calls});
+        stack.pop_back();
+        continue;
+      }
+      func::CallOp call = calls[frame.nextCall++];
+      if (edges == callLimits.maxEdges) {
+        call.emitOpError()
+            << "pure func.call analysis exceeds ACIR v0.1 edge limit "
+            << callLimits.maxEdges;
+        return failure();
+      }
+      ++edges;
+      auto target = symbols.find(call.getCallee().str());
+      if (target == symbols.end()) {
+        call.emitOpError() << "process func.call callee '@" << call.getCallee()
+                           << "' is unresolved";
+        return failure();
+      }
+      State targetState = states[target->first];
+      if (targetState == State::Pure)
+        continue;
+      if (targetState == State::Active) {
+        InFlightDiagnostic diagnostic =
+            call.emitOpError("recursive func.call purity cycle: ");
+        auto begin = llvm::find_if(stack, [&](const Frame &active) {
+          return cast<StringAttr>(
+                     active.function->getAttr(SymbolTable::getSymbolAttrName()))
+                     .getValue() == target->first;
+        });
+        for (auto current = begin; current != stack.end(); ++current)
+          diagnostic << '@' << current->function.getSymName() << " -> ";
+        diagnostic << '@' << target->first;
+        return failure();
+      }
+      stack.push_back({target->second, call, 0, false});
+    }
+  }
+  llvm::sort(graph.functions, [](const ValidatedPureFunction &left,
+                                 const ValidatedPureFunction &right) {
+    auto name = [](func::FuncOp function) {
+      return cast<StringAttr>(
+                 function->getAttr(SymbolTable::getSymbolAttrName()))
+          .getValue();
+    };
+    return name(left.function) < name(right.function);
+  });
+  return graph;
+}
+
 FailureOr<ArrayAttr> detail::buildFrozenProcessSkeleton(ac::ProcessOp process) {
   return ProcessSkeletonSerializer(process).run();
 }
@@ -467,128 +633,8 @@ bool isTopologyFrozen(ModuleOp model) {
 }
 
 LogicalResult ModelAnalysis::verifyPureProcessCalls() {
-  std::map<std::string, func::FuncOp> functions;
-  for (func::FuncOp function : model.getOps<func::FuncOp>())
-    functions.emplace(function.getSymName().str(), function);
-  if (functions.size() > kMaxPureCallFunctions)
-    return model.emitError()
-           << "pure func.call analysis exceeds ACIR v0.1 function limit "
-           << kMaxPureCallFunctions;
-
-  enum class State : uint8_t { Unvisited, Active, Pure, Impure };
-  std::map<std::string, State> states;
-  SmallVector<std::string> stack;
-  uint64_t callEdges = 0;
-
-  std::function<LogicalResult(func::FuncOp, Operation *)> verifyFunction =
-      [&](func::FuncOp function, Operation *origin) -> LogicalResult {
-    std::string name = function.getSymName().str();
-    State state = states[name];
-    if (state == State::Pure)
-      return success();
-    if (state == State::Impure)
-      return origin->emitOpError() << "process func.call callee '@" << name
-                                   << "' is not transitively effect-free";
-    if (state == State::Active) {
-      auto begin = llvm::find(stack, name);
-      InFlightDiagnostic diagnostic =
-          origin->emitOpError("recursive func.call purity cycle: ");
-      for (auto current = begin; current != stack.end(); ++current)
-        diagnostic << '@' << *current << " -> ";
-      diagnostic << '@' << name;
-      return failure();
-    }
-    if (function.isExternal()) {
-      states[name] = State::Impure;
-      return origin->emitOpError()
-             << "process func.call callee '@" << name
-             << "' has no body and cannot be proven effect-free";
-    }
-    if (stack.size() == kMaxPureCallDepth)
-      return origin->emitOpError()
-             << "pure func.call analysis exceeds ACIR v0.1 depth limit "
-             << kMaxPureCallDepth;
-
-    states[name] = State::Active;
-    stack.push_back(name);
-    SmallVector<func::CallOp> calls;
-    LogicalResult local = success();
-    function.getBody().walk([&](Operation *operation) {
-      if (auto call = dyn_cast<func::CallOp>(operation)) {
-        calls.push_back(call);
-        return WalkResult::advance();
-      }
-      if (operation->getName().getStringRef().starts_with("cf.")) {
-        operation->emitOpError(
-            "function reachable from ac.process contains unsupported "
-            "control-flow operation");
-        local = failure();
-        return WalkResult::interrupt();
-      }
-      if (isa<func::ReturnOp>(operation) || isMemoryEffectFree(operation))
-        return WalkResult::advance();
-      operation->emitOpError()
-          << "function reachable from ac.process is not effect-free";
-      local = failure();
-      return WalkResult::interrupt();
-    });
-    if (failed(local)) {
-      stack.pop_back();
-      states[name] = State::Impure;
-      return failure();
-    }
-    llvm::sort(calls, [](func::CallOp left, func::CallOp right) {
-      return left.getCallee() < right.getCallee();
-    });
-    for (func::CallOp call : calls) {
-      if (++callEdges > kMaxPureCallEdges) {
-        stack.pop_back();
-        states[name] = State::Impure;
-        return call.emitOpError()
-               << "pure func.call analysis exceeds ACIR v0.1 edge limit "
-               << kMaxPureCallEdges;
-      }
-      auto found = functions.find(call.getCallee().str());
-      if (found == functions.end()) {
-        stack.pop_back();
-        states[name] = State::Impure;
-        return call.emitOpError() << "process func.call callee '@"
-                                  << call.getCallee() << "' is unresolved";
-      }
-      if (failed(verifyFunction(found->second, call))) {
-        stack.pop_back();
-        states[name] = State::Impure;
-        return failure();
-      }
-    }
-    stack.pop_back();
-    states[name] = State::Pure;
-    return success();
-  };
-
-  SmallVector<std::pair<std::string, func::CallOp>> roots;
-  model.walk([&](ac::ProcessOp process) {
-    auto owner = process->getParentOfType<ac::ModuleOp>();
-    process.getBody().walk([&](func::CallOp call) {
-      roots.push_back({(owner.getSymName() + "::" + process.getSymName() +
-                        "::" + call.getCallee())
-                           .str(),
-                       call});
-    });
-  });
-  llvm::sort(roots, [](const auto &left, const auto &right) {
-    return left.first < right.first;
-  });
-  for (auto &[key, call] : roots) {
-    (void)key;
-    auto found = functions.find(call.getCallee().str());
-    if (found == functions.end())
-      return call.emitOpError() << "process func.call callee '@"
-                                << call.getCallee() << "' is unresolved";
-    if (failed(verifyFunction(found->second, call)))
-      return failure();
-  }
-  return success();
+  return succeeded(detail::validatePureProcessCallGraph(model)) ? success()
+                                                                : failure();
 }
 
 LogicalResult ModelAnalysis::verifyZeroDelayDependencies() {

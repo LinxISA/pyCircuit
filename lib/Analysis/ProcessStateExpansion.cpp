@@ -1,10 +1,10 @@
+#include "ModelAnalysisInternal.h"
 #include "ProcessStatePlanInternal.h"
 
 #include "acir/Analysis/ModelAnalysis.h"
 
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
-#include "mlir/IR/SymbolTable.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallVector.h"
 
@@ -22,6 +22,20 @@ struct ExpansionTask {
   Operation *operation = nullptr;
   ExpansionContext context;
 };
+
+bool isContextPrefix(const ExpansionContext &definition,
+                     const ExpansionContext &consumer) {
+  if (definition.callSites.size() > consumer.callSites.size() ||
+      definition.iterations.size() > consumer.iterations.size())
+    return false;
+  for (auto [left, right] : llvm::zip(definition.callSites, consumer.callSites))
+    if (left.operation() != right.operation() ||
+        !llvm::equal(left.iterationVector(), right.iterationVector()))
+      return false;
+  return llvm::equal(definition.iterations,
+                     llvm::ArrayRef(consumer.iterations)
+                         .take_front(definition.iterations.size()));
+}
 
 std::string processDefinitionKey(ac::ProcessOp process) {
   ac::ModuleOp owner = process->getParentOfType<ac::ModuleOp>();
@@ -68,26 +82,47 @@ PlanSetBuilder::expandProcess(ac::ProcessOp process,
   ExpandedProcess expanded;
   expanded.process = process;
   expanded.definitionKey = processDefinitionKey(process);
+  uint64_t expansionNodes = 0;
+  uint64_t expansionEdges = 0;
+  bool budgetFailed = false;
+  auto reserveNodes = [&](Operation *origin, uint64_t count) {
+    if (count > limits.maxNodes - expansionNodes) {
+      origin->emitOpError(
+          "pure process expansion exceeds ACIR v0.1 node/edge limits");
+      budgetFailed = true;
+      return false;
+    }
+    expansionNodes += count;
+    return true;
+  };
+  auto reserveEdges = [&](Operation *origin, uint64_t count) {
+    if (count > limits.maxEdges - expansionEdges) {
+      origin->emitOpError(
+          "pure process expansion exceeds ACIR v0.1 node/edge limits");
+      budgetFailed = true;
+      return false;
+    }
+    expansionEdges += count;
+    return true;
+  };
 
   ModuleOp file = process->getParentOfType<ModuleOp>();
-  DenseMap<StringAttr, func::FuncOp> functions;
-  for (func::FuncOp function : file.getOps<func::FuncOp>())
-    functions[function.getSymNameAttr()] = function;
-  if (functions.size() > kMaxPureCallFunctions) {
-    file.emitError() << "pure func.call expansion exceeds ACIR v0.1 function "
-                        "limit "
-                     << kMaxPureCallFunctions;
+  FailureOr<ValidatedPureCallGraph> callGraph =
+      validatePureProcessCallGraph(file);
+  if (failed(callGraph))
     return failure();
-  }
 
   DenseMap<Operation *, std::string> operationPaths;
   DenseMap<Block *, std::string> blockPaths;
   indexOperationTree(process, expanded.definitionKey, operationPaths,
                      blockPaths);
-  for (auto &[name, function] : functions)
+  for (const ValidatedPureFunction &entry : callGraph->functions) {
+    func::FuncOp function = entry.function;
     indexOperationTree(
-        function, (expanded.definitionKey + "/func/@" + name.getValue()).str(),
+        function,
+        (expanded.definitionKey + "/func/@" + function.getSymName()).str(),
         operationPaths, blockPaths);
+  }
 
   auto makeCallSite = [&](Operation *operation,
                           const ExpansionContext &context) {
@@ -136,7 +171,8 @@ PlanSetBuilder::expandProcess(ac::ProcessOp process,
             ProcessSyntheticConstantOccurrence(constant);
         return ProcessOccurrenceId(occurrence);
       };
-  auto makeValue = [&](Value value, const ExpansionContext &context) {
+  auto makeValueAtDefinition = [&](Value value,
+                                   const ExpansionContext &context) {
     Operation *owner = value.getDefiningOp();
     auto coordinateImpl = std::make_shared<ProcessValueCoordinate::Impl>();
     std::string path;
@@ -166,6 +202,31 @@ PlanSetBuilder::expandProcess(ac::ProcessOp process,
     planned->original = ProcessOriginalPlannedValue(originalImpl);
     return ProcessPlannedValue(planned);
   };
+  struct ValueBinding {
+    ExpansionContext context;
+    ProcessPlannedValue planned;
+  };
+  DenseMap<Value, std::vector<ValueBinding>> valueEnvironment;
+  auto defineValue = [&](Value value, const ExpansionContext &context) {
+    ProcessPlannedValue planned = makeValueAtDefinition(value, context);
+    valueEnvironment[value].push_back({context, planned});
+    return planned;
+  };
+  auto resolveValue = [&](Value value, const ExpansionContext &context) {
+    auto found = valueEnvironment.find(value);
+    const ValueBinding *best = nullptr;
+    if (found != valueEnvironment.end())
+      for (const ValueBinding &binding : found->second)
+        if (isContextPrefix(binding.context, context) &&
+            (!best || binding.context.callSites.size() +
+                              binding.context.iterations.size() >
+                          best->context.callSites.size() +
+                              best->context.iterations.size()))
+          best = &binding;
+    if (best)
+      return best->planned;
+    return defineValue(value, context);
+  };
   auto makeSyntheticValue = [&](scf::ForOp loop,
                                 const ExpansionContext &context,
                                 uint32_t ordinal) {
@@ -183,10 +244,45 @@ PlanSetBuilder::expandProcess(ac::ProcessOp process,
     planned->synthetic = ProcessSyntheticPlannedValue(syntheticImpl);
     return ProcessPlannedValue(planned);
   };
+  auto makeSyntheticLoopValue = [&](scf::ForOp loop,
+                                    const ExpansionContext &context,
+                                    ProcessLoopPhase phase, Type type,
+                                    uint32_t index) {
+    auto coordinateImpl = std::make_shared<ProcessValueCoordinate::Impl>();
+    coordinateImpl->kind = ProcessValueCoordinateKind::Result;
+    coordinateImpl->ownerPath = operationPaths.lookup(loop);
+    coordinateImpl->index = index;
+    auto syntheticImpl = std::make_shared<ProcessSyntheticPlannedValue::Impl>();
+    syntheticImpl->occurrence =
+        makeSyntheticLoopOccurrence(loop, context, phase);
+    syntheticImpl->coordinate = ProcessValueCoordinate(coordinateImpl);
+    auto planned = std::make_shared<ProcessPlannedValue::Impl>();
+    planned->kind = ProcessPlannedValueKind::Synthetic;
+    planned->type = type;
+    planned->synthetic = ProcessSyntheticPlannedValue(syntheticImpl);
+    return ProcessPlannedValue(planned);
+  };
+  auto makeScalar = [&](StringRef name, bool predicate) {
+    auto impl = std::make_shared<ProcessScalarOperationPlan::Impl>();
+    impl->name = name.str();
+    impl->properties = "{}";
+    if (predicate) {
+      auto attribute = std::make_shared<ProcessScalarAttribute::Impl>();
+      attribute->name = "predicate";
+      attribute->value = "2 : i64";
+      impl->attributes.push_back(ProcessScalarAttribute(attribute));
+    }
+    return ProcessScalarOperationPlan(impl);
+  };
   auto addForwarding = [&](Value from, const ExpansionContext &fromContext,
                            Value to, const ExpansionContext &toContext) {
+    Operation *origin = from.getDefiningOp();
+    if (!origin)
+      origin = cast<BlockArgument>(from).getOwner()->getParentOp();
+    if (!reserveEdges(origin, 1))
+      return;
     expanded.forwarding.push_back(
-        {makeValue(from, fromContext), makeValue(to, toContext)});
+        {resolveValue(from, fromContext), defineValue(to, toContext)});
   };
   auto addOriginalAction = [&](Operation *operation,
                                const ExpansionContext &context) {
@@ -197,9 +293,9 @@ PlanSetBuilder::expandProcess(ac::ProcessOp process,
     action.iterationVector = context.iterations;
     action.occurrence = makeOriginalOccurrence(operation, context);
     for (Value operand : operation->getOperands())
-      action.operands.push_back(makeValue(operand, context));
+      action.operands.push_back(resolveValue(operand, context));
     for (Value result : operation->getResults())
-      action.results.push_back(makeValue(result, context));
+      action.results.push_back(defineValue(result, context));
     expanded.actions.push_back(std::move(action));
   };
 
@@ -208,59 +304,25 @@ PlanSetBuilder::expandProcess(ac::ProcessOp process,
     SmallVector<Operation *> operations;
     for (Operation &operation : block)
       operations.push_back(&operation);
-    for (Operation *operation : llvm::reverse(operations))
+    for (Operation *operation : llvm::reverse(operations)) {
+      if (!reserveNodes(operation, 1) ||
+          !reserveEdges(operation, operation->getNumOperands()))
+        return;
       pending.push_back({operation, context});
+    }
   };
+  for (BlockArgument argument : process.getBody().front().getArguments())
+    (void)defineValue(argument, {});
   pushBlock(process.getBody().front(), {});
-  uint64_t expansionEdges = 0;
-  uint64_t callEdges = 0;
+  if (budgetFailed)
+    return failure();
   while (!pending.empty()) {
     ExpansionTask task = std::move(pending.back());
     pending.pop_back();
     Operation *operation = task.operation;
-    if (expanded.actions.size() >= limits.maxNodes ||
-        expansionEdges > limits.maxEdges - operation->getNumOperands()) {
-      operation->emitOpError(
-          "pure process expansion exceeds ACIR v0.1 node/edge limits");
-      return failure();
-    }
-    expansionEdges += operation->getNumOperands();
-
     if (auto call = dyn_cast<func::CallOp>(operation)) {
-      if (++callEdges > kMaxPureCallEdges) {
-        call.emitOpError()
-            << "pure func.call expansion exceeds ACIR v0.1 edge limit "
-            << kMaxPureCallEdges;
-        return failure();
-      }
-      auto found = functions.find(
-          StringAttr::get(process.getContext(), call.getCallee()));
-      if (found == functions.end() || found->second.isExternal()) {
-        call.emitOpError() << "process func.call callee '@" << call.getCallee()
-                           << "' is unresolved or external";
-        return failure();
-      }
-      LogicalResult pure = success();
-      if (failed(ac::walkStructuredOperationsIterative(
-              found->second,
-              [&](Operation *candidate) -> LogicalResult {
-                if (candidate == found->second.getOperation() ||
-                    isa<func::CallOp, func::ReturnOp>(candidate))
-                  return success();
-                if (candidate->getName().getStringRef().starts_with("cf."))
-                  return candidate->emitOpError(
-                      "function reachable from ac.process contains "
-                      "unsupported control-flow operation");
-                if (!isMemoryEffectFree(candidate))
-                  return candidate->emitOpError(
-                      "function reachable from ac.process is not "
-                      "effect-free");
-                return success();
-              },
-              limits)))
-        pure = failure();
-      if (failed(pure))
-        return failure();
+      const ValidatedPureFunction *callee = callGraph->lookup(call.getCallee());
+      assert(callee && "validated graph must contain every reachable callee");
       ExpansionContext calleeContext = task.context;
       calleeContext.callSites.push_back(makeCallSite(operation, task.context));
       if (calleeContext.callSites.size() > kMaxPureCallDepth) {
@@ -269,7 +331,8 @@ PlanSetBuilder::expandProcess(ac::ProcessOp process,
                            << kMaxPureCallDepth;
         return failure();
       }
-      Block &entry = found->second.getBody().front();
+      func::FuncOp calleeFunction = callee->function;
+      Block &entry = calleeFunction.getBody().front();
       for (auto [operand, argument] :
            llvm::zip(call.getOperands(), entry.getArguments()))
         addForwarding(operand, task.context, argument, calleeContext);
@@ -280,6 +343,8 @@ PlanSetBuilder::expandProcess(ac::ProcessOp process,
             addForwarding(returned, calleeContext, result, task.context);
       }
       pushBlock(entry, calleeContext);
+      if (budgetFailed)
+        return failure();
       continue;
     }
     if (isa<func::ReturnOp, scf::YieldOp, scf::ConditionOp>(operation))
@@ -307,9 +372,13 @@ PlanSetBuilder::expandProcess(ac::ProcessOp process,
           constant.iterationVector = bodyContext.iterations;
           constant.occurrence = induction.synthetic().occurrence();
           constant.results.push_back(induction);
+          if (!reserveNodes(operation, 1))
+            return failure();
           expanded.actions.push_back(std::move(constant));
+          if (!reserveEdges(operation, 1))
+            return failure();
           expanded.forwarding.push_back(
-              {induction, makeValue(forOp.getInductionVar(), bodyContext)});
+              {induction, defineValue(forOp.getInductionVar(), bodyContext)});
           if (iteration == 0)
             for (auto [init, argument] :
                  llvm::zip(forOp.getInitArgs(), forOp.getRegionIterArgs()))
@@ -331,10 +400,21 @@ PlanSetBuilder::expandProcess(ac::ProcessOp process,
           ExpansionContext bodyContext = task.context;
           bodyContext.iterations.push_back(iteration - 1);
           pushBlock(*forOp.getBody(), bodyContext);
+          if (budgetFailed)
+            return failure();
         }
         continue;
       }
 
+      ProcessPlannedValue induction = makeSyntheticLoopValue(
+          forOp, task.context, ProcessLoopPhase::Initialize,
+          forOp.getInductionVar().getType(), 0);
+      ProcessPlannedValue condition = makeSyntheticLoopValue(
+          forOp, task.context, ProcessLoopPhase::Condition,
+          IntegerType::get(process.getContext(), 1), 0);
+      ProcessPlannedValue nextInduction = makeSyntheticLoopValue(
+          forOp, task.context, ProcessLoopPhase::Increment,
+          forOp.getInductionVar().getType(), 0);
       for (auto [kind, phase] : {std::pair{ProcessActionKind::ForInitialize,
                                            ProcessLoopPhase::Initialize},
                                  std::pair{ProcessActionKind::ForCondition,
@@ -349,32 +429,72 @@ PlanSetBuilder::expandProcess(ac::ProcessOp process,
         action.iterationVector = task.context.iterations;
         action.occurrence =
             makeSyntheticLoopOccurrence(forOp, task.context, phase);
-        if (kind == ProcessActionKind::ForCondition) {
-          action.scalarOperation = "arith.cmpi";
-          action.scalarPredicate = "slt";
-        } else if (kind == ProcessActionKind::ForIncrement) {
-          action.scalarOperation = "arith.addi";
+        if (kind == ProcessActionKind::ForInitialize) {
+          action.operands.push_back(
+              resolveValue(forOp.getLowerBound(), task.context));
+          action.results.push_back(induction);
+          for (Value init : forOp.getInitArgs()) {
+            ProcessPlannedValue initial = resolveValue(init, task.context);
+            action.operands.push_back(initial);
+            action.results.push_back(initial);
+          }
+        } else if (kind == ProcessActionKind::ForCondition) {
+          action.operands = {induction,
+                             resolveValue(forOp.getUpperBound(), task.context)};
+          action.results = {condition};
+          action.scalarOperation = makeScalar("arith.cmpi", true);
+        } else {
+          action.operands = {induction,
+                             resolveValue(forOp.getStep(), task.context)};
+          action.results = {nextInduction};
+          action.scalarOperation = makeScalar("arith.addi", false);
         }
+        if (!reserveNodes(operation, 1))
+          return failure();
         expanded.actions.push_back(std::move(action));
       }
+      if (!reserveEdges(operation, 1))
+        return failure();
+      expanded.forwarding.push_back(
+          {induction, defineValue(forOp.getInductionVar(), task.context)});
+      if (!reserveEdges(operation, 1))
+        return failure();
+      expanded.forwarding.push_back(
+          {nextInduction, resolveValue(forOp.getInductionVar(), task.context)});
+      auto yield = cast<scf::YieldOp>(forOp.getBody()->getTerminator());
+      for (auto [init, argument] :
+           llvm::zip(forOp.getInitArgs(), forOp.getRegionIterArgs()))
+        addForwarding(init, task.context, argument, task.context);
+      for (auto [yielded, result] :
+           llvm::zip(yield.getOperands(), forOp.getResults()))
+        addForwarding(yielded, task.context, result, task.context);
       pushBlock(*forOp.getBody(), task.context);
+      if (budgetFailed)
+        return failure();
       continue;
     }
     if (auto ifOp = dyn_cast<scf::IfOp>(operation)) {
       pushBlock(ifOp.getThenRegion().front(), task.context);
       if (!ifOp.getElseRegion().empty())
         pushBlock(ifOp.getElseRegion().front(), task.context);
+      if (budgetFailed)
+        return failure();
       continue;
     }
     if (auto whileOp = dyn_cast<scf::WhileOp>(operation)) {
       pushBlock(whileOp.getBefore().front(), task.context);
       pushBlock(whileOp.getAfter().front(), task.context);
+      if (budgetFailed)
+        return failure();
       continue;
     }
     addOriginalAction(operation, task.context);
   }
 
-  return expanded;
+  expanded.expandedNodes = expansionNodes;
+  expanded.expandedEdges = expansionEdges;
+  return budgetFailed ? FailureOr<ExpandedProcess>(failure())
+                      : FailureOr<ExpandedProcess>(std::move(expanded));
 }
 
 FailureOr<ExpandedProcess>

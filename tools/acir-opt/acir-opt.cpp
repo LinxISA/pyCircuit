@@ -5,10 +5,14 @@
 #include "acir/InitAllPasses.h"
 #include "acir/Transforms/ResolveBindings.h"
 #include "mlir/AsmParser/AsmParser.h"
+#include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/Diagnostics.h"
+#include "mlir/Pass/Pass.h"
+#include "mlir/Pass/PassInstrumentation.h"
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Support/FileUtilities.h"
 #include "mlir/Tools/mlir-opt/MlirOptMain.h"
+#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/ToolOutputFile.h"
 #include "llvm/Support/raw_ostream.h"
@@ -78,57 +82,49 @@ CanonicalScanResult scanCanonicalAssembly(llvm::StringRef input) {
   return CanonicalScanResult::Canonical;
 }
 
-bool exceedsSafeTextualDelimiterDepth(llvm::StringRef input) {
-  constexpr unsigned kParserSafetyDepth = 2048;
-  unsigned depth = 0;
-  bool quoted = false;
-  bool escaped = false;
-  for (size_t index = 0; index < input.size(); ++index) {
-    if (!quoted && input.substr(index).starts_with("//")) {
-      index = input.find('\n', index);
-      if (index == llvm::StringRef::npos)
-        return false;
-      continue;
+#ifdef ACIR_INTERNAL_TEST_TOOL
+llvm::cl::opt<unsigned> testRawDepth(
+    "acir-test-raw-depth", llvm::cl::Hidden, llvm::cl::init(0),
+    llvm::cl::desc("materialize hostile nested IR after shallow parsing"));
+llvm::cl::opt<bool> testRawMalformed("acir-test-raw-malformed",
+                                     llvm::cl::Hidden, llvm::cl::init(false));
+llvm::cl::opt<bool> testPassTrace("acir-test-pass-trace", llvm::cl::Hidden,
+                                  llvm::cl::init(false));
+
+class MaterializeRawDepthPass final
+    : public mlir::PassWrapper<MaterializeRawDepthPass,
+                               mlir::OperationPass<mlir::ModuleOp>> {
+public:
+  llvm::StringRef getArgument() const final {
+    return "acir-test-materialize-raw-depth";
+  }
+  void runOnOperation() final {
+    mlir::ModuleOp parent = getOperation();
+    for (unsigned index = 0; index < testRawDepth; ++index) {
+      auto nested = mlir::ModuleOp::create(parent.getLoc());
+      parent.getBody()->push_back(nested);
+      parent = nested;
     }
-    if (!quoted && input.substr(index).starts_with("/*")) {
-      unsigned commentDepth = 1;
-      index += 2;
-      while (index < input.size() && commentDepth) {
-        if (input.substr(index).starts_with("/*")) {
-          ++commentDepth;
-          index += 2;
-        } else if (input.substr(index).starts_with("*/")) {
-          --commentDepth;
-          index += 2;
-        } else {
-          ++index;
-        }
-      }
-      --index;
-      continue;
-    }
-    char value = input[index];
-    if (quoted) {
-      if (!escaped && value == '"')
-        quoted = false;
-      escaped = !escaped && value == '\\';
-      if (value != '\\')
-        escaped = false;
-      continue;
-    }
-    if (value == '"') {
-      quoted = true;
-      continue;
-    }
-    if (value == '{') {
-      if (++depth > kParserSafetyDepth)
-        return true;
-    } else if (value == '}' && depth) {
-      --depth;
+    if (testRawMalformed) {
+      mlir::OperationState state(parent.getLoc(), "scf.yield");
+      parent.getBody()->push_back(mlir::Operation::create(state));
     }
   }
-  return false;
-}
+};
+
+class TestPassTrace final : public mlir::PassInstrumentation {
+public:
+  void runBeforePass(mlir::Pass *pass, mlir::Operation *) final {
+    llvm::errs() << "enter:" << pass->getArgument() << '\n';
+  }
+  void runAfterPass(mlir::Pass *pass, mlir::Operation *) final {
+    llvm::errs() << "complete:" << pass->getArgument() << '\n';
+  }
+  void runAfterPassFailed(mlir::Pass *pass, mlir::Operation *) final {
+    llvm::errs() << "fail:" << pass->getArgument() << '\n';
+  }
+};
+#endif
 
 } // namespace
 
@@ -162,6 +158,12 @@ int main(int argc, char **argv) {
       .setPassPipelineSetupFn([commandLineConfig,
                                bindingOptions = std::move(*bindingOptions)](
                                   mlir::PassManager &passManager) {
+#ifdef ACIR_INTERNAL_TEST_TOOL
+        if (testPassTrace)
+          passManager.addInstrumentation(std::make_unique<TestPassTrace>());
+        if (testRawDepth)
+          passManager.addPass(std::make_unique<MaterializeRawDepthPass>());
+#endif
         passManager.addPass(acir::createNormalizeACIRFilePass());
         passManager.addPass(acir::createVerifyACIRFilePass());
         if (mlir::failed(commandLineConfig.setupPassPipeline(passManager)))
@@ -186,11 +188,6 @@ int main(int argc, char **argv) {
   llvm::StringRef contents = input->getBuffer();
   bool isBytecode = contents.size() >= 4 &&
                     contents.take_front(4) == llvm::StringRef("ML\xefR", 4);
-  if (!isBytecode && exceedsSafeTextualDelimiterDepth(contents)) {
-    llvm::errs() << "error: whole-model region nesting exceeds ACIR v0.1 "
-                    "capability limit 512\n";
-    return EXIT_FAILURE;
-  }
 #ifndef ACIR_INTERNAL_TEST_TOOL
   if (!isBytecode) {
     switch (scanCanonicalAssembly(contents)) {

@@ -7,6 +7,8 @@
 // RUN: %not %acir_opt --verify-each=false %t/cyclic-cf.mlir 2>&1 | %FileCheck %s --check-prefix=CF
 // RUN: %not %acir_opt --verify-each=false %t/recursive-call.mlir 2>&1 | %FileCheck %s --check-prefix=RECURSION
 // RUN: %not %acir_opt --verify-each=false %t/external-call.mlir 2>&1 | %FileCheck %s --check-prefix=EXTERNAL
+// RUN: %not %acir_opt --verify-each=false %t/callee-dynamic-no-suspend.mlir 2>&1 | %FileCheck %s --check-prefix=CALLEEDYNAMIC
+// RUN: %not %acir_opt --verify-each=false %t/callee-unsupported.mlir 2>&1 | %FileCheck %s --check-prefix=CALLEEBAD
 
 //--- static.mlir
 builtin.module attributes {ac.contract_epoch = "0.1"} {
@@ -125,3 +127,39 @@ builtin.module attributes {ac.contract_epoch = "0.1"} {
   }
 }
 // EXTERNAL: process func.call callee '@external' has no body and cannot be proven effect-free
+
+//--- callee-dynamic-no-suspend.mlir
+builtin.module attributes {ac.contract_epoch = "0.1"} {
+  func.func @loop(%l : index, %u : index, %s : index) {
+    scf.for %i = %l to %u step %s { scf.yield }
+    return
+  }
+  ac.module @Top(index, index, index) parameters {} graph {
+  ^bb0(%l : index, %u : index, %s : index):
+    ac.process @workload kind "workload" captures(%l, %u, %s : index, index, index) {
+    ^bb0(%pl : index, %pu : index, %ps : index):
+      func.call @loop(%pl, %pu, %ps) : (index, index, index) -> ()
+      ac.yield_sim
+    }
+    ac.return
+  }
+}
+// CALLEEDYNAMIC: dynamic scf.for requires every reachable backedge to suspend
+
+//--- callee-unsupported.mlir
+builtin.module attributes {ac.contract_epoch = "0.1"} {
+  func.func @bad() {
+  ^entry:
+    cf.br ^cycle
+  ^cycle:
+    cf.br ^cycle
+  }
+  ac.module @Top() parameters {} graph {
+    ac.process @workload kind "workload" {
+      func.call @bad() : () -> ()
+      ac.yield_sim
+    }
+    ac.return
+  }
+}
+// CALLEEBAD: ac.process contains unsupported operation cf.br

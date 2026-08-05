@@ -395,8 +395,7 @@ struct ExpandedAction {
   std::vector<uint64_t> iterationVector;
   std::vector<ProcessPlannedValue> operands;
   std::vector<ProcessPlannedValue> results;
-  std::string scalarOperation;
-  std::string scalarPredicate;
+  std::optional<ProcessScalarOperationPlan> scalarOperation;
 };
 
 struct ExpandedProcess {
@@ -404,11 +403,18 @@ struct ExpandedProcess {
   std::string definitionKey;
   std::vector<ExpandedAction> actions;
   std::vector<ExpandedForwarding> forwarding;
+  uint64_t expandedNodes = 0;
+  uint64_t expandedEdges = 0;
 };
 
 mlir::FailureOr<ExpandedProcess> expandProcessForPlanning(
     ac::ProcessOp process,
     const ac::RawModelStructureLimits &limits = ac::RawModelStructureLimits());
+
+llvm::Expected<std::string>
+canonicalProcessOccurrenceJSON(const ProcessOccurrenceId &occurrence);
+llvm::Expected<std::string>
+hashProcessOccurrence(const ProcessOccurrenceId &occurrence);
 
 class PlanSetBuilder {
 public:
