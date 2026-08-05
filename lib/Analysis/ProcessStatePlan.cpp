@@ -216,10 +216,19 @@ detail::PlanSetBuilder::buildEmpty(mlir::ModuleOp module) {
 
 mlir::FailureOr<ProcessStatePlanSet>
 detail::PlanSetBuilder::buildYieldOnly(mlir::ModuleOp module) {
+  return buildFrozenFixture(module, /*requireYieldOnly=*/true);
+}
+
+mlir::FailureOr<ProcessStatePlanSet>
+detail::PlanSetBuilder::buildFrozenFixture(mlir::ModuleOp module,
+                                           bool requireYieldOnly) {
   auto frozenEpoch = module->getAttrOfType<mlir::StringAttr>("ac.freeze_epoch");
   if (!frozenEpoch || frozenEpoch.getValue() != "0.1") {
-    module.emitError(
-        "yield-only process-state fixture requires a frozen v0.1 model");
+    module.emitError(requireYieldOnly
+                         ? "yield-only process-state fixture requires a frozen "
+                           "v0.1 model"
+                         : "loop-action process-state fixture requires a "
+                           "frozen v0.1 model");
     return mlir::failure();
   }
 
@@ -239,9 +248,11 @@ detail::PlanSetBuilder::buildYieldOnly(mlir::ModuleOp module) {
       yield = candidate;
       ++yieldCount;
     });
+    bool validBody = process.getBody().hasOneBlock() &&
+                     (!requireYieldOnly ||
+                      llvm::hasSingleElement(process.getBody().front()));
     if (!owner || !moduleName || !processName || yieldCount != 1 ||
-        !process.getBody().hasOneBlock() ||
-        !llvm::hasSingleElement(process.getBody().front())) {
+        !validBody) {
       fixtures.push_back({{}, process, {}});
       return;
     }
@@ -249,15 +260,22 @@ detail::PlanSetBuilder::buildYieldOnly(mlir::ModuleOp module) {
         {("@" + moduleName.str() + "::@" + processName.str()), process, yield});
   });
   if (fixtures.empty()) {
-    module.emitError(
-        "yield-only process-state fixture requires at least one ac.process");
+    module.emitError(requireYieldOnly
+                         ? "yield-only process-state fixture requires at least "
+                           "one ac.process"
+                         : "loop-action process-state fixture requires exactly "
+                           "one ac.process");
     return mlir::failure();
   }
   if (llvm::any_of(fixtures, [](const ProcessFixture &fixture) {
         return fixture.definitionKey.empty() || !fixture.yield;
       })) {
-    module.emitError("yield-only process-state fixture requires exactly one "
-                     "ac.yield_sim per process and no other operations");
+    module.emitError(
+        requireYieldOnly
+            ? "yield-only process-state fixture requires exactly "
+              "one ac.yield_sim per process and no other operations"
+            : "loop-action process-state fixture requires exactly "
+              "one ac.yield_sim per process");
     return mlir::failure();
   }
   llvm::sort(fixtures,
@@ -266,8 +284,11 @@ detail::PlanSetBuilder::buildYieldOnly(mlir::ModuleOp module) {
              });
   for (auto [index, fixture] : llvm::enumerate(fixtures))
     if (index && fixtures[index - 1].definitionKey == fixture.definitionKey) {
-      module.emitError(
-          "yield-only process-state fixture has duplicate definition key");
+      module.emitError(requireYieldOnly
+                           ? "yield-only process-state fixture has duplicate "
+                             "definition key"
+                           : "loop-action process-state fixture has duplicate "
+                             "definition key");
       return mlir::failure();
     }
 
@@ -319,7 +340,14 @@ detail::PlanSetBuilder::buildYieldOnly(mlir::ModuleOp module) {
   auto setImpl = std::make_shared<ProcessStatePlanSet::Impl>();
   setImpl->callees.push_back(callee);
   for (ProcessFixture &fixture : fixtures) {
-    std::string operationPath = fixture.definitionKey + "/r0/b0/o0";
+    uint32_t yieldOrdinal = 0;
+    for (mlir::Operation &operation : fixture.process.getBody().front()) {
+      if (&operation == fixture.yield.getOperation())
+        break;
+      ++yieldOrdinal;
+    }
+    std::string operationPath =
+        fixture.definitionKey + "/r0/b0/o" + std::to_string(yieldOrdinal);
     auto originalImpl = std::make_shared<ProcessOriginalOccurrence::Impl>();
     originalImpl->operation = fixture.yield;
     originalImpl->operationPath = operationPath;
@@ -382,6 +410,125 @@ detail::PlanSetBuilder::buildYieldOnly(mlir::ModuleOp module) {
     setImpl->processes.push_back(ProcessStatePlan(processImpl));
   }
   return ProcessStatePlanSet(setImpl);
+}
+
+mlir::FailureOr<ProcessStatePlanSet>
+detail::PlanSetBuilder::buildLoopActionFixture(mlir::ModuleOp module) {
+  auto built = buildFrozenFixture(module, /*requireYieldOnly=*/false);
+  if (mlir::failed(built))
+    return mlir::failure();
+  if (built->impl_->processes.size() != 1) {
+    module.emitError(
+        "loop-action process-state fixture requires exactly one ac.process");
+    return mlir::failure();
+  }
+
+  auto process = std::make_shared<ProcessStatePlan::Impl>(
+      *built->impl_->processes.front().impl_);
+  llvm::SmallVector<mlir::scf::ForOp> loops;
+  process->process.walk([&](mlir::scf::ForOp loop) { loops.push_back(loop); });
+  if (loops.size() != 2) {
+    module.emitError(
+        "loop-action process-state fixture requires exactly two scf.for "
+        "operations");
+    return mlir::failure();
+  }
+
+  uint32_t loopOrdinal = 0;
+  for (mlir::Operation &operation : process->process.getBody().front()) {
+    if (&operation == loops.front().getOperation())
+      break;
+    ++loopOrdinal;
+  }
+  auto original = std::make_shared<ProcessOriginalOccurrence::Impl>();
+  original->operation = loops.front();
+  original->operationPath =
+      process->definitionKey + "/r0/b0/o" + std::to_string(loopOrdinal);
+  auto anchor = std::make_shared<ProcessOccurrenceId::Impl>();
+  anchor->kind = ProcessOccurrenceKind::Original;
+  anchor->original = ProcessOriginalOccurrence(original);
+  ProcessOccurrenceId loopAnchor(anchor);
+
+  auto makeLoopOccurrence = [&](ProcessLoopPhase phase) {
+    auto loop = std::make_shared<ProcessSyntheticLoopOccurrence::Impl>();
+    loop->anchor = loopAnchor;
+    loop->phase = phase;
+    auto occurrence = std::make_shared<ProcessOccurrenceId::Impl>();
+    occurrence->kind = ProcessOccurrenceKind::SyntheticLoop;
+    occurrence->syntheticLoop = ProcessSyntheticLoopOccurrence(loop);
+    return ProcessOccurrenceId(occurrence);
+  };
+  auto makeConstant = [](mlir::Type type, llvm::StringRef literal) {
+    auto constant = std::make_shared<ProcessConstantPlannedValue::Impl>();
+    constant->value = literal.str();
+    auto value = std::make_shared<ProcessPlannedValue::Impl>();
+    value->kind = ProcessPlannedValueKind::Constant;
+    value->type = type;
+    value->constant = ProcessConstantPlannedValue(constant);
+    return ProcessPlannedValue(value);
+  };
+
+  mlir::MLIRContext *context = module.getContext();
+  mlir::Type indexType = mlir::IndexType::get(context);
+  ProcessPlannedValue lower = makeConstant(indexType, "0");
+  ProcessPlannedValue upper = makeConstant(indexType, "4");
+  ProcessPlannedValue step = makeConstant(indexType, "1");
+  ProcessPlannedValue condition =
+      makeConstant(mlir::IntegerType::get(context, 1), "true");
+
+  auto predicate = std::make_shared<ProcessScalarAttribute::Impl>();
+  predicate->name = "predicate";
+  predicate->value = "2 : i64";
+  auto comparison = std::make_shared<ProcessScalarOperationPlan::Impl>();
+  comparison->name = "arith.cmpi";
+  comparison->attributes.push_back(ProcessScalarAttribute(predicate));
+  comparison->properties = "{}";
+  auto increment = std::make_shared<ProcessScalarOperationPlan::Impl>();
+  increment->name = "arith.addi";
+  increment->properties = "{}";
+
+  auto makeAction =
+      [&](uint32_t id, ProcessActionKind kind, ProcessEmissionClass emission,
+          ProcessLoopPhase phase, std::vector<ProcessPlannedValue> operands,
+          std::vector<ProcessPlannedValue> results,
+          std::shared_ptr<ProcessScalarOperationPlan::Impl> scalarOperation) {
+        auto action = std::make_shared<ProcessActionPlan::Impl>();
+        action->id = id;
+        action->kind = kind;
+        action->emission = emission;
+        action->occurrence = makeLoopOccurrence(phase);
+        action->sourceOperation = loops.front();
+        action->operands = std::move(operands);
+        action->results = std::move(results);
+        action->cost = emission == ProcessEmissionClass::ForwardOnly ? 0 : 1;
+        for (const ProcessPlannedValue &result : action->results)
+          action->resultTypes.push_back(result.type());
+        if (scalarOperation)
+          action->scalarOp =
+              ProcessScalarOperationPlan(std::move(scalarOperation));
+        return ProcessActionPlan(action);
+      };
+
+  auto block =
+      std::make_shared<ProcessBlockPlan::Impl>(*process->blocks.front().impl_);
+  block->actions = {
+      makeAction(0, ProcessActionKind::ForInitialize,
+                 ProcessEmissionClass::ForwardOnly,
+                 ProcessLoopPhase::Initialize, {lower}, {lower}, nullptr),
+      makeAction(1, ProcessActionKind::ForCondition,
+                 ProcessEmissionClass::CopyScalar, ProcessLoopPhase::Condition,
+                 {lower, upper}, {condition}, comparison),
+      makeAction(2, ProcessActionKind::ForIncrement,
+                 ProcessEmissionClass::CopyScalar, ProcessLoopPhase::Increment,
+                 {lower, step}, {step}, increment),
+  };
+  block->cost = 4;
+  process->blocks.front() = ProcessBlockPlan(block);
+  process->fairnessWork = 4;
+
+  auto impl = std::make_shared<ProcessStatePlanSet::Impl>(*built->impl_);
+  impl->processes.front() = ProcessStatePlan(process);
+  return ProcessStatePlanSet(impl);
 }
 
 ProcessStatePlanSet detail::PlanSetBuilder::cloneWithCorruption(
@@ -706,134 +853,211 @@ detail::PlanSetBuilder::cloneWithUnexpectedConstantActionSource(
 
 ProcessStatePlanSet detail::PlanSetBuilder::cloneWithNonLoopForActionSource(
     const ProcessStatePlanSet &plans) {
-  auto impl = std::make_shared<ProcessStatePlanSet::Impl>(*plans.impl_);
-  auto process =
-      std::make_shared<ProcessStatePlan::Impl>(*impl->processes.front().impl_);
-  auto block =
-      std::make_shared<ProcessBlockPlan::Impl>(*process->blocks.front().impl_);
-  auto loop = std::make_shared<ProcessSyntheticLoopOccurrence::Impl>();
-  loop->anchor = *process->wakes.front().impl_->occurrence;
-  loop->phase = ProcessLoopPhase::Condition;
-  auto occurrence = std::make_shared<ProcessOccurrenceId::Impl>();
-  occurrence->kind = ProcessOccurrenceKind::SyntheticLoop;
-  occurrence->syntheticLoop = ProcessSyntheticLoopOccurrence(loop);
-  auto scalarOp = std::make_shared<ProcessScalarOperationPlan::Impl>();
-  scalarOp->name = "arith.cmpi";
-  scalarOp->properties = "{}";
-  auto action = std::make_shared<ProcessActionPlan::Impl>();
-  action->id = 0;
-  action->kind = ProcessActionKind::ForCondition;
-  action->emission = ProcessEmissionClass::CopyScalar;
-  action->occurrence = ProcessOccurrenceId(occurrence);
-  action->sourceOperation = process->wakes.front().impl_->operation;
-  action->scalarOp = ProcessScalarOperationPlan(scalarOp);
-  action->cost = 1;
-  block->actions.push_back(ProcessActionPlan(action));
-  process->blocks.front() = ProcessBlockPlan(block);
-  impl->processes.front() = ProcessStatePlan(process);
-  return ProcessStatePlanSet(impl);
+  return cloneLoopActionWithMutationForTest(
+      plans, /*actionIndex=*/1, LoopActionMutationForTest::NonLoopSource);
 }
 
-ProcessStatePlanSet detail::PlanSetBuilder::cloneWithLoopActionForTest(
-    const ProcessStatePlanSet &plans, ProcessActionKind kind,
-    ProcessEmissionClass emission, llvm::StringRef scalarName) {
-  auto impl = std::make_shared<ProcessStatePlanSet::Impl>(*plans.impl_);
-  auto process =
-      std::make_shared<ProcessStatePlan::Impl>(*impl->processes.front().impl_);
-  auto block =
-      std::make_shared<ProcessBlockPlan::Impl>(*process->blocks.front().impl_);
+ProcessStatePlanSet
+detail::PlanSetBuilder::cloneWithForInitializeWrongOwningLoopSource(
+    const ProcessStatePlanSet &plans) {
+  return cloneLoopActionWithMutationForTest(
+      plans, /*actionIndex=*/0,
+      LoopActionMutationForTest::WrongOwningLoopSource);
+}
 
-  mlir::ModuleOp module = process->process->getParentOfType<mlir::ModuleOp>();
-  module.getContext()->getOrLoadDialect<mlir::scf::SCFDialect>();
-  mlir::OpBuilder builder(module.getContext());
-  builder.setInsertionPointToEnd(module.getBody());
-  mlir::OperationState state(process->process.getLoc(),
-                             mlir::scf::ForOp::getOperationName());
-  state.addRegion();
-  mlir::Operation *loopOperation = builder.create(state);
+ProcessStatePlanSet
+detail::PlanSetBuilder::cloneWithForConditionWrongOwningLoopSource(
+    const ProcessStatePlanSet &plans) {
+  return cloneLoopActionWithMutationForTest(
+      plans, /*actionIndex=*/1,
+      LoopActionMutationForTest::WrongOwningLoopSource);
+}
 
-  auto loop = std::make_shared<ProcessSyntheticLoopOccurrence::Impl>();
-  loop->anchor = *process->wakes.front().impl_->occurrence;
-  loop->phase = kind == ProcessActionKind::ForCondition
-                    ? ProcessLoopPhase::Condition
-                    : ProcessLoopPhase::Increment;
-  auto occurrence = std::make_shared<ProcessOccurrenceId::Impl>();
-  occurrence->kind = ProcessOccurrenceKind::SyntheticLoop;
-  occurrence->syntheticLoop = ProcessSyntheticLoopOccurrence(loop);
-  auto action = std::make_shared<ProcessActionPlan::Impl>();
-  action->id = 0;
-  action->kind = kind;
-  action->emission = emission;
-  action->occurrence = ProcessOccurrenceId(occurrence);
-  action->sourceOperation = loopOperation;
-  action->cost = emission == ProcessEmissionClass::ForwardOnly ? 0 : 1;
-  auto makeConstant = [&](mlir::Type type, llvm::StringRef literal) {
-    auto constant = std::make_shared<ProcessConstantPlannedValue::Impl>();
-    constant->value = literal.str();
-    auto value = std::make_shared<ProcessPlannedValue::Impl>();
-    value->kind = ProcessPlannedValueKind::Constant;
-    value->type = type;
-    value->constant = ProcessConstantPlannedValue(constant);
-    return ProcessPlannedValue(value);
-  };
-  mlir::Type indexType = mlir::IndexType::get(module.getContext());
-  if (kind == ProcessActionKind::ForCondition) {
-    action->operands = {makeConstant(indexType, "0"),
-                        makeConstant(indexType, "8")};
-    action->results = {
-        makeConstant(mlir::IntegerType::get(module.getContext(), 1), "true")};
-  } else {
-    action->operands = {makeConstant(indexType, "0"),
-                        makeConstant(indexType, "1")};
-    action->results = {makeConstant(indexType, "1")};
-  }
-  for (const ProcessPlannedValue &result : action->results)
-    action->resultTypes.push_back(result.type());
-  if (!scalarName.empty()) {
-    auto scalarOp = std::make_shared<ProcessScalarOperationPlan::Impl>();
-    scalarOp->name = scalarName.str();
-    scalarOp->properties = "{}";
-    if (kind == ProcessActionKind::ForCondition) {
-      auto predicate = std::make_shared<ProcessScalarAttribute::Impl>();
-      predicate->name = "predicate";
-      predicate->value = "2 : i64";
-      scalarOp->attributes.push_back(ProcessScalarAttribute(predicate));
-    }
-    action->scalarOp = ProcessScalarOperationPlan(scalarOp);
-  }
-  block->actions.push_back(ProcessActionPlan(action));
-  block->cost += action->cost;
-  process->blocks.front() = ProcessBlockPlan(block);
-  impl->processes.front() = ProcessStatePlan(process);
-  return ProcessStatePlanSet(impl);
+ProcessStatePlanSet
+detail::PlanSetBuilder::cloneWithForIncrementWrongOwningLoopSource(
+    const ProcessStatePlanSet &plans) {
+  return cloneLoopActionWithMutationForTest(
+      plans, /*actionIndex=*/2,
+      LoopActionMutationForTest::WrongOwningLoopSource);
+}
+
+ProcessStatePlanSet
+detail::PlanSetBuilder::cloneWithForConditionWrongResultType(
+    const ProcessStatePlanSet &plans) {
+  return cloneLoopActionWithMutationForTest(
+      plans, /*actionIndex=*/1, LoopActionMutationForTest::WrongResultType);
+}
+
+ProcessStatePlanSet
+detail::PlanSetBuilder::cloneWithForIncrementWrongResultType(
+    const ProcessStatePlanSet &plans) {
+  return cloneLoopActionWithMutationForTest(
+      plans, /*actionIndex=*/2, LoopActionMutationForTest::WrongResultType);
+}
+
+ProcessStatePlanSet detail::PlanSetBuilder::cloneWithForConditionInactiveCallee(
+    const ProcessStatePlanSet &plans) {
+  return cloneLoopActionWithMutationForTest(
+      plans, /*actionIndex=*/1, LoopActionMutationForTest::InactiveCallee);
+}
+
+ProcessStatePlanSet
+detail::PlanSetBuilder::cloneWithForInitializeInactiveScalar(
+    const ProcessStatePlanSet &plans) {
+  return cloneLoopActionWithMutationForTest(
+      plans, /*actionIndex=*/0, LoopActionMutationForTest::InactiveScalar);
 }
 
 ProcessStatePlanSet detail::PlanSetBuilder::cloneWithForConditionWrongEmission(
     const ProcessStatePlanSet &plans) {
-  return cloneWithLoopActionForTest(plans, ProcessActionKind::ForCondition,
-                                    ProcessEmissionClass::ForwardOnly,
-                                    /*scalarName=*/{});
+  return cloneLoopActionWithMutationForTest(
+      plans, /*actionIndex=*/1, LoopActionMutationForTest::WrongEmission);
 }
 
 ProcessStatePlanSet detail::PlanSetBuilder::cloneWithForConditionWrongScalarOp(
     const ProcessStatePlanSet &plans) {
-  return cloneWithLoopActionForTest(plans, ProcessActionKind::ForCondition,
-                                    ProcessEmissionClass::CopyScalar,
-                                    "arith.addi");
+  return cloneLoopActionWithMutationForTest(
+      plans, /*actionIndex=*/1, LoopActionMutationForTest::WrongScalarName);
 }
 
 ProcessStatePlanSet detail::PlanSetBuilder::cloneWithForIncrementWrongEmission(
     const ProcessStatePlanSet &plans) {
-  return cloneWithLoopActionForTest(plans, ProcessActionKind::ForIncrement,
-                                    ProcessEmissionClass::ForwardOnly,
-                                    /*scalarName=*/{});
+  return cloneLoopActionWithMutationForTest(
+      plans, /*actionIndex=*/2, LoopActionMutationForTest::WrongEmission);
 }
 
 ProcessStatePlanSet detail::PlanSetBuilder::cloneWithForIncrementWrongScalarOp(
     const ProcessStatePlanSet &plans) {
-  return cloneWithLoopActionForTest(plans, ProcessActionKind::ForIncrement,
-                                    ProcessEmissionClass::CopyScalar,
-                                    "arith.cmpi");
+  return cloneLoopActionWithMutationForTest(
+      plans, /*actionIndex=*/2, LoopActionMutationForTest::WrongScalarName);
+}
+
+ProcessStatePlanSet detail::PlanSetBuilder::cloneLoopActionWithMutationForTest(
+    const ProcessStatePlanSet &plans, uint32_t actionIndex,
+    LoopActionMutationForTest mutation) {
+  auto impl = std::make_shared<ProcessStatePlanSet::Impl>(*plans.impl_);
+  auto process =
+      std::make_shared<ProcessStatePlan::Impl>(*impl->processes.front().impl_);
+  auto block =
+      std::make_shared<ProcessBlockPlan::Impl>(*process->blocks.front().impl_);
+  assert(actionIndex < block->actions.size() &&
+         "loop-action corruption requires a valid fixture action");
+  auto action = std::make_shared<ProcessActionPlan::Impl>(
+      *block->actions[actionIndex].impl_);
+  auto cloneScalarOperation = [&]() {
+    assert(action->scalarOp && action->scalarOp->impl_ &&
+           "loop-action scalar corruption requires scalar storage");
+    return std::make_shared<ProcessScalarOperationPlan::Impl>(
+        *action->scalarOp->impl_);
+  };
+
+  switch (mutation) {
+  case LoopActionMutationForTest::WrongOwningLoopSource: {
+    llvm::SmallVector<mlir::scf::ForOp> loops;
+    process->process.walk(
+        [&](mlir::scf::ForOp loop) { loops.push_back(loop); });
+    assert(loops.size() == 2 &&
+           "loop-action source corruption requires two frozen loops");
+    action->sourceOperation = loops.back();
+    break;
+  }
+  case LoopActionMutationForTest::NonLoopSource:
+    action->sourceOperation = process->wakes.front().impl_->operation;
+    break;
+  case LoopActionMutationForTest::WrongResultType: {
+    assert(action->results.size() == 1 &&
+           "loop-action result corruption requires one result");
+    auto result = std::make_shared<ProcessPlannedValue::Impl>(
+        *action->results.front().impl_);
+    result->type =
+        action->kind == ProcessActionKind::ForCondition
+            ? mlir::Type(mlir::IndexType::get(process->process.getContext()))
+            : mlir::Type(
+                  mlir::IntegerType::get(process->process.getContext(), 1));
+    action->results.front() = ProcessPlannedValue(result);
+    break;
+  }
+  case LoopActionMutationForTest::InactiveCallee:
+    action->callee = ProcessCalleeId(0);
+    break;
+  case LoopActionMutationForTest::InactiveScalar:
+    assert(block->actions.size() > 1 && block->actions[1].impl_->scalarOp &&
+           "loop-action scalar corruption requires a condition action");
+    action->scalarOp = block->actions[1].impl_->scalarOp;
+    break;
+  case LoopActionMutationForTest::WrongEmission:
+    action->emission = ProcessEmissionClass::Inline;
+    break;
+  case LoopActionMutationForTest::WrongScalarName: {
+    auto scalar = cloneScalarOperation();
+    scalar->name = action->kind == ProcessActionKind::ForCondition
+                       ? "arith.addi"
+                       : "arith.cmpi";
+    action->scalarOp = ProcessScalarOperationPlan(scalar);
+    break;
+  }
+  case LoopActionMutationForTest::MissingScalar:
+    action->scalarOp.reset();
+    break;
+  case LoopActionMutationForTest::WrongScalarProperties: {
+    auto scalar = cloneScalarOperation();
+    scalar->properties = "{unexpected = true}";
+    action->scalarOp = ProcessScalarOperationPlan(scalar);
+    break;
+  }
+  case LoopActionMutationForTest::WrongScalarAttributeCount: {
+    auto scalar = cloneScalarOperation();
+    if (action->kind == ProcessActionKind::ForCondition) {
+      scalar->attributes.clear();
+    } else {
+      auto unexpected = std::make_shared<ProcessScalarAttribute::Impl>();
+      unexpected->name = "unexpected";
+      unexpected->value = "true";
+      scalar->attributes.push_back(ProcessScalarAttribute(unexpected));
+    }
+    action->scalarOp = ProcessScalarOperationPlan(scalar);
+    break;
+  }
+  case LoopActionMutationForTest::WrongScalarAttributeName:
+  case LoopActionMutationForTest::WrongScalarAttributeValue: {
+    auto scalar = cloneScalarOperation();
+    assert(scalar->attributes.size() == 1 && scalar->attributes.front().impl_ &&
+           "loop-action attribute corruption requires one attribute");
+    auto attribute = std::make_shared<ProcessScalarAttribute::Impl>(
+        *scalar->attributes.front().impl_);
+    if (mutation == LoopActionMutationForTest::WrongScalarAttributeName)
+      attribute->name = "unexpected";
+    else
+      attribute->value = "3 : i64";
+    scalar->attributes.front() = ProcessScalarAttribute(attribute);
+    action->scalarOp = ProcessScalarOperationPlan(scalar);
+    break;
+  }
+  case LoopActionMutationForTest::WrongOperandCount:
+    assert(!action->operands.empty() &&
+           "loop-action operand corruption requires an operand");
+    action->operands.pop_back();
+    break;
+  case LoopActionMutationForTest::WrongOperandType: {
+    assert(!action->operands.empty() && action->operands.front().impl_ &&
+           "loop-action operand corruption requires an operand");
+    auto operand = std::make_shared<ProcessPlannedValue::Impl>(
+        *action->operands.front().impl_);
+    operand->type = mlir::IntegerType::get(process->process.getContext(), 1);
+    action->operands.front() = ProcessPlannedValue(operand);
+    break;
+  }
+  case LoopActionMutationForTest::WrongResultCount:
+    assert(!action->results.empty() &&
+           "loop-action result corruption requires a result");
+    action->results.pop_back();
+    break;
+  }
+
+  block->actions[actionIndex] = ProcessActionPlan(action);
+  process->blocks.front() = ProcessBlockPlan(block);
+  impl->processes.front() = ProcessStatePlan(process);
+  return ProcessStatePlanSet(impl);
 }
 
 ProcessStatePlanSet detail::PlanSetBuilder::cloneWithLongLocalChain(
@@ -2394,9 +2618,23 @@ detail::PlanSetBuilder::structuralError(const ProcessStatePlanSet &plans) {
             action.impl_->kind == ProcessActionKind::ForInitialize ||
             action.impl_->kind == ProcessActionKind::ForCondition ||
             action.impl_->kind == ProcessActionKind::ForIncrement;
-        if (isLoopAction &&
-            !mlir::isa<mlir::scf::ForOp>(action.impl_->sourceOperation))
-          return "process-state plan invariant violated: invalid action arm";
+        if (isLoopAction) {
+          if (!mlir::isa<mlir::scf::ForOp>(action.impl_->sourceOperation))
+            return "process-state plan invariant violated: invalid action arm";
+          const ProcessOccurrenceId::Impl &occurrence =
+              *action.impl_->occurrence->impl_;
+          if (occurrence.kind != ProcessOccurrenceKind::SyntheticLoop ||
+              !occurrence.syntheticLoop ||
+              !occurrence.syntheticLoop->impl_->anchor)
+            return "process-state plan invariant violated: invalid action arm";
+          const ProcessOccurrenceId &anchor =
+              *occurrence.syntheticLoop->impl_->anchor;
+          if (anchor.impl_->kind != ProcessOccurrenceKind::Original ||
+              !anchor.impl_->original ||
+              anchor.impl_->original->impl_->operation !=
+                  action.impl_->sourceOperation)
+            return "process-state plan invariant violated: invalid action arm";
+        }
         for (const ProcessPlannedValue &value : action.impl_->operands)
           if (!validPlannedValue(value))
             return "process-state plan invariant violated: invalid planned "

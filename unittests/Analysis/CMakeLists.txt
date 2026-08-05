@@ -30,6 +30,7 @@ target_link_libraries(ACIRProcessStatePlanTests PRIVATE
   ACIRTransforms
   ACSimDialect
   MLIRAsmParser
+  MLIRBytecodeWriter
   MLIRIndexDialect
   MLIRIR
   MLIRParser

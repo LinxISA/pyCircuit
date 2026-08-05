@@ -382,9 +382,29 @@ namespace detail {
 
 class PlanSetBuilder {
 public:
+  enum class LoopActionMutationForTest {
+    WrongOwningLoopSource,
+    NonLoopSource,
+    WrongResultType,
+    InactiveCallee,
+    InactiveScalar,
+    WrongEmission,
+    WrongScalarName,
+    MissingScalar,
+    WrongScalarProperties,
+    WrongScalarAttributeCount,
+    WrongScalarAttributeName,
+    WrongScalarAttributeValue,
+    WrongOperandCount,
+    WrongOperandType,
+    WrongResultCount,
+  };
+
   static mlir::FailureOr<ProcessStatePlanSet> buildEmpty(mlir::ModuleOp module);
   static mlir::FailureOr<ProcessStatePlanSet>
   buildYieldOnly(mlir::ModuleOp module);
+  static mlir::FailureOr<ProcessStatePlanSet>
+  buildLoopActionFixture(mlir::ModuleOp module);
   static ProcessStatePlanSet
   cloneWithCorruption(const ProcessStatePlanSet &plans,
                       ProcessStatePlanCorruptionForTest corruption);
@@ -409,6 +429,20 @@ public:
   static ProcessStatePlanSet
   cloneWithNonLoopForActionSource(const ProcessStatePlanSet &plans);
   static ProcessStatePlanSet
+  cloneWithForInitializeWrongOwningLoopSource(const ProcessStatePlanSet &plans);
+  static ProcessStatePlanSet
+  cloneWithForConditionWrongOwningLoopSource(const ProcessStatePlanSet &plans);
+  static ProcessStatePlanSet
+  cloneWithForIncrementWrongOwningLoopSource(const ProcessStatePlanSet &plans);
+  static ProcessStatePlanSet
+  cloneWithForConditionWrongResultType(const ProcessStatePlanSet &plans);
+  static ProcessStatePlanSet
+  cloneWithForIncrementWrongResultType(const ProcessStatePlanSet &plans);
+  static ProcessStatePlanSet
+  cloneWithForConditionInactiveCallee(const ProcessStatePlanSet &plans);
+  static ProcessStatePlanSet
+  cloneWithForInitializeInactiveScalar(const ProcessStatePlanSet &plans);
+  static ProcessStatePlanSet
   cloneWithForConditionWrongEmission(const ProcessStatePlanSet &plans);
   static ProcessStatePlanSet
   cloneWithForConditionWrongScalarOp(const ProcessStatePlanSet &plans);
@@ -416,9 +450,10 @@ public:
   cloneWithForIncrementWrongEmission(const ProcessStatePlanSet &plans);
   static ProcessStatePlanSet
   cloneWithForIncrementWrongScalarOp(const ProcessStatePlanSet &plans);
-  static ProcessStatePlanSet cloneWithLoopActionForTest(
-      const ProcessStatePlanSet &plans, ProcessActionKind kind,
-      ProcessEmissionClass emission, llvm::StringRef scalarName);
+  static ProcessStatePlanSet
+  cloneLoopActionWithMutationForTest(const ProcessStatePlanSet &plans,
+                                     uint32_t actionIndex,
+                                     LoopActionMutationForTest mutation);
   static bool exerciseCompleteApiFixture(mlir::MLIRContext &context);
   static bool exerciseAllActionArmsFixture(mlir::MLIRContext &context);
   static ProcessStatePlanSet
@@ -434,6 +469,10 @@ public:
   static llvm::StringRef specializationBytes(const ProcessValueTypePlan &type);
   static bool validEdgeShape(const ProcessControlEdgePlan &edge);
   static llvm::StringRef structuralError(const ProcessStatePlanSet &plans);
+
+private:
+  static mlir::FailureOr<ProcessStatePlanSet>
+  buildFrozenFixture(mlir::ModuleOp module, bool requireYieldOnly);
 };
 
 llvm::StringRef

@@ -929,16 +929,6 @@ TEST(ProcessStatePlanBasicTest,
        "process-state plan invariant violated: invalid action arm"},
       {detail::PlanSetBuilder::cloneWithUnexpectedConstantActionSource,
        "process-state plan invariant violated: invalid action arm"},
-      {detail::PlanSetBuilder::cloneWithNonLoopForActionSource,
-       "process-state plan invariant violated: invalid action arm"},
-      {detail::PlanSetBuilder::cloneWithForConditionWrongEmission,
-       "process-state plan invariant violated: invalid action arm"},
-      {detail::PlanSetBuilder::cloneWithForConditionWrongScalarOp,
-       "process-state plan invariant violated: invalid action arm"},
-      {detail::PlanSetBuilder::cloneWithForIncrementWrongEmission,
-       "process-state plan invariant violated: invalid action arm"},
-      {detail::PlanSetBuilder::cloneWithForIncrementWrongScalarOp,
-       "process-state plan invariant violated: invalid action arm"},
   };
   for (auto [index, testCase] : llvm::enumerate(cases)) {
     SCOPED_TRACE(index);
@@ -950,6 +940,170 @@ TEST(ProcessStatePlanBasicTest,
     EXPECT_FALSE(static_cast<bool>(serialized));
     llvm::consumeError(serialized.takeError());
   }
+}
+
+TEST(ProcessStatePlanBasicTest,
+     FrozenLoopActionFixtureBuildsWithoutMutatingItsInputModule) {
+  mlir::DialectRegistry registry;
+  registerAllDialects(registry);
+  mlir::MLIRContext context(registry);
+  auto module = test::parseAndFreezeLoopActions(context);
+  ASSERT_TRUE(module);
+  const std::string textBefore = test::moduleText(*module);
+  const std::string bytecodeBefore = test::moduleBytecode(*module);
+  const std::string freezeSealBefore = test::moduleFreezeSeal(*module);
+  ASSERT_FALSE(bytecodeBefore.empty());
+  ASSERT_FALSE(freezeSealBefore.empty());
+
+  auto built = detail::PlanSetBuilder::buildLoopActionFixture(*module);
+  ASSERT_TRUE(mlir::succeeded(built));
+  ASSERT_TRUE(mlir::succeeded(verifyProcessStatePlan(*built)));
+  auto serialized = serializeProcessStatePlan(*built);
+  ASSERT_TRUE(static_cast<bool>(serialized));
+  ASSERT_EQ(built->processes().size(), 1U);
+  const auto &actions = built->processes().front().blocks().front().actions();
+  ASSERT_EQ(actions.size(), 3U);
+  EXPECT_EQ(actions[0].kind(), ProcessActionKind::ForInitialize);
+  EXPECT_EQ(actions[1].kind(), ProcessActionKind::ForCondition);
+  EXPECT_EQ(actions[2].kind(), ProcessActionKind::ForIncrement);
+  EXPECT_EQ(actions[0].sourceOperation(), actions[1].sourceOperation());
+  EXPECT_EQ(actions[1].sourceOperation(), actions[2].sourceOperation());
+  for (const ProcessActionPlan &action : actions) {
+    const ProcessOccurrenceId &anchor =
+        action.occurrence().syntheticLoop().anchor();
+    ASSERT_EQ(anchor.kind(), ProcessOccurrenceKind::Original);
+    EXPECT_EQ(anchor.original().operation(), action.sourceOperation());
+    EXPECT_EQ(anchor.original().operationPath(), "@Top::@workload/r0/b0/o3");
+    EXPECT_TRUE(anchor.original().iterationVector().empty());
+  }
+
+  EXPECT_EQ(test::moduleText(*module), textBefore);
+  EXPECT_EQ(test::moduleBytecode(*module), bytecodeBefore);
+  EXPECT_EQ(test::moduleFreezeSeal(*module), freezeSealBefore);
+}
+
+TEST(ProcessStatePlanBasicTest,
+     IsolatedLoopActionCorruptionsRejectWithoutMutatingFrozenInput) {
+  mlir::DialectRegistry registry;
+  registerAllDialects(registry);
+  mlir::MLIRContext context(registry);
+  auto module = test::parseAndFreezeLoopActions(context);
+  ASSERT_TRUE(module);
+  const std::string textBefore = test::moduleText(*module);
+  const std::string bytecodeBefore = test::moduleBytecode(*module);
+  const std::string freezeSealBefore = test::moduleFreezeSeal(*module);
+  ASSERT_FALSE(bytecodeBefore.empty());
+  ASSERT_FALSE(freezeSealBefore.empty());
+
+  auto built = detail::PlanSetBuilder::buildLoopActionFixture(*module);
+  ASSERT_TRUE(mlir::succeeded(built));
+  const ProcessStatePlanSet plan = std::move(*built);
+  ASSERT_TRUE(mlir::succeeded(verifyProcessStatePlan(plan)));
+
+  struct Case {
+    ProcessStatePlanSet (*corrupt)(const ProcessStatePlanSet &);
+    const char *name;
+    bool rejectedByStructuralPreflight;
+  };
+  const Case cases[] = {
+      {detail::PlanSetBuilder::cloneWithForInitializeWrongOwningLoopSource,
+       "for_initialize wrong owning-loop source", true},
+      {detail::PlanSetBuilder::cloneWithForConditionWrongOwningLoopSource,
+       "for_condition wrong owning-loop source", true},
+      {detail::PlanSetBuilder::cloneWithForIncrementWrongOwningLoopSource,
+       "for_increment wrong owning-loop source", true},
+      {detail::PlanSetBuilder::cloneWithNonLoopForActionSource,
+       "for_condition non-loop source", true},
+      {detail::PlanSetBuilder::cloneWithForConditionWrongResultType,
+       "for_condition wrong result type", false},
+      {detail::PlanSetBuilder::cloneWithForIncrementWrongResultType,
+       "for_increment wrong result type", false},
+      {detail::PlanSetBuilder::cloneWithForConditionInactiveCallee,
+       "for_condition inactive callee", true},
+      {detail::PlanSetBuilder::cloneWithForInitializeInactiveScalar,
+       "for_initialize inactive scalar", true},
+      {detail::PlanSetBuilder::cloneWithForConditionWrongEmission,
+       "for_condition wrong emission", true},
+      {detail::PlanSetBuilder::cloneWithForConditionWrongScalarOp,
+       "for_condition wrong scalar operation", false},
+      {detail::PlanSetBuilder::cloneWithForIncrementWrongEmission,
+       "for_increment wrong emission", true},
+      {detail::PlanSetBuilder::cloneWithForIncrementWrongScalarOp,
+       "for_increment wrong scalar operation", false},
+  };
+  mlir::ScopedDiagnosticHandler handler(
+      &context, [](mlir::Diagnostic &) { return mlir::success(); });
+  auto expectRejected = [&](ProcessStatePlanSet corrupted, const char *name,
+                            bool rejectedByStructuralPreflight) {
+    SCOPED_TRACE(name);
+    EXPECT_EQ(detail::PlanSetBuilder::structuralError(corrupted),
+              rejectedByStructuralPreflight
+                  ? "process-state plan invariant violated: invalid action arm"
+                  : "");
+    EXPECT_TRUE(mlir::failed(verifyProcessStatePlan(corrupted)));
+    EXPECT_EQ(detail::lastProcessStatePlanDiagnosticForTest(),
+              "process-state plan invariant violated: invalid action arm");
+    auto serialized = serializeProcessStatePlan(corrupted);
+    if (serialized) {
+      ADD_FAILURE() << "serializer accepted isolated corruption";
+      return;
+    }
+    EXPECT_EQ(test::takeError(serialized.takeError()),
+              "process-state plan verification failed");
+  };
+  for (const Case &testCase : cases) {
+    expectRejected(testCase.corrupt(plan), testCase.name,
+                   testCase.rejectedByStructuralPreflight);
+  }
+
+  using Mutation = detail::PlanSetBuilder::LoopActionMutationForTest;
+  struct RelationshipCase {
+    uint32_t actionIndex;
+    Mutation mutation;
+    const char *name;
+    bool rejectedByStructuralPreflight;
+  };
+  const RelationshipCase relationshipCases[] = {
+      {0, Mutation::InactiveCallee, "for_initialize inactive callee", true},
+      {2, Mutation::InactiveCallee, "for_increment inactive callee", true},
+      {1, Mutation::MissingScalar, "for_condition missing scalar operation",
+       true},
+      {1, Mutation::WrongScalarProperties,
+       "for_condition wrong scalar properties", false},
+      {1, Mutation::WrongScalarAttributeCount,
+       "for_condition wrong scalar attribute count", false},
+      {1, Mutation::WrongScalarAttributeName,
+       "for_condition wrong predicate name", false},
+      {1, Mutation::WrongScalarAttributeValue,
+       "for_condition wrong predicate value", false},
+      {1, Mutation::WrongOperandCount, "for_condition wrong operand count",
+       false},
+      {1, Mutation::WrongOperandType, "for_condition wrong operand type",
+       false},
+      {1, Mutation::WrongResultCount, "for_condition wrong result count",
+       false},
+      {2, Mutation::MissingScalar, "for_increment missing scalar operation",
+       true},
+      {2, Mutation::WrongScalarProperties,
+       "for_increment wrong scalar properties", false},
+      {2, Mutation::WrongScalarAttributeCount,
+       "for_increment forbidden scalar attribute", false},
+      {2, Mutation::WrongOperandCount, "for_increment wrong operand count",
+       false},
+      {2, Mutation::WrongOperandType, "for_increment wrong operand type",
+       false},
+      {2, Mutation::WrongResultCount, "for_increment wrong result count",
+       false},
+  };
+  for (const RelationshipCase &testCase : relationshipCases) {
+    expectRejected(detail::PlanSetBuilder::cloneLoopActionWithMutationForTest(
+                       plan, testCase.actionIndex, testCase.mutation),
+                   testCase.name, testCase.rejectedByStructuralPreflight);
+  }
+
+  EXPECT_EQ(test::moduleText(*module), textBefore);
+  EXPECT_EQ(test::moduleBytecode(*module), bytecodeBefore);
+  EXPECT_EQ(test::moduleFreezeSeal(*module), freezeSealBefore);
 }
 
 TEST(ProcessStatePlanBasicTest,
