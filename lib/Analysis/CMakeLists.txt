@@ -2,6 +2,8 @@ add_acir_library(ACIRAnalysis SOURCES
   ModelAnalysis.cpp
   ProcessStateIdentity.cpp
   ProcessStateExpansion.cpp
+  ProcessStateContinuation.cpp
+  ProcessStateWake.cpp
   ProcessStatePlan.cpp
   ProcessStateReport.cpp
 )

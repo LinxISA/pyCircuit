@@ -22,6 +22,8 @@ add_test(NAME ACIRModelAnalysisTests COMMAND ACIRModelAnalysisTests)
 
 add_executable(ACIRProcessStatePlanTests
   ProcessStatePlanBasicTest.cpp
+  ProcessStatePlanControlFlowTest.cpp
+  ProcessStatePlanWakeTest.cpp
   ProcessStatePlanVerifierTest.cpp
 )
 target_include_directories(ACIRProcessStatePlanTests PRIVATE

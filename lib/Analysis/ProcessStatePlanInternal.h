@@ -511,7 +511,21 @@ public:
   expandProcess(ac::ProcessOp process,
                 const ac::RawModelStructureLimits &limits);
 
-private:
+  struct ControlPlan {
+    std::vector<std::shared_ptr<ProcessCapturePlan::Impl>> captures;
+    std::vector<std::shared_ptr<ProcessPcPlan::Impl>> pcs;
+    std::vector<std::shared_ptr<ProcessBlockPlan::Impl>> blocks;
+    std::vector<std::shared_ptr<ProcessWakePlan::Impl>> wakes;
+    std::vector<std::shared_ptr<ProcessTransitionPlan::Impl>> transitions;
+  };
+  static mlir::FailureOr<std::unique_ptr<ControlPlan>>
+  planProcessContinuation(const ExpandedProcess &expanded,
+                          const ProcessStateLimits &limits);
+  static mlir::FailureOr<std::unique_ptr<ControlPlan>>
+  planProcessWakes(std::unique_ptr<ControlPlan> control,
+                   const ProcessStateLimits &limits);
+
+ private:
   static mlir::FailureOr<ProcessStatePlanSet>
   buildFrozenFixture(mlir::ModuleOp module, bool requireYieldOnly);
 };
