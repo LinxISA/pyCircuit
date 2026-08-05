@@ -370,6 +370,7 @@ struct ProcessValueTypePlan::Impl {
   ProcessValueTypeKind kind = ProcessValueTypeKind::Value;
   mlir::Type acirType;
   std::optional<ProcessValueTypePayload> payload;
+  std::string specializationBytes;
 };
 struct ProcessStatePlanSet::Impl {
   std::vector<ProcessStatePlan> processes;
@@ -381,27 +382,38 @@ namespace detail {
 
 class PlanSetBuilder {
 public:
-  static ProcessStatePlanSet buildEmpty(mlir::ModuleOp module);
-  static ProcessStatePlanSet buildYieldOnly(mlir::ModuleOp module);
+  static mlir::FailureOr<ProcessStatePlanSet> buildEmpty(mlir::ModuleOp module);
+  static mlir::FailureOr<ProcessStatePlanSet>
+  buildYieldOnly(mlir::ModuleOp module);
   static ProcessStatePlanSet
   cloneWithCorruption(const ProcessStatePlanSet &plans,
                       ProcessStatePlanCorruptionForTest corruption);
+  static ProcessStatePlanSet
+  cloneWithMissingWakeCallee(const ProcessStatePlanSet &plans);
+  static ProcessStatePlanSet
+  cloneWithDanglingSuspendTransition(const ProcessStatePlanSet &plans);
+  static ProcessStatePlanSet
+  cloneWithUnpairedLiveSlotCallee(const ProcessStatePlanSet &plans);
+  static ProcessStatePlanSet
+  cloneWithMissingValueTypePayload(const ProcessStatePlanSet &plans);
   static llvm::StringRef
   specializationBytes(const ProcessGeneratedCalleePlan &callee);
   static llvm::StringRef
   descriptorBytes(const ProcessGeneratedCalleePlan &callee);
+  static llvm::StringRef specializationBytes(const ProcessValueTypePlan &type);
   static bool validEdgeShape(const ProcessControlEdgePlan &edge);
+  static llvm::StringRef structuralError(const ProcessStatePlanSet &plans);
 };
 
 llvm::StringRef
 generatedCalleeSpecializationBytes(const ProcessGeneratedCalleePlan &callee);
 llvm::StringRef
 generatedCalleeDescriptorBytes(const ProcessGeneratedCalleePlan &callee);
-llvm::StringRef processStatePlanCorruptionDiagnostic(
-    ProcessStatePlanCorruptionForTest corruption);
 llvm::StringRef lastProcessStatePlanDiagnosticForTest();
-std::vector<std::string>
-canonicalDefinitionKeyOrderForTest(llvm::ArrayRef<llvm::StringRef> keys);
+llvm::Expected<std::string> canonicalGeneratedCalleeSpecialization(
+    const ProcessGeneratedCalleePlan &callee);
+llvm::Expected<std::string>
+canonicalValueTypeSpecialization(const ProcessValueTypePlan &type);
 
 } // namespace detail
 } // namespace acir

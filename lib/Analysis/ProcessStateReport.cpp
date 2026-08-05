@@ -644,6 +644,36 @@ Value json(const ProcessStatePlan &plan) {
 
 } // namespace
 
+llvm::Expected<std::string> detail::canonicalGeneratedCalleeSpecialization(
+    const ProcessGeneratedCalleePlan &callee) {
+  Object object;
+  object["contract_epoch"] = "0.1";
+  object["effect"] = spelling(callee.effect());
+  object["inputs"] = mapArray(callee.inputTypeKeys(),
+                              [](llvm::StringRef key) { return Value(key); });
+  object["kind"] = callee.kind();
+  object["payload"] = json(callee.payload());
+  object["results"] = mapArray(callee.resultTypeKeys(),
+                               [](llvm::StringRef key) { return Value(key); });
+  object["role"] = spelling(callee.role());
+  object["schema"] = "acir-generated-implementation-0.1";
+  object["source_paths"] = mapArray(
+      callee.sourcePaths(), [](llvm::StringRef path) { return Value(path); });
+  return bindings::canonicalizeJson(Value(std::move(object)));
+}
+
+llvm::Expected<std::string>
+detail::canonicalValueTypeSpecialization(const ProcessValueTypePlan &type) {
+  Object descriptor = *json(type).getAsObject();
+  descriptor.erase("cpp");
+  descriptor.erase("fingerprint");
+  descriptor.erase("ordinal");
+  descriptor.erase("symbol");
+  descriptor["contract_epoch"] = "0.1";
+  descriptor["schema"] = "acir-generated-value-type-0.1";
+  return bindings::canonicalizeJson(Value(std::move(descriptor)));
+}
+
 llvm::Expected<std::string>
 serializeProcessStatePlan(const ProcessStatePlanSet &plans,
                           const ProcessStateLimits &limits) {

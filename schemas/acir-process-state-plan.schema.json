@@ -92,7 +92,7 @@
       "required": ["argument_path", "name", "operand_path", "ordinal", "type"],
       "properties": {"argument_path": {"type": "string"}, "name": {"type": "string"}, "operand_path": {"type": "string"}, "ordinal": {"$ref": "#/$defs/ordinal"}, "type": {"type": "string"}}
     },
-    "action": {
+    "action_base": {
       "type": "object", "additionalProperties": false,
       "required": ["cost", "emission", "iteration_vector", "kind", "occurrence", "operands", "ordinal", "result_types", "results"],
       "properties": {
@@ -105,6 +105,16 @@
         "scalar_op": {"$ref": "#/$defs/scalar_op"}
       }
     },
+    "action": {
+      "oneOf": [
+        {"allOf": [{"$ref": "#/$defs/action_base"}, {"properties": {"emission": {"const": "copy_scalar"}}, "required": ["scalar_op"], "not": {"required": ["callee"]}}]},
+        {"allOf": [{"$ref": "#/$defs/action_base"}, {"properties": {"emission": {"const": "inline"}}, "required": ["callee"], "not": {"required": ["scalar_op"]}}]},
+        {"allOf": [{"$ref": "#/$defs/action_base"}, {"properties": {"emission": {"const": "invoke"}}, "required": ["callee"], "not": {"required": ["scalar_op"]}}]},
+        {"allOf": [{"$ref": "#/$defs/action_base"}, {"properties": {"emission": {"const": "wrap"}}, "required": ["callee"], "not": {"required": ["scalar_op"]}}]},
+        {"allOf": [{"$ref": "#/$defs/action_base"}, {"properties": {"emission": {"const": "unwrap"}}, "required": ["callee"], "not": {"required": ["scalar_op"]}}]},
+        {"allOf": [{"$ref": "#/$defs/action_base"}, {"properties": {"emission": {"const": "forward_only"}}, "not": {"anyOf": [{"required": ["callee"]}, {"required": ["scalar_op"]}]}}]}
+      ]
+    },
     "load": {
       "type": "object", "additionalProperties": false, "required": ["replacements", "slot"],
       "properties": {"replacements": {"type": "array", "items": {"$ref": "#/$defs/planned_value"}}, "slot": {"$ref": "#/$defs/ordinal"}}
@@ -113,10 +123,16 @@
       "type": "object", "additionalProperties": false, "required": ["slot", "source"],
       "properties": {"slot": {"$ref": "#/$defs/ordinal"}, "source": {"$ref": "#/$defs/planned_value"}}
     },
-    "frame": {
+    "frame_base": {
       "type": "object", "additionalProperties": false, "required": ["bindings", "kind", "operation_path", "phase"],
       "properties": {"bindings": {"type": "array", "items": {"$ref": "#/$defs/binding"}}, "kind": {"enum": ["entry", "scf.if", "scf.for", "scf.while"]}, "operation_path": {"type": "string"}, "phase": {"enum": ["entry", "then", "else", "merge", "header", "body", "before", "after", "exit"]}}
     },
+    "frame": {"oneOf": [
+      {"allOf": [{"$ref": "#/$defs/frame_base"}, {"properties": {"kind": {"const": "entry"}, "phase": {"const": "entry"}}}]},
+      {"allOf": [{"$ref": "#/$defs/frame_base"}, {"properties": {"kind": {"const": "scf.if"}, "phase": {"enum": ["then", "else", "merge"]}}}]},
+      {"allOf": [{"$ref": "#/$defs/frame_base"}, {"properties": {"kind": {"const": "scf.for"}, "phase": {"enum": ["header", "body", "exit"]}}}]},
+      {"allOf": [{"$ref": "#/$defs/frame_base"}, {"properties": {"kind": {"const": "scf.while"}, "phase": {"enum": ["before", "after", "exit"]}}}]}
+    ]},
     "edge_branch": {
       "type": "object", "additionalProperties": false,
       "required": ["condition", "false_bindings", "false_block", "kind", "true_bindings", "true_block"],
@@ -144,10 +160,16 @@
       "type": "object", "additionalProperties": false, "required": ["blocks", "entry_path", "name", "ordinal"],
       "properties": {"blocks": {"$ref": "#/$defs/ordinal_array"}, "entry_path": {"type": "string"}, "name": {"type": "string"}, "ordinal": {"$ref": "#/$defs/ordinal"}}
     },
-    "live_slot": {
+    "live_slot_base": {
       "type": "object", "additionalProperties": false,
       "required": ["member_values", "name", "ordinal", "storage_type", "type"],
       "properties": {"member_values": {"type": "array", "items": {"$ref": "#/$defs/planned_value"}}, "name": {"type": "string"}, "ordinal": {"$ref": "#/$defs/ordinal"}, "storage_type": {"$ref": "#/$defs/ordinal"}, "type": {"type": "string"}, "unwrap_callee": {"$ref": "#/$defs/ordinal"}, "wrap_callee": {"$ref": "#/$defs/ordinal"}}
+    },
+    "live_slot": {
+      "oneOf": [
+        {"allOf": [{"$ref": "#/$defs/live_slot_base"}, {"required": ["unwrap_callee", "wrap_callee"]}]},
+        {"allOf": [{"$ref": "#/$defs/live_slot_base"}, {"not": {"anyOf": [{"required": ["unwrap_callee"]}, {"required": ["wrap_callee"]}]}}]}
+      ]
     },
     "source_capture": {
       "type": "object", "additionalProperties": false, "required": ["capture", "kind", "path"],
@@ -202,17 +224,37 @@
     "payload_wake": {"type": "object", "additionalProperties": false, "required": ["wake_kind", "wake_type"], "properties": {"wake_kind": {"enum": ["condition", "resource", "event_queue", "next_delta"]}, "wake_type": {"type": "string"}}},
     "payload_scalar": {"type": "object", "additionalProperties": false, "required": ["direction", "scalar", "value_type"], "properties": {"direction": {"enum": ["wrap", "unwrap"]}, "scalar": {"type": "string"}, "value_type": {"type": "string"}}},
     "callee_payload": {"oneOf": [{"$ref": "#/$defs/payload_record_create"}, {"$ref": "#/$defs/payload_record_get"}, {"$ref": "#/$defs/payload_record_with"}, {"$ref": "#/$defs/payload_packet"}, {"$ref": "#/$defs/payload_trace_decode"}, {"$ref": "#/$defs/payload_queue"}, {"$ref": "#/$defs/payload_event"}, {"$ref": "#/$defs/payload_source"}, {"$ref": "#/$defs/payload_trace_next"}, {"$ref": "#/$defs/payload_message"}, {"$ref": "#/$defs/payload_probe"}, {"$ref": "#/$defs/payload_stat"}, {"$ref": "#/$defs/payload_wake"}, {"$ref": "#/$defs/payload_scalar"}]},
-    "callee": {
+    "callee_base": {
       "type": "object", "additionalProperties": false,
       "required": ["cpp", "effect", "fingerprint", "inputs", "kind", "ordinal", "payload", "results", "role", "source_paths", "symbol"],
-      "properties": {"cpp": {"type": "string"}, "effect": {"enum": ["pure", "stateful"]}, "fingerprint": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}, "inputs": {"$ref": "#/$defs/string_array"}, "kind": {"const": "implementation"}, "ordinal": {"$ref": "#/$defs/ordinal"}, "payload": {"$ref": "#/$defs/callee_payload"}, "results": {"$ref": "#/$defs/string_array"}, "role": {"enum": ["record_create", "record_get", "record_with", "packet_serialize", "packet_deserialize", "trace_decode", "queue_try_send", "queue_try_recv", "event_schedule", "trace_open", "trace_next", "trace_eof", "trace_position", "contract_require", "contract_ensure", "contract_assert", "probe", "stat_add", "wake_condition", "wake_resource", "wake_event_queue", "wake_next_delta", "scalar_wrap", "scalar_unwrap"]}, "source_paths": {"$ref": "#/$defs/string_array"}, "symbol": {"type": "string"}},
-      "allOf": [
-        {"if": {"properties": {"role": {"const": "wake_next_delta"}}}, "then": {"properties": {"effect": {"const": "stateful"}, "inputs": {"maxItems": 0}, "payload": {"type": "object", "additionalProperties": false, "required": ["wake_kind", "wake_type"], "properties": {"wake_kind": {"const": "next_delta"}, "wake_type": {"const": "@acir_wake_next_delta"}}}, "results": {"prefixItems": [{"const": "@acir_wake_next_delta"}], "items": false, "minItems": 1}}}},
-        {"if": {"properties": {"role": {"const": "wake_condition"}}}, "then": {"properties": {"effect": {"const": "stateful"}, "payload": {"properties": {"wake_kind": {"const": "condition"}, "wake_type": {"const": "@acir_wake_condition"}}}}}},
-        {"if": {"properties": {"role": {"const": "wake_resource"}}}, "then": {"properties": {"effect": {"const": "stateful"}, "payload": {"properties": {"wake_kind": {"const": "resource"}, "wake_type": {"const": "@acir_wake_resource"}}}}}},
-        {"if": {"properties": {"role": {"const": "wake_event_queue"}}}, "then": {"properties": {"effect": {"const": "stateful"}, "payload": {"properties": {"wake_kind": {"const": "event_queue"}, "wake_type": {"const": "@acir_wake_event_queue"}}}}}},
-        {"if": {"properties": {"role": {"const": "scalar_wrap"}}}, "then": {"properties": {"effect": {"const": "pure"}, "payload": {"properties": {"direction": {"const": "wrap"}}}}}},
-        {"if": {"properties": {"role": {"const": "scalar_unwrap"}}}, "then": {"properties": {"effect": {"const": "pure"}, "payload": {"properties": {"direction": {"const": "unwrap"}}}}}}
+      "properties": {"cpp": {"type": "string"}, "effect": {"enum": ["pure", "stateful"]}, "fingerprint": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}, "inputs": {"$ref": "#/$defs/string_array"}, "kind": {"const": "implementation"}, "ordinal": {"$ref": "#/$defs/ordinal"}, "payload": {"$ref": "#/$defs/callee_payload"}, "results": {"$ref": "#/$defs/string_array"}, "role": {"enum": ["record_create", "record_get", "record_with", "packet_serialize", "packet_deserialize", "trace_decode", "queue_try_send", "queue_try_recv", "event_schedule", "trace_open", "trace_next", "trace_eof", "trace_position", "contract_require", "contract_ensure", "contract_assert", "probe", "stat_add", "wake_condition", "wake_resource", "wake_event_queue", "wake_next_delta", "scalar_wrap", "scalar_unwrap"]}, "source_paths": {"$ref": "#/$defs/string_array"}, "symbol": {"type": "string"}}
+    },
+    "callee": {
+      "oneOf": [
+        {"allOf": [{"$ref": "#/$defs/callee_base"}, {"properties": {"role": {"const": "record_create"}, "effect": {"const": "pure"}, "payload": {"$ref": "#/$defs/payload_record_create"}}}]},
+        {"allOf": [{"$ref": "#/$defs/callee_base"}, {"properties": {"role": {"const": "record_get"}, "effect": {"const": "pure"}, "payload": {"$ref": "#/$defs/payload_record_get"}}}]},
+        {"allOf": [{"$ref": "#/$defs/callee_base"}, {"properties": {"role": {"const": "record_with"}, "effect": {"const": "pure"}, "payload": {"$ref": "#/$defs/payload_record_with"}}}]},
+        {"allOf": [{"$ref": "#/$defs/callee_base"}, {"properties": {"role": {"const": "packet_serialize"}, "effect": {"const": "pure"}, "payload": {"$ref": "#/$defs/payload_packet"}}}]},
+        {"allOf": [{"$ref": "#/$defs/callee_base"}, {"properties": {"role": {"const": "packet_deserialize"}, "effect": {"const": "pure"}, "payload": {"$ref": "#/$defs/payload_packet"}}}]},
+        {"allOf": [{"$ref": "#/$defs/callee_base"}, {"properties": {"role": {"const": "trace_decode"}, "effect": {"const": "pure"}, "payload": {"$ref": "#/$defs/payload_trace_decode"}}}]},
+        {"allOf": [{"$ref": "#/$defs/callee_base"}, {"properties": {"role": {"const": "queue_try_send"}, "effect": {"const": "stateful"}, "payload": {"$ref": "#/$defs/payload_queue"}}}]},
+        {"allOf": [{"$ref": "#/$defs/callee_base"}, {"properties": {"role": {"const": "queue_try_recv"}, "effect": {"const": "stateful"}, "payload": {"$ref": "#/$defs/payload_queue"}}}]},
+        {"allOf": [{"$ref": "#/$defs/callee_base"}, {"properties": {"role": {"const": "event_schedule"}, "effect": {"const": "stateful"}, "payload": {"$ref": "#/$defs/payload_event"}}}]},
+        {"allOf": [{"$ref": "#/$defs/callee_base"}, {"properties": {"role": {"const": "trace_open"}, "effect": {"const": "stateful"}, "payload": {"$ref": "#/$defs/payload_source"}}}]},
+        {"allOf": [{"$ref": "#/$defs/callee_base"}, {"properties": {"role": {"const": "trace_next"}, "effect": {"const": "stateful"}, "payload": {"$ref": "#/$defs/payload_trace_next"}}}]},
+        {"allOf": [{"$ref": "#/$defs/callee_base"}, {"properties": {"role": {"const": "trace_eof"}, "effect": {"const": "stateful"}, "payload": {"$ref": "#/$defs/payload_source"}}}]},
+        {"allOf": [{"$ref": "#/$defs/callee_base"}, {"properties": {"role": {"const": "trace_position"}, "effect": {"const": "stateful"}, "payload": {"$ref": "#/$defs/payload_source"}}}]},
+        {"allOf": [{"$ref": "#/$defs/callee_base"}, {"properties": {"role": {"const": "contract_require"}, "effect": {"const": "stateful"}, "payload": {"$ref": "#/$defs/payload_message"}}}]},
+        {"allOf": [{"$ref": "#/$defs/callee_base"}, {"properties": {"role": {"const": "contract_ensure"}, "effect": {"const": "stateful"}, "payload": {"$ref": "#/$defs/payload_message"}}}]},
+        {"allOf": [{"$ref": "#/$defs/callee_base"}, {"properties": {"role": {"const": "contract_assert"}, "effect": {"const": "stateful"}, "payload": {"$ref": "#/$defs/payload_message"}}}]},
+        {"allOf": [{"$ref": "#/$defs/callee_base"}, {"properties": {"role": {"const": "probe"}, "effect": {"const": "stateful"}, "payload": {"$ref": "#/$defs/payload_probe"}}}]},
+        {"allOf": [{"$ref": "#/$defs/callee_base"}, {"properties": {"role": {"const": "stat_add"}, "effect": {"const": "stateful"}, "payload": {"$ref": "#/$defs/payload_stat"}}}]},
+        {"allOf": [{"$ref": "#/$defs/callee_base"}, {"properties": {"role": {"const": "wake_condition"}, "effect": {"const": "stateful"}, "payload": {"allOf": [{"$ref": "#/$defs/payload_wake"}, {"properties": {"wake_kind": {"const": "condition"}, "wake_type": {"const": "@acir_wake_condition"}}}]}}}]},
+        {"allOf": [{"$ref": "#/$defs/callee_base"}, {"properties": {"role": {"const": "wake_resource"}, "effect": {"const": "stateful"}, "payload": {"allOf": [{"$ref": "#/$defs/payload_wake"}, {"properties": {"wake_kind": {"const": "resource"}, "wake_type": {"const": "@acir_wake_resource"}}}]}}}]},
+        {"allOf": [{"$ref": "#/$defs/callee_base"}, {"properties": {"role": {"const": "wake_event_queue"}, "effect": {"const": "stateful"}, "payload": {"allOf": [{"$ref": "#/$defs/payload_wake"}, {"properties": {"wake_kind": {"const": "event_queue"}, "wake_type": {"const": "@acir_wake_event_queue"}}}]}}}]},
+        {"allOf": [{"$ref": "#/$defs/callee_base"}, {"properties": {"role": {"const": "wake_next_delta"}, "effect": {"const": "stateful"}, "inputs": {"maxItems": 0}, "payload": {"allOf": [{"$ref": "#/$defs/payload_wake"}, {"properties": {"wake_kind": {"const": "next_delta"}, "wake_type": {"const": "@acir_wake_next_delta"}}}]}, "results": {"prefixItems": [{"const": "@acir_wake_next_delta"}], "items": false, "minItems": 1}}}]},
+        {"allOf": [{"$ref": "#/$defs/callee_base"}, {"properties": {"role": {"const": "scalar_wrap"}, "effect": {"const": "pure"}, "payload": {"allOf": [{"$ref": "#/$defs/payload_scalar"}, {"properties": {"direction": {"const": "wrap"}}}]}}}]},
+        {"allOf": [{"$ref": "#/$defs/callee_base"}, {"properties": {"role": {"const": "scalar_unwrap"}, "effect": {"const": "pure"}, "payload": {"allOf": [{"$ref": "#/$defs/payload_scalar"}, {"properties": {"direction": {"const": "unwrap"}}}]}}}]}
       ]
     },
     "value_member_field": {
@@ -226,14 +268,14 @@
     "value_member": {"oneOf": [{"$ref": "#/$defs/value_member_field"}, {"$ref": "#/$defs/value_member_element"}]},
     "value_payload": {"type": "object", "additionalProperties": false, "required": ["encoding", "members", "width_bits"], "properties": {"encoding": {"type": "string"}, "members": {"type": "array", "items": {"$ref": "#/$defs/value_member"}}, "width_bits": {"$ref": "#/$defs/ordinal"}}},
     "packet_payload": {"type": "object", "additionalProperties": false, "required": ["bytes", "encoding", "members", "width_bits"], "properties": {"bytes": {"$ref": "#/$defs/ordinal"}, "encoding": {"type": "string"}, "members": {"type": "array", "items": {"$ref": "#/$defs/value_member"}}, "width_bits": {"$ref": "#/$defs/ordinal"}}},
-    "value_type": {
+    "value_type_base": {
       "type": "object", "additionalProperties": false,
       "required": ["acir_type", "cpp", "fingerprint", "kind", "ordinal", "payload", "symbol"],
-      "properties": {"acir_type": {"type": "string"}, "cpp": {"type": "string"}, "fingerprint": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}, "kind": {"enum": ["value", "packet"]}, "ordinal": {"$ref": "#/$defs/ordinal"}, "payload": {"oneOf": [{"$ref": "#/$defs/value_payload"}, {"$ref": "#/$defs/packet_payload"}]}, "symbol": {"type": "string"}},
-      "allOf": [
-        {"if": {"properties": {"kind": {"const": "value"}}}, "then": {"properties": {"payload": {"$ref": "#/$defs/value_payload"}}}},
-        {"if": {"properties": {"kind": {"const": "packet"}}}, "then": {"properties": {"payload": {"$ref": "#/$defs/packet_payload"}}}}
-      ]
-    }
+      "properties": {"acir_type": {"type": "string"}, "cpp": {"type": "string"}, "fingerprint": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}, "kind": {"enum": ["value", "packet"]}, "ordinal": {"$ref": "#/$defs/ordinal"}, "payload": {"oneOf": [{"$ref": "#/$defs/value_payload"}, {"$ref": "#/$defs/packet_payload"}]}, "symbol": {"type": "string"}}
+    },
+    "value_type": {"oneOf": [
+      {"allOf": [{"$ref": "#/$defs/value_type_base"}, {"properties": {"kind": {"const": "value"}, "payload": {"$ref": "#/$defs/value_payload"}}}]},
+      {"allOf": [{"$ref": "#/$defs/value_type_base"}, {"properties": {"kind": {"const": "packet"}, "payload": {"$ref": "#/$defs/packet_payload"}}}]}
+    ]}
   }
 }

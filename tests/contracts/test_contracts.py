@@ -314,6 +314,126 @@ class RepositoryContractsTest(unittest.TestCase):
         }
         validator.validate(fixture)
 
+        def validate_definition(name, value):
+            Draft202012Validator({
+                "$schema": schema["$schema"],
+                "$ref": f"#/$defs/{name}",
+                "$defs": schema["$defs"],
+            }).validate(value)
+
+        loop_occurrence = {"anchor": occurrence, "kind": "synthetic", "phase": "condition"}
+        wrapper_occurrence = {"anchor": occurrence, "direction": "wrap", "kind": "synthetic", "slot": 0, "transition": 0}
+        constant_occurrence = {"anchor": occurrence, "constant": 7, "kind": "synthetic"}
+        for arm in (occurrence, loop_occurrence, wrapper_occurrence, constant_occurrence):
+            validate_definition("occurrence", arm)
+
+        coordinate = {"index": 0, "kind": "result", "owner_path": "@Top::@workload/r0/b0/o0"}
+        planned_arms = (
+            {"coordinate": coordinate, "kind": "original", "occurrence": occurrence, "path": "@Top::@workload/r0/b0/o0/r0"},
+            {"capture": 0, "kind": "capture"},
+            {"kind": "live_slot", "slot": 0},
+            {"coordinate": coordinate, "kind": "synthetic", "occurrence": loop_occurrence},
+            {"kind": "constant", "value": "0"},
+        )
+        for arm in planned_arms:
+            validate_definition("planned_value", {**arm, "type": "i32"})
+
+        binding = {"from": {**planned_arms[-1], "type": "i32"}, "to": {**planned_arms[-1], "type": "i32"}}
+        edge_arms = (
+            {"condition": {**planned_arms[-1], "type": "i1"}, "false_bindings": [], "false_block": 1, "kind": "branch", "true_bindings": [binding], "true_block": 0},
+            {"bindings": [binding], "kind": "local_continue", "target_block": 0},
+            {"kind": "suspend", "transition": 0},
+            {"kind": "terminate", "status": "success"},
+        )
+        for arm in edge_arms:
+            validate_definition("edge", arm)
+        for kind, phases in (("entry", ("entry",)), ("scf.if", ("then", "else", "merge")), ("scf.for", ("header", "body", "exit")), ("scf.while", ("before", "after", "exit"))):
+            for phase in phases:
+                validate_definition("frame", {"bindings": [], "kind": kind, "operation_path": "@Top::@workload/r0/b0/o0", "phase": phase})
+
+        action_base = {"cost": 1, "iteration_vector": [], "kind": "original", "occurrence": occurrence, "operands": [], "ordinal": 0, "result_types": [], "results": []}
+        for emission in ("inline", "invoke", "wrap", "unwrap"):
+            validate_definition("action", {**action_base, "callee": 0, "emission": emission})
+        validate_definition("action", {**action_base, "emission": "copy_scalar", "scalar_op": {"attributes": [], "name": "arith.constant", "properties": "{}"}})
+        validate_definition("action", {**action_base, "cost": 0, "emission": "forward_only"})
+        validate_definition("live_slot", {"member_values": [], "name": "live00000000", "ordinal": 0, "storage_type": 0, "type": "i32"})
+        validate_definition("live_slot", {"member_values": [], "name": "live00000000", "ordinal": 0, "storage_type": 0, "type": "i32", "unwrap_callee": 1, "wrap_callee": 0})
+
+        payloads = {
+            "record_create": {"fields": [{"name": "x", "type_key": "mlir:i32"}], "record_type": "mlir:!ac.record"},
+            "record_get": {"field": "x", "record": "mlir:!ac.record", "result": "mlir:i32"},
+            "record_with": {"field": "x", "record": "mlir:!ac.record", "value": "mlir:i32"},
+            "packet_serialize": {"bytes": 4, "packet": "@packet", "packet_type": "mlir:!ac.packet"},
+            "packet_deserialize": {"bytes": 4, "packet": "@packet", "packet_type": "mlir:!ac.packet"},
+            "trace_decode": {"entry": "mlir:i32", "result": "mlir:i64", "source": "trace"},
+            "queue_try_send": {"element": "mlir:i32", "queue": "@queue"},
+            "queue_try_recv": {"element": "mlir:i32", "queue": "@queue"},
+            "event_schedule": {"delay": "mlir:i64", "target": "@event", "value": "mlir:i32"},
+            "trace_open": {"source": "trace"}, "trace_next": {"entry": "mlir:i32", "source": "trace"},
+            "trace_eof": {"source": "trace"}, "trace_position": {"source": "trace"},
+            "contract_require": {"message": "required"}, "contract_ensure": {"message": "ensured"}, "contract_assert": {"message": "asserted"},
+            "probe": {"kind": "counter", "result": "mlir:i64", "target": "@probe"},
+            "stat_add": {"stat": "@stat", "value_type": "mlir:i64"},
+            "wake_condition": {"wake_kind": "condition", "wake_type": "@acir_wake_condition"},
+            "wake_resource": {"wake_kind": "resource", "wake_type": "@acir_wake_resource"},
+            "wake_event_queue": {"wake_kind": "event_queue", "wake_type": "@acir_wake_event_queue"},
+            "wake_next_delta": {"wake_kind": "next_delta", "wake_type": "@acir_wake_next_delta"},
+            "scalar_wrap": {"direction": "wrap", "scalar": "mlir:i32", "value_type": "storage:value:" + "0" * 64},
+            "scalar_unwrap": {"direction": "unwrap", "scalar": "mlir:i32", "value_type": "storage:value:" + "0" * 64},
+        }
+        pure_roles = {"record_create", "record_get", "record_with", "packet_serialize", "packet_deserialize", "trace_decode", "scalar_wrap", "scalar_unwrap"}
+        for ordinal, (role, payload) in enumerate(payloads.items()):
+            candidate = {**descriptor, "ordinal": ordinal, "role": role, "payload": payload, "effect": "pure" if role in pure_roles else "stateful"}
+            if role == "wake_next_delta":
+                candidate.update(inputs=[], results=["@acir_wake_next_delta"])
+            validate_definition("callee", candidate)
+
+        value_identity = "0" * 64
+        value_base = {"acir_type": "i32", "cpp": "acir::generated::value_" + value_identity, "fingerprint": "sha256:" + value_identity, "ordinal": 0, "symbol": "@acir_value_" + value_identity}
+        validate_definition("value_type", {**value_base, "kind": "value", "payload": {"encoding": "i32", "members": [], "width_bits": 32}})
+        validate_definition("value_type", {**value_base, "kind": "packet", "payload": {"bytes": 4, "encoding": "array<4xi8>", "members": [], "width_bits": 32}})
+
+        mismatched_role = json.loads(json.dumps(fixture))
+        mismatched_role["callees"][0]["role"] = "record_create"
+        with self.assertRaises(ValidationError):
+            validator.validate(mismatched_role)
+
+        mismatched_effect = json.loads(json.dumps(fixture))
+        mismatched_effect["callees"][0].update({
+            "role": "record_create",
+            "payload": {"fields": [], "record_type": "mlir:i32"},
+            "results": ["mlir:i32"],
+        })
+        with self.assertRaises(ValidationError):
+            validator.validate(mismatched_effect)
+
+        unpaired_wrapper = json.loads(json.dumps(fixture))
+        unpaired_wrapper["processes"][0]["live_slots"] = [{
+            "member_values": [],
+            "name": "live00000000",
+            "ordinal": 0,
+            "storage_type": 0,
+            "type": "i32",
+            "wrap_callee": 0,
+        }]
+        with self.assertRaises(ValidationError):
+            validator.validate(unpaired_wrapper)
+
+        missing_scalar_op = json.loads(json.dumps(fixture))
+        missing_scalar_op["processes"][0]["blocks"][0]["actions"] = [{
+            "cost": 1,
+            "emission": "copy_scalar",
+            "iteration_vector": [],
+            "kind": "original",
+            "occurrence": occurrence,
+            "operands": [],
+            "ordinal": 0,
+            "result_types": [],
+            "results": [],
+        }]
+        with self.assertRaises(ValidationError):
+            validator.validate(missing_scalar_op)
+
         branch = schema["$defs"]["edge_branch"]
         self.assertEqual(
             {"condition", "false_bindings", "false_block", "kind", "true_bindings", "true_block"},
