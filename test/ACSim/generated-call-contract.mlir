@@ -11,9 +11,9 @@
 // RUN: sed 's/acsim.inline @generated_inline()/acsim.inline @missing()/' %t/valid.mlir > %t/unresolved.mlir
 // RUN: %not %acir_opt %t/unresolved.mlir 2>&1 | %FileCheck %s --check-prefix=UNRESOLVED
 // RUN: sed 's/acsim.inline @generated_inline()/acsim.inline @Top()/' %t/valid.mlir > %t/module-callee.mlir
-// RUN: %not %acir_opt %t/module-callee.mlir 2>&1 | %FileCheck %s --check-prefix=INCOMPATIBLE
+// RUN: %not %acir_opt %t/module-callee.mlir 2>&1 | %FileCheck %s --check-prefix=MODULE-CALLEE
 // RUN: sed 's/acsim.invoke @generated_invoke()/acsim.invoke @tick()/' %t/valid.mlir > %t/process-callee.mlir
-// RUN: %not %acir_opt %t/process-callee.mlir 2>&1 | %FileCheck %s --check-prefix=INCOMPATIBLE
+// RUN: %not %acir_opt %t/process-callee.mlir 2>&1 | %FileCheck %s --check-prefix=PROCESS-CALLEE
 // RUN: sed 's/acsim.inline @generated_inline()/acsim.inline @generated_invoke()/' %t/valid.mlir > %t/mixed-effect.mlir
 // RUN: %not %acir_opt %t/mixed-effect.mlir 2>&1 | %FileCheck %s --check-prefix=MIXED
 // RUN: sed 's/acsim.inline @pure_binding() : () -> !acsim.expr<@cpp_i32>/acsim.inline @pure_binding() : () -> i32/' %t/valid.mlir > %t/module-inline-i32.mlir
@@ -42,8 +42,8 @@
 // INVOKE-PURE: invoke callee '@pure_binding' requires effect 'stateful'
 // NONIMPLEMENTATION: callee reference '@cpp_i32' resolves to non-implementation acsim.type
 // UNRESOLVED: callee reference '@missing' is unresolved
-// INCOMPATIBLE: callee reference
-// INCOMPATIBLE-SAME: resolves to incompatible operation
+// MODULE-CALLEE: callee reference '@Top' resolves to incompatible operation 'acsim.module'
+// PROCESS-CALLEE: callee reference '@tick' resolves to incompatible operation 'acsim.process'
 // MIXED: generated implementation callee '@generated_invoke' cannot be used by both acsim.inline and acsim.invoke
 // MODULE-RESULT: module inline result must be exactly !acsim.expr
 // PROCESS-RESULT: process inline result must be an integer, float, index, or !acsim.value
