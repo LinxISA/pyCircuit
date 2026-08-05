@@ -123,6 +123,16 @@ Their compiler-generated C++ identities are carried by ACSim symbols and
 specialization fingerprints. Registry records and the binding lock remain
 exclusive to reusable external/library realizations.
 
+An `acsim.type` whose kind is exactly `implementation` is the sole callable
+identity for a compiler-generated helper or method. It is not a registry
+record, provider request, placement, runtime object, or binding-lock entry.
+Both call operations resolve their `callee` by exact canonical symbol only:
+`acsim.inline` accepts either a pure `acsim.binding` or an implementation
+`acsim.type`, while `acsim.invoke` accepts either a stateful `acsim.binding` or
+an implementation `acsim.type`. A generated implementation symbol MUST NOT be
+used by both operations in one model; its operation kind closes its effect
+classification without mutable effect metadata.
+
 The generic emitter may dispatch on ACSim operation kind and normalized binding
 metadata. It MUST NOT dispatch on component name, family, provider namespace,
 binding ID, or C++ symbol.
@@ -216,11 +226,11 @@ reflection, or untyped port type.
 | `acsim.port` | Typed port projection through a resolved accessor |
 | `acsim.resource` | Typed resource-capability projection |
 | `acsim.bind` | Exact typed port, resource, export, or pure-view binding |
-| `acsim.inline` | Pure registered C++ function/template application |
+| `acsim.inline` | Exact pure external-binding or generated-implementation call |
 | `acsim.process` | Generated enum-PC process state machine |
 | `acsim.live.load` | Typed load of process state live across suspension |
 | `acsim.live.store` | Proposed typed process-state update |
-| `acsim.invoke` | Statically resolved runtime/library call in a process state |
+| `acsim.invoke` | Exact stateful external-binding or generated-implementation call in a process state |
 | `acsim.continue` | Transition to another PC without a wake |
 | `acsim.suspend` | Proposed next PC plus exact typed wake registration |
 | `acsim.terminate` | Proposed terminal success or failure |
@@ -230,9 +240,10 @@ reflection, or untyped port type.
 | `acsim.return` | Ordered module-construction exports |
 
 Process regions may use `builtin`, `arith`, `index`, and `cf` for constants,
-pure arithmetic, indexing, and intra-state control flow. No other dialect is
-legal in canonical ACSim v0.1. Every process block has one PC attribute; an
-ordinary `cf` edge cannot cross a suspension boundary.
+pure arithmetic, indexing, and intra-state control flow, and may use the
+effect-free `acsim.inline` operation. No other dialect is legal in canonical
+ACSim v0.1. Every process block has one PC attribute; an ordinary `cf` edge
+cannot cross a suspension boundary.
 
 Changing this inventory changes the public schema and requires a global epoch
 increment.
@@ -287,8 +298,14 @@ generator, or component schema.
 
 ### Pure expressions
 
-- Every `acsim.inline` references a pure binding and has no owner, object ID,
-  dispatch row, activation source, state, queue, event, or side effect.
+- Every `acsim.inline` resolves exactly to either an external `acsim.binding`
+  whose immutable effect is `pure` or a compiler-generated `acsim.type` whose
+  kind is `implementation`. It has no owner, object ID, dispatch row,
+  activation source, state, queue, event, or side effect.
+- Module-body inline calls produce exactly one `!acsim.expr`. Process-body
+  inline calls produce exactly one builtin integer, float, index, or
+  `!acsim.value`; an expression, owner, reference, wake, or other aggregate is
+  not process state.
 - Pure-expression graphs are acyclic and deterministic.
 - Activation bypasses the pure graph: a committed upstream source activates
   each downstream stateful consumer, which evaluates the expression from its
@@ -307,6 +324,15 @@ generator, or component schema.
 - Suspension is subscription-driven. Coroutines, polling, bytecode
   interpretation, dynamic continuation frames, `std::function`, and
   exception-driven control flow are forbidden.
+- Every `acsim.invoke` resolves exactly to either an external `acsim.binding`
+  whose immutable effect is `stateful` or a compiler-generated `acsim.type`
+  whose kind is `implementation`; each result is exactly `!acsim.value` or
+  `!acsim.wake`. A stateless generated wake helper MAY have zero arguments.
+- Live slots remain exact `!acsim.value` records. When a builtin scalar crosses
+  suspension, ProcessStatePlan inserts a generated pure wrap inline call before
+  `acsim.live.store`, then `acsim.live.load` and a generated pure unwrap inline
+  call after resumption. These helpers allocate no runtime object and create no
+  generated binding record.
 
 ### Dispatch and activation
 

@@ -154,10 +154,10 @@ def ACSim_BindOp : ACSim_Op<"bind"> {
 }
 
 def ACSim_InlineOp : ACSim_Op<"inline", [Pure]> {
-  let arguments = (ins Variadic<AnyType>:$args, FlatSymbolRefAttr:$binding);
+  let arguments = (ins Variadic<AnyType>:$args, FlatSymbolRefAttr:$callee);
   let results = (outs AnyType:$result);
   let assemblyFormat = [{
-    $binding `(` $args `)` attr-dict `:` functional-type($args, $result)
+    $callee `(` $args `)` attr-dict `:` functional-type($args, $result)
   }];
   let hasVerifier = 1;
 }
@@ -195,10 +195,10 @@ def ACSim_LiveStoreOp : ACSim_Op<"live.store"> {
 }
 
 def ACSim_InvokeOp : ACSim_Op<"invoke"> {
-  let arguments = (ins Variadic<AnyType>:$args, FlatSymbolRefAttr:$binding);
+  let arguments = (ins Variadic<AnyType>:$args, FlatSymbolRefAttr:$callee);
   let results = (outs Variadic<AnyType>:$results);
   let assemblyFormat = [{
-    $binding `(` $args `)` attr-dict `:` functional-type($args, $results)
+    $callee `(` $args `)` attr-dict `:` functional-type($args, $results)
   }];
   let hasVerifier = 1;
 }

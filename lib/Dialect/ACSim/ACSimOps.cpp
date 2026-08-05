@@ -815,7 +815,7 @@ SmallVector<Operation *> collectPreorder(ModelOp model) {
 }
 
 bool isProcessOperation(Operation *operation) {
-  return isa<LiveLoadOp, LiveStoreOp, InvokeOp, ContinueOp, SuspendOp,
+  return isa<InlineOp, LiveLoadOp, LiveStoreOp, InvokeOp, ContinueOp, SuspendOp,
              TerminateOp>(operation);
 }
 
@@ -941,6 +941,24 @@ requireReference(const ModelIndex &index, Operation *from,
   return definition;
 }
 
+FailureOr<Operation *> requireCallCallee(const ModelIndex &index,
+                                         Operation *call,
+                                         FlatSymbolRefAttr callee) {
+  Operation *definition = resolveReference(index, call, callee);
+  if (!definition)
+    return call->emitOpError()
+           << "callee reference '" << callee << "' is unresolved";
+  if (!isa<BindingOp, TypeOp>(definition))
+    return call->emitOpError() << "callee reference '" << callee
+                               << "' resolves to incompatible operation '"
+                               << definition->getName() << "'";
+  if (definition != call &&
+      index.positions.lookup(definition) >= index.positions.lookup(call))
+    return call->emitOpError() << "callee reference '" << callee
+                               << "' appears before its construction";
+  return definition;
+}
+
 LogicalResult requireTypeKind(const ModelIndex &index, Operation *from,
                               SymbolRefAttr reference,
                               ArrayRef<StringRef> allowedKinds,
@@ -1016,7 +1034,7 @@ LogicalResult verifyCanonicalType(Type type, Operation *from,
       })
       .Case<ObjectIdType, ActivationIdType>([](auto) { return success(); })
       .Default([&](Type other) -> LogicalResult {
-        if (from->getParentOfType<ProcessOp>() && !isProcessOperation(from) &&
+        if ((from->getParentOfType<ProcessOp>() || isa<InlineOp>(from)) &&
             isa<IntegerType, FloatType, IndexType>(other))
           return success();
         return from->emitOpError()
@@ -1771,6 +1789,7 @@ LogicalResult verifyModulesAndTypedGraph(ModelOp model,
   llvm::SmallSet<std::pair<void *, void *>, 16> bindingPairs;
   llvm::StringMap<StringAttr> specializationByKey;
   llvm::StringMap<std::string> keyBySpecialization;
+  llvm::StringMap<StringRef> generatedCallEffects;
   auto recordSpecialization = [&](Operation *placement, SymbolRefAttr target,
                                   ArrayAttr arguments,
                                   StringAttr fingerprint) -> LogicalResult {
@@ -2107,25 +2126,71 @@ LogicalResult verifyModulesAndTypedGraph(ModelOp model,
         return bind.emitOpError(
             "each typed construction relation must lower exactly once");
     } else if (auto inlineOp = dyn_cast<InlineOp>(operation)) {
-      FailureOr<Operation *> definition = requireReference<BindingOp>(
-          index, inlineOp, inlineOp.getBindingAttr(), "inline binding");
-      if (failed(definition) ||
-          cast<BindingOp>(*definition).getEffect() != "pure" ||
-          !isa<ExprType>(inlineOp.getResult().getType()) ||
-          !isMemoryEffectFree(inlineOp))
+      Type result = inlineOp.getResult().getType();
+      if (inlineOp->getParentOfType<ProcessOp>()) {
+        if (!isa<IntegerType, FloatType, IndexType, ValueType>(result))
+          return inlineOp.emitOpError(
+              "process inline result must be an integer, float, index, or "
+              "!acsim.value");
+      } else if (!isa<ExprType>(result)) {
         return inlineOp.emitOpError(
-            "inline requires a pure binding and effect-free expr result");
-    } else if (auto invoke = dyn_cast<InvokeOp>(operation)) {
-      FailureOr<Operation *> definition = requireReference<BindingOp>(
-          index, invoke, invoke.getBindingAttr(), "invoke binding");
+            "module inline result must be exactly !acsim.expr");
+      }
+      FailureOr<Operation *> definition =
+          requireCallCallee(index, inlineOp, inlineOp.getCalleeAttr());
       if (failed(definition))
         return failure();
-      if (cast<BindingOp>(*definition).getEffect() != "stateful")
-        return invoke.emitOpError("invoke requires a stateful binding");
+      if (auto binding = dyn_cast<BindingOp>(*definition)) {
+        if (binding.getEffect() != "pure")
+          return inlineOp.emitOpError()
+                 << "inline callee '" << inlineOp.getCalleeAttr()
+                 << "' requires effect 'pure'";
+      } else {
+        auto type = cast<TypeOp>(*definition);
+        if (type.getKind() != "implementation")
+          return inlineOp.emitOpError()
+                 << "callee reference '" << inlineOp.getCalleeAttr()
+                 << "' resolves to non-implementation acsim.type";
+        std::string key = definitionKey(type);
+        auto [entry, inserted] =
+            generatedCallEffects.try_emplace(key, "inline");
+        if (!inserted && entry->second != "inline")
+          return inlineOp.emitOpError()
+                 << "generated implementation callee '"
+                 << inlineOp.getCalleeAttr()
+                 << "' cannot be used by both acsim.inline and acsim.invoke";
+      }
+      if (!isMemoryEffectFree(inlineOp))
+        return inlineOp.emitOpError("inline must remain effect-free");
+    } else if (auto invoke = dyn_cast<InvokeOp>(operation)) {
+      FailureOr<Operation *> definition =
+          requireCallCallee(index, invoke, invoke.getCalleeAttr());
+      if (failed(definition))
+        return failure();
+      if (auto binding = dyn_cast<BindingOp>(*definition)) {
+        if (binding.getEffect() != "stateful")
+          return invoke.emitOpError()
+                 << "invoke callee '" << invoke.getCalleeAttr()
+                 << "' requires effect 'stateful'";
+      } else {
+        auto type = cast<TypeOp>(*definition);
+        if (type.getKind() != "implementation")
+          return invoke.emitOpError()
+                 << "callee reference '" << invoke.getCalleeAttr()
+                 << "' resolves to non-implementation acsim.type";
+        std::string key = definitionKey(type);
+        auto [entry, inserted] =
+            generatedCallEffects.try_emplace(key, "invoke");
+        if (!inserted && entry->second != "invoke")
+          return invoke.emitOpError()
+                 << "generated implementation callee '"
+                 << invoke.getCalleeAttr()
+                 << "' cannot be used by both acsim.inline and acsim.invoke";
+      }
       for (Type type : invoke.getResultTypes())
         if (!isa<ValueType, WakeType>(type))
           return invoke.emitOpError(
-              "invoke results must be exact value or wake types");
+              "invoke results must be exact !acsim.value or !acsim.wake types");
     } else if (auto exportOp = dyn_cast<ExportOp>(operation)) {
       if (exportOp.getValue().getType() != exportOp.getResult().getType())
         return exportOp.emitOpError(
@@ -2831,8 +2896,17 @@ LogicalResult BindOp::verify() {
 }
 
 LogicalResult InlineOp::verify() {
-  if (!isa<ExprType>(getResult().getType()) || !isMemoryEffectFree(*this))
-    return emitOpError("inline must be effect-free and produce expr");
+  if (!isMemoryEffectFree(*this))
+    return emitOpError("inline must remain effect-free");
+  Type result = getResult().getType();
+  if (getOperation()->getParentOfType<ProcessOp>()) {
+    if (!isa<IntegerType, FloatType, IndexType, ValueType>(result))
+      return emitOpError(
+          "process inline result must be an integer, float, index, or "
+          "!acsim.value");
+  } else if (!isa<ExprType>(result)) {
+    return emitOpError("module inline result must be exactly !acsim.expr");
+  }
   return success();
 }
 
@@ -2859,7 +2933,8 @@ LogicalResult LiveStoreOp::verify() {
 LogicalResult InvokeOp::verify() {
   for (Type type : getResultTypes())
     if (!isa<ValueType, WakeType>(type))
-      return emitOpError("results must be typed values or wakes");
+      return emitOpError(
+          "invoke results must be exact !acsim.value or !acsim.wake types");
   return success();
 }
 

@@ -105,6 +105,8 @@ builtin.module attributes {ac.contract_epoch = "0.1"} {
         : () -> !acsim.expr<@cpp_bool>
       %expr2 = acsim.inline @pure(%expr)
         : (!acsim.expr<@cpp_bool>) -> !acsim.expr<@cpp_bool>
+      %generated_expr = acsim.inline @pure_impl()
+        : () -> !acsim.expr<@cpp_bool>
       acsim.bind %expr to %expr2 kind "pure_view"
         : !acsim.expr<@cpp_bool> to !acsim.expr<@cpp_bool>
       %out_port = acsim.export @out_port %port0 role @role
@@ -134,6 +136,10 @@ builtin.module attributes {ac.contract_epoch = "0.1"} {
         }
         state @done {
         ^bb0(%lane_done : !acsim.ref<@stateful>):
+          %scalar = acsim.inline @pure_impl() : () -> i32
+          %wrapped = acsim.inline @pure_impl() : () -> !acsim.value<@cpp_bool>
+          %generated_wake = acsim.invoke @stateful_impl()
+            : () -> !acsim.wake<@event_kind>
           acsim.terminate "success"
         }
       }

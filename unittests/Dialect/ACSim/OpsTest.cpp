@@ -247,6 +247,46 @@ builtin.module {
   EXPECT_FALSE(file);
 }
 
+TEST(ACSimOpsTest, GeneratedCallsExposeExactCalleeAttributeApi) {
+  mlir::MLIRContext context;
+  loadTestDialects(context);
+
+  auto file = mlir::parseSourceString<mlir::ModuleOp>(R"mlir(
+builtin.module {
+  %inline = acsim.inline @generated_inline() : () -> !acsim.expr<@cpp_i32>
+  %invoke = acsim.invoke @generated_invoke() : () -> !acsim.value<@cpp_i32>
+}
+)mlir",
+                                                      &context);
+  ASSERT_TRUE(file);
+
+  InlineOp inlineOp = firstOp<InlineOp>(*file);
+  InvokeOp invokeOp = firstOp<InvokeOp>(*file);
+  ASSERT_TRUE(inlineOp);
+  ASSERT_TRUE(invokeOp);
+  EXPECT_EQ(inlineOp.getCalleeAttr().getValue(), "generated_inline");
+  EXPECT_EQ(inlineOp.getCallee(), "generated_inline");
+  EXPECT_EQ(inlineOp->getAttr("callee"), inlineOp.getCalleeAttr());
+  EXPECT_FALSE(inlineOp->hasAttr("binding"));
+  EXPECT_EQ(invokeOp.getCalleeAttr().getValue(), "generated_invoke");
+  EXPECT_EQ(invokeOp.getCallee(), "generated_invoke");
+  EXPECT_EQ(invokeOp->getAttr("callee"), invokeOp.getCalleeAttr());
+  EXPECT_FALSE(invokeOp->hasAttr("binding"));
+
+  mlir::OpBuilder builder(&context);
+  builder.setInsertionPointToEnd(file->getBody());
+  InlineOp builtInline = InlineOp::create(
+      builder, builder.getUnknownLoc(),
+      ExprType::get(&context,
+                    mlir::FlatSymbolRefAttr::get(&context, "cpp_i32")),
+      mlir::ValueRange{}, "built_inline");
+  InvokeOp builtInvoke =
+      InvokeOp::create(builder, builder.getUnknownLoc(), mlir::TypeRange{},
+                       mlir::ValueRange{}, "built_invoke");
+  EXPECT_EQ(builtInline.getCalleeAttr().getValue(), "built_inline");
+  EXPECT_EQ(builtInvoke.getCalleeAttr().getValue(), "built_invoke");
+}
+
 TEST(ACSimOpsTest, ExportRetainsItsPublicSymbolNameApi) {
   mlir::MLIRContext context;
   loadTestDialects(context);
@@ -708,8 +748,8 @@ TEST(ACSimOpsTest, CanonicalFixtureCoversInventoryEffectsAndPerPcRoundTrip) {
       {"acsim.model", 1},     {"acsim.type", 24},      {"acsim.binding", 2},
       {"acsim.module", 1},    {"acsim.instance", 1},   {"acsim.array", 1},
       {"acsim.element", 2},   {"acsim.port", 2},       {"acsim.resource", 2},
-      {"acsim.bind", 3},      {"acsim.inline", 2},     {"acsim.process", 1},
-      {"acsim.live.load", 1}, {"acsim.live.store", 1}, {"acsim.invoke", 2},
+      {"acsim.bind", 3},      {"acsim.inline", 5},     {"acsim.process", 1},
+      {"acsim.live.load", 1}, {"acsim.live.store", 1}, {"acsim.invoke", 3},
       {"acsim.continue", 1},  {"acsim.suspend", 1},    {"acsim.terminate", 1},
       {"acsim.export", 3},    {"acsim.dispatch", 4},   {"acsim.activate", 6},
       {"acsim.return", 1},
@@ -982,11 +1022,11 @@ TEST(ACSimOpsTest, SemanticMutationsProduceDeterministicDiagnostics) {
     if (!invoke)
       invoke = candidate;
   });
-  invoke.setBindingAttr(mlir::FlatSymbolRefAttr::get(&context, "pure"));
+  invoke.setCalleeAttr(mlir::FlatSymbolRefAttr::get(&context, "pure"));
   std::string invokeEffectDiagnostic =
       expectVerificationFailure(*invokeEffectFile);
   EXPECT_TRUE(llvm::StringRef(invokeEffectDiagnostic)
-                  .contains("invoke requires a stateful binding"))
+                  .contains("requires effect 'stateful'"))
       << invokeEffectDiagnostic;
 }
 
@@ -1069,9 +1109,9 @@ TEST(ACSimOpsTest, EveryOperationHasATableDrivenBehavioralNegative) {
        "resource binding must connect exact initiator and target"},
       {"inline",
        [&](mlir::ModuleOp file) {
-         firstOp<InlineOp>(file).setBinding("stateful");
+         firstOp<InlineOp>(file).setCallee("stateful");
        },
-       "inline requires a pure binding"},
+       "requires effect 'pure'"},
       {"process",
        [&](mlir::ModuleOp file) {
          firstOp<ProcessOp>(file).setCaptureNamesAttr(
@@ -1089,8 +1129,8 @@ TEST(ACSimOpsTest, EveryOperationHasATableDrivenBehavioralNegative) {
        },
        "live store must resolve to an exact typed slot"},
       {"invoke",
-       [&](mlir::ModuleOp file) { firstOp<InvokeOp>(file).setBinding("pure"); },
-       "invoke requires a stateful binding"},
+       [&](mlir::ModuleOp file) { firstOp<InvokeOp>(file).setCallee("pure"); },
+       "requires effect 'stateful'"},
       {"continue",
        [&](mlir::ModuleOp file) {
          firstOp<ContinueOp>(file).setTargetPc("missing");
@@ -1730,8 +1770,8 @@ TEST(ACSimOpsTest, CyclicSsaDependencyFailsExplicitlyWithoutRecursion) {
   ModelOp model = *file->getOps<ModelOp>().begin();
   llvm::SmallVector<InlineOp> inlineOps;
   file->walk([&](InlineOp operation) { inlineOps.push_back(operation); });
-  ASSERT_EQ(inlineOps.size(), 2u);
-  inlineOps.front()->insertOperands(0, inlineOps.back().getResult());
+  ASSERT_GE(inlineOps.size(), 2u);
+  inlineOps.front()->insertOperands(0, inlineOps[1].getResult());
 
   std::string diagnostic =
       expectDirectVerificationFailure(context, [&] { return model.verify(); });
