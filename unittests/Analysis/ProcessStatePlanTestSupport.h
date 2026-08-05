@@ -15,8 +15,32 @@
 namespace acir::test {
 
 inline mlir::OwningOpRef<mlir::ModuleOp>
-parseAndFreezeYieldOnly(mlir::MLIRContext &context,
-                        bool reverseDeclarations = false) {
+parseAndFreezeYieldOnly(mlir::MLIRContext &context) {
+  constexpr llvm::StringLiteral source = R"mlir(
+    builtin.module attributes {ac.contract_epoch = "0.1"} {
+      ac.system @soc root @Top as "root" tick 0 "cycle"
+          workload @Top::@workload seed {kind = "fixed", value = 0 : i64}
+          instrumentation [] results {id = "default", format = "json"}
+          selected true
+      ac.module @Top() parameters {} graph {
+        ac.process @workload kind "workload" { ac.yield_sim }
+        ac.return
+      }
+    }
+  )mlir";
+  auto module = mlir::parseSourceString<mlir::ModuleOp>(source, &context);
+  if (!module)
+    return {};
+  mlir::PassManager manager(&context);
+  manager.addPass(createFreezeTopologyPass());
+  if (mlir::failed(manager.run(*module)))
+    return {};
+  return module;
+}
+
+inline mlir::OwningOpRef<mlir::ModuleOp>
+parseAndFreezeYieldPermutation(mlir::MLIRContext &context,
+                               bool reverseDeclarations) {
   constexpr llvm::StringLiteral alphaFirst = R"mlir(
     builtin.module attributes {ac.contract_epoch = "0.1"} {
       ac.system @soc root @Top as "root" tick 0 "cycle"

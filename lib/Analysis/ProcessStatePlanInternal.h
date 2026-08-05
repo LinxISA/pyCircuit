@@ -396,6 +396,25 @@ public:
   cloneWithUnpairedLiveSlotCallee(const ProcessStatePlanSet &plans);
   static ProcessStatePlanSet
   cloneWithMissingValueTypePayload(const ProcessStatePlanSet &plans);
+  static ProcessStatePlanSet
+  cloneWithNullEdgeStorage(const ProcessStatePlanSet &plans);
+  static ProcessStatePlanSet
+  cloneWithInactiveEdgeField(const ProcessStatePlanSet &plans);
+  static ProcessStatePlanSet
+  cloneWithDoubleValueTypePayload(const ProcessStatePlanSet &plans);
+  static ProcessStatePlanSet
+  cloneWithMissingOriginalActionSource(const ProcessStatePlanSet &plans);
+  static ProcessStatePlanSet
+  cloneWithUnexpectedConstantActionSource(const ProcessStatePlanSet &plans);
+  static ProcessStatePlanSet
+  cloneWithNonLoopForActionSource(const ProcessStatePlanSet &plans);
+  static bool exerciseCompleteApiFixture(mlir::MLIRContext &context);
+  static ProcessStatePlanSet
+  cloneWithLongLocalChain(const ProcessStatePlanSet &plans, uint32_t blocks);
+  static ProcessStatePlanSet
+  cloneWithLocalCycle(const ProcessStatePlanSet &plans);
+  static ProcessStatePlanSet
+  cloneWithUnreachableBlock(const ProcessStatePlanSet &plans);
   static llvm::StringRef
   specializationBytes(const ProcessGeneratedCalleePlan &callee);
   static llvm::StringRef

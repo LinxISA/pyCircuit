@@ -2,6 +2,7 @@
 
 #include "acir/Bindings/Binding.h"
 
+#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/Diagnostics.h"
 #include "mlir/IR/SymbolTable.h"
 #include "llvm/ADT/STLExtras.h"
@@ -10,8 +11,8 @@
 #include "llvm/Support/FormatVariadic.h"
 #include "llvm/Support/JSON.h"
 
+#include <array>
 #include <cassert>
-#include <functional>
 #include <limits>
 
 namespace acir {
@@ -601,6 +602,1100 @@ ProcessStatePlanSet detail::PlanSetBuilder::cloneWithMissingValueTypePayload(
   return ProcessStatePlanSet(impl);
 }
 
+ProcessStatePlanSet detail::PlanSetBuilder::cloneWithNullEdgeStorage(
+    const ProcessStatePlanSet &plans) {
+  auto impl = std::make_shared<ProcessStatePlanSet::Impl>(*plans.impl_);
+  auto process =
+      std::make_shared<ProcessStatePlan::Impl>(*impl->processes.front().impl_);
+  auto block =
+      std::make_shared<ProcessBlockPlan::Impl>(*process->blocks.front().impl_);
+  block->edge = ProcessControlEdgePlan(
+      std::shared_ptr<const ProcessControlEdgePlan::Impl>());
+  process->blocks.front() = ProcessBlockPlan(block);
+  impl->processes.front() = ProcessStatePlan(process);
+  return ProcessStatePlanSet(impl);
+}
+
+ProcessStatePlanSet detail::PlanSetBuilder::cloneWithInactiveEdgeField(
+    const ProcessStatePlanSet &plans) {
+  auto impl = std::make_shared<ProcessStatePlanSet::Impl>(*plans.impl_);
+  auto process =
+      std::make_shared<ProcessStatePlan::Impl>(*impl->processes.front().impl_);
+  auto block =
+      std::make_shared<ProcessBlockPlan::Impl>(*process->blocks.front().impl_);
+  auto edge =
+      std::make_shared<ProcessControlEdgePlan::Impl>(*block->edge->impl_);
+  edge->targetBlock = ProcessBlockId(0);
+  block->edge = ProcessControlEdgePlan(edge);
+  process->blocks.front() = ProcessBlockPlan(block);
+  impl->processes.front() = ProcessStatePlan(process);
+  return ProcessStatePlanSet(impl);
+}
+
+ProcessStatePlanSet detail::PlanSetBuilder::cloneWithDoubleValueTypePayload(
+    const ProcessStatePlanSet &plans) {
+  ProcessStatePlanSet seeded = cloneWithUnpairedLiveSlotCallee(plans);
+  auto impl = std::make_shared<ProcessStatePlanSet::Impl>(*seeded.impl_);
+  auto type = std::make_shared<ProcessValueTypePlan::Impl>(
+      *impl->valueTypes.front().impl_);
+  auto payload =
+      std::make_shared<ProcessValueTypePayload::Impl>(*type->payload->impl_);
+  auto packet = std::make_shared<ProcessStoragePacketPayload::Impl>();
+  packet->widthBits = 32;
+  packet->bytes = 4;
+  packet->encoding = "array<4xi8>";
+  payload->packet = ProcessStoragePacketPayload(packet);
+  type->payload = ProcessValueTypePayload(payload);
+  impl->valueTypes.front() = ProcessValueTypePlan(type);
+  auto process =
+      std::make_shared<ProcessStatePlan::Impl>(*impl->processes.front().impl_);
+  process->liveSlots.clear();
+  impl->processes.front() = ProcessStatePlan(process);
+  return ProcessStatePlanSet(impl);
+}
+
+ProcessStatePlanSet
+detail::PlanSetBuilder::cloneWithMissingOriginalActionSource(
+    const ProcessStatePlanSet &plans) {
+  auto impl = std::make_shared<ProcessStatePlanSet::Impl>(*plans.impl_);
+  auto process =
+      std::make_shared<ProcessStatePlan::Impl>(*impl->processes.front().impl_);
+  auto block =
+      std::make_shared<ProcessBlockPlan::Impl>(*process->blocks.front().impl_);
+  auto action = std::make_shared<ProcessActionPlan::Impl>();
+  action->id = 0;
+  action->kind = ProcessActionKind::Original;
+  action->emission = ProcessEmissionClass::ForwardOnly;
+  action->occurrence = process->wakes.front().impl_->occurrence;
+  action->sourceOperation = process->wakes.front().impl_->operation;
+  action->cost = 0;
+  action->sourceOperation = nullptr;
+  block->actions.push_back(ProcessActionPlan(action));
+  process->blocks.front() = ProcessBlockPlan(block);
+  impl->processes.front() = ProcessStatePlan(process);
+  return ProcessStatePlanSet(impl);
+}
+
+ProcessStatePlanSet
+detail::PlanSetBuilder::cloneWithUnexpectedConstantActionSource(
+    const ProcessStatePlanSet &plans) {
+  auto impl = std::make_shared<ProcessStatePlanSet::Impl>(*plans.impl_);
+  auto process =
+      std::make_shared<ProcessStatePlan::Impl>(*impl->processes.front().impl_);
+  auto block =
+      std::make_shared<ProcessBlockPlan::Impl>(*process->blocks.front().impl_);
+  auto synthetic = std::make_shared<ProcessSyntheticConstantOccurrence::Impl>();
+  synthetic->anchor = *process->wakes.front().impl_->occurrence;
+  synthetic->constant = 7;
+  auto occurrence = std::make_shared<ProcessOccurrenceId::Impl>();
+  occurrence->kind = ProcessOccurrenceKind::SyntheticConstant;
+  occurrence->syntheticConstant = ProcessSyntheticConstantOccurrence(synthetic);
+  auto action = std::make_shared<ProcessActionPlan::Impl>();
+  action->id = 0;
+  action->kind = ProcessActionKind::Constant;
+  action->emission = ProcessEmissionClass::ForwardOnly;
+  action->occurrence = ProcessOccurrenceId(occurrence);
+  action->cost = 0;
+  action->sourceOperation = process->wakes.front().impl_->operation;
+  block->actions.push_back(ProcessActionPlan(action));
+  process->blocks.front() = ProcessBlockPlan(block);
+  impl->processes.front() = ProcessStatePlan(process);
+  return ProcessStatePlanSet(impl);
+}
+
+ProcessStatePlanSet detail::PlanSetBuilder::cloneWithNonLoopForActionSource(
+    const ProcessStatePlanSet &plans) {
+  auto impl = std::make_shared<ProcessStatePlanSet::Impl>(*plans.impl_);
+  auto process =
+      std::make_shared<ProcessStatePlan::Impl>(*impl->processes.front().impl_);
+  auto block =
+      std::make_shared<ProcessBlockPlan::Impl>(*process->blocks.front().impl_);
+  auto loop = std::make_shared<ProcessSyntheticLoopOccurrence::Impl>();
+  loop->anchor = *process->wakes.front().impl_->occurrence;
+  loop->phase = ProcessLoopPhase::Condition;
+  auto occurrence = std::make_shared<ProcessOccurrenceId::Impl>();
+  occurrence->kind = ProcessOccurrenceKind::SyntheticLoop;
+  occurrence->syntheticLoop = ProcessSyntheticLoopOccurrence(loop);
+  auto scalarOp = std::make_shared<ProcessScalarOperationPlan::Impl>();
+  scalarOp->name = "arith.cmpi";
+  scalarOp->properties = "{}";
+  auto action = std::make_shared<ProcessActionPlan::Impl>();
+  action->id = 0;
+  action->kind = ProcessActionKind::ForCondition;
+  action->emission = ProcessEmissionClass::CopyScalar;
+  action->occurrence = ProcessOccurrenceId(occurrence);
+  action->sourceOperation = process->wakes.front().impl_->operation;
+  action->scalarOp = ProcessScalarOperationPlan(scalarOp);
+  action->cost = 1;
+  block->actions.push_back(ProcessActionPlan(action));
+  process->blocks.front() = ProcessBlockPlan(block);
+  impl->processes.front() = ProcessStatePlan(process);
+  return ProcessStatePlanSet(impl);
+}
+
+ProcessStatePlanSet detail::PlanSetBuilder::cloneWithLongLocalChain(
+    const ProcessStatePlanSet &plans, uint32_t blockCount) {
+  assert(blockCount > 0 && "long-chain fixture requires at least one block");
+  auto impl = std::make_shared<ProcessStatePlanSet::Impl>(*plans.impl_);
+  auto process =
+      std::make_shared<ProcessStatePlan::Impl>(*impl->processes.front().impl_);
+  process->blocks.clear();
+  process->wakes.clear();
+  process->transitions.clear();
+  auto pc = std::make_shared<ProcessPcPlan::Impl>(*process->pcs.front().impl_);
+  pc->blocks.clear();
+  for (uint32_t index = 0; index < blockCount; ++index) {
+    auto edge = std::make_shared<ProcessControlEdgePlan::Impl>();
+    if (index + 1 == blockCount) {
+      edge->kind = ProcessControlEdgeKind::Terminate;
+      edge->status = ProcessTerminateStatus::Success;
+    } else {
+      edge->kind = ProcessControlEdgeKind::LocalContinue;
+      edge->targetBlock = ProcessBlockId(index + 1);
+    }
+    auto block = std::make_shared<ProcessBlockPlan::Impl>();
+    block->id = ProcessBlockId(index);
+    block->pc = ProcessPcId(0);
+    block->path = process->definitionKey + "/plan/pc/entry/" +
+                  llvm::formatv("b{0:D8}", index).str();
+    block->edge = ProcessControlEdgePlan(edge);
+    block->cost = 1;
+    process->blocks.push_back(ProcessBlockPlan(block));
+    pc->blocks.push_back(ProcessBlockId(index));
+  }
+  pc->entryPath = process->blocks.front().impl_->path;
+  process->pcs.front() = ProcessPcPlan(pc);
+  process->fairnessWork = blockCount;
+  impl->processes.front() = ProcessStatePlan(process);
+  return ProcessStatePlanSet(impl);
+}
+
+ProcessStatePlanSet
+detail::PlanSetBuilder::cloneWithLocalCycle(const ProcessStatePlanSet &plans) {
+  auto impl = std::make_shared<ProcessStatePlanSet::Impl>(*plans.impl_);
+  auto process =
+      std::make_shared<ProcessStatePlan::Impl>(*impl->processes.front().impl_);
+  auto block =
+      std::make_shared<ProcessBlockPlan::Impl>(*process->blocks.back().impl_);
+  auto edge = std::make_shared<ProcessControlEdgePlan::Impl>();
+  edge->kind = ProcessControlEdgeKind::LocalContinue;
+  edge->targetBlock = ProcessBlockId(0);
+  block->edge = ProcessControlEdgePlan(edge);
+  process->blocks.back() = ProcessBlockPlan(block);
+  impl->processes.front() = ProcessStatePlan(process);
+  return ProcessStatePlanSet(impl);
+}
+
+ProcessStatePlanSet detail::PlanSetBuilder::cloneWithUnreachableBlock(
+    const ProcessStatePlanSet &plans) {
+  auto impl = std::make_shared<ProcessStatePlanSet::Impl>(*plans.impl_);
+  auto process =
+      std::make_shared<ProcessStatePlan::Impl>(*impl->processes.front().impl_);
+  auto block =
+      std::make_shared<ProcessBlockPlan::Impl>(*process->blocks.front().impl_);
+  block->id = ProcessBlockId(1);
+  block->path = process->definitionKey + "/plan/pc/entry/b00000001";
+  auto edge = std::make_shared<ProcessControlEdgePlan::Impl>();
+  edge->kind = ProcessControlEdgeKind::Terminate;
+  edge->status = ProcessTerminateStatus::Success;
+  block->edge = ProcessControlEdgePlan(edge);
+  block->cost = 1;
+  process->blocks.push_back(ProcessBlockPlan(block));
+  auto pc = std::make_shared<ProcessPcPlan::Impl>(*process->pcs.front().impl_);
+  pc->blocks.push_back(ProcessBlockId(1));
+  process->pcs.front() = ProcessPcPlan(pc);
+  impl->processes.front() = ProcessStatePlan(process);
+  return ProcessStatePlanSet(impl);
+}
+
+bool detail::PlanSetBuilder::exerciseCompleteApiFixture(
+    mlir::MLIRContext &context) {
+  bool valid = true;
+  auto expect = [&](bool condition) { valid &= condition; };
+  mlir::Type i32 = mlir::IntegerType::get(&context, 32);
+  mlir::Block values;
+  mlir::Value operand =
+      values.addArgument(i32, mlir::UnknownLoc::get(&context));
+  mlir::Value argument =
+      values.addArgument(i32, mlir::UnknownLoc::get(&context));
+
+  auto siteImpl = std::make_shared<ProcessCallSitePlan::Impl>();
+  siteImpl->operationPath = "@Top::@workload/r0/b0/o0";
+  siteImpl->iterationVector = {3};
+  ProcessCallSitePlan site(siteImpl);
+  expect(site.operation() == nullptr);
+  expect(site.operationPath() == "@Top::@workload/r0/b0/o0");
+  expect(site.iterationVector() == llvm::ArrayRef<uint64_t>({3}));
+
+  auto originalImpl = std::make_shared<ProcessOriginalOccurrence::Impl>();
+  originalImpl->operationPath = "@Top::@workload/r0/b0/o1";
+  originalImpl->callSites = {site};
+  originalImpl->iterationVector = {5};
+  ProcessOriginalOccurrence original(originalImpl);
+  auto occurrenceImpl = std::make_shared<ProcessOccurrenceId::Impl>();
+  occurrenceImpl->kind = ProcessOccurrenceKind::Original;
+  occurrenceImpl->original = original;
+  ProcessOccurrenceId anchor(occurrenceImpl);
+  expect(original.operation() == nullptr);
+  expect(original.operationPath() == "@Top::@workload/r0/b0/o1");
+  expect(original.callSites().size() == 1);
+  expect(original.iterationVector() == llvm::ArrayRef<uint64_t>({5}));
+  expect(anchor.kind() == ProcessOccurrenceKind::Original);
+  expect(anchor.original().operationPath() == original.operationPath());
+
+  auto loopImpl = std::make_shared<ProcessSyntheticLoopOccurrence::Impl>();
+  loopImpl->anchor = anchor;
+  loopImpl->phase = ProcessLoopPhase::Condition;
+  ProcessSyntheticLoopOccurrence loop(loopImpl);
+  auto loopOccurrenceImpl = std::make_shared<ProcessOccurrenceId::Impl>();
+  loopOccurrenceImpl->kind = ProcessOccurrenceKind::SyntheticLoop;
+  loopOccurrenceImpl->syntheticLoop = loop;
+  ProcessOccurrenceId loopOccurrence(loopOccurrenceImpl);
+  expect(loop.anchor().kind() == ProcessOccurrenceKind::Original);
+  expect(loop.phase() == ProcessLoopPhase::Condition);
+  expect(loopOccurrence.syntheticLoop().phase() == ProcessLoopPhase::Condition);
+  expect(loopOccurrence.kind() == ProcessOccurrenceKind::SyntheticLoop);
+
+  auto wrapperImpl =
+      std::make_shared<ProcessSyntheticWrapperOccurrence::Impl>();
+  wrapperImpl->anchor = anchor;
+  wrapperImpl->transition = ProcessTransitionId(2);
+  wrapperImpl->slot = ProcessLiveSlotId(3);
+  wrapperImpl->direction = ProcessWrapperDirection::Unwrap;
+  ProcessSyntheticWrapperOccurrence wrapper(wrapperImpl);
+  auto wrapperOccurrenceImpl = std::make_shared<ProcessOccurrenceId::Impl>();
+  wrapperOccurrenceImpl->kind = ProcessOccurrenceKind::SyntheticWrapper;
+  wrapperOccurrenceImpl->syntheticWrapper = wrapper;
+  ProcessOccurrenceId wrapperOccurrence(wrapperOccurrenceImpl);
+  expect(wrapper.anchor().kind() == ProcessOccurrenceKind::Original);
+  expect(wrapper.transition().value() == 2);
+  expect(wrapper.slot().value() == 3);
+  expect(wrapper.direction() == ProcessWrapperDirection::Unwrap);
+  expect(wrapperOccurrence.syntheticWrapper().slot().value() == 3);
+  expect(wrapperOccurrence.kind() == ProcessOccurrenceKind::SyntheticWrapper);
+
+  auto constantOccurrenceImpl =
+      std::make_shared<ProcessSyntheticConstantOccurrence::Impl>();
+  constantOccurrenceImpl->anchor = anchor;
+  constantOccurrenceImpl->constant = 7;
+  ProcessSyntheticConstantOccurrence constantOccurrencePayload(
+      constantOccurrenceImpl);
+  auto constantOccurrenceUnionImpl =
+      std::make_shared<ProcessOccurrenceId::Impl>();
+  constantOccurrenceUnionImpl->kind = ProcessOccurrenceKind::SyntheticConstant;
+  constantOccurrenceUnionImpl->syntheticConstant = constantOccurrencePayload;
+  ProcessOccurrenceId constantOccurrence(constantOccurrenceUnionImpl);
+  expect(constantOccurrencePayload.anchor().kind() ==
+         ProcessOccurrenceKind::Original);
+  expect(constantOccurrencePayload.constant() == 7);
+  expect(constantOccurrence.syntheticConstant().constant() == 7);
+  expect(constantOccurrence.kind() == ProcessOccurrenceKind::SyntheticConstant);
+
+  auto coordinateImpl = std::make_shared<ProcessValueCoordinate::Impl>();
+  coordinateImpl->kind = ProcessValueCoordinateKind::BlockArgument;
+  coordinateImpl->ownerPath = "@Top::@workload/r0/b0";
+  coordinateImpl->index = 4;
+  ProcessValueCoordinate coordinate(coordinateImpl);
+  expect(coordinate.kind() == ProcessValueCoordinateKind::BlockArgument);
+  expect(coordinate.ownerPath() == "@Top::@workload/r0/b0");
+  expect(coordinate.index() == 4);
+
+  auto originalValueImpl =
+      std::make_shared<ProcessOriginalPlannedValue::Impl>();
+  originalValueImpl->value = operand;
+  originalValueImpl->occurrence = anchor;
+  originalValueImpl->coordinate = coordinate;
+  originalValueImpl->path = "@Top::@workload/r0/b0/a4";
+  ProcessOriginalPlannedValue originalValue(originalValueImpl);
+  auto captureValueImpl = std::make_shared<ProcessCapturePlannedValue::Impl>();
+  captureValueImpl->capture = ProcessCaptureId(5);
+  ProcessCapturePlannedValue captureValue(captureValueImpl);
+  auto slotValueImpl = std::make_shared<ProcessLiveSlotPlannedValue::Impl>();
+  slotValueImpl->slot = ProcessLiveSlotId(6);
+  ProcessLiveSlotPlannedValue slotValue(slotValueImpl);
+  auto syntheticValueImpl =
+      std::make_shared<ProcessSyntheticPlannedValue::Impl>();
+  syntheticValueImpl->occurrence = loopOccurrence;
+  syntheticValueImpl->coordinate = coordinate;
+  ProcessSyntheticPlannedValue syntheticValue(syntheticValueImpl);
+  auto constantValueImpl =
+      std::make_shared<ProcessConstantPlannedValue::Impl>();
+  constantValueImpl->value = "42";
+  ProcessConstantPlannedValue constantValue(constantValueImpl);
+
+  auto makePlanned = [&](ProcessPlannedValueKind kind) {
+    auto impl = std::make_shared<ProcessPlannedValue::Impl>();
+    impl->kind = kind;
+    impl->type = i32;
+    switch (kind) {
+    case ProcessPlannedValueKind::Original:
+      impl->original = originalValue;
+      break;
+    case ProcessPlannedValueKind::Capture:
+      impl->capture = captureValue;
+      break;
+    case ProcessPlannedValueKind::LiveSlot:
+      impl->liveSlot = slotValue;
+      break;
+    case ProcessPlannedValueKind::Synthetic:
+      impl->synthetic = syntheticValue;
+      break;
+    case ProcessPlannedValueKind::Constant:
+      impl->constant = constantValue;
+      break;
+    }
+    return ProcessPlannedValue(impl);
+  };
+  std::vector<ProcessPlannedValue> planned = {
+      makePlanned(ProcessPlannedValueKind::Original),
+      makePlanned(ProcessPlannedValueKind::Capture),
+      makePlanned(ProcessPlannedValueKind::LiveSlot),
+      makePlanned(ProcessPlannedValueKind::Synthetic),
+      makePlanned(ProcessPlannedValueKind::Constant)};
+  expect(originalValue.value() == operand);
+  expect(originalValue.occurrence().kind() == ProcessOccurrenceKind::Original);
+  expect(originalValue.coordinate().index() == 4);
+  expect(originalValue.path() == "@Top::@workload/r0/b0/a4");
+  expect(captureValue.capture().value() == 5);
+  expect(slotValue.slot().value() == 6);
+  expect(syntheticValue.occurrence().kind() ==
+         ProcessOccurrenceKind::SyntheticLoop);
+  expect(syntheticValue.coordinate().index() == 4);
+  expect(constantValue.value() == "42");
+  expect(planned[0].original().path() == originalValue.path());
+  expect(planned[1].capture().capture().value() == 5);
+  expect(planned[2].liveSlot().slot().value() == 6);
+  expect(planned[3].synthetic().coordinate().index() == 4);
+  expect(planned[4].constant().value() == "42");
+  for (auto [index, value] : llvm::enumerate(planned)) {
+    expect(static_cast<unsigned>(value.kind()) == index);
+    expect(value.type() == i32);
+  }
+
+  auto scalarAttributeImpl = std::make_shared<ProcessScalarAttribute::Impl>();
+  scalarAttributeImpl->name = "predicate";
+  scalarAttributeImpl->value = "slt";
+  ProcessScalarAttribute scalarAttribute(scalarAttributeImpl);
+  auto scalarOpImpl = std::make_shared<ProcessScalarOperationPlan::Impl>();
+  scalarOpImpl->name = "arith.cmpi";
+  scalarOpImpl->attributes = {scalarAttribute};
+  scalarOpImpl->properties = "{}";
+  ProcessScalarOperationPlan scalarOp(scalarOpImpl);
+  expect(scalarAttribute.name() == "predicate");
+  expect(scalarAttribute.value() == "slt");
+  expect(scalarOp.name() == "arith.cmpi");
+  expect(scalarOp.attributes().size() == 1);
+  expect(scalarOp.properties() == "{}");
+
+  auto captureImpl = std::make_shared<ProcessCapturePlan::Impl>();
+  captureImpl->id = ProcessCaptureId(0);
+  captureImpl->name = "capture00000000";
+  captureImpl->operand = operand;
+  captureImpl->entryArgument = argument;
+  captureImpl->type = i32;
+  captureImpl->operandPath = "operand";
+  captureImpl->argumentPath = "argument";
+  ProcessCapturePlan capture(captureImpl);
+  expect(capture.id().value() == 0);
+  expect(capture.name() == "capture00000000");
+  expect(capture.operand() == operand);
+  expect(capture.entryArgument() == argument);
+  expect(capture.type() == i32);
+  expect(capture.operandPath() == "operand");
+  expect(capture.argumentPath() == "argument");
+
+  auto actionImpl = std::make_shared<ProcessActionPlan::Impl>();
+  actionImpl->id = 9;
+  actionImpl->kind = ProcessActionKind::ForCondition;
+  actionImpl->emission = ProcessEmissionClass::CopyScalar;
+  actionImpl->occurrence = loopOccurrence;
+  actionImpl->iterationVector = {8};
+  actionImpl->operands = {planned[0]};
+  actionImpl->results = {planned[3]};
+  actionImpl->cost = 1;
+  actionImpl->resultTypes = {i32};
+  actionImpl->scalarOp = scalarOp;
+  ProcessActionPlan action(actionImpl);
+  expect(action.id() == 9);
+  expect(action.kind() == ProcessActionKind::ForCondition);
+  expect(action.emission() == ProcessEmissionClass::CopyScalar);
+  expect(action.occurrence().kind() == ProcessOccurrenceKind::SyntheticLoop);
+  expect(action.sourceOperation() == nullptr);
+  expect(action.iterationVector() == llvm::ArrayRef<uint64_t>({8}));
+  expect(action.operands().size() == 1);
+  expect(action.results().size() == 1);
+  expect(action.cost() == 1);
+  expect(action.resultTypes() == llvm::ArrayRef<mlir::Type>({i32}));
+  expect(!action.callee());
+  expect(action.scalarOp() && action.scalarOp()->name() == "arith.cmpi");
+
+  auto liveSlotImpl = std::make_shared<ProcessLiveSlotPlan::Impl>();
+  liveSlotImpl->id = ProcessLiveSlotId(1);
+  liveSlotImpl->name = "live00000001";
+  liveSlotImpl->type = i32;
+  liveSlotImpl->storageType = ProcessValueTypeId(2);
+  liveSlotImpl->memberValues = {planned[0]};
+  liveSlotImpl->wrapCallee = ProcessCalleeId(3);
+  liveSlotImpl->unwrapCallee = ProcessCalleeId(4);
+  ProcessLiveSlotPlan liveSlot(liveSlotImpl);
+  expect(liveSlot.id().value() == 1);
+  expect(liveSlot.name() == "live00000001");
+  expect(liveSlot.type() == i32);
+  expect(liveSlot.storageType().value() == 2);
+  expect(liveSlot.memberValues().size() == 1);
+  expect(liveSlot.wrapCallee()->value() == 3);
+  expect(liveSlot.unwrapCallee()->value() == 4);
+
+  std::vector<ProcessSubscriptionSourcePlan> sources;
+  for (ProcessSubscriptionSourceKind kind :
+       {ProcessSubscriptionSourceKind::Capture,
+        ProcessSubscriptionSourceKind::Value,
+        ProcessSubscriptionSourceKind::Symbol}) {
+    auto impl = std::make_shared<ProcessSubscriptionSourcePlan::Impl>();
+    impl->kind = kind;
+    impl->path = "source";
+    if (kind == ProcessSubscriptionSourceKind::Capture)
+      impl->capture = ProcessCaptureId(5);
+    else if (kind == ProcessSubscriptionSourceKind::Value) {
+      impl->value = operand;
+      impl->ownerPath = "owner";
+    } else {
+      impl->declaration = reinterpret_cast<mlir::Operation *>(uintptr_t{1});
+      impl->symbol = "@symbol";
+      impl->ownerPath = "owner";
+    }
+    sources.push_back(ProcessSubscriptionSourcePlan(impl));
+  }
+  expect(sources[0].kind() == ProcessSubscriptionSourceKind::Capture);
+  expect(sources[0].capture()->value() == 5);
+  expect(sources[0].path() == "source");
+  expect(sources[1].value() == operand);
+  expect(sources[1].owner() == nullptr);
+  expect(sources[1].ownerPath() == "owner");
+  expect(sources[2].declaration() != nullptr);
+  expect(sources[2].symbol() == "@symbol");
+  for (auto [index, source] : llvm::enumerate(sources))
+    expect(static_cast<unsigned>(source.kind()) == index);
+
+  auto wakeImpl = std::make_shared<ProcessWakePlan::Impl>();
+  wakeImpl->id = ProcessWakeId(6);
+  wakeImpl->kind = ProcessWakeKind::Condition;
+  wakeImpl->triggeringValue = operand;
+  wakeImpl->callee = ProcessCalleeId(7);
+  wakeImpl->typeKey = "@acir_wake_condition";
+  wakeImpl->operationPath = "operation";
+  wakeImpl->target = "condition";
+  wakeImpl->occurrence = anchor;
+  wakeImpl->iterationVector = {9};
+  wakeImpl->sources = sources;
+  ProcessWakePlan wake(wakeImpl);
+  expect(wake.id().value() == 6);
+  expect(wake.kind() == ProcessWakeKind::Condition);
+  expect(wake.operation() == nullptr);
+  expect(wake.triggeringValue() == operand);
+  expect(wake.declaration() == nullptr);
+  expect(wake.callee().value() == 7);
+  expect(wake.typeKey() == "@acir_wake_condition");
+  expect(wake.operationPath() == "operation");
+  expect(wake.target() == "condition");
+  expect(wake.occurrence().kind() == ProcessOccurrenceKind::Original);
+  expect(wake.iterationVector() == llvm::ArrayRef<uint64_t>({9}));
+  expect(wake.sources().size() == 3);
+
+  auto storeImpl = std::make_shared<ProcessTransitionStorePlan::Impl>();
+  storeImpl->slot = ProcessLiveSlotId(1);
+  storeImpl->source = planned[0];
+  storeImpl->sourceValue = operand;
+  ProcessTransitionStorePlan store(storeImpl);
+  auto loadImpl = std::make_shared<ProcessTransitionLoadPlan::Impl>();
+  loadImpl->slot = ProcessLiveSlotId(1);
+  loadImpl->replacements = {planned[1]};
+  ProcessTransitionLoadPlan load(loadImpl);
+  auto transitionImpl = std::make_shared<ProcessTransitionPlan::Impl>();
+  transitionImpl->id = ProcessTransitionId(2);
+  transitionImpl->sourcePc = ProcessPcId(3);
+  transitionImpl->targetPc = ProcessPcId(4);
+  transitionImpl->wake = ProcessWakeId(5);
+  transitionImpl->iterationVector = {6};
+  transitionImpl->stores = {store};
+  transitionImpl->loads = {load};
+  ProcessTransitionPlan transition(transitionImpl);
+  expect(store.slot().value() == 1);
+  expect(store.source().kind() == ProcessPlannedValueKind::Original);
+  expect(store.sourceValue() == operand);
+  expect(load.slot().value() == 1);
+  expect(load.replacements().size() == 1);
+  expect(transition.id().value() == 2);
+  expect(transition.sourcePc().value() == 3);
+  expect(transition.targetPc().value() == 4);
+  expect(transition.wake().value() == 5);
+  expect(transition.iterationVector() == llvm::ArrayRef<uint64_t>({6}));
+  expect(transition.stores().size() == 1);
+  expect(transition.loads().size() == 1);
+
+  auto bindingImpl = std::make_shared<ProcessForwardingBindingPlan::Impl>();
+  bindingImpl->from = planned[0];
+  bindingImpl->to = planned[3];
+  ProcessForwardingBindingPlan binding(bindingImpl);
+  expect(binding.from().kind() == ProcessPlannedValueKind::Original);
+  expect(binding.to().kind() == ProcessPlannedValueKind::Synthetic);
+
+  std::vector<ProcessControlFramePlan> frames;
+  for (auto [kind, phase] :
+       {std::pair{ProcessFrameKind::Entry, ProcessFramePhase::Entry},
+        std::pair{ProcessFrameKind::ScfIf, ProcessFramePhase::Then},
+        std::pair{ProcessFrameKind::ScfIf, ProcessFramePhase::Else},
+        std::pair{ProcessFrameKind::ScfIf, ProcessFramePhase::Merge},
+        std::pair{ProcessFrameKind::ScfFor, ProcessFramePhase::Header},
+        std::pair{ProcessFrameKind::ScfFor, ProcessFramePhase::Body},
+        std::pair{ProcessFrameKind::ScfFor, ProcessFramePhase::Exit},
+        std::pair{ProcessFrameKind::ScfWhile, ProcessFramePhase::Before},
+        std::pair{ProcessFrameKind::ScfWhile, ProcessFramePhase::After},
+        std::pair{ProcessFrameKind::ScfWhile, ProcessFramePhase::Exit}}) {
+    auto impl = std::make_shared<ProcessControlFramePlan::Impl>();
+    impl->kind = kind;
+    impl->phase = phase;
+    impl->operationPath = "frame";
+    impl->bindings = {binding};
+    frames.push_back(ProcessControlFramePlan(impl));
+  }
+  expect(frames.front().kind() == ProcessFrameKind::Entry);
+  expect(frames.front().phase() == ProcessFramePhase::Entry);
+  expect(frames.front().operation() == nullptr);
+  expect(frames.front().operationPath() == "frame");
+  expect(frames.front().bindings().size() == 1);
+
+  std::vector<ProcessControlEdgePlan> edges;
+  auto branch = std::make_shared<ProcessControlEdgePlan::Impl>();
+  branch->kind = ProcessControlEdgeKind::Branch;
+  branch->condition = planned[4];
+  branch->trueBlock = ProcessBlockId(1);
+  branch->falseBlock = ProcessBlockId(2);
+  branch->trueBindings = {binding};
+  branch->falseBindings = {binding};
+  edges.push_back(ProcessControlEdgePlan(branch));
+  auto local = std::make_shared<ProcessControlEdgePlan::Impl>();
+  local->kind = ProcessControlEdgeKind::LocalContinue;
+  local->targetBlock = ProcessBlockId(3);
+  local->bindings = {binding};
+  edges.push_back(ProcessControlEdgePlan(local));
+  auto suspend = std::make_shared<ProcessControlEdgePlan::Impl>();
+  suspend->kind = ProcessControlEdgeKind::Suspend;
+  suspend->transition = ProcessTransitionId(4);
+  edges.push_back(ProcessControlEdgePlan(suspend));
+  auto terminate = std::make_shared<ProcessControlEdgePlan::Impl>();
+  terminate->kind = ProcessControlEdgeKind::Terminate;
+  terminate->status = ProcessTerminateStatus::Failure;
+  edges.push_back(ProcessControlEdgePlan(terminate));
+  expect(edges[0].kind() == ProcessControlEdgeKind::Branch);
+  expect(edges[0].condition().kind() == ProcessPlannedValueKind::Constant);
+  expect(edges[0].trueBlock().value() == 1);
+  expect(edges[0].falseBlock().value() == 2);
+  expect(edges[0].trueBindings().size() == 1);
+  expect(edges[0].falseBindings().size() == 1);
+  expect(edges[1].targetBlock().value() == 3);
+  expect(edges[1].bindings().size() == 1);
+  expect(edges[2].transition().value() == 4);
+  expect(edges[3].status() == ProcessTerminateStatus::Failure);
+  for (auto [index, edge] : llvm::enumerate(edges))
+    expect(static_cast<unsigned>(edge.kind()) == index);
+
+  auto blockImpl = std::make_shared<ProcessBlockPlan::Impl>();
+  blockImpl->id = ProcessBlockId(1);
+  blockImpl->pc = ProcessPcId(2);
+  blockImpl->path = "block";
+  blockImpl->frames = {frames.front()};
+  blockImpl->loads = {load};
+  blockImpl->actions = {action};
+  blockImpl->edge = edges.back();
+  blockImpl->cost = 3;
+  ProcessBlockPlan block(blockImpl);
+  expect(block.id().value() == 1);
+  expect(block.pc().value() == 2);
+  expect(block.originRegion() == nullptr);
+  expect(block.originBlock() == nullptr);
+  expect(block.path() == "block");
+  expect(block.frames().size() == 1);
+  expect(block.loads().size() == 1);
+  expect(block.actions().size() == 1);
+  expect(block.edge().kind() == ProcessControlEdgeKind::Terminate);
+  expect(block.cost() == 3);
+
+  auto pcImpl = std::make_shared<ProcessPcPlan::Impl>();
+  pcImpl->id = ProcessPcId(2);
+  pcImpl->name = "pc00000002";
+  pcImpl->entryPath = "block";
+  pcImpl->blocks = {ProcessBlockId(1)};
+  ProcessPcPlan pc(pcImpl);
+  expect(pc.id().value() == 2);
+  expect(pc.name() == "pc00000002");
+  expect(pc.entryPath() == "block");
+  expect(pc.blocks().front().value() == 1);
+
+  auto stateImpl = std::make_shared<ProcessStatePlan::Impl>();
+  stateImpl->definitionKey = "@Top::@workload";
+  stateImpl->captures = {capture};
+  stateImpl->entryPc = ProcessPcId(2);
+  stateImpl->pcs = {pc};
+  stateImpl->blocks = {block};
+  stateImpl->liveSlots = {liveSlot};
+  stateImpl->wakes = {wake};
+  stateImpl->transitions = {transition};
+  stateImpl->pcBitWidth = 3;
+  stateImpl->fairnessWork = 4;
+  ProcessStatePlan state(stateImpl);
+  expect(state.definitionKey() == "@Top::@workload");
+  expect(!state.process());
+  expect(state.captures().size() == 1);
+  expect(state.entryPc().value() == 2);
+  expect(state.pcs().size() == 1);
+  expect(state.blocks().size() == 1);
+  expect(state.liveSlots().size() == 1);
+  expect(state.wakes().size() == 1);
+  expect(state.transitions().size() == 1);
+  expect(state.pcBitWidth() == 3);
+  expect(state.fairnessWork() == 4);
+
+  auto fieldImpl = std::make_shared<ProcessRecordFieldDescriptor::Impl>();
+  fieldImpl->name = "field";
+  fieldImpl->typeKey = "mlir:i32";
+  ProcessRecordFieldDescriptor field(fieldImpl);
+  auto recordCreateImpl = std::make_shared<ProcessRecordCreatePayload::Impl>();
+  recordCreateImpl->fields = {field};
+  recordCreateImpl->recordType = "mlir:!ac.record";
+  ProcessRecordCreatePayload recordCreate(recordCreateImpl);
+  auto recordGetImpl = std::make_shared<ProcessRecordGetPayload::Impl>();
+  recordGetImpl->field = "field";
+  recordGetImpl->record = "mlir:!ac.record";
+  recordGetImpl->result = "mlir:i32";
+  ProcessRecordGetPayload recordGet(recordGetImpl);
+  auto recordWithImpl = std::make_shared<ProcessRecordWithPayload::Impl>();
+  recordWithImpl->field = "field";
+  recordWithImpl->record = "mlir:!ac.record";
+  recordWithImpl->value = "mlir:i32";
+  ProcessRecordWithPayload recordWith(recordWithImpl);
+  expect(field.name() == "field");
+  expect(field.typeKey() == "mlir:i32");
+  expect(recordCreate.fields().size() == 1);
+  expect(recordCreate.recordType() == "mlir:!ac.record");
+  expect(recordGet.field() == "field");
+  expect(recordGet.record() == "mlir:!ac.record");
+  expect(recordGet.result() == "mlir:i32");
+  expect(recordWith.field() == "field");
+  expect(recordWith.record() == "mlir:!ac.record");
+  expect(recordWith.value() == "mlir:i32");
+
+  auto packetSerializeImpl =
+      std::make_shared<ProcessPacketSerializePayload::Impl>();
+  packetSerializeImpl->bytes = 4;
+  packetSerializeImpl->packet = "@packet";
+  packetSerializeImpl->packetType = "mlir:!ac.packet";
+  ProcessPacketSerializePayload packetSerialize(packetSerializeImpl);
+  auto packetDeserializeImpl =
+      std::make_shared<ProcessPacketDeserializePayload::Impl>(
+          ProcessPacketDeserializePayload::Impl{4, "@packet",
+                                                "mlir:!ac.packet"});
+  ProcessPacketDeserializePayload packetDeserialize(packetDeserializeImpl);
+  expect(packetSerialize.bytes() == 4);
+  expect(packetSerialize.packet() == "@packet");
+  expect(packetSerialize.packetType() == "mlir:!ac.packet");
+  expect(packetDeserialize.bytes() == 4);
+  expect(packetDeserialize.packet() == "@packet");
+  expect(packetDeserialize.packetType() == "mlir:!ac.packet");
+
+  auto traceDecodeImpl = std::make_shared<ProcessTraceDecodePayload::Impl>();
+  traceDecodeImpl->entry = "mlir:i32";
+  traceDecodeImpl->result = "mlir:i64";
+  traceDecodeImpl->source = "trace";
+  ProcessTraceDecodePayload traceDecode(traceDecodeImpl);
+  auto queueSendImpl = std::make_shared<ProcessQueueTrySendPayload::Impl>();
+  queueSendImpl->element = "mlir:i32";
+  queueSendImpl->queue = "@queue";
+  ProcessQueueTrySendPayload queueSend(queueSendImpl);
+  auto queueRecvImpl = std::make_shared<ProcessQueueTryRecvPayload::Impl>();
+  queueRecvImpl->element = "mlir:i32";
+  queueRecvImpl->queue = "@queue";
+  ProcessQueueTryRecvPayload queueRecv(queueRecvImpl);
+  auto eventImpl = std::make_shared<ProcessEventSchedulePayload::Impl>();
+  eventImpl->delay = "mlir:i64";
+  eventImpl->target = "@event";
+  eventImpl->value = "mlir:i32";
+  ProcessEventSchedulePayload event(eventImpl);
+  expect(traceDecode.entry() == "mlir:i32");
+  expect(traceDecode.result() == "mlir:i64");
+  expect(traceDecode.source() == "trace");
+  expect(queueSend.element() == "mlir:i32");
+  expect(queueSend.queue() == "@queue");
+  expect(queueRecv.element() == "mlir:i32");
+  expect(queueRecv.queue() == "@queue");
+  expect(event.delay() == "mlir:i64");
+  expect(event.target() == "@event");
+  expect(event.value() == "mlir:i32");
+
+  auto traceOpenImpl = std::make_shared<ProcessTraceOpenPayload::Impl>();
+  traceOpenImpl->source = "trace";
+  ProcessTraceOpenPayload traceOpen(traceOpenImpl);
+  auto traceNextImpl = std::make_shared<ProcessTraceNextPayload::Impl>();
+  traceNextImpl->entry = "mlir:i32";
+  traceNextImpl->source = "trace";
+  ProcessTraceNextPayload traceNext(traceNextImpl);
+  auto traceEofImpl = std::make_shared<ProcessTraceEofPayload::Impl>();
+  traceEofImpl->source = "trace";
+  ProcessTraceEofPayload traceEof(traceEofImpl);
+  auto tracePositionImpl =
+      std::make_shared<ProcessTracePositionPayload::Impl>();
+  tracePositionImpl->source = "trace";
+  ProcessTracePositionPayload tracePosition(tracePositionImpl);
+  expect(traceOpen.source() == "trace");
+  expect(traceNext.entry() == "mlir:i32");
+  expect(traceNext.source() == "trace");
+  expect(traceEof.source() == "trace");
+  expect(tracePosition.source() == "trace");
+
+  auto requireImpl = std::make_shared<ProcessContractRequirePayload::Impl>();
+  requireImpl->message = "require";
+  ProcessContractRequirePayload requirePayload(requireImpl);
+  auto ensureImpl = std::make_shared<ProcessContractEnsurePayload::Impl>();
+  ensureImpl->message = "ensure";
+  ProcessContractEnsurePayload ensurePayload(ensureImpl);
+  auto assertImpl = std::make_shared<ProcessContractAssertPayload::Impl>();
+  assertImpl->message = "assert";
+  ProcessContractAssertPayload assertPayload(assertImpl);
+  auto probeImpl = std::make_shared<ProcessProbePayload::Impl>();
+  probeImpl->kind = "counter";
+  probeImpl->result = "mlir:i64";
+  probeImpl->target = "@probe";
+  ProcessProbePayload probe(probeImpl);
+  auto statImpl = std::make_shared<ProcessStatAddPayload::Impl>();
+  statImpl->stat = "@stat";
+  statImpl->valueType = "mlir:i64";
+  ProcessStatAddPayload stat(statImpl);
+  expect(requirePayload.message() == "require");
+  expect(ensurePayload.message() == "ensure");
+  expect(assertPayload.message() == "assert");
+  expect(probe.kind() == "counter");
+  expect(probe.result() == "mlir:i64");
+  expect(probe.target() == "@probe");
+  expect(stat.stat() == "@stat");
+  expect(stat.valueType() == "mlir:i64");
+
+  auto wakeConditionImpl =
+      std::make_shared<ProcessWakeConditionPayload::Impl>();
+  wakeConditionImpl->wakeKind = ProcessWakeKind::Condition;
+  wakeConditionImpl->wakeType = "@acir_wake_condition";
+  ProcessWakeConditionPayload wakeCondition(wakeConditionImpl);
+  auto wakeResourceImpl = std::make_shared<ProcessWakeResourcePayload::Impl>();
+  wakeResourceImpl->wakeKind = ProcessWakeKind::Resource;
+  wakeResourceImpl->wakeType = "@acir_wake_resource";
+  ProcessWakeResourcePayload wakeResource(wakeResourceImpl);
+  auto wakeEventImpl = std::make_shared<ProcessWakeEventQueuePayload::Impl>();
+  wakeEventImpl->wakeKind = ProcessWakeKind::EventQueue;
+  wakeEventImpl->wakeType = "@acir_wake_event_queue";
+  ProcessWakeEventQueuePayload wakeEvent(wakeEventImpl);
+  auto wakeNextImpl = std::make_shared<ProcessWakeNextDeltaPayload::Impl>();
+  wakeNextImpl->wakeKind = ProcessWakeKind::NextDelta;
+  wakeNextImpl->wakeType = "@acir_wake_next_delta";
+  ProcessWakeNextDeltaPayload wakeNext(wakeNextImpl);
+  expect(wakeCondition.wakeKind() == ProcessWakeKind::Condition);
+  expect(wakeCondition.wakeType() == "@acir_wake_condition");
+  expect(wakeResource.wakeKind() == ProcessWakeKind::Resource);
+  expect(wakeResource.wakeType() == "@acir_wake_resource");
+  expect(wakeEvent.wakeKind() == ProcessWakeKind::EventQueue);
+  expect(wakeEvent.wakeType() == "@acir_wake_event_queue");
+  expect(wakeNext.wakeKind() == ProcessWakeKind::NextDelta);
+  expect(wakeNext.wakeType() == "@acir_wake_next_delta");
+
+  auto scalarWrapImpl = std::make_shared<ProcessScalarWrapPayload::Impl>();
+  scalarWrapImpl->direction = ProcessWrapperDirection::Wrap;
+  scalarWrapImpl->scalar = "mlir:i32";
+  scalarWrapImpl->valueType = "storage:value:digest";
+  ProcessScalarWrapPayload scalarWrap(scalarWrapImpl);
+  auto scalarUnwrapImpl = std::make_shared<ProcessScalarUnwrapPayload::Impl>();
+  scalarUnwrapImpl->direction = ProcessWrapperDirection::Unwrap;
+  scalarUnwrapImpl->scalar = "mlir:i32";
+  scalarUnwrapImpl->valueType = "storage:value:digest";
+  ProcessScalarUnwrapPayload scalarUnwrap(scalarUnwrapImpl);
+  expect(scalarWrap.direction() == ProcessWrapperDirection::Wrap);
+  expect(scalarWrap.scalar() == "mlir:i32");
+  expect(scalarWrap.valueType() == "storage:value:digest");
+  expect(scalarUnwrap.direction() == ProcessWrapperDirection::Unwrap);
+  expect(scalarUnwrap.scalar() == "mlir:i32");
+  expect(scalarUnwrap.valueType() == "storage:value:digest");
+
+  std::vector<ProcessGeneratedCalleePayload> payloads;
+  auto addPayload = [&](ProcessHelperRole role, auto value,
+                        auto ProcessGeneratedCalleePayload::Impl::*member) {
+    auto impl = std::make_shared<ProcessGeneratedCalleePayload::Impl>();
+    impl->role = role;
+    impl.get()->*member = value;
+    payloads.push_back(ProcessGeneratedCalleePayload(impl));
+  };
+  addPayload(ProcessHelperRole::RecordCreate, recordCreate,
+             &ProcessGeneratedCalleePayload::Impl::recordCreate);
+  addPayload(ProcessHelperRole::RecordGet, recordGet,
+             &ProcessGeneratedCalleePayload::Impl::recordGet);
+  addPayload(ProcessHelperRole::RecordWith, recordWith,
+             &ProcessGeneratedCalleePayload::Impl::recordWith);
+  addPayload(ProcessHelperRole::PacketSerialize, packetSerialize,
+             &ProcessGeneratedCalleePayload::Impl::packetSerialize);
+  addPayload(ProcessHelperRole::PacketDeserialize, packetDeserialize,
+             &ProcessGeneratedCalleePayload::Impl::packetDeserialize);
+  addPayload(ProcessHelperRole::TraceDecode, traceDecode,
+             &ProcessGeneratedCalleePayload::Impl::traceDecode);
+  addPayload(ProcessHelperRole::QueueTrySend, queueSend,
+             &ProcessGeneratedCalleePayload::Impl::queueTrySend);
+  addPayload(ProcessHelperRole::QueueTryRecv, queueRecv,
+             &ProcessGeneratedCalleePayload::Impl::queueTryRecv);
+  addPayload(ProcessHelperRole::EventSchedule, event,
+             &ProcessGeneratedCalleePayload::Impl::eventSchedule);
+  addPayload(ProcessHelperRole::TraceOpen, traceOpen,
+             &ProcessGeneratedCalleePayload::Impl::traceOpen);
+  addPayload(ProcessHelperRole::TraceNext, traceNext,
+             &ProcessGeneratedCalleePayload::Impl::traceNext);
+  addPayload(ProcessHelperRole::TraceEof, traceEof,
+             &ProcessGeneratedCalleePayload::Impl::traceEof);
+  addPayload(ProcessHelperRole::TracePosition, tracePosition,
+             &ProcessGeneratedCalleePayload::Impl::tracePosition);
+  addPayload(ProcessHelperRole::ContractRequire, requirePayload,
+             &ProcessGeneratedCalleePayload::Impl::contractRequire);
+  addPayload(ProcessHelperRole::ContractEnsure, ensurePayload,
+             &ProcessGeneratedCalleePayload::Impl::contractEnsure);
+  addPayload(ProcessHelperRole::ContractAssert, assertPayload,
+             &ProcessGeneratedCalleePayload::Impl::contractAssert);
+  addPayload(ProcessHelperRole::Probe, probe,
+             &ProcessGeneratedCalleePayload::Impl::probe);
+  addPayload(ProcessHelperRole::StatAdd, stat,
+             &ProcessGeneratedCalleePayload::Impl::statAdd);
+  addPayload(ProcessHelperRole::WakeCondition, wakeCondition,
+             &ProcessGeneratedCalleePayload::Impl::wakeCondition);
+  addPayload(ProcessHelperRole::WakeResource, wakeResource,
+             &ProcessGeneratedCalleePayload::Impl::wakeResource);
+  addPayload(ProcessHelperRole::WakeEventQueue, wakeEvent,
+             &ProcessGeneratedCalleePayload::Impl::wakeEventQueue);
+  addPayload(ProcessHelperRole::WakeNextDelta, wakeNext,
+             &ProcessGeneratedCalleePayload::Impl::wakeNextDelta);
+  addPayload(ProcessHelperRole::ScalarWrap, scalarWrap,
+             &ProcessGeneratedCalleePayload::Impl::scalarWrap);
+  addPayload(ProcessHelperRole::ScalarUnwrap, scalarUnwrap,
+             &ProcessGeneratedCalleePayload::Impl::scalarUnwrap);
+  expect(payloads.size() == 24);
+  for (auto [index, payload] : llvm::enumerate(payloads))
+    expect(static_cast<unsigned>(payload.role()) == index);
+  expect(payloads[0].recordCreate().recordType() == "mlir:!ac.record");
+  expect(payloads[1].recordGet().field() == "field");
+  expect(payloads[2].recordWith().value() == "mlir:i32");
+  expect(payloads[3].packetSerialize().bytes() == 4);
+  expect(payloads[4].packetDeserialize().bytes() == 4);
+  expect(payloads[5].traceDecode().source() == "trace");
+  expect(payloads[6].queueTrySend().queue() == "@queue");
+  expect(payloads[7].queueTryRecv().queue() == "@queue");
+  expect(payloads[8].eventSchedule().target() == "@event");
+  expect(payloads[9].traceOpen().source() == "trace");
+  expect(payloads[10].traceNext().entry() == "mlir:i32");
+  expect(payloads[11].traceEof().source() == "trace");
+  expect(payloads[12].tracePosition().source() == "trace");
+  expect(payloads[13].contractRequire().message() == "require");
+  expect(payloads[14].contractEnsure().message() == "ensure");
+  expect(payloads[15].contractAssert().message() == "assert");
+  expect(payloads[16].probe().target() == "@probe");
+  expect(payloads[17].statAdd().stat() == "@stat");
+  expect(payloads[18].wakeCondition().wakeType() == "@acir_wake_condition");
+  expect(payloads[19].wakeResource().wakeType() == "@acir_wake_resource");
+  expect(payloads[20].wakeEventQueue().wakeType() == "@acir_wake_event_queue");
+  expect(payloads[21].wakeNextDelta().wakeType() == "@acir_wake_next_delta");
+  expect(payloads[22].scalarWrap().direction() ==
+         ProcessWrapperDirection::Wrap);
+  expect(payloads[23].scalarUnwrap().direction() ==
+         ProcessWrapperDirection::Unwrap);
+
+  auto fieldMemberImpl = std::make_shared<ProcessValueTypeMemberPlan::Impl>();
+  fieldMemberImpl->kind = ProcessValueTypeMemberKind::Field;
+  fieldMemberImpl->name = "member";
+  fieldMemberImpl->offsetBits = 0;
+  fieldMemberImpl->widthBits = 32;
+  fieldMemberImpl->signedness = ProcessStorageSignedness::Signed;
+  fieldMemberImpl->encoding = "i32";
+  fieldMemberImpl->typeKey = "mlir:i32";
+  ProcessValueTypeMemberPlan fieldMember(fieldMemberImpl);
+  auto elementMemberImpl = std::make_shared<ProcessValueTypeMemberPlan::Impl>();
+  elementMemberImpl->kind = ProcessValueTypeMemberKind::Element;
+  elementMemberImpl->index = 1;
+  elementMemberImpl->offsetBits = 32;
+  elementMemberImpl->widthBits = 32;
+  elementMemberImpl->signedness = ProcessStorageSignedness::Unsigned;
+  elementMemberImpl->encoding = "i32";
+  elementMemberImpl->typeKey = "mlir:i32";
+  ProcessValueTypeMemberPlan elementMember(elementMemberImpl);
+  expect(fieldMember.kind() == ProcessValueTypeMemberKind::Field);
+  expect(fieldMember.name() == "member");
+  expect(!fieldMember.index());
+  expect(fieldMember.offsetBits() == 0);
+  expect(fieldMember.widthBits() == 32);
+  expect(fieldMember.signedness() == ProcessStorageSignedness::Signed);
+  expect(fieldMember.encoding() == "i32");
+  expect(fieldMember.typeKey() == "mlir:i32");
+  expect(elementMember.kind() == ProcessValueTypeMemberKind::Element);
+  expect(elementMember.name().empty());
+  expect(elementMember.index() == 1);
+
+  auto storageValueImpl = std::make_shared<ProcessStorageValuePayload::Impl>();
+  storageValueImpl->members = {fieldMember};
+  storageValueImpl->widthBits = 32;
+  storageValueImpl->encoding = "i32";
+  ProcessStorageValuePayload storageValue(storageValueImpl);
+  auto storagePacketImpl =
+      std::make_shared<ProcessStoragePacketPayload::Impl>();
+  storagePacketImpl->members = {fieldMember, elementMember};
+  storagePacketImpl->widthBits = 64;
+  storagePacketImpl->bytes = 8;
+  storagePacketImpl->encoding = "array<8xi8>";
+  ProcessStoragePacketPayload storagePacket(storagePacketImpl);
+  expect(storageValue.members().size() == 1);
+  expect(storageValue.widthBits() == 32);
+  expect(storageValue.encoding() == "i32");
+  expect(storagePacket.members().size() == 2);
+  expect(storagePacket.widthBits() == 64);
+  expect(storagePacket.bytes() == 8);
+  expect(storagePacket.encoding() == "array<8xi8>");
+  auto valuePayloadImpl = std::make_shared<ProcessValueTypePayload::Impl>();
+  valuePayloadImpl->kind = ProcessValueTypeKind::Value;
+  valuePayloadImpl->value = storageValue;
+  ProcessValueTypePayload valuePayload(valuePayloadImpl);
+  auto packetPayloadImpl = std::make_shared<ProcessValueTypePayload::Impl>();
+  packetPayloadImpl->kind = ProcessValueTypeKind::Packet;
+  packetPayloadImpl->packet = storagePacket;
+  ProcessValueTypePayload packetPayload(packetPayloadImpl);
+  expect(valuePayload.kind() == ProcessValueTypeKind::Value);
+  expect(valuePayload.value().widthBits() == 32);
+  expect(packetPayload.kind() == ProcessValueTypeKind::Packet);
+  expect(packetPayload.packet().bytes() == 8);
+
+  auto calleeImpl = std::make_shared<ProcessGeneratedCalleePlan::Impl>();
+  calleeImpl->id = ProcessCalleeId(5);
+  calleeImpl->symbol = "@callee";
+  calleeImpl->cpp = "callee";
+  calleeImpl->kind = "implementation";
+  calleeImpl->fingerprint = "sha256:fingerprint";
+  calleeImpl->effect = ProcessEffectKind::Stateful;
+  calleeImpl->inputTypeKeyStorage = {"mlir:i32"};
+  calleeImpl->inputTypeKeys = {calleeImpl->inputTypeKeyStorage[0]};
+  calleeImpl->resultTypeKeyStorage = {"mlir:i64"};
+  calleeImpl->resultTypeKeys = {calleeImpl->resultTypeKeyStorage[0]};
+  calleeImpl->role = ProcessHelperRole::Probe;
+  calleeImpl->payload = payloads[16];
+  calleeImpl->sourceOperations = {
+      reinterpret_cast<mlir::Operation *>(uintptr_t{1})};
+  calleeImpl->declarations = {
+      reinterpret_cast<mlir::Operation *>(uintptr_t{2})};
+  calleeImpl->sourcePathStorage = {"source"};
+  calleeImpl->sourcePaths = {calleeImpl->sourcePathStorage[0]};
+  ProcessGeneratedCalleePlan callee(calleeImpl);
+  expect(callee.id().value() == 5);
+  expect(callee.symbol() == "@callee");
+  expect(callee.cpp() == "callee");
+  expect(callee.kind() == "implementation");
+  expect(callee.fingerprint() == "sha256:fingerprint");
+  expect(callee.effect() == ProcessEffectKind::Stateful);
+  expect(callee.inputTypeKeys() ==
+         llvm::ArrayRef<llvm::StringRef>({"mlir:i32"}));
+  expect(callee.resultTypeKeys() ==
+         llvm::ArrayRef<llvm::StringRef>({"mlir:i64"}));
+  expect(callee.role() == ProcessHelperRole::Probe);
+  expect(callee.payload().probe().kind() == "counter");
+  expect(callee.sourceOperations().size() == 1);
+  expect(callee.declarations().size() == 1);
+  expect(callee.sourcePaths() == llvm::ArrayRef<llvm::StringRef>({"source"}));
+  auto typeImpl = std::make_shared<ProcessValueTypePlan::Impl>();
+  typeImpl->id = ProcessValueTypeId(6);
+  typeImpl->symbol = "@type";
+  typeImpl->cpp = "type";
+  typeImpl->kind = ProcessValueTypeKind::Value;
+  typeImpl->fingerprint = "sha256:type";
+  typeImpl->acirType = i32;
+  typeImpl->payload = valuePayload;
+  ProcessValueTypePlan type(typeImpl);
+  expect(type.id().value() == 6);
+  expect(type.symbol() == "@type");
+  expect(type.cpp() == "type");
+  expect(type.kind() == ProcessValueTypeKind::Value);
+  expect(type.fingerprint() == "sha256:type");
+  expect(type.acirType() == i32);
+  expect(type.payload().value().encoding() == "i32");
+
+  auto setImpl = std::make_shared<ProcessStatePlanSet::Impl>();
+  setImpl->processes = {state};
+  setImpl->callees = {callee};
+  setImpl->valueTypes = {type};
+  ProcessStatePlanSet set(setImpl);
+  expect(set.processes().size() == 1);
+  expect(set.callees().size() == 1);
+  expect(set.valueTypes().size() == 1);
+  expect(set.lookupByDefinitionKey("@Top::@workload") != nullptr);
+  expect(set.lookupByDefinitionKey("@Top::@missing") == nullptr);
+
+  auto allEnumsSequential = [](auto values) {
+    for (auto [index, value] : llvm::enumerate(values))
+      if (static_cast<unsigned>(value) != index)
+        return false;
+    return true;
+  };
+  expect(allEnumsSequential(
+      std::array{ProcessWakeKind::Condition, ProcessWakeKind::Resource,
+                 ProcessWakeKind::EventQueue, ProcessWakeKind::NextDelta}));
+  expect(allEnumsSequential(std::array{ProcessSubscriptionSourceKind::Capture,
+                                       ProcessSubscriptionSourceKind::Value,
+                                       ProcessSubscriptionSourceKind::Symbol}));
+  expect(allEnumsSequential(std::array{
+      ProcessActionKind::Original, ProcessActionKind::Constant,
+      ProcessActionKind::ForInitialize, ProcessActionKind::ForCondition,
+      ProcessActionKind::ForIncrement, ProcessActionKind::ScalarWrap,
+      ProcessActionKind::ScalarUnwrap}));
+  expect(allEnumsSequential(std::array{
+      ProcessEmissionClass::CopyScalar, ProcessEmissionClass::Inline,
+      ProcessEmissionClass::Invoke, ProcessEmissionClass::Wrap,
+      ProcessEmissionClass::Unwrap, ProcessEmissionClass::ForwardOnly}));
+  expect(allEnumsSequential(std::array{
+      ProcessOccurrenceKind::Original, ProcessOccurrenceKind::SyntheticLoop,
+      ProcessOccurrenceKind::SyntheticWrapper,
+      ProcessOccurrenceKind::SyntheticConstant}));
+  expect(allEnumsSequential(std::array{ProcessLoopPhase::Initialize,
+                                       ProcessLoopPhase::Condition,
+                                       ProcessLoopPhase::Increment}));
+  expect(allEnumsSequential(std::array{ProcessWrapperDirection::Wrap,
+                                       ProcessWrapperDirection::Unwrap}));
+  expect(allEnumsSequential(
+      std::array{ProcessFrameKind::Entry, ProcessFrameKind::ScfIf,
+                 ProcessFrameKind::ScfFor, ProcessFrameKind::ScfWhile}));
+  expect(allEnumsSequential(
+      std::array{ProcessFramePhase::Entry, ProcessFramePhase::Then,
+                 ProcessFramePhase::Else, ProcessFramePhase::Merge,
+                 ProcessFramePhase::Header, ProcessFramePhase::Body,
+                 ProcessFramePhase::Before, ProcessFramePhase::After,
+                 ProcessFramePhase::Exit}));
+  expect(allEnumsSequential(std::array{
+      ProcessPlannedValueKind::Original, ProcessPlannedValueKind::Capture,
+      ProcessPlannedValueKind::LiveSlot, ProcessPlannedValueKind::Synthetic,
+      ProcessPlannedValueKind::Constant}));
+  expect(allEnumsSequential(
+      std::array{ProcessValueCoordinateKind::Result,
+                 ProcessValueCoordinateKind::BlockArgument}));
+  expect(allEnumsSequential(std::array{
+      ProcessControlEdgeKind::Branch, ProcessControlEdgeKind::LocalContinue,
+      ProcessControlEdgeKind::Suspend, ProcessControlEdgeKind::Terminate}));
+  expect(allEnumsSequential(std::array{ProcessTerminateStatus::Success,
+                                       ProcessTerminateStatus::Failure}));
+  expect(allEnumsSequential(
+      std::array{ProcessEffectKind::Pure, ProcessEffectKind::Stateful}));
+  expect(allEnumsSequential(
+      std::array{ProcessValueTypeKind::Value, ProcessValueTypeKind::Packet}));
+  expect(allEnumsSequential(std::array{ProcessValueTypeMemberKind::Field,
+                                       ProcessValueTypeMemberKind::Element}));
+  expect(allEnumsSequential(std::array{ProcessStorageSignedness::Signless,
+                                       ProcessStorageSignedness::Signed,
+                                       ProcessStorageSignedness::Unsigned}));
+  return valid;
+}
+
 llvm::StringRef detail::PlanSetBuilder::specializationBytes(
     const ProcessGeneratedCalleePlan &callee) {
   return callee.impl_->specializationBytes;
@@ -618,23 +1713,28 @@ detail::PlanSetBuilder::specializationBytes(const ProcessValueTypePlan &type) {
 
 bool detail::PlanSetBuilder::validEdgeShape(
     const ProcessControlEdgePlan &edge) {
+  if (!edge.impl_)
+    return false;
   switch (edge.impl_->kind) {
   case ProcessControlEdgeKind::Branch:
     return edge.impl_->condition && edge.impl_->trueBlock &&
            edge.impl_->falseBlock && !edge.impl_->targetBlock &&
-           !edge.impl_->transition;
+           !edge.impl_->transition && edge.impl_->bindings.empty();
   case ProcessControlEdgeKind::LocalContinue:
     return edge.impl_->targetBlock && !edge.impl_->condition &&
            !edge.impl_->trueBlock && !edge.impl_->falseBlock &&
-           !edge.impl_->transition;
+           !edge.impl_->transition && edge.impl_->trueBindings.empty() &&
+           edge.impl_->falseBindings.empty();
   case ProcessControlEdgeKind::Suspend:
     return edge.impl_->transition && !edge.impl_->condition &&
            !edge.impl_->trueBlock && !edge.impl_->falseBlock &&
-           !edge.impl_->targetBlock;
+           !edge.impl_->targetBlock && edge.impl_->trueBindings.empty() &&
+           edge.impl_->falseBindings.empty() && edge.impl_->bindings.empty();
   case ProcessControlEdgeKind::Terminate:
     return !edge.impl_->condition && !edge.impl_->trueBlock &&
            !edge.impl_->falseBlock && !edge.impl_->targetBlock &&
-           !edge.impl_->transition;
+           !edge.impl_->transition && edge.impl_->trueBindings.empty() &&
+           edge.impl_->falseBindings.empty() && edge.impl_->bindings.empty();
   }
   return false;
 }
@@ -831,7 +1931,10 @@ detail::PlanSetBuilder::structuralError(const ProcessStatePlanSet &plans) {
       return "process-state plan invariant violated: value-type specialization "
              "mismatch";
     auto &payload = *type.impl_->payload->impl_;
-    if ((payload.kind == ProcessValueTypeKind::Value &&
+    unsigned active = static_cast<unsigned>(payload.value.has_value()) +
+                      static_cast<unsigned>(payload.packet.has_value());
+    if (active != 1 ||
+        (payload.kind == ProcessValueTypeKind::Value &&
          (!payload.value || !payload.value->impl_)) ||
         (payload.kind == ProcessValueTypeKind::Packet &&
          (!payload.packet || !payload.packet->impl_)))
@@ -868,6 +1971,8 @@ detail::PlanSetBuilder::structuralError(const ProcessStatePlanSet &plans) {
           block.impl_->pc->value() >= plan.impl_->pcs.size() ||
           !block.impl_->edge)
         return "process-state plan invariant violated: dangling reference";
+      if (!block.impl_->edge->impl_)
+        return "process-state plan invariant violated: invalid edge binding";
       if (!validEdgeShape(*block.impl_->edge))
         return "process-state plan invariant violated: invalid edge binding";
       auto &edge = *block.impl_->edge->impl_;
@@ -912,6 +2017,20 @@ detail::PlanSetBuilder::structuralError(const ProcessStatePlanSet &plans) {
             (action.impl_->callee &&
              action.impl_->callee->value() >= plans.impl_->callees.size()) ||
             (action.impl_->scalarOp && !action.impl_->scalarOp->impl_))
+          return "process-state plan invariant violated: invalid action arm";
+        bool sourceRequired =
+            action.impl_->kind == ProcessActionKind::Original ||
+            action.impl_->kind == ProcessActionKind::ForInitialize ||
+            action.impl_->kind == ProcessActionKind::ForCondition ||
+            action.impl_->kind == ProcessActionKind::ForIncrement;
+        if (static_cast<bool>(action.impl_->sourceOperation) != sourceRequired)
+          return "process-state plan invariant violated: invalid action arm";
+        bool isLoopAction =
+            action.impl_->kind == ProcessActionKind::ForInitialize ||
+            action.impl_->kind == ProcessActionKind::ForCondition ||
+            action.impl_->kind == ProcessActionKind::ForIncrement;
+        if (isLoopAction &&
+            !mlir::isa<mlir::scf::ForOp>(action.impl_->sourceOperation))
           return "process-state plan invariant violated: invalid action arm";
         for (const ProcessPlannedValue &value : action.impl_->operands)
           if (!validPlannedValue(value))
@@ -1232,6 +2351,46 @@ mlir::LogicalResult verifyProcessStatePlan(const ProcessStatePlanSet &plans,
           return reject(
               plans,
               "process-state plan invariant violated: invalid action arm");
+        ProcessOccurrenceKind expectedOccurrence =
+            ProcessOccurrenceKind::Original;
+        std::optional<ProcessLoopPhase> expectedLoopPhase;
+        std::optional<ProcessWrapperDirection> expectedWrapperDirection;
+        switch (action.kind()) {
+        case ProcessActionKind::Original:
+          break;
+        case ProcessActionKind::Constant:
+          expectedOccurrence = ProcessOccurrenceKind::SyntheticConstant;
+          break;
+        case ProcessActionKind::ForInitialize:
+          expectedOccurrence = ProcessOccurrenceKind::SyntheticLoop;
+          expectedLoopPhase = ProcessLoopPhase::Initialize;
+          break;
+        case ProcessActionKind::ForCondition:
+          expectedOccurrence = ProcessOccurrenceKind::SyntheticLoop;
+          expectedLoopPhase = ProcessLoopPhase::Condition;
+          break;
+        case ProcessActionKind::ForIncrement:
+          expectedOccurrence = ProcessOccurrenceKind::SyntheticLoop;
+          expectedLoopPhase = ProcessLoopPhase::Increment;
+          break;
+        case ProcessActionKind::ScalarWrap:
+          expectedOccurrence = ProcessOccurrenceKind::SyntheticWrapper;
+          expectedWrapperDirection = ProcessWrapperDirection::Wrap;
+          break;
+        case ProcessActionKind::ScalarUnwrap:
+          expectedOccurrence = ProcessOccurrenceKind::SyntheticWrapper;
+          expectedWrapperDirection = ProcessWrapperDirection::Unwrap;
+          break;
+        }
+        if (action.occurrence().kind() != expectedOccurrence ||
+            (expectedLoopPhase && action.occurrence().syntheticLoop().phase() !=
+                                      *expectedLoopPhase) ||
+            (expectedWrapperDirection &&
+             action.occurrence().syntheticWrapper().direction() !=
+                 *expectedWrapperDirection))
+          return reject(
+              plans,
+              "process-state plan invariant violated: invalid action arm");
         if (action.resultTypes().size() != action.results().size())
           return reject(
               plans, "process-state plan invariant violated: wrong type key");
@@ -1408,41 +2567,64 @@ mlir::LogicalResult verifyProcessStatePlan(const ProcessStatePlanSet &plans,
           plan.blocks()[pc.blocks().front().value()].path() != pc.entryPath())
         return reject(
             plans, "process-state plan invariant violated: dangling reference");
-      llvm::SmallVector<uint8_t> color(plan.blocks().size());
-      llvm::SmallVector<uint64_t> memo(plan.blocks().size());
+      llvm::SmallVector<uint32_t> indegree(plan.blocks().size());
+      llvm::SmallVector<std::optional<uint64_t>> distance(plan.blocks().size());
       bool invalidGraph = false;
-      std::function<uint64_t(ProcessBlockId)> longest = [&](ProcessBlockId id) {
-        size_t index = id.value();
-        if (color[index] == 1) {
-          invalidGraph = true;
-          return uint64_t{0};
+      auto successors = [](const ProcessControlEdgePlan &edge) {
+        llvm::SmallVector<ProcessBlockId, 2> result;
+        if (edge.kind() == ProcessControlEdgeKind::Branch) {
+          result.push_back(edge.trueBlock());
+          result.push_back(edge.falseBlock());
+        } else if (edge.kind() == ProcessControlEdgeKind::LocalContinue) {
+          result.push_back(edge.targetBlock());
         }
-        if (color[index] == 2)
-          return memo[index];
-        color[index] = 1;
-        const ProcessBlockPlan &block = plan.blocks()[index];
-        if (block.pc() != pc.id()) {
-          invalidGraph = true;
-          return uint64_t{0};
-        }
-        uint64_t suffix = 0;
-        if (block.edge().kind() == ProcessControlEdgeKind::Branch) {
-          suffix = std::max(longest(block.edge().trueBlock()),
-                            longest(block.edge().falseBlock()));
-        } else if (block.edge().kind() ==
-                   ProcessControlEdgeKind::LocalContinue) {
-          suffix = longest(block.edge().targetBlock());
-        }
-        if (block.cost() > std::numeric_limits<uint64_t>::max() - suffix) {
-          invalidGraph = true;
-          return uint64_t{0};
-        }
-        color[index] = 2;
-        return memo[index] = block.cost() + suffix;
+        return result;
       };
-      uint64_t pcWork = longest(pc.blocks().front());
+      for (ProcessBlockId id : pc.blocks()) {
+        for (ProcessBlockId successor :
+             successors(plan.blocks()[id.value()].edge())) {
+          if (plan.blocks()[successor.value()].pc() != pc.id()) {
+            invalidGraph = true;
+            continue;
+          }
+          ++indegree[successor.value()];
+        }
+      }
+      llvm::SmallVector<ProcessBlockId> ready;
       for (ProcessBlockId id : pc.blocks())
-        if (color[id.value()] == 0)
+        if (indegree[id.value()] == 0)
+          ready.push_back(id);
+      distance[pc.blocks().front().value()] =
+          plan.blocks()[pc.blocks().front().value()].cost();
+      size_t processed = 0;
+      uint64_t pcWork = 0;
+      for (size_t cursor = 0; cursor < ready.size(); ++cursor) {
+        ProcessBlockId id = ready[cursor];
+        ++processed;
+        if (distance[id.value()])
+          pcWork = std::max(pcWork, *distance[id.value()]);
+        for (ProcessBlockId successor :
+             successors(plan.blocks()[id.value()].edge())) {
+          if (distance[id.value()]) {
+            uint64_t cost = plan.blocks()[successor.value()].cost();
+            if (*distance[id.value()] >
+                std::numeric_limits<uint64_t>::max() - cost) {
+              invalidGraph = true;
+            } else {
+              uint64_t candidate = *distance[id.value()] + cost;
+              if (!distance[successor.value()] ||
+                  candidate > *distance[successor.value()])
+                distance[successor.value()] = candidate;
+            }
+          }
+          if (--indegree[successor.value()] == 0)
+            ready.push_back(successor);
+        }
+      }
+      if (processed != pc.blocks().size())
+        invalidGraph = true;
+      for (ProcessBlockId id : pc.blocks())
+        if (!distance[id.value()])
           invalidGraph = true;
       if (invalidGraph)
         return reject(plans,

@@ -705,6 +705,18 @@ static_assert(!HasHierarchyLookup<ProcessStatePlanSet>);
 static_assert(!HasFallbackLookup<ProcessStatePlanSet>);
 static_assert(!std::default_initializable<ProcessCalleeId>);
 static_assert(!std::constructible_from<ProcessCalleeId, uint32_t>);
+#define CHECK_ID_VALUE(Type)                                                   \
+  static_assert(                                                               \
+      std::same_as<decltype(&Type::value), uint32_t (Type::*)() const>)
+CHECK_ID_VALUE(ProcessCalleeId);
+CHECK_ID_VALUE(ProcessValueTypeId);
+CHECK_ID_VALUE(ProcessCaptureId);
+CHECK_ID_VALUE(ProcessPcId);
+CHECK_ID_VALUE(ProcessBlockId);
+CHECK_ID_VALUE(ProcessLiveSlotId);
+CHECK_ID_VALUE(ProcessWakeId);
+CHECK_ID_VALUE(ProcessTransitionId);
+#undef CHECK_ID_VALUE
 
 constexpr llvm::StringLiteral kEmptyBytes =
     R"json({"callees":[],"contract_epoch":"0.1","processes":[],"schema":"acir-process-state-plan-0.1","value_types":[]})json";
@@ -738,7 +750,7 @@ TEST(ProcessStatePlanBasicTest, YieldOnlyBaselineIsExactAndImmutable) {
   ASSERT_TRUE(mlir::succeeded(built));
   ProcessStatePlanSet plans = std::move(*built);
   ASSERT_TRUE(mlir::succeeded(verifyProcessStatePlan(plans)));
-  ASSERT_EQ(plans.processes().size(), 2U);
+  ASSERT_EQ(plans.processes().size(), 1U);
   ASSERT_EQ(plans.callees().size(), 1U);
   EXPECT_TRUE(plans.valueTypes().empty());
 
@@ -778,8 +790,8 @@ TEST(ProcessStatePlanBasicTest, FrozenDeclarationPermutationsAreByteIdentical) {
   mlir::DialectRegistry registry;
   registerAllDialects(registry);
   mlir::MLIRContext context(registry);
-  auto first = test::parseAndFreezeYieldOnly(context, false);
-  auto second = test::parseAndFreezeYieldOnly(context, true);
+  auto first = test::parseAndFreezeYieldPermutation(context, false);
+  auto second = test::parseAndFreezeYieldPermutation(context, true);
   ASSERT_TRUE(first);
   ASSERT_TRUE(second);
   auto firstBuilt = detail::PlanSetBuilder::buildYieldOnly(*first);
@@ -822,6 +834,12 @@ TEST(ProcessStatePlanBasicTest, EveryFrozenSemanticCorruptionIsRejected) {
   auto built = detail::PlanSetBuilder::buildYieldOnly(*module);
   ASSERT_TRUE(mlir::succeeded(built));
   auto plan = std::move(*built);
+  auto permutationModule = test::parseAndFreezeYieldPermutation(context, false);
+  ASSERT_TRUE(permutationModule);
+  auto permutationBuilt =
+      detail::PlanSetBuilder::buildYieldOnly(*permutationModule);
+  ASSERT_TRUE(mlir::succeeded(permutationBuilt));
+  auto permutationPlan = std::move(*permutationBuilt);
   mlir::ScopedDiagnosticHandler handler(
       &context, [](mlir::Diagnostic &) { return mlir::success(); });
   const ProcessStatePlanCorruptionForTest corruptions[] = {
@@ -861,8 +879,12 @@ TEST(ProcessStatePlanBasicTest, EveryFrozenSemanticCorruptionIsRejected) {
   };
   for (auto [index, corruption] : llvm::enumerate(corruptions)) {
     SCOPED_TRACE(static_cast<int>(corruption));
+    const ProcessStatePlanSet &source =
+        corruption == ProcessStatePlanCorruptionForTest::UnsortedCanonicalOrder
+            ? permutationPlan
+            : plan;
     auto corrupted =
-        cloneProcessStatePlanWithCorruptionForTest(plan, corruption);
+        cloneProcessStatePlanWithCorruptionForTest(source, corruption);
     EXPECT_TRUE(mlir::failed(verifyProcessStatePlan(corrupted)));
     EXPECT_EQ(diagnostics[index],
               detail::lastProcessStatePlanDiagnosticForTest());
@@ -896,6 +918,19 @@ TEST(ProcessStatePlanBasicTest,
       {detail::PlanSetBuilder::cloneWithMissingValueTypePayload,
        "process-state plan invariant violated: value-type specialization "
        "mismatch"},
+      {detail::PlanSetBuilder::cloneWithNullEdgeStorage,
+       "process-state plan invariant violated: invalid edge binding"},
+      {detail::PlanSetBuilder::cloneWithInactiveEdgeField,
+       "process-state plan invariant violated: invalid edge binding"},
+      {detail::PlanSetBuilder::cloneWithDoubleValueTypePayload,
+       "process-state plan invariant violated: value-type specialization "
+       "mismatch"},
+      {detail::PlanSetBuilder::cloneWithMissingOriginalActionSource,
+       "process-state plan invariant violated: invalid action arm"},
+      {detail::PlanSetBuilder::cloneWithUnexpectedConstantActionSource,
+       "process-state plan invariant violated: invalid action arm"},
+      {detail::PlanSetBuilder::cloneWithNonLoopForActionSource,
+       "process-state plan invariant violated: invalid action arm"},
   };
   for (const Case &testCase : cases) {
     ProcessStatePlanSet corrupted = testCase.build(plan);
@@ -921,6 +956,41 @@ TEST(ProcessStatePlanBasicTest,
       &context, [](mlir::Diagnostic &) { return mlir::success(); });
   EXPECT_TRUE(mlir::failed(detail::PlanSetBuilder::buildYieldOnly(*empty)));
   EXPECT_TRUE(mlir::failed(detail::PlanSetBuilder::buildEmpty(*yieldOnly)));
+}
+
+TEST(ProcessStatePlanBasicTest,
+     CompletePrivateFixtureExercisesEveryPublicGetterAndUnionArm) {
+  mlir::DialectRegistry registry;
+  registerAllDialects(registry);
+  mlir::MLIRContext context(registry);
+  EXPECT_TRUE(detail::PlanSetBuilder::exerciseCompleteApiFixture(context));
+}
+
+TEST(ProcessStatePlanBasicTest,
+     LongProcessGraphUsesBoundedIterativeFairnessVerification) {
+  mlir::DialectRegistry registry;
+  registerAllDialects(registry);
+  mlir::MLIRContext context(registry);
+  auto module = test::parseAndFreezeYieldOnly(context);
+  ASSERT_TRUE(module);
+  auto baseline = detail::PlanSetBuilder::buildYieldOnly(*module);
+  ASSERT_TRUE(mlir::succeeded(baseline));
+  auto longChain =
+      detail::PlanSetBuilder::cloneWithLongLocalChain(*baseline, 32768);
+  EXPECT_TRUE(mlir::succeeded(verifyProcessStatePlan(longChain)));
+  EXPECT_EQ(longChain.processes().front().blocks().size(), 32768U);
+  EXPECT_EQ(longChain.processes().front().fairnessWork(), 32768U);
+  mlir::ScopedDiagnosticHandler handler(
+      &context, [](mlir::Diagnostic &) { return mlir::success(); });
+  auto cycle = detail::PlanSetBuilder::cloneWithLocalCycle(longChain);
+  EXPECT_TRUE(mlir::failed(verifyProcessStatePlan(cycle)));
+  EXPECT_EQ(detail::lastProcessStatePlanDiagnosticForTest(),
+            "process-state plan invariant violated: cost mismatch");
+  auto unreachable =
+      detail::PlanSetBuilder::cloneWithUnreachableBlock(*baseline);
+  EXPECT_TRUE(mlir::failed(verifyProcessStatePlan(unreachable)));
+  EXPECT_EQ(detail::lastProcessStatePlanDiagnosticForTest(),
+            "process-state plan invariant violated: cost mismatch");
 }
 
 } // namespace
