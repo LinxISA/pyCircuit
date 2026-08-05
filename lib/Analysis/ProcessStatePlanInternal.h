@@ -408,7 +408,19 @@ public:
   cloneWithUnexpectedConstantActionSource(const ProcessStatePlanSet &plans);
   static ProcessStatePlanSet
   cloneWithNonLoopForActionSource(const ProcessStatePlanSet &plans);
+  static ProcessStatePlanSet
+  cloneWithForConditionWrongEmission(const ProcessStatePlanSet &plans);
+  static ProcessStatePlanSet
+  cloneWithForConditionWrongScalarOp(const ProcessStatePlanSet &plans);
+  static ProcessStatePlanSet
+  cloneWithForIncrementWrongEmission(const ProcessStatePlanSet &plans);
+  static ProcessStatePlanSet
+  cloneWithForIncrementWrongScalarOp(const ProcessStatePlanSet &plans);
+  static ProcessStatePlanSet cloneWithLoopActionForTest(
+      const ProcessStatePlanSet &plans, ProcessActionKind kind,
+      ProcessEmissionClass emission, llvm::StringRef scalarName);
   static bool exerciseCompleteApiFixture(mlir::MLIRContext &context);
+  static bool exerciseAllActionArmsFixture(mlir::MLIRContext &context);
   static ProcessStatePlanSet
   cloneWithLongLocalChain(const ProcessStatePlanSet &plans, uint32_t blocks);
   static ProcessStatePlanSet

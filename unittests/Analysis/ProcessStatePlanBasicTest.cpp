@@ -931,12 +931,21 @@ TEST(ProcessStatePlanBasicTest,
        "process-state plan invariant violated: invalid action arm"},
       {detail::PlanSetBuilder::cloneWithNonLoopForActionSource,
        "process-state plan invariant violated: invalid action arm"},
+      {detail::PlanSetBuilder::cloneWithForConditionWrongEmission,
+       "process-state plan invariant violated: invalid action arm"},
+      {detail::PlanSetBuilder::cloneWithForConditionWrongScalarOp,
+       "process-state plan invariant violated: invalid action arm"},
+      {detail::PlanSetBuilder::cloneWithForIncrementWrongEmission,
+       "process-state plan invariant violated: invalid action arm"},
+      {detail::PlanSetBuilder::cloneWithForIncrementWrongScalarOp,
+       "process-state plan invariant violated: invalid action arm"},
   };
-  for (const Case &testCase : cases) {
+  for (auto [index, testCase] : llvm::enumerate(cases)) {
+    SCOPED_TRACE(index);
     ProcessStatePlanSet corrupted = testCase.build(plan);
     EXPECT_TRUE(mlir::failed(verifyProcessStatePlan(corrupted)));
-    EXPECT_EQ(testCase.diagnostic,
-              detail::lastProcessStatePlanDiagnosticForTest());
+    EXPECT_EQ(testCase.diagnostic.str(),
+              detail::lastProcessStatePlanDiagnosticForTest().str());
     auto serialized = serializeProcessStatePlan(corrupted);
     EXPECT_FALSE(static_cast<bool>(serialized));
     llvm::consumeError(serialized.takeError());
@@ -964,6 +973,7 @@ TEST(ProcessStatePlanBasicTest,
   registerAllDialects(registry);
   mlir::MLIRContext context(registry);
   EXPECT_TRUE(detail::PlanSetBuilder::exerciseCompleteApiFixture(context));
+  EXPECT_TRUE(detail::PlanSetBuilder::exerciseAllActionArmsFixture(context));
 }
 
 TEST(ProcessStatePlanBasicTest,

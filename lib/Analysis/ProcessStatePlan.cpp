@@ -14,6 +14,7 @@
 #include <array>
 #include <cassert>
 #include <limits>
+#include <tuple>
 
 namespace acir {
 namespace {
@@ -731,6 +732,108 @@ ProcessStatePlanSet detail::PlanSetBuilder::cloneWithNonLoopForActionSource(
   process->blocks.front() = ProcessBlockPlan(block);
   impl->processes.front() = ProcessStatePlan(process);
   return ProcessStatePlanSet(impl);
+}
+
+ProcessStatePlanSet detail::PlanSetBuilder::cloneWithLoopActionForTest(
+    const ProcessStatePlanSet &plans, ProcessActionKind kind,
+    ProcessEmissionClass emission, llvm::StringRef scalarName) {
+  auto impl = std::make_shared<ProcessStatePlanSet::Impl>(*plans.impl_);
+  auto process =
+      std::make_shared<ProcessStatePlan::Impl>(*impl->processes.front().impl_);
+  auto block =
+      std::make_shared<ProcessBlockPlan::Impl>(*process->blocks.front().impl_);
+
+  mlir::ModuleOp module = process->process->getParentOfType<mlir::ModuleOp>();
+  module.getContext()->getOrLoadDialect<mlir::scf::SCFDialect>();
+  mlir::OpBuilder builder(module.getContext());
+  builder.setInsertionPointToEnd(module.getBody());
+  mlir::OperationState state(process->process.getLoc(),
+                             mlir::scf::ForOp::getOperationName());
+  state.addRegion();
+  mlir::Operation *loopOperation = builder.create(state);
+
+  auto loop = std::make_shared<ProcessSyntheticLoopOccurrence::Impl>();
+  loop->anchor = *process->wakes.front().impl_->occurrence;
+  loop->phase = kind == ProcessActionKind::ForCondition
+                    ? ProcessLoopPhase::Condition
+                    : ProcessLoopPhase::Increment;
+  auto occurrence = std::make_shared<ProcessOccurrenceId::Impl>();
+  occurrence->kind = ProcessOccurrenceKind::SyntheticLoop;
+  occurrence->syntheticLoop = ProcessSyntheticLoopOccurrence(loop);
+  auto action = std::make_shared<ProcessActionPlan::Impl>();
+  action->id = 0;
+  action->kind = kind;
+  action->emission = emission;
+  action->occurrence = ProcessOccurrenceId(occurrence);
+  action->sourceOperation = loopOperation;
+  action->cost = emission == ProcessEmissionClass::ForwardOnly ? 0 : 1;
+  auto makeConstant = [&](mlir::Type type, llvm::StringRef literal) {
+    auto constant = std::make_shared<ProcessConstantPlannedValue::Impl>();
+    constant->value = literal.str();
+    auto value = std::make_shared<ProcessPlannedValue::Impl>();
+    value->kind = ProcessPlannedValueKind::Constant;
+    value->type = type;
+    value->constant = ProcessConstantPlannedValue(constant);
+    return ProcessPlannedValue(value);
+  };
+  mlir::Type indexType = mlir::IndexType::get(module.getContext());
+  if (kind == ProcessActionKind::ForCondition) {
+    action->operands = {makeConstant(indexType, "0"),
+                        makeConstant(indexType, "8")};
+    action->results = {
+        makeConstant(mlir::IntegerType::get(module.getContext(), 1), "true")};
+  } else {
+    action->operands = {makeConstant(indexType, "0"),
+                        makeConstant(indexType, "1")};
+    action->results = {makeConstant(indexType, "1")};
+  }
+  for (const ProcessPlannedValue &result : action->results)
+    action->resultTypes.push_back(result.type());
+  if (!scalarName.empty()) {
+    auto scalarOp = std::make_shared<ProcessScalarOperationPlan::Impl>();
+    scalarOp->name = scalarName.str();
+    scalarOp->properties = "{}";
+    if (kind == ProcessActionKind::ForCondition) {
+      auto predicate = std::make_shared<ProcessScalarAttribute::Impl>();
+      predicate->name = "predicate";
+      predicate->value = "2 : i64";
+      scalarOp->attributes.push_back(ProcessScalarAttribute(predicate));
+    }
+    action->scalarOp = ProcessScalarOperationPlan(scalarOp);
+  }
+  block->actions.push_back(ProcessActionPlan(action));
+  block->cost += action->cost;
+  process->blocks.front() = ProcessBlockPlan(block);
+  impl->processes.front() = ProcessStatePlan(process);
+  return ProcessStatePlanSet(impl);
+}
+
+ProcessStatePlanSet detail::PlanSetBuilder::cloneWithForConditionWrongEmission(
+    const ProcessStatePlanSet &plans) {
+  return cloneWithLoopActionForTest(plans, ProcessActionKind::ForCondition,
+                                    ProcessEmissionClass::ForwardOnly,
+                                    /*scalarName=*/{});
+}
+
+ProcessStatePlanSet detail::PlanSetBuilder::cloneWithForConditionWrongScalarOp(
+    const ProcessStatePlanSet &plans) {
+  return cloneWithLoopActionForTest(plans, ProcessActionKind::ForCondition,
+                                    ProcessEmissionClass::CopyScalar,
+                                    "arith.addi");
+}
+
+ProcessStatePlanSet detail::PlanSetBuilder::cloneWithForIncrementWrongEmission(
+    const ProcessStatePlanSet &plans) {
+  return cloneWithLoopActionForTest(plans, ProcessActionKind::ForIncrement,
+                                    ProcessEmissionClass::ForwardOnly,
+                                    /*scalarName=*/{});
+}
+
+ProcessStatePlanSet detail::PlanSetBuilder::cloneWithForIncrementWrongScalarOp(
+    const ProcessStatePlanSet &plans) {
+  return cloneWithLoopActionForTest(plans, ProcessActionKind::ForIncrement,
+                                    ProcessEmissionClass::CopyScalar,
+                                    "arith.cmpi");
 }
 
 ProcessStatePlanSet detail::PlanSetBuilder::cloneWithLongLocalChain(
@@ -1696,6 +1799,251 @@ bool detail::PlanSetBuilder::exerciseCompleteApiFixture(
   return valid;
 }
 
+bool detail::PlanSetBuilder::exerciseAllActionArmsFixture(
+    mlir::MLIRContext &context) {
+  bool valid = true;
+  auto expect = [&](bool condition) { valid &= condition; };
+  mlir::Type i1 = mlir::IntegerType::get(&context, 1);
+  mlir::Type i32 = mlir::IntegerType::get(&context, 32);
+  mlir::OwningOpRef<mlir::ModuleOp> module =
+      mlir::ModuleOp::create(mlir::UnknownLoc::get(&context));
+  context.getOrLoadDialect<mlir::scf::SCFDialect>();
+  mlir::OpBuilder builder(&context);
+  builder.setInsertionPointToEnd(module->getBody());
+  mlir::OperationState state(module->getLoc(),
+                             mlir::scf::ForOp::getOperationName());
+  state.addRegion();
+  mlir::Operation *loopOperation = builder.create(state);
+
+  auto makeOriginal = [&]() {
+    auto original = std::make_shared<ProcessOriginalOccurrence::Impl>();
+    original->operation = module->getOperation();
+    original->operationPath = "@fixture/r0/b0/o0";
+    auto occurrence = std::make_shared<ProcessOccurrenceId::Impl>();
+    occurrence->kind = ProcessOccurrenceKind::Original;
+    occurrence->original = ProcessOriginalOccurrence(original);
+    return ProcessOccurrenceId(occurrence);
+  };
+  ProcessOccurrenceId original = makeOriginal();
+  auto makeLoop = [&](ProcessLoopPhase phase) {
+    auto loop = std::make_shared<ProcessSyntheticLoopOccurrence::Impl>();
+    loop->anchor = original;
+    loop->phase = phase;
+    auto occurrence = std::make_shared<ProcessOccurrenceId::Impl>();
+    occurrence->kind = ProcessOccurrenceKind::SyntheticLoop;
+    occurrence->syntheticLoop = ProcessSyntheticLoopOccurrence(loop);
+    return ProcessOccurrenceId(occurrence);
+  };
+  auto makeWrapper = [&](ProcessWrapperDirection direction) {
+    auto wrapper = std::make_shared<ProcessSyntheticWrapperOccurrence::Impl>();
+    wrapper->anchor = original;
+    wrapper->transition = ProcessTransitionId(0);
+    wrapper->slot = ProcessLiveSlotId(0);
+    wrapper->direction = direction;
+    auto occurrence = std::make_shared<ProcessOccurrenceId::Impl>();
+    occurrence->kind = ProcessOccurrenceKind::SyntheticWrapper;
+    occurrence->syntheticWrapper = ProcessSyntheticWrapperOccurrence(wrapper);
+    return ProcessOccurrenceId(occurrence);
+  };
+
+  auto makeConstant = [&](mlir::Type type, llvm::StringRef literal) {
+    auto constant = std::make_shared<ProcessConstantPlannedValue::Impl>();
+    constant->value = literal.str();
+    auto value = std::make_shared<ProcessPlannedValue::Impl>();
+    value->kind = ProcessPlannedValueKind::Constant;
+    value->type = type;
+    value->constant = ProcessConstantPlannedValue(constant);
+    return ProcessPlannedValue(value);
+  };
+  ProcessPlannedValue lhs = makeConstant(i32, "7");
+  ProcessPlannedValue rhs = makeConstant(i32, "9");
+  ProcessPlannedValue boolean = makeConstant(i1, "true");
+  ProcessPlannedValue lower = makeConstant(mlir::IndexType::get(&context), "0");
+  ProcessPlannedValue upper = makeConstant(mlir::IndexType::get(&context), "8");
+  ProcessPlannedValue step = makeConstant(mlir::IndexType::get(&context), "1");
+
+  auto makePayload = [](ProcessHelperRole role) {
+    auto payload = std::make_shared<ProcessGeneratedCalleePayload::Impl>();
+    payload->role = role;
+    if (role == ProcessHelperRole::TraceDecode) {
+      auto arm = std::make_shared<ProcessTraceDecodePayload::Impl>();
+      arm->entry = "mlir:i32";
+      arm->result = "mlir:i32";
+      arm->source = "fixture";
+      payload->traceDecode = ProcessTraceDecodePayload(arm);
+    } else if (role == ProcessHelperRole::Probe) {
+      auto arm = std::make_shared<ProcessProbePayload::Impl>();
+      arm->kind = "fixture";
+      arm->result = "mlir:i32";
+      arm->target = "@fixture";
+      payload->probe = ProcessProbePayload(arm);
+    } else if (role == ProcessHelperRole::ScalarWrap) {
+      auto arm = std::make_shared<ProcessScalarWrapPayload::Impl>();
+      arm->direction = ProcessWrapperDirection::Wrap;
+      arm->scalar = "mlir:i32";
+      arm->valueType = "storage:value:fixture";
+      payload->scalarWrap = ProcessScalarWrapPayload(arm);
+    } else {
+      auto arm = std::make_shared<ProcessScalarUnwrapPayload::Impl>();
+      arm->direction = ProcessWrapperDirection::Unwrap;
+      arm->scalar = "mlir:i32";
+      arm->valueType = "storage:value:fixture";
+      payload->scalarUnwrap = ProcessScalarUnwrapPayload(arm);
+    }
+    return ProcessGeneratedCalleePayload(payload);
+  };
+  const ProcessHelperRole calleeRoles[] = {
+      ProcessHelperRole::TraceDecode, ProcessHelperRole::Probe,
+      ProcessHelperRole::ScalarWrap, ProcessHelperRole::ScalarUnwrap};
+  std::vector<ProcessGeneratedCalleePlan> callees;
+  for (auto [index, role] : llvm::enumerate(calleeRoles)) {
+    auto callee = std::make_shared<ProcessGeneratedCalleePlan::Impl>();
+    callee->id = ProcessCalleeId(index);
+    callee->role = role;
+    callee->payload = makePayload(role);
+    callees.push_back(ProcessGeneratedCalleePlan(callee));
+  }
+
+  auto cmpiAttribute = std::make_shared<ProcessScalarAttribute::Impl>();
+  cmpiAttribute->name = "predicate";
+  cmpiAttribute->value = "2 : i64";
+  auto cmpi = std::make_shared<ProcessScalarOperationPlan::Impl>();
+  cmpi->name = "arith.cmpi";
+  cmpi->attributes = {ProcessScalarAttribute(cmpiAttribute)};
+  cmpi->properties = "{}";
+  auto addi = std::make_shared<ProcessScalarOperationPlan::Impl>();
+  addi->name = "arith.addi";
+  addi->properties = "{}";
+
+  auto makeAction =
+      [&](uint32_t id, ProcessActionKind kind, ProcessEmissionClass emission,
+          ProcessOccurrenceId occurrence, mlir::Operation *source,
+          std::vector<ProcessPlannedValue> operands,
+          std::vector<ProcessPlannedValue> results,
+          std::optional<ProcessCalleeId> callee,
+          std::shared_ptr<ProcessScalarOperationPlan::Impl> scalar) {
+        auto action = std::make_shared<ProcessActionPlan::Impl>();
+        action->id = id;
+        action->kind = kind;
+        action->emission = emission;
+        action->occurrence = std::move(occurrence);
+        action->sourceOperation = source;
+        action->iterationVector = {100 + id};
+        action->operands = std::move(operands);
+        action->results = std::move(results);
+        action->cost = emission == ProcessEmissionClass::ForwardOnly ? 0 : 1;
+        for (const ProcessPlannedValue &result : action->results)
+          action->resultTypes.push_back(result.type());
+        action->callee = callee;
+        if (scalar)
+          action->scalarOp = ProcessScalarOperationPlan(std::move(scalar));
+        return ProcessActionPlan(action);
+      };
+
+  std::vector<ProcessActionPlan> actions;
+  actions.push_back(makeAction(
+      0, ProcessActionKind::ForCondition, ProcessEmissionClass::CopyScalar,
+      makeLoop(ProcessLoopPhase::Condition), loopOperation, {lower, upper},
+      {boolean}, std::nullopt, cmpi));
+  actions.push_back(makeAction(
+      1, ProcessActionKind::Original, ProcessEmissionClass::Inline, original,
+      module->getOperation(), {lhs}, {rhs}, ProcessCalleeId(0), nullptr));
+  actions.push_back(makeAction(
+      2, ProcessActionKind::Original, ProcessEmissionClass::Invoke, original,
+      module->getOperation(), {}, {lhs}, ProcessCalleeId(1), nullptr));
+  actions.push_back(
+      makeAction(3, ProcessActionKind::ScalarWrap, ProcessEmissionClass::Wrap,
+                 makeWrapper(ProcessWrapperDirection::Wrap), nullptr, {lhs},
+                 {rhs}, ProcessCalleeId(2), nullptr));
+  actions.push_back(makeAction(
+      4, ProcessActionKind::ScalarUnwrap, ProcessEmissionClass::Unwrap,
+      makeWrapper(ProcessWrapperDirection::Unwrap), nullptr, {rhs}, {lhs},
+      ProcessCalleeId(3), nullptr));
+  actions.push_back(makeAction(
+      5, ProcessActionKind::ForInitialize, ProcessEmissionClass::ForwardOnly,
+      makeLoop(ProcessLoopPhase::Initialize), loopOperation, {lower}, {lower},
+      std::nullopt, nullptr));
+  actions.push_back(makeAction(
+      6, ProcessActionKind::ForIncrement, ProcessEmissionClass::CopyScalar,
+      makeLoop(ProcessLoopPhase::Increment), loopOperation, {lower, step},
+      {step}, std::nullopt, addi));
+
+  const ProcessEmissionClass emissions[] = {
+      ProcessEmissionClass::CopyScalar, ProcessEmissionClass::Inline,
+      ProcessEmissionClass::Invoke,     ProcessEmissionClass::Wrap,
+      ProcessEmissionClass::Unwrap,     ProcessEmissionClass::ForwardOnly,
+      ProcessEmissionClass::CopyScalar};
+  const ProcessActionKind kinds[] = {
+      ProcessActionKind::ForCondition, ProcessActionKind::Original,
+      ProcessActionKind::Original,     ProcessActionKind::ScalarWrap,
+      ProcessActionKind::ScalarUnwrap, ProcessActionKind::ForInitialize,
+      ProcessActionKind::ForIncrement};
+  for (auto [index, action] : llvm::enumerate(actions)) {
+    expect(action.id() == index);
+    expect(action.kind() == kinds[index]);
+    expect(action.emission() == emissions[index]);
+    expect(action.iterationVector() == llvm::ArrayRef<uint64_t>({100 + index}));
+    expect(action.cost() ==
+           (emissions[index] == ProcessEmissionClass::ForwardOnly ? 0U : 1U));
+    expect(action.resultTypes().size() == action.results().size());
+    expect(llvm::all_of(llvm::zip_equal(action.resultTypes(), action.results()),
+                        [](auto pair) {
+                          return std::get<0>(pair) == std::get<1>(pair).type();
+                        }));
+  }
+  expect(actions[0].sourceOperation() == loopOperation);
+  expect(actions[0].occurrence().syntheticLoop().phase() ==
+         ProcessLoopPhase::Condition);
+  expect(actions[0].operands().size() == 2);
+  expect(actions[0].results()[0].type() == i1);
+  expect(!actions[0].callee());
+  expect(actions[0].scalarOp() &&
+         actions[0].scalarOp()->name() == "arith.cmpi");
+  expect(actions[0].scalarOp()->attributes()[0].name() == "predicate");
+  expect(actions[0].scalarOp()->attributes()[0].value() == "2 : i64");
+  expect(actions[0].scalarOp()->properties() == "{}");
+  expect(actions[1].sourceOperation() == module->getOperation());
+  expect(actions[1].callee() == ProcessCalleeId(0));
+  expect(callees[actions[1].callee()->value()].role() ==
+         ProcessHelperRole::TraceDecode);
+  expect(!actions[1].scalarOp());
+  expect(actions[2].sourceOperation() == module->getOperation());
+  expect(actions[2].callee() == ProcessCalleeId(1));
+  expect(callees[actions[2].callee()->value()].role() ==
+         ProcessHelperRole::Probe);
+  expect(!actions[2].scalarOp());
+  expect(actions[3].sourceOperation() == nullptr);
+  expect(actions[3].occurrence().syntheticWrapper().direction() ==
+         ProcessWrapperDirection::Wrap);
+  expect(actions[3].callee() == ProcessCalleeId(2));
+  expect(callees[actions[3].callee()->value()].role() ==
+         ProcessHelperRole::ScalarWrap);
+  expect(!actions[3].scalarOp());
+  expect(actions[4].sourceOperation() == nullptr);
+  expect(actions[4].occurrence().syntheticWrapper().direction() ==
+         ProcessWrapperDirection::Unwrap);
+  expect(actions[4].callee() == ProcessCalleeId(3));
+  expect(callees[actions[4].callee()->value()].role() ==
+         ProcessHelperRole::ScalarUnwrap);
+  expect(!actions[4].scalarOp());
+  expect(actions[5].sourceOperation() == loopOperation);
+  expect(actions[5].occurrence().syntheticLoop().phase() ==
+         ProcessLoopPhase::Initialize);
+  expect(!actions[5].callee());
+  expect(!actions[5].scalarOp());
+  expect(actions[6].sourceOperation() == loopOperation);
+  expect(actions[6].occurrence().syntheticLoop().phase() ==
+         ProcessLoopPhase::Increment);
+  expect(actions[6].operands().size() == 2);
+  expect(mlir::isa<mlir::IndexType>(actions[6].results()[0].type()));
+  expect(!actions[6].callee());
+  expect(actions[6].scalarOp() &&
+         actions[6].scalarOp()->name() == "arith.addi");
+  expect(actions[6].scalarOp()->attributes().empty());
+  expect(actions[6].scalarOp()->properties() == "{}");
+  return valid;
+}
+
 llvm::StringRef detail::PlanSetBuilder::specializationBytes(
     const ProcessGeneratedCalleePlan &callee) {
   return callee.impl_->specializationBytes;
@@ -2018,6 +2366,23 @@ detail::PlanSetBuilder::structuralError(const ProcessStatePlanSet &plans) {
              action.impl_->callee->value() >= plans.impl_->callees.size()) ||
             (action.impl_->scalarOp && !action.impl_->scalarOp->impl_))
           return "process-state plan invariant violated: invalid action arm";
+        if (action.impl_->scalarOp) {
+          auto &scalar = *action.impl_->scalarOp->impl_;
+          if (scalar.name.empty() || scalar.properties.empty() ||
+              llvm::any_of(scalar.attributes,
+                           [](const ProcessScalarAttribute &attribute) {
+                             return !attribute.impl_;
+                           }))
+            return "process-state plan invariant violated: invalid action arm";
+          for (size_t index = 1; index < scalar.attributes.size(); ++index) {
+            auto &previous = *scalar.attributes[index - 1].impl_;
+            auto &current = *scalar.attributes[index].impl_;
+            if (std::tie(previous.name, previous.value) >=
+                std::tie(current.name, current.value))
+              return "process-state plan invariant violated: invalid action "
+                     "arm";
+          }
+        }
         bool sourceRequired =
             action.impl_->kind == ProcessActionKind::Original ||
             action.impl_->kind == ProcessActionKind::ForInitialize ||
@@ -2351,6 +2716,44 @@ mlir::LogicalResult verifyProcessStatePlan(const ProcessStatePlanSet &plans,
           return reject(
               plans,
               "process-state plan invariant violated: invalid action arm");
+        if (action.kind() == ProcessActionKind::ForCondition) {
+          const ProcessScalarOperationPlan *scalar = action.scalarOp();
+          if (action.emission() != ProcessEmissionClass::CopyScalar ||
+              !scalar || scalar->name() != "arith.cmpi" ||
+              scalar->properties() != "{}" ||
+              scalar->attributes().size() != 1 ||
+              scalar->attributes()[0].name() != "predicate" ||
+              scalar->attributes()[0].value() != "2 : i64" ||
+              action.operands().size() != 2 ||
+              !llvm::all_of(action.operands(),
+                            [](const auto &operand) {
+                              return mlir::isa<mlir::IndexType>(operand.type());
+                            }) ||
+              action.results().size() != 1 ||
+              !action.results()[0].type().isInteger(1))
+            return reject(
+                plans,
+                "process-state plan invariant violated: invalid action arm");
+        }
+        if (action.kind() == ProcessActionKind::ForIncrement) {
+          const ProcessScalarOperationPlan *scalar = action.scalarOp();
+          if (action.emission() != ProcessEmissionClass::CopyScalar ||
+              !scalar || scalar->name() != "arith.addi" ||
+              scalar->properties() != "{}" || !scalar->attributes().empty())
+            return reject(
+                plans,
+                "process-state plan invariant violated: invalid action arm");
+          if (action.operands().size() != 2 ||
+              !llvm::all_of(action.operands(),
+                            [](const auto &operand) {
+                              return mlir::isa<mlir::IndexType>(operand.type());
+                            }) ||
+              action.results().size() != 1 ||
+              !mlir::isa<mlir::IndexType>(action.results()[0].type()))
+            return reject(
+                plans,
+                "process-state plan invariant violated: invalid action arm");
+        }
         ProcessOccurrenceKind expectedOccurrence =
             ProcessOccurrenceKind::Original;
         std::optional<ProcessLoopPhase> expectedLoopPhase;
