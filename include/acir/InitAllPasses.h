@@ -1,6 +1,7 @@
 #ifndef ACIR_INITALLPASSES_H
 #define ACIR_INITALLPASSES_H
 
+#include "acir/Conversion/ACIRToACSim/ACIRToACSim.h"
 #include "acir/Transforms/Passes.h"
 #include "mlir/Pass/PassRegistry.h"
 #include "mlir/Transforms/Passes.h"
@@ -17,6 +18,9 @@ inline void registerAllPasses() {
   });
   mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
     return createVerifyACIRFilePass();
+  });
+  mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
+    return createConvertACIRToACSimPass();
   });
 }
 
