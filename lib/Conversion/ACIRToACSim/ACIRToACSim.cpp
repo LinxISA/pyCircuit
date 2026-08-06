@@ -14,6 +14,14 @@ struct ConvertACIRToACSim
                                mlir::OperationPass<mlir::ModuleOp>> {
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(ConvertACIRToACSim)
 
+  llvm::StringRef getArgument() const override {
+    return "convert-acir-to-acsim";
+  }
+  llvm::StringRef getDescription() const override {
+    return "Lower frozen ACIR structure into canonical ACSim (not yet "
+           "implemented)";
+  }
+
   void runOnOperation() override {
     // TODO: implement ACIR-to-ACSim conversion
     mlir::ModuleOp module = getOperation();
