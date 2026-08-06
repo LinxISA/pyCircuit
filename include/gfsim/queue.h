@@ -44,13 +44,13 @@ public:
     return true;
   }
 
-  /// Propose to dequeue the front element.
+  /// Propose to dequeue the next element in FIFO order.
   std::optional<T> proposePop() {
-    if (committed_.empty() && popProposalCount_ >= committedSize())
+    if (popProposalCount_ >= committed_.size())
       return std::nullopt;
+    size_t index = popProposalCount_;
     ++popProposalCount_;
-    return committed_.empty() ? std::nullopt
-                              : std::optional<T>(committed_.front());
+    return std::optional<T>(committed_[index]);
   }
 
   /// Peek at the front without proposing a pop.

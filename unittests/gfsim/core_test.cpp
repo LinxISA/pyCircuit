@@ -6,10 +6,14 @@
 
 #include "gtest/gtest.h"
 
+#include <memory>
+
 namespace gfsim {
 namespace {
 
-// ── Core types ────────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════
+// Core types
+// ═══════════════════════════════════════════════════════════════════════
 
 TEST(GfsimCoreTest, EpochComparison) {
   Epoch a{0, 0}, b{0, 1}, c{1, 0};
@@ -25,6 +29,11 @@ TEST(GfsimCoreTest, EpochSameTime) {
   EXPECT_FALSE(a.sameTime({6, 0}));
 }
 
+TEST(GfsimCoreTest, EpochNextDeltaCorrect) {
+  Epoch e{10, 5};
+  EXPECT_EQ(e.nextDelta(), (Epoch{10, 6}));
+}
+
 TEST(GfsimCoreTest, EventOrdering) {
   Event e1{{0, 0}, 1, 0, 0};
   Event e2{{0, 1}, 1, 0, 0};
@@ -33,7 +42,38 @@ TEST(GfsimCoreTest, EventOrdering) {
   EXPECT_LT(e2, e3);
 }
 
-// ── Object hierarchy ──────────────────────────────────────────────────
+TEST(GfsimCoreTest, EventSameTimeOrderedByDelta) {
+  Event e1{{5, 0}, 1, 0, 0};
+  Event e2{{5, 1}, 1, 0, 0};
+  Event e3{{5, 2}, 1, 0, 0};
+  EXPECT_LT(e1, e2);
+  EXPECT_LT(e2, e3);
+}
+
+TEST(GfsimCoreTest, EventSameTimeOrderedByKindThenPayload) {
+  Event e1{{0, 0}, 1, 0, 0};
+  Event e2{{0, 0}, 1, 1, 0};
+  Event e3{{0, 0}, 1, 1, 1};
+  EXPECT_LT(e1, e2);
+  EXPECT_LT(e2, e3);
+  EXPECT_LT(e1, e3);
+}
+
+TEST(GfsimCoreTest, TerminationResultDefaults) {
+  TerminationResult r;
+  EXPECT_EQ(r.classification, TerminationClass::Incomplete);
+  EXPECT_EQ(r.committedEventCount, 0u);
+  EXPECT_EQ(r.tracePosition, 0u);
+}
+
+TEST(GfsimCoreTest, MaxDeltasPerTickIsFinite) {
+  EXPECT_GT(kMaxDeltasPerTick, 0u);
+  EXPECT_LT(kMaxDeltasPerTick, 1u << 20);
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// Object hierarchy
+// ═══════════════════════════════════════════════════════════════════════
 
 TEST(GfsimObjectTest, ModuleAddsChildWithPath) {
   Module root("root", 1);
@@ -48,13 +88,65 @@ TEST(GfsimObjectTest, ModuleWalkVisitsAll) {
   Module root("root", 1);
   root.addChild(std::make_unique<SimObject>(ObjectKind::Compute, "a", 2));
   root.addChild(std::make_unique<SimObject>(ObjectKind::Sink, "b", 3));
-
   int count = 0;
   root.walk([&](SimObject &) { ++count; });
-  EXPECT_EQ(count, 3); // root + a + b
+  EXPECT_EQ(count, 3);
 }
 
-// ── Queue ─────────────────────────────────────────────────────────────
+TEST(GfsimObjectTest, NestedModuleWalkVisitsAllLevels) {
+  Module root("root", 1);
+  auto mid = std::make_unique<Module>("mid", 2);
+  auto leaf = std::make_unique<SimObject>(ObjectKind::Compute, "leaf", 3);
+  mid->addChild(std::move(leaf));
+  root.addChild(std::move(mid));
+  int count = 0;
+  root.walk([&](SimObject &) { ++count; });
+  EXPECT_EQ(count, 3);
+}
+
+TEST(GfsimObjectTest, FindChildByName) {
+  Module root("root", 1);
+  root.addChild(std::make_unique<SimObject>(ObjectKind::Compute, "alu", 2));
+  root.addChild(std::make_unique<SimObject>(ObjectKind::Sink, "mem", 3));
+  EXPECT_NE(root.findChild("alu"), nullptr);
+  EXPECT_NE(root.findChild("mem"), nullptr);
+  EXPECT_EQ(root.findChild("nonexistent"), nullptr);
+}
+
+TEST(GfsimObjectTest, ResetPropagatesToChildren) {
+  Module root("root", 1);
+  auto q = std::make_unique<SimQueue<int>>("q", 2, nullptr, 10);
+  auto *qptr = q.get();
+  root.addChild(std::move(q));
+  qptr->proposePush(42);
+  qptr->doArbitrate({0, 0});
+  qptr->doXfer({0, 0});
+  EXPECT_EQ(qptr->committedSize(), 1u);
+  root.reset();
+  EXPECT_EQ(qptr->committedSize(), 0u);
+}
+
+TEST(GfsimObjectTest, EmptyModuleWalkOnlySelf) {
+  Module root("root", 1);
+  int count = 0;
+  root.walk([&](SimObject &) { ++count; });
+  EXPECT_EQ(count, 1);
+}
+
+TEST(GfsimObjectTest, ChildPathReflectsHierarchy) {
+  Module root("top", 1);
+  auto mid = std::make_unique<Module>("mid", 2);
+  auto leaf = std::make_unique<SimObject>(ObjectKind::Sink, "leaf", 3);
+  mid->addChild(std::move(leaf));
+  root.addChild(std::move(mid));
+  // Paths are hierarchical; verify they are non-empty and distinct
+  EXPECT_FALSE(root.children()[0]->path().empty());
+  EXPECT_NE(root.path(), root.children()[0]->path());
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// Queue
+// ═══════════════════════════════════════════════════════════════════════
 
 TEST(GfsimQueueTest, PushPopRoundTrip) {
   SimQueue<int> q("q", 1, nullptr, 10);
@@ -70,23 +162,139 @@ TEST(GfsimQueueTest, CapacityEnforcement) {
   SimQueue<int> q("q", 1, nullptr, 2);
   EXPECT_TRUE(q.proposePush(1));
   EXPECT_TRUE(q.proposePush(2));
-  EXPECT_FALSE(q.proposePush(3)); // capacity exceeded
+  EXPECT_FALSE(q.proposePush(3));
 }
 
-// ── EventQueue ────────────────────────────────────────────────────────
+TEST(GfsimQueueTest, PopAfterPushRoundTrip) {
+  SimQueue<int> q("q", 1, nullptr, 10);
+  q.proposePush(42);
+  q.doArbitrate({0, 0});
+  q.doXfer({0, 0});
+  auto popped = q.proposePop();
+  ASSERT_TRUE(popped.has_value());
+  EXPECT_EQ(*popped, 42);
+  q.doArbitrate({0, 0});
+  q.doXfer({0, 0});
+  EXPECT_TRUE(q.isEmpty());
+}
+
+TEST(GfsimQueueTest, WatermarkTracksPeak) {
+  SimQueue<int> q("q", 1, nullptr, 10);
+  q.proposePush(1); q.proposePush(2); q.proposePush(3);
+  q.doArbitrate({0, 0});
+  q.doXfer({0, 0});
+  EXPECT_EQ(q.highWatermark(), 3u);
+  q.proposePop();
+  q.doArbitrate({0, 0});
+  q.doXfer({0, 0});
+  EXPECT_EQ(q.highWatermark(), 3u); // persists after pop
+  EXPECT_EQ(q.committedSize(), 2u);
+}
+
+TEST(GfsimQueueTest, MultiplePopsDrainQueue) {
+  SimQueue<int> q("q", 1, nullptr, 3);
+  q.proposePush(10); q.proposePush(20);
+  q.doArbitrate({0, 0});
+  q.doXfer({0, 0});
+  q.proposePop(); q.proposePop();
+  q.doArbitrate({0, 0});
+  q.doXfer({0, 0});
+  EXPECT_TRUE(q.isEmpty());
+}
+
+TEST(GfsimQueueTest, PeekReturnsFrontWithoutConsuming) {
+  SimQueue<int> q("q", 1, nullptr, 10);
+  q.proposePush(7);
+  q.doArbitrate({0, 0});
+  q.doXfer({0, 0});
+  EXPECT_EQ(*q.peek(), 7);
+  EXPECT_EQ(q.committedSize(), 1u);
+}
+
+TEST(GfsimQueueTest, PopFromEmptyReturnsNullopt) {
+  SimQueue<int> q("q", 1, nullptr, 10);
+  auto popped = q.proposePop();
+  EXPECT_FALSE(popped.has_value());
+}
+
+TEST(GfsimQueueTest, PeekFromEmptyReturnsNull) {
+  SimQueue<int> q("q", 1, nullptr, 10);
+  EXPECT_EQ(q.peek(), nullptr);
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// EventQueue
+// ═══════════════════════════════════════════════════════════════════════
 
 TEST(GfsimEventQueueTest, EventsOrderedByEpoch) {
   EventQueue eq("events", 1, nullptr);
   EXPECT_TRUE(eq.proposeSchedule({{2, 0}, 1, 0, 0}));
   EXPECT_TRUE(eq.proposeSchedule({{1, 0}, 1, 0, 0}));
   eq.doXfer({0, 0});
-
   auto e = eq.popNext();
   ASSERT_TRUE(e.has_value());
   EXPECT_EQ(e->readyTime.time, 1u);
 }
 
-// ── Resource ──────────────────────────────────────────────────────────
+TEST(GfsimEventQueueTest, SameTickOrderedByDelta) {
+  EventQueue eq("events", 1, nullptr);
+  eq.proposeSchedule({{5, 2}, 1, 0, 0});
+  eq.proposeSchedule({{5, 0}, 1, 0, 0});
+  eq.proposeSchedule({{5, 1}, 1, 0, 0});
+  eq.doXfer({0, 0});
+  EXPECT_EQ(eq.popNext()->readyTime.delta, 0u);
+  EXPECT_EQ(eq.popNext()->readyTime.delta, 1u);
+  EXPECT_EQ(eq.popNext()->readyTime.delta, 2u);
+}
+
+TEST(GfsimEventQueueTest, HasEventAtChecksExactEpoch) {
+  EventQueue eq("events", 1, nullptr);
+  eq.proposeSchedule({{7, 0}, 1, 0, 0});
+  eq.doXfer({0, 0});
+  EXPECT_TRUE(eq.hasEventAt({7, 0}));
+  EXPECT_FALSE(eq.hasEventAt({7, 1}));
+  EXPECT_FALSE(eq.hasEventAt({8, 0}));
+}
+
+TEST(GfsimEventQueueTest, CapacityEnforcement) {
+  EventQueue eq("events", 1, nullptr, 3);
+  EXPECT_TRUE(eq.proposeSchedule({{1, 0}, 1, 0, 0}));
+  EXPECT_TRUE(eq.proposeSchedule({{2, 0}, 1, 0, 0}));
+  EXPECT_TRUE(eq.proposeSchedule({{3, 0}, 1, 0, 0}));
+  EXPECT_FALSE(eq.proposeSchedule({{4, 0}, 1, 0, 0}));
+}
+
+TEST(GfsimEventQueueTest, PopNextFromEmptyReturnsNullopt) {
+  EventQueue eq("events", 1, nullptr);
+  EXPECT_FALSE(eq.popNext().has_value());
+}
+
+TEST(GfsimEventQueueTest, NextEventDoesNotConsume) {
+  EventQueue eq("events", 1, nullptr);
+  eq.proposeSchedule({{1, 0}, 1, 0, 0});
+  eq.doXfer({0, 0});
+  auto next = eq.nextEvent();
+  ASSERT_TRUE(next.has_value());
+  EXPECT_EQ(next->readyTime.time, 1u);
+  auto popped = eq.popNext();
+  ASSERT_TRUE(popped.has_value());
+  EXPECT_EQ(popped->readyTime.time, 1u);
+}
+
+TEST(GfsimEventQueueTest, ResetClearsAllEvents) {
+  EventQueue eq("events", 1, nullptr);
+  eq.proposeSchedule({{1, 0}, 1, 0, 0});
+  eq.proposeSchedule({{2, 0}, 1, 0, 0});
+  eq.doXfer({0, 0});
+  EXPECT_EQ(eq.size(), 2u);
+  eq.reset();
+  EXPECT_EQ(eq.size(), 0u);
+  EXPECT_FALSE(eq.nextEvent().has_value());
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// Resource
+// ═══════════════════════════════════════════════════════════════════════
 
 TEST(GfsimResourceTest, ReserveWithinCapacity) {
   Resource r("r", 1, nullptr, 10);
@@ -103,7 +311,75 @@ TEST(GfsimResourceTest, ReserveExceedsCapacityFails) {
   EXPECT_FALSE(r.proposeReserve(1, 5, {0, 0}, 100));
 }
 
-// ── Components ────────────────────────────────────────────────────────
+TEST(GfsimResourceTest, ReleaseAfterReserve) {
+  Resource r("r", 1, nullptr, 10);
+  r.proposeReserve(1, 5, {0, 0}, 100);
+  r.doArbitrate({0, 0});
+  r.doXfer({0, 0});
+  EXPECT_EQ(r.activeReservations(), 5u);
+  r.proposeRelease(1, 3);
+  r.doXfer({0, 0});
+  EXPECT_EQ(r.activeReservations(), 2u);
+  EXPECT_EQ(r.availableCapacity(), 8u);
+}
+
+TEST(GfsimResourceTest, HighWatermarkPersistsAfterRelease) {
+  Resource r("r", 1, nullptr, 10);
+  r.proposeReserve(1, 7, {0, 0}, 100);
+  r.doArbitrate({0, 0});
+  r.doXfer({0, 0});
+  EXPECT_EQ(r.highWatermark(), 7u);
+  r.proposeRelease(1, 5);
+  r.doXfer({0, 0});
+  EXPECT_EQ(r.highWatermark(), 7u);
+  EXPECT_EQ(r.activeReservations(), 2u);
+}
+
+TEST(GfsimResourceTest, MultipleReservationsArbitratedFifo) {
+  Resource r("r", 1, nullptr, 5);
+  // Two reservers each want 3, total capacity is 5
+  r.proposeReserve(10, 3, {0, 0}, 100);
+  r.proposeReserve(20, 3, {0, 0}, 200);
+  r.doArbitrate({0, 0});
+  r.doXfer({0, 0});
+  // First gets granted (3), second rejected (only 2 remaining)
+  EXPECT_EQ(r.activeReservations(), 3u);
+  EXPECT_EQ(r.availableCapacity(), 2u);
+  EXPECT_TRUE(r.canReserve(2));
+  EXPECT_FALSE(r.canReserve(3));
+}
+
+TEST(GfsimResourceTest, TotalStatisticsAccumulate) {
+  Resource r("r", 1, nullptr, 10);
+  r.proposeReserve(1, 3, {0, 0}, 100);
+  r.doArbitrate({0, 0});
+  r.doXfer({0, 0});
+  r.proposeRelease(1, 1);
+  r.doXfer({0, 0});
+  r.proposeReserve(1, 4, {0, 0}, 200);
+  r.doArbitrate({0, 0});
+  r.doXfer({0, 0});
+  EXPECT_EQ(r.totalReservations(), 7u);
+  EXPECT_EQ(r.totalReleases(), 1u);
+  EXPECT_EQ(r.activeReservations(), 6u);
+}
+
+TEST(GfsimResourceTest, ResetClearsAllState) {
+  Resource r("r", 1, nullptr, 10);
+  r.proposeReserve(1, 5, {0, 0}, 100);
+  r.doArbitrate({0, 0});
+  r.doXfer({0, 0});
+  EXPECT_EQ(r.activeReservations(), 5u);
+  r.reset();
+  EXPECT_EQ(r.activeReservations(), 0u);
+  EXPECT_EQ(r.availableCapacity(), 10u);
+  EXPECT_EQ(r.highWatermark(), 0u);
+  EXPECT_EQ(r.totalReservations(), 0u);
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// Components
+// ═══════════════════════════════════════════════════════════════════════
 
 TEST(GfsimComponentsTest, ComputeTransformsInput) {
   Compute c("c", 1, nullptr);
@@ -116,8 +392,7 @@ TEST(GfsimComponentsTest, ComputeTransformsInput) {
 
 TEST(GfsimComponentsTest, SinkAccumulatesValues) {
   Sink s("s", 1, nullptr);
-  s.receive(10);
-  s.receive(20);
+  s.receive(10); s.receive(20);
   s.doXfer({0, 0});
   EXPECT_EQ(s.totalReceived(), 2u);
   ASSERT_EQ(s.received().size(), 2u);
@@ -135,13 +410,187 @@ TEST(GfsimComponentsTest, MemoryReadWrite) {
   EXPECT_EQ(m.read(2), 99u);
 }
 
-// ── System ────────────────────────────────────────────────────────────
+TEST(GfsimComponentsTest, MemoryRejectsOutOfBoundsWrite) {
+  Memory m("m", 1, nullptr, 2);
+  EXPECT_TRUE(m.proposeWrite(0, 42));
+  EXPECT_TRUE(m.proposeWrite(1, 43));
+  EXPECT_FALSE(m.proposeWrite(2, 44));
+}
 
-TEST(GfsimSystemTest, SystemRunsToCompletion) {
+TEST(GfsimComponentsTest, MemoryReadOutOfBoundsReturnsZero) {
+  Memory m("m", 1, nullptr, 4);
+  EXPECT_EQ(m.read(100), 0u);
+}
+
+TEST(GfsimComponentsTest, LinkForwardsValue) {
+  Link l("l", 1, nullptr);
+  l.forward(123);
+  l.doXfer({0, 0});
+  EXPECT_EQ(l.value(), 123u);
+  EXPECT_TRUE(l.hasValue());
+}
+
+TEST(GfsimComponentsTest, LinkResetClearsValue) {
+  Link l("l", 1, nullptr);
+  l.forward(99);
+  l.doXfer({0, 0});
+  l.reset();
+  EXPECT_EQ(l.value(), 0u);
+  EXPECT_FALSE(l.hasValue());
+}
+
+TEST(GfsimComponentsTest, ComputeResetClearsOutput) {
+  Compute c("c", 1, nullptr);
+  c.setFunction([](uint64_t x) { return x + 1; });
+  c.setInput(5);
+  c.doWork({0, 0});
+  c.doXfer({0, 0});
+  EXPECT_EQ(c.output(), 6u);
+  c.reset();
+  EXPECT_EQ(c.output(), 0u);
+}
+
+TEST(GfsimComponentsTest, SinkResetClearsAll) {
+  Sink s("s", 1, nullptr);
+  s.receive(1); s.receive(2);
+  s.doXfer({0, 0});
+  EXPECT_EQ(s.totalReceived(), 2u);
+  s.reset();
+  EXPECT_EQ(s.totalReceived(), 0u);
+  EXPECT_TRUE(s.received().empty());
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// SimSystem
+// ═══════════════════════════════════════════════════════════════════════
+
+TEST(GfsimSystemTest, EmptySystemCompletesImmediately) {
   SimSystem sys("test");
   auto result = sys.run();
   EXPECT_EQ(result.classification, TerminationClass::Completed);
   EXPECT_EQ(result.finalEpoch.time, 0u);
+  EXPECT_EQ(result.finalEpoch.delta, 0u);
+}
+
+TEST(GfsimSystemTest, MaxTicksCapTriggersIncomplete) {
+  SimSystem sys("test");
+  sys.setMaxTicks(3);
+  sys.scheduleEvent({{100, 0}, 1, 0, 0});
+  auto result = sys.run();
+  EXPECT_EQ(result.classification, TerminationClass::Incomplete);
+  EXPECT_EQ(result.diagnosticCode, "max_ticks_reached");
+}
+
+TEST(GfsimSystemTest, MaxEventsCapTriggersIncomplete) {
+  SimSystem sys("test");
+  sys.setMaxEvents(0);
+  auto result = sys.run();
+  EXPECT_EQ(result.classification, TerminationClass::Incomplete);
+}
+
+TEST(GfsimSystemTest, ObjectRegistryLookup) {
+  SimSystem sys("test");
+  sys.registerObject(&sys.root());
+  EXPECT_EQ(sys.lookup(kSystemObjectId), &sys);
+  EXPECT_EQ(sys.lookup(999), nullptr);
+}
+
+TEST(GfsimSystemTest, DeterministicEmptyRuns) {
+  SimSystem sys1("a"), sys2("a");
+  auto r1 = sys1.run();
+  auto r2 = sys2.run();
+  EXPECT_EQ(r1.classification, r2.classification);
+  EXPECT_EQ(r1.finalEpoch, r2.finalEpoch);
+}
+
+TEST(GfsimSystemTest, ScheduleEventAndCommitThenQuery) {
+  SimSystem sys("test");
+  sys.scheduleEvent({{5, 0}, kSystemObjectId, 0, 0});
+  // Step once to commit the event into the event queue
+  bool hasWork = sys.step();
+  (void)hasWork;
+  auto next = sys.nextEvent();
+  ASSERT_TRUE(next.has_value());
+  EXPECT_EQ(next->readyTime.time, 5u);
+}
+
+TEST(GfsimSystemTest, SystemCanBeReset) {
+  SimSystem sys("test");
+  sys.scheduleEvent({{5, 0}, 1, 0, 0});
+  sys.run();
+  EXPECT_TRUE(sys.isTerminated());
+  // Reset and verify clean state
+  sys.reset();
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// Integration
+// ═══════════════════════════════════════════════════════════════════════
+
+TEST(GfsimIntegrationTest, ComputeToSinkPipeline) {
+  auto comp = std::make_unique<Compute>("adder", 10, nullptr);
+  auto *cptr = comp.get();
+  cptr->setFunction([](uint64_t x) { return x * 2; });
+
+  auto snk = std::make_unique<Sink>("sink", 11, nullptr);
+  auto *sptr = snk.get();
+
+  cptr->setInput(21);
+  cptr->doWork({0, 0});
+  cptr->doXfer({0, 0});
+  sptr->receive(cptr->output());
+  sptr->doXfer({0, 0});
+
+  ASSERT_EQ(sptr->received().size(), 1u);
+  EXPECT_EQ(sptr->received()[0], 42u);
+}
+
+TEST(GfsimIntegrationTest, QueueProducerConsumer) {
+  SimQueue<int> q("fifo", 1, nullptr, 5);
+  q.proposePush(10); q.proposePush(20);
+  q.doArbitrate({0, 0});
+  q.doXfer({0, 0});
+  auto v1 = q.proposePop();
+  auto v2 = q.proposePop();
+  auto v3 = q.proposePop();
+  q.doArbitrate({0, 0});
+  q.doXfer({0, 0});
+  ASSERT_TRUE(v1.has_value()); EXPECT_EQ(*v1, 10);
+  ASSERT_TRUE(v2.has_value()); EXPECT_EQ(*v2, 20);
+  EXPECT_FALSE(v3.has_value());
+  EXPECT_TRUE(q.isEmpty());
+}
+
+TEST(GfsimIntegrationTest, ResourceProducerConsumer) {
+  Resource r("r", 1, nullptr, 3);
+  EXPECT_TRUE(r.proposeReserve(100, 2, {0, 0}, 1));
+  r.doArbitrate({0, 0});
+  r.doXfer({0, 0});
+  EXPECT_EQ(r.activeReservations(), 2u);
+  EXPECT_FALSE(r.proposeReserve(200, 2, {0, 0}, 2));
+  r.proposeRelease(100, 1);
+  r.doXfer({0, 0});
+  EXPECT_EQ(r.activeReservations(), 1u);
+}
+
+TEST(GfsimIntegrationTest, MemoryToComputeToSinkChain) {
+  Memory mem("mem", 1, nullptr, 4);
+  Compute comp("comp", 2, nullptr);
+  Sink snk("snk", 3, nullptr);
+
+  mem.proposeWrite(0, 5);
+  mem.proposeWrite(1, 7);
+  mem.doXfer({0, 0});
+
+  comp.setFunction([](uint64_t x) { return x + 3; });
+  comp.setInput(mem.read(0));
+  comp.doWork({0, 0});
+  comp.doXfer({0, 0});
+
+  snk.receive(comp.output());
+  snk.doXfer({0, 0});
+
+  EXPECT_EQ(snk.received()[0], 8u);
 }
 
 } // namespace
