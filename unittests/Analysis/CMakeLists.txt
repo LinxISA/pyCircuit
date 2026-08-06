@@ -29,6 +29,7 @@ add_executable(ACIRProcessStatePlanTests
   ProcessStatePlanLimitsTest.cpp
   ProcessStatePlanAtomicityTest.cpp
   ProcessStatePlanVerifierTest.cpp
+  ProcessStatePlanTask13ConsumerTest.cpp
 )
 target_include_directories(ACIRProcessStatePlanTests PRIVATE
   "${PROJECT_SOURCE_DIR}/lib"
