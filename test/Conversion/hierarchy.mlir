@@ -1,35 +1,58 @@
-// RUN: %acir_opt --convert-acir-to-acsim %s | %FileCheck %s
+// RUN: %acir_opt_public --verify-each=false --pass-pipeline='builtin.module(ac-freeze-topology)' %s -o %t.frozen
+// RUN: %acir_opt_public --ac-lower-to-acsim --ac-binding-profile=fast --ac-binding-target=arm64-apple-darwin %t.frozen | %FileCheck %s
+// RUN: %acir_opt_public --ac-lower-to-acsim --ac-binding-profile=fast --ac-binding-target=arm64-apple-darwin %t.frozen -o %t.out
+// RUN: %acir_opt_public %t.out -o %t.roundtrip
+// RUN: %acir_opt_public --ac-lower-to-acsim --ac-binding-profile=fast --ac-binding-target=arm64-apple-darwin %t.frozen -o %t.again
+// RUN: diff %t.out %t.again
 
-// Test: deeper hierarchy conversion with multiple levels.
-// Top → A → X (leaf) and Top → B (leaf).
-// Construction order must be DFS pre-order: ["Top.a", "Top.a.x", "Top.b"].
+// A three-level hierarchy: Top instantiates Mid and Child, Mid instantiates
+// Child twice. ACSim modules are strictly symbol-sorted (Child < Mid < Top),
+// construction is DFS preorder from the root, destruction is its exact
+// reverse, and every instance records the target module's exact static
+// arguments and specialization fingerprint. Instances of structural modules
+// are ownership-only: only the workload process produces a dispatch row.
 
 builtin.module attributes {ac.contract_epoch = "0.1"} {
-  ac.module @Top() -> () static {} {
-    %a = ac.instance @a of @A() static {} id "a" path "a" : () -> ()
-    %b = ac.instance @b of @B() static {} id "b" path "b" : () -> ()
+  ac.system @soc root @Top as "root" tick 0 "cycle"
+      workload @Top::@workload seed {kind = "fixed", value = 7 : i64}
+      instrumentation [] results {id = "default", format = "json"} selected true
+  ac.module @Child() parameters {} graph {
     ac.return
   }
-  ac.module @A() -> () static {} {
-    %x = ac.instance @x of @X() static {} id "x" path "x" : () -> ()
+  ac.module @Mid() parameters {} graph {
+    ac.instance @left of @Child() static {} id "left" path "left" : () -> ()
+    ac.instance @right of @Child() static {} id "right" path "right" : () -> ()
     ac.return
   }
-  ac.module @B() -> () static {} {
-    ac.return
-  }
-  ac.module @X() -> () static {} {
+  ac.module @Top() parameters {} graph {
+    ac.instance @mid of @Mid() static {} id "mid" path "mid" : () -> ()
+    ac.instance @solo of @Child() static {} id "solo" path "solo" : () -> ()
+    ac.process @workload kind "workload" {
+      ac.yield_sim
+    }
     ac.return
   }
 }
 
-// CHECK:      builtin.module attributes {ac.contract_epoch = "0.1"}
-// CHECK-NEXT:   acsim.model @Top epoch "0.1" root @Top
-// CHECK-SAME:     construction ["Top.a", "Top.a.x", "Top.b"]
-// CHECK-SAME:     destruction ["Top.b", "Top.a.x", "Top.a"]
-// CHECK:        acsim.module @A
-// CHECK:          acsim.instance @x target @X
-// CHECK:        acsim.module @B
-// CHECK:        acsim.module @Top
-// CHECK:          acsim.instance @a target @A
-// CHECK:          acsim.instance @b target @B
-// CHECK:        acsim.module @X
+// CHECK:      acsim.model @soc epoch "0.1" root @Top
+// CHECK-SAME:   construction ["Top.mid", "Top.mid.left", "Top.mid.right", "Top.solo", "Top.workload"]
+// CHECK-SAME:   destruction ["Top.workload", "Top.solo", "Top.mid.right", "Top.mid.left", "Top.mid"]
+// CHECK:        acsim.module @Child interface {ports = [], resources = [], results = []} static [] specialization "[[CHILD_FP:sha256:[0-9a-f]+]]" exports [] {
+// CHECK-NEXT:     acsim.return
+// CHECK-NEXT:   }
+// CHECK-NEXT:   acsim.module @Mid interface {ports = [], resources = [], results = []} static [] specialization "[[MID_FP:sha256:[0-9a-f]+]]" exports [] {
+// CHECK-NEXT:     %{{.+}} = acsim.instance @left target @Child args [] specialization "[[CHILD_FP]]" : !acsim.owner<@Child>
+// CHECK-NEXT:     %{{.+}} = acsim.instance @right target @Child args [] specialization "[[CHILD_FP]]" : !acsim.owner<@Child>
+// CHECK-NEXT:     acsim.return
+// CHECK-NEXT:   }
+// CHECK-NEXT:   acsim.module @Top interface {ports = [], resources = [], results = []} static [] specialization "[[TOP_FP:sha256:[0-9a-f]+]]" exports [] {
+// CHECK-NEXT:     %{{.+}} = acsim.instance @mid target @Mid args [] specialization "[[MID_FP]]" : !acsim.owner<@Mid>
+// CHECK-NEXT:     %{{.+}} = acsim.instance @solo target @Child args [] specialization "[[CHILD_FP]]" : !acsim.owner<@Child>
+// CHECK:          acsim.process @workload
+// CHECK:          acsim.return
+// CHECK-NEXT:   }
+// CHECK-NEXT:   %{{.+}}, %{{.+}} = acsim.dispatch @Top::@workload path "Top.workload" indices [] object 0 activation 0
+// CHECK-NOT:    acsim.dispatch
+// CHECK:        acsim.activate
+// CHECK-NOT:    acsim.activate
+// CHECK-NEXT:   }

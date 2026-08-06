@@ -1,24 +1,47 @@
-// RUN: %acir_opt --convert-acir-to-acsim %s | %FileCheck %s
+// RUN: %acir_opt_public --verify-each=false --pass-pipeline='builtin.module(ac-freeze-topology)' %s -o %t.frozen
+// RUN: %acir_opt_public --ac-lower-to-acsim --ac-binding-profile=fast --ac-binding-target=arm64-apple-darwin %t.frozen | %FileCheck %s
+// RUN: %acir_opt_public --ac-lower-to-acsim --ac-binding-profile=fast --ac-binding-target=arm64-apple-darwin %t.frozen -o %t.out
+// RUN: %acir_opt_public %t.out | %FileCheck %s
+// RUN: %acir_opt_public --ac-lower-to-acsim --ac-binding-profile=fast --ac-binding-target=arm64-apple-darwin %t.frozen > %t.canonical
+// RUN: %acir_opt_public %t.canonical > %t.roundtrip
+// RUN: diff %t.canonical %t.roundtrip
 
-// Test: convert a simple frozen ACIR module with one instance to ACSim.
-// The input has two modules — Child (leaf) and Top (root with one child instance).
-// The conversion must produce a valid acsim.model wrapper with correct
-// construction/destruction order and instance lowering.
+// The smallest lowerable model: one root module with a single yield-only
+// workload process. The atomic lowering publishes exactly one acsim.model
+// with the wake type pair, one module, one dispatch row, and one
+// self-activation edge.
 
 builtin.module attributes {ac.contract_epoch = "0.1"} {
-  ac.module @Child() -> () static {} {
-    ac.process @dummy kind "control" { ac.yield_sim }
-    ac.return
-  }
-  ac.module @Top() -> () static {} {
-    %inst = ac.instance @child of @Child() static {} id "child" path "child" : () -> ()
+  ac.system @soc root @Top as "root" tick 0 "cycle"
+      workload @Top::@workload seed {kind = "fixed", value = 7 : i64}
+      instrumentation [] results {id = "default", format = "json"} selected true
+  ac.module @Top() parameters {} graph {
+    ac.process @workload kind "workload" {
+      ac.yield_sim
+    }
     ac.return
   }
 }
 
-// CHECK:      builtin.module attributes {ac.contract_epoch = "0.1"}
-// CHECK-NEXT:   acsim.model @Top epoch "0.1" root @Top
-// CHECK:        acsim.module @Child
-// CHECK:        acsim.module @Top
-// CHECK:          acsim.instance @child target @Child
-// CHECK:          acsim.return
+// CHECK:      module attributes {ac.contract_epoch = "0.1"} {
+// CHECK-NEXT:   acsim.model @soc epoch "0.1" root @Top
+// CHECK-SAME:     construction ["Top.workload"]
+// CHECK-SAME:     destruction ["Top.workload"]
+// CHECK-SAME:     fingerprints {binding_lock = "sha256:{{[0-9a-f]+}}", frozen_acir = "sha256:{{[0-9a-f]+}}", profile = "sha256:{{[0-9a-f]+}}", provider = "sha256:{{[0-9a-f]+}}", schema_set = "sha256:{{[0-9a-f]+}}", toolchain = "sha256:{{[0-9a-f]+}}"} {
+// CHECK-NEXT:     acsim.type @acir_impl_wake_next_delta_63cacba5c3eb82976464804b4aeaa17d43b445733efaddfad7c7bec1ab650269 cpp "acir::generated::impl_wake_next_delta_63cacba5c3eb82976464804b4aeaa17d43b445733efaddfad7c7bec1ab650269" kind "implementation" fingerprint "sha256:63cacba5c3eb82976464804b4aeaa17d43b445733efaddfad7c7bec1ab650269"
+// CHECK-NEXT:     acsim.type @acir_wake_next_delta cpp "acir::generated::wake_next_delta" kind "wake" fingerprint "sha256:8cf214054e3ad1f49ca7091e040092971fe7dec32ccfd59554fdef160e889c2a"
+// CHECK-NEXT:     acsim.module @Top interface {ports = [], resources = [], results = []} static [] specialization "sha256:{{[0-9a-f]+}}" exports [] {
+// CHECK-NEXT:       acsim.process @workload captures() names [] entry @entry pcs [@entry] live [] fairness 2 specialization "sha256:{{[0-9a-f]+}}" {
+// CHECK:              %[[WAKE:.+]] = acsim.invoke @acir_impl_wake_next_delta_63cacba5c3eb82976464804b4aeaa17d43b445733efaddfad7c7bec1ab650269() : () -> !acsim.wake<@acir_wake_next_delta>
+// CHECK-NEXT:         acsim.suspend @entry on %[[WAKE]] : !acsim.wake<@acir_wake_next_delta>
+// CHECK:            acsim.return
+// CHECK-NEXT:     }
+// CHECK-NEXT:     %[[OBJ:.+]], %[[ACT:.+]] = acsim.dispatch @Top::@workload path "Top.workload" indices [] object 0 activation 0
+// CHECK-SAME:       work "acsim_generated::Top::s{{[0-9a-f]+}}::workload::p{{[0-9a-f]+}}::work"
+// CHECK-SAME:       xfer "acsim_generated::Top::s{{[0-9a-f]+}}::workload::p{{[0-9a-f]+}}::xfer"
+// CHECK-SAME:       reset "acsim_generated::Top::s{{[0-9a-f]+}}::workload::p{{[0-9a-f]+}}::reset"
+// CHECK-SAME:       validate "acsim_generated::Top::s{{[0-9a-f]+}}::workload::p{{[0-9a-f]+}}::validate"
+// CHECK-SAME:       : !acsim.object_id, !acsim.activation_id
+// CHECK-NEXT:     acsim.activate %[[ACT]] to %[[OBJ]] : !acsim.activation_id to !acsim.object_id
+// CHECK-NEXT:   }
+// CHECK-NEXT: }

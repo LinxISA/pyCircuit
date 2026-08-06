@@ -1,6 +1,5 @@
 add_acir_library(ACIRToACSim SOURCES
   ACIRToACSim.cpp
-  TypeConverter.cpp
 )
 add_dependencies(ACIRToACSim ACIRTransformsIncGen ACIRDialectIncGen)
 target_link_libraries(ACIRToACSim PUBLIC

@@ -55,4 +55,5 @@ builtin.module attributes {ac.contract_epoch = "0.1"} {
 // HELP-NEXT: --ac-binding-profile=<profile>
 // HELP-NEXT: --ac-binding-registry=<file>
 // HELP-NEXT: --ac-binding-target=<target>
+// HELP-NEXT: --ac-lower-to-acsim
 // HELP-NEXT: --ac-resolve-gfsim-bindings

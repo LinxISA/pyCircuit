@@ -150,13 +150,20 @@ int main(int argc, char **argv) {
                  << '\n';
     return EXIT_FAILURE;
   }
+  auto loweringOptions = acir::opt::loadLoweringCommandLineOptions();
+  if (!loweringOptions) {
+    llvm::errs() << "error: " << llvm::toString(loweringOptions.takeError())
+                 << '\n';
+    return EXIT_FAILURE;
+  }
   mlir::MlirOptMainConfig config =
       mlir::MlirOptMainConfig::createFromCLOptions();
   mlir::MlirOptMainConfig commandLineConfig = config;
   config.allowUnregisteredDialects(false)
       .useExplicitModule(true)
       .setPassPipelineSetupFn([commandLineConfig,
-                               bindingOptions = std::move(*bindingOptions)](
+                               bindingOptions = std::move(*bindingOptions),
+                               loweringOptions = std::move(*loweringOptions)](
                                   mlir::PassManager &passManager) {
 #ifdef ACIR_INTERNAL_TEST_TOOL
         if (testPassTrace)
@@ -170,6 +177,13 @@ int main(int argc, char **argv) {
           return mlir::failure();
         if (bindingOptions)
           passManager.addPass(acir::createResolveBindingsPass(*bindingOptions));
+        if (loweringOptions) {
+          // Atomic whole-model lowering publishes canonical ACSim, so the
+          // trailing ACIR whole-model gate does not apply to its output.
+          passManager.addPass(
+              acir::createACIRToACSimPass(std::move(*loweringOptions)));
+          return mlir::success();
+        }
         // The final whole-model gate makes a persisted freeze digest effective
         // across every user-supplied pipeline: any topology mutation after
         // ac-freeze-topology is diagnosed before output is committed.
