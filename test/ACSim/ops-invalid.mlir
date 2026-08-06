@@ -12,6 +12,13 @@
 // RUN: %not %acir_opt %t/legacy-module-binding.mlir 2>&1 | %FileCheck %s --check-prefix=LEGACY-MODULE
 // RUN: %not %acir_opt %t/legacy-placement-binding.mlir 2>&1 | %FileCheck %s --check-prefix=LEGACY-PLACEMENT
 // RUN: %not %acir_opt %t/legacy-process-binding.mlir 2>&1 | %FileCheck %s --check-prefix=LEGACY-PROCESS
+// RUN: %not %acir_opt %t/inline-module-type.mlir 2>&1 | %FileCheck %s --check-prefix=INLINE-MODULE-TYPE
+// RUN: %not %acir_opt %t/live-load-type.mlir 2>&1 | %FileCheck %s --check-prefix=LIVE-LOAD-TYPE
+// RUN: %not %acir_opt %t/live-store-type.mlir 2>&1 | %FileCheck %s --check-prefix=LIVE-STORE-TYPE
+// RUN: %not %acir_opt %t/invoke-type.mlir 2>&1 | %FileCheck %s --check-prefix=INVOKE-TYPE
+// RUN: %not %acir_opt %t/continue-missing.mlir 2>&1 | %FileCheck %s --check-prefix=CONTINUE-MISSING
+// RUN: %not %acir_opt %t/dispatch-negative.mlir 2>&1 | %FileCheck %s --check-prefix=DISPATCH-NEGATIVE
+// RUN: %not %acir_opt %t/activate-types.mlir 2>&1 | %FileCheck %s --check-prefix=ACTIVATE-TYPES
 
 // GENERIC: error: generic ACIR operation spelling is internal-only
 // EPOCH: contract epoch must be exactly "0.1"
@@ -26,6 +33,13 @@
 // LEGACY-MODULE: custom op 'acsim.module' expected 'interface'
 // LEGACY-PLACEMENT: custom op 'acsim.instance' expected 'target'
 // LEGACY-PROCESS: custom op 'acsim.process' expected 'captures'
+// INLINE-MODULE-TYPE: module inline result must be exactly !acsim.expr
+// LIVE-LOAD-TYPE: live load must produce a typed value
+// LIVE-STORE-TYPE: live store requires a typed value
+// INVOKE-TYPE: invoke results must be exact !acsim.value or !acsim.wake types
+// CONTINUE-MISSING: expected symbol reference
+// DISPATCH-NEGATIVE: object and activation IDs must be non-negative and path non-empty
+// ACTIVATE-TYPES: expected '!acsim.object_id'
 
 //--- generic-spelling.mlir
 builtin.module attributes {ac.contract_epoch = "0.1"} {
@@ -181,5 +195,143 @@ builtin.module {
       state @entry { acsim.terminate "success" }
     }
     acsim.return
+  }
+}
+
+//--- inline-module-type.mlir
+builtin.module {
+  acsim.model @m epoch "0.1" root @M construction [] destruction [] fingerprints {
+    frozen_acir = "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    binding_lock = "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    provider = "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    profile = "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    toolchain = "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    schema_set = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+  } {
+    acsim.module @M interface {ports = [], resources = [], results = []} static [] specialization "sha256:0000000000000000000000000000000000000000000000000000000000000000" exports [] {
+      %bad = acsim.inline @f() : () -> i32
+      acsim.return
+    }
+  }
+}
+
+//--- live-load-type.mlir
+builtin.module {
+  acsim.model @m epoch "0.1" root @M construction [] destruction [] fingerprints {
+    frozen_acir = "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    binding_lock = "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    provider = "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    profile = "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    toolchain = "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    schema_set = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+  } {
+    acsim.module @M interface {ports = [], resources = [], results = []} static [] specialization "sha256:0000000000000000000000000000000000000000000000000000000000000000" exports [] {
+      acsim.process @p captures() names [] entry @entry pcs [@entry, @done] live [] fairness 1 specialization "sha256:0000000000000000000000000000000000000000000000000000000000000000" {
+        state @entry {
+          %bad = acsim.live.load @p slot "x" : i32
+          acsim.continue @done
+        }
+        state @done { acsim.terminate "success" }
+      }
+      acsim.return
+    }
+  }
+}
+
+//--- live-store-type.mlir
+builtin.module {
+  acsim.model @m epoch "0.1" root @M construction [] destruction [] fingerprints {
+    frozen_acir = "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    binding_lock = "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    provider = "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    profile = "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    toolchain = "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    schema_set = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+  } {
+    acsim.module @M interface {ports = [], resources = [], results = []} static [] specialization "sha256:0000000000000000000000000000000000000000000000000000000000000000" exports [] {
+      acsim.process @p captures() names [] entry @entry pcs [@entry, @done] live [] fairness 1 specialization "sha256:0000000000000000000000000000000000000000000000000000000000000000" {
+        state @entry {
+          %val = arith.constant 0 : i32
+          acsim.live.store %val in @p slot "x" : i32
+          acsim.continue @done
+        }
+        state @done { acsim.terminate "success" }
+      }
+      acsim.return
+    }
+  }
+}
+
+//--- invoke-type.mlir
+builtin.module {
+  acsim.model @m epoch "0.1" root @M construction [] destruction [] fingerprints {
+    frozen_acir = "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    binding_lock = "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    provider = "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    profile = "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    toolchain = "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    schema_set = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+  } {
+    acsim.module @M interface {ports = [], resources = [], results = []} static [] specialization "sha256:0000000000000000000000000000000000000000000000000000000000000000" exports [] {
+      acsim.process @p captures() names [] entry @entry pcs [@entry, @done] live [] fairness 1 specialization "sha256:0000000000000000000000000000000000000000000000000000000000000000" {
+        state @entry {
+          %bad = acsim.invoke @f() : () -> i32
+          acsim.continue @done
+        }
+        state @done { acsim.terminate "success" }
+      }
+      acsim.return
+    }
+  }
+}
+
+//--- continue-missing.mlir
+builtin.module {
+  acsim.model @m epoch "0.1" root @M construction [] destruction [] fingerprints {
+    frozen_acir = "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    binding_lock = "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    provider = "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    profile = "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    toolchain = "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    schema_set = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+  } {
+    acsim.module @M interface {ports = [], resources = [], results = []} static [] specialization "sha256:0000000000000000000000000000000000000000000000000000000000000000" exports [] {
+      acsim.process @p captures() names [] entry @entry pcs [@entry, @done] live [] fairness 1 specialization "sha256:0000000000000000000000000000000000000000000000000000000000000000" {
+        state @entry {
+          acsim.continue
+        }
+        state @done { acsim.terminate "success" }
+      }
+      acsim.return
+    }
+  }
+}
+
+//--- dispatch-negative.mlir
+builtin.module {
+  acsim.model @m epoch "0.1" root @M construction [] destruction [] fingerprints {
+    frozen_acir = "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    binding_lock = "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    provider = "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    profile = "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    toolchain = "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    schema_set = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+  } {
+    %obj, %act = acsim.dispatch @M path "" indices [] object -1 activation 0 work "" xfer "" reset "" validate "" : !acsim.object_id, !acsim.activation_id
+  }
+}
+
+//--- activate-types.mlir
+builtin.module {
+  acsim.model @m epoch "0.1" root @M construction [] destruction [] fingerprints {
+    frozen_acir = "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    binding_lock = "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    provider = "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    profile = "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    toolchain = "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    schema_set = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+  } {
+    %obj, %act = acsim.dispatch @M path "root" indices [] object 1 activation 0 work "w" xfer "x" reset "r" validate "v" : !acsim.object_id, !acsim.activation_id
+    acsim.activate %obj to %act : !acsim.object_id to !acsim.activation_id
   }
 }

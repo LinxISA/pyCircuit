@@ -9,6 +9,8 @@
 // RUN: %not %acir_opt %t/ambiguous-merge.mlir 2>&1 | %FileCheck %s --check-prefix=AMBIGUOUS
 // RUN: %not %acir_opt %t/cursor-noncursor-merge.mlir 2>&1 | %FileCheck %s --check-prefix=NONCURSOR-MERGE
 // RUN: %not %acir_opt %t/for-induction-cursor.mlir 2>&1 | %FileCheck %s --check-prefix=FOR-INDUCTION
+// RUN: %not %acir_opt %t/decode-non-next.mlir 2>&1 | %FileCheck %s --check-prefix=DECODE-NON-NEXT
+// RUN: %not %acir_opt %t/decode-not-in-process.mlir 2>&1 | %FileCheck %s --check-prefix=DECODE-NOT-PROCESS
 
 //--- forked-cursor.mlir
 builtin.module attributes {ac.contract_epoch = "0.1"} {
@@ -173,3 +175,29 @@ builtin.module attributes {ac.contract_epoch = "0.1"} {
   }
 }
 // FOR-INDUCTION: trace cursor forwarding merges cursor and non-cursor values
+// DECODE-NON-NEXT: trace.decode input must be an ac.trace.next entry
+// DECODE-NOT-PROCESS: must be inside an ac.process
+
+//--- decode-non-next.mlir
+builtin.module attributes {ac.contract_epoch = "0.1"} {
+  ac.module @M() parameters {} graph {
+    ac.process @p kind "workload" {
+      %cursor = ac.trace.open source "input"
+      %next, %raw, %advanced = ac.trace.next %cursor from source "input" : i32
+      %bad = arith.constant 0 : i32
+      %decoded = ac.trace.decode %bad : i32 to i64
+      ac.yield_sim
+    }
+    ac.return
+  }
+}
+
+//--- decode-not-in-process.mlir
+builtin.module attributes {ac.contract_epoch = "0.1"} {
+  ac.module @M() parameters {} graph {
+    %cursor = ac.trace.open source "input"
+    %next, %raw, %advanced = ac.trace.next %cursor from source "input" : i32
+    %decoded = ac.trace.decode %raw : i32 to i64
+    ac.return
+  }
+}
