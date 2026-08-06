@@ -1,10 +1,10 @@
-// RUN: %not %acir_opt --convert-acir-to-acsim %s 2>&1 | %FileCheck %s --check-prefix=NOT-YET
-
-// NOT-YET: ACIR-to-ACSim conversion
-// After implementation, replace RUN line with:
 // RUN: %acir_opt --convert-acir-to-acsim %s | %FileCheck %s
 
 // Test: convert a simple frozen ACIR module with one instance to ACSim.
+// The input has two modules — Child (leaf) and Top (root with one child instance).
+// The conversion must produce a valid acsim.model wrapper with correct
+// construction/destruction order and instance lowering.
+
 builtin.module attributes {ac.contract_epoch = "0.1"} {
   ac.module @Child() -> () static {} {
     ac.process @dummy kind "control" { ac.yield_sim }
@@ -16,7 +16,9 @@ builtin.module attributes {ac.contract_epoch = "0.1"} {
   }
 }
 
-// After implementation, expected ACSim output:
-// CHECK: acsim.model
-// CHECK: acsim.module @Top
-// CHECK: acsim.instance @child target @Child
+// CHECK:      builtin.module attributes {ac.contract_epoch = "0.1"}
+// CHECK-NEXT:   acsim.model @Top epoch "0.1" root @Top
+// CHECK:        acsim.module @Child
+// CHECK:        acsim.module @Top
+// CHECK:          acsim.instance @child target @Child
+// CHECK:          acsim.return
