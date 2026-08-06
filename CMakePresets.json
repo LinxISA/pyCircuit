@@ -39,6 +39,36 @@
       "environment": {
         "LLVM_PREFIX": "/opt/homebrew/opt/llvm"
       }
+    },
+    {
+      "name": "asan-llvm22",
+      "displayName": "ASAN with LLVM 22.1.8",
+      "inherits": "llvm22-base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "ACIR_ENABLE_ASSERTIONS": true,
+        "CMAKE_CXX_FLAGS": "-fsanitize=address -fno-omit-frame-pointer",
+        "CMAKE_C_FLAGS": "-fsanitize=address -fno-omit-frame-pointer",
+        "CMAKE_EXE_LINKER_FLAGS": "-fsanitize=address"
+      },
+      "environment": {
+        "LLVM_PREFIX": "/opt/homebrew/opt/llvm"
+      }
+    },
+    {
+      "name": "ubsan-llvm22",
+      "displayName": "UBSAN with LLVM 22.1.8",
+      "inherits": "llvm22-base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "ACIR_ENABLE_ASSERTIONS": true,
+        "CMAKE_CXX_FLAGS": "-fsanitize=undefined -fno-omit-frame-pointer",
+        "CMAKE_C_FLAGS": "-fsanitize=undefined -fno-omit-frame-pointer",
+        "CMAKE_EXE_LINKER_FLAGS": "-fsanitize=undefined"
+      },
+      "environment": {
+        "LLVM_PREFIX": "/opt/homebrew/opt/llvm"
+      }
     }
   ],
   "buildPresets": [
@@ -49,6 +79,14 @@
     {
       "name": "release-llvm22",
       "configurePreset": "release-llvm22"
+    },
+    {
+      "name": "asan-llvm22",
+      "configurePreset": "asan-llvm22"
+    },
+    {
+      "name": "ubsan-llvm22",
+      "configurePreset": "ubsan-llvm22"
     }
   ]
 }
