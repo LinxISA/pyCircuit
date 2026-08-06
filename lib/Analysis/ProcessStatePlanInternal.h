@@ -524,6 +524,10 @@ public:
   static mlir::FailureOr<std::unique_ptr<ControlPlan>>
   planProcessWakes(std::unique_ptr<ControlPlan> control,
                    const ProcessStateLimits &limits);
+  static mlir::LogicalResult
+  planProcessLiveness(ControlPlan &control, const ProcessStateLimits &limits);
+  static mlir::LogicalResult
+  planProcessCost(ControlPlan &control, const ProcessStateLimits &limits);
 
  private:
   static mlir::FailureOr<ProcessStatePlanSet>
