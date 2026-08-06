@@ -26,6 +26,8 @@ add_executable(ACIRProcessStatePlanTests
   ProcessStatePlanWakeTest.cpp
   ProcessStatePlanEmissionTest.cpp
   ProcessStatePlanCostConsumer.cpp
+  ProcessStatePlanLimitsTest.cpp
+  ProcessStatePlanAtomicityTest.cpp
   ProcessStatePlanVerifierTest.cpp
 )
 target_include_directories(ACIRProcessStatePlanTests PRIVATE
