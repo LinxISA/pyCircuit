@@ -176,7 +176,7 @@ builtin.module attributes {ac.contract_epoch = "0.1"} {
 }
 // FOR-INDUCTION: trace cursor forwarding merges cursor and non-cursor values
 // DECODE-NON-NEXT: trace.decode input must be an ac.trace.next entry
-// DECODE-NOT-PROCESS: must be inside an ac.process
+// DECODE-NOT-PROCESS: operation is not legal in an ac.module structural Graph region
 
 //--- decode-non-next.mlir
 builtin.module attributes {ac.contract_epoch = "0.1"} {
