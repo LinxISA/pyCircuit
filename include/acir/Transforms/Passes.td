@@ -30,4 +30,12 @@ def FreezeTopologyPass : Pass<"ac-freeze-topology", "::mlir::ModuleOp"> {
   }];
 }
 
+def LowerProcessStatePass : Pass<"ac-lower-process-state", "::mlir::ModuleOp"> {
+  let summary = "Plan ACSim process state from frozen ACIR";
+  let description = [{
+    Analyzes a selected topology-frozen model without mutation and produces
+    an immutable ProcessStatePlanSet.
+  }];
+}
+
 #endif // ACIR_TRANSFORMS_PASSES
