@@ -36,6 +36,14 @@ jobs:
       - name: Run repository contracts
         run: python -m unittest tests.contracts.test_contracts -v
 
+      - name: Run IR coverage gate
+        run: |
+          python -m unittest tests.contracts.test_ir_coverage -v
+          python scripts/check-ir-coverage.py
+
+      - name: Check clang-format on owned sources
+        run: git ls-files "*.cpp" "*.h" | xargs clang-format --dry-run --Werror
+
       - name: Cache content-addressed LLVM source archive
         uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684
         with:
@@ -91,7 +99,55 @@ jobs:
       - name: Configure development preset
         env:
           LLVM_PREFIX: "${{ github.workspace }}/.cache/llvm-build"
-        run: cmake --preset dev-llvm22 -DMLIR_DIR="${LLVM_PREFIX}/lib/cmake/mlir"
+        run: cmake --preset dev-llvm22 -DMLIR_DIR="${LLVM_PREFIX}/lib/cmake/mlir" -DACIR_ENABLE_ASSERTIONS=ON
+
+      - name: Build development preset with assertions
+        run: cmake --build --preset dev-llvm22
+
+      - name: Run lit and FileCheck suite
+        run: cmake --build --preset dev-llvm22 --target check-acir
+
+      - name: Run unit tests with assertions
+        run: ctest --test-dir build/dev-llvm22 --output-on-failure
+
+      - name: Install clang-tidy
+        run: sudo apt-get install --yes --no-install-recommends clang-tidy
+
+      - name: Run clang-tidy gate on owned sources
+        run: |
+          git ls-files "lib/*.cpp" "tools/*.cpp" "unittests/*.cpp" |
+            xargs -P 4 -I {} clang-tidy -p build/dev-llvm22 \
+              --config-file=.clang-tidy \
+              --header-filter='.*agentic-circuit/(include|lib|tools|unittests)/.*' \
+              {}
+
+      - name: Configure release preset
+        env:
+          LLVM_PREFIX: "${{ github.workspace }}/.cache/llvm-build"
+        run: cmake --preset release-llvm22 -DMLIR_DIR="${LLVM_PREFIX}/lib/cmake/mlir"
+
+      - name: Build release preset
+        run: cmake --build --preset release-llvm22
+
+      - name: Run release test suites
+        run: |
+          cmake --build --preset release-llvm22 --target check-acir
+          ctest --test-dir build/release-llvm22 --output-on-failure
+
+      - name: Install to a temporary prefix
+        run: cmake --install build/release-llvm22 --prefix "${RUNNER_TEMP}/acir-prefix"
+
+      - name: Build and run the installed-tree consumer
+        env:
+          LLVM_PREFIX: "${{ github.workspace }}/.cache/llvm-build"
+        run: |
+          cmake -S tests/install-consumer -B "${RUNNER_TEMP}/acir-consumer" \
+            -GNinja -DCMAKE_BUILD_TYPE=Release \
+            -DAgenticCircuit_DIR="${RUNNER_TEMP}/acir-prefix/lib/cmake/AgenticCircuit" \
+            -DLLVM_DIR="${LLVM_PREFIX}/lib/cmake/llvm" \
+            -DMLIR_DIR="${LLVM_PREFIX}/lib/cmake/mlir"
+          cmake --build "${RUNNER_TEMP}/acir-consumer"
+          "${RUNNER_TEMP}/acir-consumer/process-state-plan-consumer"
 
       - name: Check whitespace
         run: git diff --check

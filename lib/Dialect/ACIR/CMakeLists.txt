@@ -27,5 +27,6 @@ target_link_libraries(ACIRDialect PUBLIC
 target_include_directories(ACIRDialect PUBLIC
   "$<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>"
   "$<BUILD_INTERFACE:${PROJECT_BINARY_DIR}/include>"
+  "$<INSTALL_INTERFACE:include>"
 )
 add_library(AgenticCircuit::ACIRDialect ALIAS ACIRDialect)

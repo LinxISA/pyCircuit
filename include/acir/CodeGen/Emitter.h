@@ -3,10 +3,10 @@
 
 #include "acir/CodeGen/Manifest.h"
 
+#include <functional>
 #include <ostream>
 #include <string>
 #include <vector>
-#include <functional>
 
 namespace acir::codegen {
 
@@ -48,18 +48,20 @@ public:
   void emitMember(const std::string &type, const std::string &name,
                   const std::string &init = "");
   void emitStaticMember(const std::string &type, const std::string &name,
-                         const std::string &init = "");
+                        const std::string &init = "");
 
   // ── Methods ─────────────────────────────────────────────────────────
 
-  void emitConstructor(const std::string &className,
-                       const std::vector<std::pair<std::string, std::string>> &params,
-                       const std::vector<std::string> &initializers,
-                       const std::string &body = "");
-  void emitMethod(const std::string &returnType, const std::string &name,
-                  const std::vector<std::pair<std::string, std::string>> &params,
-                  bool isConst = false, bool isOverride = false,
-                  bool isVirtual = false, bool isStatic = false);
+  void emitConstructor(
+      const std::string &className,
+      const std::vector<std::pair<std::string, std::string>> &params,
+      const std::vector<std::string> &initializers,
+      const std::string &body = "");
+  void
+  emitMethod(const std::string &returnType, const std::string &name,
+             const std::vector<std::pair<std::string, std::string>> &params,
+             bool isConst = false, bool isOverride = false,
+             bool isVirtual = false, bool isStatic = false);
   void beginMethodBody();
   void endMethodBody();
   void emitReturn(const std::string &expr = "");
@@ -67,8 +69,7 @@ public:
 
   // ── Enums ───────────────────────────────────────────────────────────
 
-  void emitEnum(const std::string &name,
-                const std::vector<std::string> &values,
+  void emitEnum(const std::string &name, const std::vector<std::string> &values,
                 const std::string &underlyingType = "uint8_t");
 
   // ── Switch ──────────────────────────────────────────────────────────
@@ -105,30 +106,26 @@ private:
 
 /// Generate a deterministic C++ header for a process state machine.
 /// Takes a process state plan and emits the state machine class.
-SourceFile generateProcessHeader(
-    const std::string &moduleName,
-    const std::string &processName,
-    const std::vector<std::string> &pcNames,
-    const std::vector<std::string> &liveSlotTypes,
-    const std::vector<std::string> &liveSlotNames);
+SourceFile generateProcessHeader(const std::string &moduleName,
+                                 const std::string &processName,
+                                 const std::vector<std::string> &pcNames,
+                                 const std::vector<std::string> &liveSlotTypes,
+                                 const std::vector<std::string> &liveSlotNames);
 
 /// Generate a deterministic C++ source for a process state machine.
-SourceFile generateProcessSource(
-    const std::string &moduleName,
-    const std::string &processName,
-    const std::vector<std::string> &pcNames,
-    const std::vector<std::string> &liveSlotTypes,
-    const std::vector<std::string> &liveSlotNames);
+SourceFile generateProcessSource(const std::string &moduleName,
+                                 const std::string &processName,
+                                 const std::vector<std::string> &pcNames,
+                                 const std::vector<std::string> &liveSlotTypes,
+                                 const std::vector<std::string> &liveSlotNames);
 
 /// Generate a deterministic C++ header for a hierarchical module.
-SourceFile generateModuleHeader(
-    const std::string &moduleName,
-    const std::vector<std::string> &childNames);
+SourceFile generateModuleHeader(const std::string &moduleName,
+                                const std::vector<std::string> &childNames);
 
 /// Generate a deterministic C++ source for a hierarchical module.
-SourceFile generateModuleSource(
-    const std::string &moduleName,
-    const std::vector<std::string> &childNames);
+SourceFile generateModuleSource(const std::string &moduleName,
+                                const std::vector<std::string> &childNames);
 
 } // namespace acir::codegen
 

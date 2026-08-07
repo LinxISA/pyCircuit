@@ -5,5 +5,6 @@ add_acir_library(ACIRBindings SOURCES
 target_link_libraries(ACIRBindings PUBLIC LLVMSupport)
 target_include_directories(ACIRBindings PUBLIC
   "$<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>"
+  "$<INSTALL_INTERFACE:include>"
 )
 add_library(AgenticCircuit::ACIRBindings ALIAS ACIRBindings)

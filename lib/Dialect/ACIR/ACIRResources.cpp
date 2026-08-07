@@ -747,11 +747,19 @@ void buildSelectorKeys(ArrayRef<unsigned> permissions,
       appendUnique(entry.registrationKeys, "CW|" + prefix);
       appendUnique(entry.queryKeys, "P|" + prefix);
     } else {
-      for (const std::string &className : classes)
-        appendUnique(entry.registrationKeys, "C|" + prefix + className);
+      for (const std::string &className : classes) {
+        std::string key = "C|";
+        key += prefix;
+        key += className;
+        appendUnique(entry.registrationKeys, key);
+      }
       appendUnique(entry.queryKeys, "CW|" + prefix);
-      for (const std::string &className : classes)
-        appendUnique(entry.queryKeys, "C|" + prefix + className);
+      for (const std::string &className : classes) {
+        std::string key = "C|";
+        key += prefix;
+        key += className;
+        appendUnique(entry.queryKeys, key);
+      }
     }
   }
 }
@@ -1043,7 +1051,7 @@ verifyAddressMap(AddressMapOp map,
           "address-map priority must be an unsigned signless i64");
       if (failed(value))
         return failure();
-      priority = *value;
+      priority.emplace(*value);
     }
     AddressMapOrderKey order{base, size, priority.has_value(),
                              priority.value_or(0)};

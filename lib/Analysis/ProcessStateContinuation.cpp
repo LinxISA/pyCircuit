@@ -7,9 +7,9 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/ErrorHandling.h"
 
-#include <sstream>
 #include <iomanip>
 #include <memory>
+#include <sstream>
 
 using namespace mlir;
 
@@ -21,28 +21,35 @@ static bool isSuspensionOp(Operation *op) {
          isa<ac::AwaitEventOp>(op) || isa<ac::YieldSimOp>(op);
 }
 
-static bool isYieldSim(Operation *op) {
-  return isa<ac::YieldSimOp>(op);
-}
+static bool isYieldSim(Operation *op) { return isa<ac::YieldSimOp>(op); }
 
 static ProcessWakeKind wakeKindForOp(Operation *op) {
-  if (isa<ac::WaitUntilOp>(op)) return ProcessWakeKind::Condition;
-  if (isa<ac::WaitForOp>(op)) return ProcessWakeKind::Resource;
-  if (isa<ac::AwaitEventOp>(op)) return ProcessWakeKind::EventQueue;
-  if (isa<ac::YieldSimOp>(op)) return ProcessWakeKind::NextDelta;
+  if (isa<ac::WaitUntilOp>(op))
+    return ProcessWakeKind::Condition;
+  if (isa<ac::WaitForOp>(op))
+    return ProcessWakeKind::Resource;
+  if (isa<ac::AwaitEventOp>(op))
+    return ProcessWakeKind::EventQueue;
+  if (isa<ac::YieldSimOp>(op))
+    return ProcessWakeKind::NextDelta;
   llvm_unreachable("unknown suspension op");
 }
 
 static std::string wakeTypeKeyForOp(Operation *op) {
-  if (isa<ac::WaitUntilOp>(op)) return "@acir_wake_condition";
-  if (isa<ac::WaitForOp>(op)) return "@acir_wake_resource";
-  if (isa<ac::AwaitEventOp>(op)) return "@acir_wake_event_queue";
-  if (isa<ac::YieldSimOp>(op)) return "@acir_wake_next_delta";
+  if (isa<ac::WaitUntilOp>(op))
+    return "@acir_wake_condition";
+  if (isa<ac::WaitForOp>(op))
+    return "@acir_wake_resource";
+  if (isa<ac::AwaitEventOp>(op))
+    return "@acir_wake_event_queue";
+  if (isa<ac::YieldSimOp>(op))
+    return "@acir_wake_next_delta";
   llvm_unreachable("unknown suspension op");
 }
 
 static std::string pcName(uint32_t index) {
-  if (index == 0) return "entry";
+  if (index == 0)
+    return "entry";
   std::ostringstream s;
   s << "pc" << std::setfill('0') << std::setw(8) << index;
   return s.str();
@@ -51,8 +58,8 @@ static std::string pcName(uint32_t index) {
 static std::string blockPath(const std::string &defKey,
                              const std::string &pcNameStr, uint32_t blockIdx) {
   std::ostringstream s;
-  s << defKey << "/plan/pc/" << pcNameStr
-    << "/b" << std::setfill('0') << std::setw(8) << blockIdx;
+  s << defKey << "/plan/pc/" << pcNameStr << "/b" << std::setfill('0')
+    << std::setw(8) << blockIdx;
   return s.str();
 }
 
@@ -60,7 +67,7 @@ static std::string blockPath(const std::string &defKey,
 
 FailureOr<std::unique_ptr<PlanSetBuilder::ControlPlan>>
 PlanSetBuilder::planProcessContinuation(const ExpandedProcess &expanded,
-                                         const ProcessStateLimits &limits) {
+                                        const ProcessStateLimits &limits) {
   auto plan = std::make_unique<ControlPlan>();
 
   if (expanded.actions.empty())
@@ -100,7 +107,8 @@ PlanSetBuilder::planProcessContinuation(const ExpandedProcess &expanded,
       rpc->name = pcName(resumeIdx);
       plan->pcs.push_back(rpc);
       pcMap[s.idx] = nextPcId;
-      ++nextPcId; ++resumeIdx;
+      ++nextPcId;
+      ++resumeIdx;
     } else {
       pcMap[s.idx] = 0; // yield_sim resumes at entry
     }
@@ -121,8 +129,8 @@ PlanSetBuilder::planProcessContinuation(const ExpandedProcess &expanded,
     auto block = std::make_shared<ProcessBlockPlan::Impl>();
     block->id = ProcessBlockId(nextBlockId);
     block->pc = ProcessPcId(pcId);
-    block->path = blockPath(expanded.definitionKey,
-                            plan->pcs[pcId]->name, nextBlockId);
+    block->path =
+        blockPath(expanded.definitionKey, plan->pcs[pcId]->name, nextBlockId);
     plan->pcs[pcId]->blocks.push_back(ProcessBlockId(nextBlockId));
     if (plan->pcs[pcId]->entryPath.empty())
       plan->pcs[pcId]->entryPath = block->path;
@@ -183,7 +191,9 @@ PlanSetBuilder::planProcessContinuation(const ExpandedProcess &expanded,
     plan->wakes.push_back(wake);
     plan->transitions.push_back(tr);
 
-    ++nextWakeId; ++nextTransitionId; ++nextBlockId;
+    ++nextWakeId;
+    ++nextTransitionId;
+    ++nextBlockId;
   }
 
   return plan;
@@ -191,7 +201,7 @@ PlanSetBuilder::planProcessContinuation(const ExpandedProcess &expanded,
 
 FailureOr<std::unique_ptr<PlanSetBuilder::ControlPlan>>
 PlanSetBuilder::planProcessWakes(std::unique_ptr<ControlPlan> control,
-                                  const ProcessStateLimits &limits) {
+                                 const ProcessStateLimits &limits) {
   return control;
 }
 

@@ -25,7 +25,8 @@ TEST(ProcessStatePlanAtomicityTest, SerializationIsDeterministic) {
   EXPECT_EQ(*result1, *result2);
 }
 
-TEST(ProcessStatePlanAtomicityTest, CloneWithMissingWakeCalleeFailsVerification) {
+TEST(ProcessStatePlanAtomicityTest,
+     CloneWithMissingWakeCalleeFailsVerification) {
   mlir::DialectRegistry registry;
   registerAllDialects(registry);
   mlir::MLIRContext context(registry);

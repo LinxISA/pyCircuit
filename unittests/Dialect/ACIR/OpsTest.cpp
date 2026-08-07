@@ -458,12 +458,12 @@ TEST(ACIROpsTest, PublicBuildersConstructEveryTaskEightOperation) {
   ModuleOp module = *file->getOps<ModuleOp>().begin();
   builder.setInsertionPoint(&module.getBody().front().back());
   StatOp stat = *module.getBody().front().getOps<StatOp>().begin();
-  auto process = ProcessOp::create(builder, loc, "p", "control",
-                                   mlir::ValueRange{});
+  auto process =
+      ProcessOp::create(builder, loc, "p", "control", mlir::ValueRange{});
   auto *body = &process.getBody().emplaceBlock();
   builder.setInsertionPointToStart(body);
-  auto i1 = mlir::arith::ConstantOp::create(builder, loc,
-                                            builder.getBoolAttr(true));
+  auto i1 =
+      mlir::arith::ConstantOp::create(builder, loc, builder.getBoolAttr(true));
   auto i32 = mlir::arith::ConstantOp::create(builder, loc,
                                              builder.getI32IntegerAttr(7));
   auto i64 = mlir::arith::ConstantOp::create(builder, loc,
@@ -477,8 +477,8 @@ TEST(ACIROpsTest, PublicBuildersConstructEveryTaskEightOperation) {
   auto waitFor = WaitForOp::create(builder, loc, "resource");
   auto awaitEvent = AwaitEventOp::create(builder, loc, "events");
   EXPECT_TRUE(schedule && waitUntil && waitFor && awaitEvent);
-  auto cursor = TraceOpenOp::create(builder, loc, builder.getIndexType(),
-                                    "pto");
+  auto cursor =
+      TraceOpenOp::create(builder, loc, builder.getIndexType(), "pto");
   EXPECT_EQ(cursor.getSource(), "pto");
   auto next = TraceNextOp::create(builder, loc, builder.getIndexType(),
                                   builder.getI32Type(), builder.getI1Type(),
@@ -497,12 +497,11 @@ TEST(ACIROpsTest, PublicBuildersConstructEveryTaskEightOperation) {
   EXPECT_TRUE(runtimeEnsure && runtimeAssert);
   auto probe =
       ProbeOp::create(builder, loc, builder.getI32Type(), "q", "queue");
-  auto storageProbe = ProbeOp::create(builder, loc, builder.getI64Type(),
-                                      "memory", "storage");
+  auto storageProbe =
+      ProbeOp::create(builder, loc, builder.getI64Type(), "memory", "storage");
   auto statAdd = StatAddOp::create(builder, loc, probe, "count");
   EXPECT_TRUE(statAdd && storageProbe);
-  auto instrumentation =
-      InstrumentationOp::create(builder, loc, "debug");
+  auto instrumentation = InstrumentationOp::create(builder, loc, "debug");
   instrumentation.getBody().emplaceBlock();
   auto yield = YieldSimOp::create(builder, loc);
   EXPECT_TRUE(yield);
@@ -663,13 +662,13 @@ TEST(ACIROpsTest, TaskEightRegistryDeltaIsExactlyTwentyOperations) {
   mlir::MLIRContext context;
   context.loadDialect<ACIRDialect>();
   const std::array<llvm::StringLiteral, 20> names = {
-      "ac.process",       "ac.try_send",      "ac.try_recv",
-      "ac.schedule",      "ac.wait_until",    "ac.wait_for",
-      "ac.await_event",   "ac.yield_sim",     "ac.trace.open",
-      "ac.trace.next",    "ac.trace.decode",  "ac.trace.eof",
-      "ac.trace.position", "ac.require",       "ac.ensure",
-      "ac.assert",        "ac.probe",         "ac.stat",
-      "ac.stat.add",      "ac.instrumentation",
+      "ac.process",        "ac.try_send",        "ac.try_recv",
+      "ac.schedule",       "ac.wait_until",      "ac.wait_for",
+      "ac.await_event",    "ac.yield_sim",       "ac.trace.open",
+      "ac.trace.next",     "ac.trace.decode",    "ac.trace.eof",
+      "ac.trace.position", "ac.require",         "ac.ensure",
+      "ac.assert",         "ac.probe",           "ac.stat",
+      "ac.stat.add",       "ac.instrumentation",
   };
   for (llvm::StringLiteral name : names)
     EXPECT_TRUE(mlir::OperationName(name, &context).isRegistered())
@@ -1018,8 +1017,8 @@ TEST(ACIROpsTest, TaskSevenOwnersRegisterAtDistinctAbsoluteInstancePaths) {
   auto emptyDictionary = builder.getDictionaryAttr({});
   auto file = mlir::ModuleOp::create(loc);
   builder.setInsertionPointToStart(file.getBody());
-  auto leaf = ModuleOp::create(builder, loc, "Leaf", emptyType,
-                               emptyDictionary);
+  auto leaf =
+      ModuleOp::create(builder, loc, "Leaf", emptyType, emptyDictionary);
   builder.setInsertionPointToStart(leaf.addEntryBlock());
   auto latency = builder.getDictionaryAttr({
       builder.getNamedAttr("kind", builder.getStringAttr("fixed")),
@@ -1099,8 +1098,8 @@ TEST(ACIROpsTest, TaskEightOwnersRegisterAtDistinctAbsoluteInstancePaths) {
   auto leaf =
       ModuleOp::create(builder, loc, "Leaf", emptyType, emptyDictionary);
   builder.setInsertionPointToStart(leaf.addEntryBlock());
-  auto process = ProcessOp::create(builder, loc, "worker", "workload",
-                                   mlir::ValueRange{});
+  auto process =
+      ProcessOp::create(builder, loc, "worker", "workload", mlir::ValueRange{});
   builder.setInsertionPointToStart(&process.getBody().emplaceBlock());
   YieldSimOp::create(builder, loc);
   builder.setInsertionPointToEnd(&leaf.getBody().front());
@@ -1151,11 +1150,11 @@ TEST(ACIROpsTest, TaskEightOwnersParticipateInSaturatedArrayBudget) {
   auto emptyDictionary = builder.getDictionaryAttr({});
   auto file = mlir::ModuleOp::create(loc);
   builder.setInsertionPointToStart(file.getBody());
-  auto leaf = ModuleOp::create(builder, loc, "Leaf", emptyType,
-                               emptyDictionary);
+  auto leaf =
+      ModuleOp::create(builder, loc, "Leaf", emptyType, emptyDictionary);
   builder.setInsertionPointToStart(leaf.addEntryBlock());
-  auto process = ProcessOp::create(builder, loc, "worker", "workload",
-                                   mlir::ValueRange{});
+  auto process =
+      ProcessOp::create(builder, loc, "worker", "workload", mlir::ValueRange{});
   builder.setInsertionPointToStart(&process.getBody().emplaceBlock());
   YieldSimOp::create(builder, loc);
   builder.setInsertionPointToEnd(&leaf.getBody().front());
@@ -1165,8 +1164,8 @@ TEST(ACIROpsTest, TaskEightOwnersParticipateInSaturatedArrayBudget) {
   llvm::SmallVector<mlir::Attribute> staticArgs(
       512, mlir::Attribute(emptyDictionary));
   builder.setInsertionPointToEnd(file.getBody());
-  auto middle = ModuleOp::create(builder, loc, "Middle", emptyType,
-                                 emptyDictionary);
+  auto middle =
+      ModuleOp::create(builder, loc, "Middle", emptyType, emptyDictionary);
   builder.setInsertionPointToStart(middle.addEntryBlock());
   ArrayOp::create(builder, loc, mlir::TypeRange{}, mlir::ValueRange{}, "Leaf",
                   "leaves", "leaves", "leaves",
@@ -1177,8 +1176,8 @@ TEST(ACIROpsTest, TaskEightOwnersParticipateInSaturatedArrayBudget) {
   builder.setInsertionPointToEnd(file.getBody());
   auto top = ModuleOp::create(builder, loc, "Top", emptyType, emptyDictionary);
   builder.setInsertionPointToStart(top.addEntryBlock());
-  ArrayOp::create(builder, loc, mlir::TypeRange{}, mlir::ValueRange{},
-                  "Middle", "middles", "middles", "middles",
+  ArrayOp::create(builder, loc, mlir::TypeRange{}, mlir::ValueRange{}, "Middle",
+                  "middles", "middles", "middles",
                   builder.getDenseI64ArrayAttr({512}),
                   builder.getArrayAttr(staticArgs));
   ReturnOp::create(builder, loc, mlir::ValueRange{});
@@ -1227,11 +1226,12 @@ TEST(ACIROpsTest, TraceSourcesHaveOneOwnerAcrossElaboratedHierarchy) {
           seed {kind = "fixed", value = 0 : i64}
           instrumentation [] results {id = "trace", format = "json"} selected true
     }
-  )mlir", &context);
+  )mlir",
+                                                             &context);
   ASSERT_TRUE(singleOwner);
   llvm::SmallVector<ElaboratedStateOwner> owners;
-  ASSERT_TRUE(mlir::succeeded(collectElaboratedStateOwners(
-      singleOwner->getOperation(), owners)));
+  ASSERT_TRUE(mlir::succeeded(
+      collectElaboratedStateOwners(singleOwner->getOperation(), owners)));
   ASSERT_EQ(owners.size(), 1u);
   EXPECT_EQ(owners.front().path, "root.workload");
   EXPECT_EQ(owners.front().stableId, "root/workload");
@@ -1310,8 +1310,8 @@ TEST(ACIROpsTest, TraceSourceArrayDuplicationFailsBeforeElaboration) {
   auto emptyDictionary = builder.getDictionaryAttr({});
   auto file = mlir::ModuleOp::create(loc);
   builder.setInsertionPointToStart(file.getBody());
-  auto leaf = ModuleOp::create(builder, loc, "Leaf", emptyType,
-                               emptyDictionary);
+  auto leaf =
+      ModuleOp::create(builder, loc, "Leaf", emptyType, emptyDictionary);
   builder.setInsertionPointToStart(leaf.addEntryBlock());
   auto process = ProcessOp::create(builder, loc, "workload", "workload",
                                    mlir::ValueRange{});
@@ -1324,8 +1324,8 @@ TEST(ACIROpsTest, TraceSourceArrayDuplicationFailsBeforeElaboration) {
   llvm::SmallVector<mlir::Attribute> staticArgs(
       512, mlir::Attribute(emptyDictionary));
   builder.setInsertionPointToEnd(file.getBody());
-  auto middle = ModuleOp::create(builder, loc, "Middle", emptyType,
-                                 emptyDictionary);
+  auto middle =
+      ModuleOp::create(builder, loc, "Middle", emptyType, emptyDictionary);
   builder.setInsertionPointToStart(middle.addEntryBlock());
   ArrayOp::create(builder, loc, mlir::TypeRange{}, mlir::ValueRange{}, "Leaf",
                   "leaves", "leaves", "leaves",
@@ -1335,8 +1335,8 @@ TEST(ACIROpsTest, TraceSourceArrayDuplicationFailsBeforeElaboration) {
   builder.setInsertionPointToEnd(file.getBody());
   auto top = ModuleOp::create(builder, loc, "Top", emptyType, emptyDictionary);
   builder.setInsertionPointToStart(top.addEntryBlock());
-  ArrayOp::create(builder, loc, mlir::TypeRange{}, mlir::ValueRange{},
-                  "Middle", "middles", "middles", "middles",
+  ArrayOp::create(builder, loc, mlir::TypeRange{}, mlir::ValueRange{}, "Middle",
+                  "middles", "middles", "middles",
                   builder.getDenseI64ArrayAttr({512}),
                   builder.getArrayAttr(staticArgs));
   ReturnOp::create(builder, loc, mlir::ValueRange{});
@@ -1378,7 +1378,8 @@ TEST(ACIROpsTest, StaticContractsUseFreezePhaseModuleEffects) {
         ac.return
       }
     }
-  )mlir", &context);
+  )mlir",
+                                                      &context);
   ASSERT_TRUE(file);
   ASSERT_TRUE(mlir::succeeded(mlir::verify(file->getOperation())));
   auto module = *file->getOps<ModuleOp>().begin();
@@ -1389,8 +1390,8 @@ TEST(ACIROpsTest, StaticContractsUseFreezePhaseModuleEffects) {
     mlir::cast<mlir::MemoryEffectOpInterface>(&operation).getEffects(effects);
     ASSERT_EQ(effects.size(), 1u);
     EXPECT_EQ(effects.front().getResource(), ModuleStateResource::get());
-    EXPECT_TRUE(mlir::isa<mlir::MemoryEffects::Read>(
-        effects.front().getEffect()));
+    EXPECT_TRUE(
+        mlir::isa<mlir::MemoryEffects::Read>(effects.front().getEffect()));
     auto parameters =
         mlir::cast<mlir::DictionaryAttr>(effects.front().getParameters());
     EXPECT_EQ(parameters.getAs<mlir::StringAttr>("contract_phase").getValue(),
@@ -2473,12 +2474,11 @@ TEST(ACIRFreezeEffectsTest, FrozenEffectsUseElaboratedAbsoluteOwnerSets) {
   checkAbsoluteOwners(stat, "root.requests");
 
   std::string diagnostic;
-  mlir::ScopedDiagnosticHandler handler(
-      &context, [&](mlir::Diagnostic &value) {
-        llvm::raw_string_ostream stream(diagnostic);
-        stream << value;
-        return mlir::success();
-      });
+  mlir::ScopedDiagnosticHandler handler(&context, [&](mlir::Diagnostic &value) {
+    llvm::raw_string_ostream stream(diagnostic);
+    stream << value;
+    return mlir::success();
+  });
   stat->removeAttr("ac.frozen_owners");
   EXPECT_TRUE(mlir::failed(acir::verifyModel(*file)));
   EXPECT_NE(diagnostic.find("frozen topology digest mismatch"),

@@ -11,7 +11,7 @@ namespace acir::detail {
 
 LogicalResult
 PlanSetBuilder::planProcessCost(ControlPlan &control,
-                                 const ProcessStateLimits &limits) {
+                                const ProcessStateLimits &limits) {
   // Compute exact per-block cost from the contract formula:
   //   block_cost = sum(entry loads, each 1)
   //              + sum(scalar_unwrap actions, each 1)

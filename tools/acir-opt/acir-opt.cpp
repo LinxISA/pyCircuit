@@ -17,6 +17,7 @@
 #include "llvm/Support/ToolOutputFile.h"
 #include "llvm/Support/raw_ostream.h"
 
+#include <exception>
 #include <memory>
 #include <string>
 
@@ -126,9 +127,7 @@ public:
 };
 #endif
 
-} // namespace
-
-int main(int argc, char **argv) {
+int runDriver(int argc, char **argv) {
   mlir::DialectRegistry registry;
   acir::registerAllDialects(registry);
 #ifdef ACIR_INTERNAL_TEST_TOOL
@@ -181,7 +180,7 @@ int main(int argc, char **argv) {
           // Atomic whole-model lowering publishes canonical ACSim, so the
           // trailing ACIR whole-model gate does not apply to its output.
           passManager.addPass(
-              acir::createACIRToACSimPass(std::move(*loweringOptions)));
+              acir::createACIRToACSimPass(*loweringOptions));
           return mlir::success();
         }
         // The final whole-model gate makes a persisted freeze digest effective
@@ -231,4 +230,18 @@ int main(int argc, char **argv) {
   if (mlir::succeeded(result))
     output->keep();
   return mlir::asMainReturnCode(result);
+}
+
+} // namespace
+
+int main(int argc, char **argv) {
+  try {
+    return runDriver(argc, argv);
+  } catch (const std::exception &error) {
+    llvm::errs() << "error: unhandled exception: " << error.what() << '\n';
+    return EXIT_FAILURE;
+  } catch (...) {
+    llvm::errs() << "error: unhandled unknown exception\n";
+    return EXIT_FAILURE;
+  }
 }

@@ -1,0 +1,47 @@
+# clang-tidy gate for Agentic Circuit owned sources.
+#
+# The gate enforces the static analyzer plus high-signal bugprone/performance
+# checks that hold across the entire owned tree. Noise-heavy checks whose
+# findings are dominated by MLIR/gtest idioms (macro parentheses, optional
+# access heuristics, generated enum sizing, gtest static initialization) are
+# intentionally out of scope for the CI gate.
+Checks: >
+  -*,
+  clang-analyzer-*,
+  bugprone-assert-side-effect,
+  bugprone-bool-pointer-implicit-conversion,
+  bugprone-dangling-handle,
+  bugprone-exception-escape,
+  bugprone-implicit-widening-of-multiplication-result,
+  bugprone-inc-dec-in-conditions,
+  bugprone-inaccurate-erase,
+  bugprone-infinite-loop,
+  bugprone-misplaced-operator-in-strlen-in-alloc,
+  bugprone-misplaced-widening-cast,
+  bugprone-not-null-terminated-result,
+  bugprone-optional-value-conversion,
+  bugprone-posix-return,
+  bugprone-string-constructor,
+  bugprone-stringview-nullptr,
+  bugprone-suspicious-missing-comma,
+  bugprone-suspicious-realloc-usage,
+  bugprone-suspicious-string-compare,
+  bugprone-swapped-arguments,
+  bugprone-undelegated-constructor,
+  bugprone-undefined-memory-manipulation,
+  bugprone-unhandled-self-assignment,
+  bugprone-use-after-move,
+  bugprone-virtual-near-miss,
+  performance-faster-string-find,
+  performance-implicit-conversion-in-loop,
+  performance-inefficient-algorithm,
+  performance-inefficient-string-concatenation,
+  performance-move-const-arg,
+  performance-no-automatic-move,
+  performance-no-int-to-ptr,
+  performance-trivially-destructible,
+  performance-type-promotion-in-math-fn,
+  performance-unnecessary-copy-initialization,
+  -clang-analyzer-core.StackAddressEscape
+WarningsAsErrors: '*'
+HeaderFilterRegex: '.*agentic-circuit/(include|lib|tools|unittests)/.*'

@@ -21,7 +21,8 @@ static ProcessStatePlanSet getYieldOnlyPlan() {
   return *built;
 }
 
-TEST(ProcessStatePlanControlFlowTest, YieldOnlyProducesEntryPcOneBlockOneWakeOneTransition) {
+TEST(ProcessStatePlanControlFlowTest,
+     YieldOnlyProducesEntryPcOneBlockOneWakeOneTransition) {
   auto plans = getYieldOnlyPlan();
   ASSERT_EQ(plans.processes().size(), 1u);
   const auto &process = plans.processes()[0];

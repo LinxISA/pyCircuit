@@ -485,7 +485,7 @@ Value json(const ProcessValueTypeMemberPlan &member) {
 }
 Value json(const ProcessValueTypePlan &type) {
   Object payload;
-  auto value = type.payload();
+  const auto &value = type.payload();
   if (value.kind() == ProcessValueTypeKind::Value) {
     payload["encoding"] = value.value().encoding();
     payload["members"] = mapArray(value.value().members(),

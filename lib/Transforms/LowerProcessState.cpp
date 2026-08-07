@@ -1,7 +1,7 @@
 #include "acir/Transforms/Passes.h"
 
-#include "acir/Analysis/ProcessStatePlan.h"
 #include "Analysis/ProcessStatePlanInternal.h"
+#include "acir/Analysis/ProcessStatePlan.h"
 
 #include "mlir/Pass/Pass.h"
 

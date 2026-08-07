@@ -1387,7 +1387,8 @@ bool detail::PlanSetBuilder::exerciseCompleteApiFixture(
       impl->value = operand;
       impl->ownerPath = "owner";
     } else {
-      impl->declaration = reinterpret_cast<mlir::Operation *>(uintptr_t{1});
+      impl->declaration =
+          reinterpret_cast<mlir::Operation *>(uintptr_t{1}); // NOLINT(performance-no-int-to-ptr) sentinel test identity
       impl->symbol = "@symbol";
       impl->ownerPath = "owner";
     }
@@ -1911,9 +1912,9 @@ bool detail::PlanSetBuilder::exerciseCompleteApiFixture(
   calleeImpl->role = ProcessHelperRole::Probe;
   calleeImpl->payload = payloads[16];
   calleeImpl->sourceOperations = {
-      reinterpret_cast<mlir::Operation *>(uintptr_t{1})};
+      reinterpret_cast<mlir::Operation *>(uintptr_t{1})}; // NOLINT(performance-no-int-to-ptr) sentinel test identity
   calleeImpl->declarations = {
-      reinterpret_cast<mlir::Operation *>(uintptr_t{2})};
+      reinterpret_cast<mlir::Operation *>(uintptr_t{2})}; // NOLINT(performance-no-int-to-ptr) sentinel test identity
   calleeImpl->sourcePathStorage = {"source"};
   calleeImpl->sourcePaths = {calleeImpl->sourcePathStorage[0]};
   ProcessGeneratedCalleePlan callee(calleeImpl);

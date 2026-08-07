@@ -224,7 +224,11 @@ private:
         return jsonError(llvm::Twine("duplicate object property '") + *name +
                          "'");
       skipWhitespace();
-      if (position == input.size() || input[position++] != ':')
+      if (position == input.size())
+        return jsonError("object property requires ':'");
+      const char separator = input[position];
+      ++position;
+      if (separator != ':')
         return jsonError("object property requires ':'");
       if (llvm::Error error = scanValue(depth + 1))
         return error;
@@ -606,7 +610,7 @@ llvm::Expected<std::string> ecmascriptNumber(double value) {
   if (negative)
     result.push_back('-');
   if (scientificExponent >= 0 && scientificExponent < 21) {
-    size_t integerDigits = static_cast<size_t>(scientificExponent + 1);
+    size_t integerDigits = static_cast<size_t>(scientificExponent) + 1;
     if (digits.size() <= integerDigits) {
       result.append(digits);
       result.append(integerDigits - digits.size(), '0');

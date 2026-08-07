@@ -4,11 +4,11 @@
 #include "gfsim/core.h"
 #include "gfsim/object.h"
 
-#include <queue>
-#include <vector>
-#include <set>
 #include <cstddef>
 #include <optional>
+#include <queue>
+#include <set>
+#include <vector>
 
 namespace gfsim {
 
@@ -17,8 +17,7 @@ namespace gfsim {
 /// FIFO data queue with entry capacity, optional byte capacity,
 /// ordered read/write proposals, deterministic arbitration,
 /// and occupancy/watermark statistics.
-template <typename T>
-class SimQueue : public SimObject {
+template <typename T> class SimQueue : public SimObject {
 public:
   SimQueue(std::string name, ObjectId id, SimObject *parent,
            size_t entryCapacity, size_t byteCapacity = SIZE_MAX)
@@ -126,14 +125,16 @@ public:
 
   size_t capacity() const { return capacity_; }
   size_t size() const { return committed_.size(); }
-  bool isFull() const { return committed_.size() + pushProposals_.size() >= capacity_; }
+  bool isFull() const {
+    return committed_.size() + pushProposals_.size() >= capacity_;
+  }
 
   // ── Proposal ────────────────────────────────────────────────────────
 
   bool proposeSchedule(Event event) {
     if (committed_.size() + pushProposals_.size() >= capacity_)
       return false;
-    pushProposals_.insert(std::move(event));
+    pushProposals_.insert(event);
     return true;
   }
 
@@ -141,20 +142,22 @@ public:
 
   void doXfer(Epoch epoch) override {
     for (auto &event : pushProposals_)
-      committed_.insert(std::move(event));
+      committed_.insert(event);
     pushProposals_.clear();
   }
 
   // ── Query ───────────────────────────────────────────────────────────
 
   std::optional<Event> nextEvent() const {
-    if (committed_.empty()) return std::nullopt;
+    if (committed_.empty())
+      return std::nullopt;
     return *committed_.begin();
   }
 
   /// Pop the earliest event and return it.
   std::optional<Event> popNext() {
-    if (committed_.empty()) return std::nullopt;
+    if (committed_.empty())
+      return std::nullopt;
     auto it = committed_.begin();
     Event e = *it;
     committed_.erase(it);
@@ -163,7 +166,8 @@ public:
 
   bool hasEventAt(Epoch epoch) const {
     for (const auto &e : committed_)
-      if (e.readyTime == epoch) return true;
+      if (e.readyTime == epoch)
+        return true;
     return false;
   }
 

@@ -44,8 +44,7 @@ TEST(ProcessStatePlanEmissionTest, YieldOnlyEdgeIsSuspend) {
   auto plans = getYieldOnlyPlan();
   const auto &process = plans.processes()[0];
   ASSERT_GE(process.blocks().size(), 1u);
-  EXPECT_EQ(process.blocks()[0].edge().kind(),
-            ProcessControlEdgeKind::Suspend);
+  EXPECT_EQ(process.blocks()[0].edge().kind(), ProcessControlEdgeKind::Suspend);
 }
 
 TEST(ProcessStatePlanEmissionTest, NoCapturesInYieldOnly) {

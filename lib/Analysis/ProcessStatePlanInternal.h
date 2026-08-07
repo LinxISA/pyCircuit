@@ -526,10 +526,10 @@ public:
                    const ProcessStateLimits &limits);
   static mlir::LogicalResult
   planProcessLiveness(ControlPlan &control, const ProcessStateLimits &limits);
-  static mlir::LogicalResult
-  planProcessCost(ControlPlan &control, const ProcessStateLimits &limits);
+  static mlir::LogicalResult planProcessCost(ControlPlan &control,
+                                             const ProcessStateLimits &limits);
 
- private:
+private:
   static mlir::FailureOr<ProcessStatePlanSet>
   buildFrozenFixture(mlir::ModuleOp module, bool requireYieldOnly);
 };

@@ -4,9 +4,9 @@
 #include "gfsim/core.h"
 #include "gfsim/object.h"
 
-#include <vector>
 #include <cstdint>
 #include <string>
+#include <vector>
 
 namespace gfsim {
 
@@ -18,7 +18,9 @@ public:
         totalCapacity_(totalCapacity) {}
 
   uint32_t totalCapacity() const { return totalCapacity_; }
-  uint32_t availableCapacity() const { return totalCapacity_ - activeReservations_; }
+  uint32_t availableCapacity() const {
+    return totalCapacity_ - activeReservations_;
+  }
   uint32_t activeReservations() const { return activeReservations_; }
   bool canReserve(uint32_t amount = 1) const {
     return availableCapacity() >= amount + proposedReservations_;
@@ -33,7 +35,8 @@ public:
 
   bool proposeReserve(ObjectId owner, uint32_t amount, Epoch issueTime,
                       uint64_t txnId) {
-    if (!canReserve(amount)) return false;
+    if (!canReserve(amount))
+      return false;
     proposals_.push_back({owner, amount, issueTime, txnId});
     proposedReservations_ += amount;
     return true;
@@ -103,7 +106,10 @@ private:
   std::vector<ReservationProposal> proposals_;
   std::vector<ReservationProposal> acceptedProposals_;
   std::vector<ReservationProposal> rejectedProposals_;
-  struct ReleaseProposal { ObjectId ownerId; uint32_t amount; };
+  struct ReleaseProposal {
+    ObjectId ownerId;
+    uint32_t amount;
+  };
   std::vector<ReleaseProposal> releaseProposals_;
 };
 

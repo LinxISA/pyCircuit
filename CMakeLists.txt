@@ -76,6 +76,11 @@ install(
   DESTINATION lib/cmake/AgenticCircuit
 )
 install(FILES cmake/modules/AddACIR.cmake DESTINATION lib/cmake/AgenticCircuit/modules)
+install(DIRECTORY include/acir DESTINATION include)
+install(
+  DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/include/acir"
+  DESTINATION include
+)
 
 add_subdirectory(include)
 add_subdirectory(lib)

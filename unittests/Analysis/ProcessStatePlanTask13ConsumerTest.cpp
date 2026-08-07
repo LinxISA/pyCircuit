@@ -32,12 +32,17 @@ TEST(ProcessStateTask13ConsumerTest, AllClosedEnumsAreAccessible) {
   auto wakeResource = ProcessWakeKind::Resource;
   auto wakeEvent = ProcessWakeKind::EventQueue;
   auto wakeNext = ProcessWakeKind::NextDelta;
-  (void)wakeCondition; (void)wakeResource; (void)wakeEvent; (void)wakeNext;
+  (void)wakeCondition;
+  (void)wakeResource;
+  (void)wakeEvent;
+  (void)wakeNext;
 
   auto subCapture = ProcessSubscriptionSourceKind::Capture;
   auto subValue = ProcessSubscriptionSourceKind::Value;
   auto subSymbol = ProcessSubscriptionSourceKind::Symbol;
-  (void)subCapture; (void)subValue; (void)subSymbol;
+  (void)subCapture;
+  (void)subValue;
+  (void)subSymbol;
 
   auto actOrig = ProcessActionKind::Original;
   auto actConst = ProcessActionKind::Constant;
@@ -46,8 +51,13 @@ TEST(ProcessStateTask13ConsumerTest, AllClosedEnumsAreAccessible) {
   auto actIncr = ProcessActionKind::ForIncrement;
   auto actWrap = ProcessActionKind::ScalarWrap;
   auto actUnwrap = ProcessActionKind::ScalarUnwrap;
-  (void)actOrig; (void)actConst; (void)actInit; (void)actCond;
-  (void)actIncr; (void)actWrap; (void)actUnwrap;
+  (void)actOrig;
+  (void)actConst;
+  (void)actInit;
+  (void)actCond;
+  (void)actIncr;
+  (void)actWrap;
+  (void)actUnwrap;
 
   auto emCopy = ProcessEmissionClass::CopyScalar;
   auto emInline = ProcessEmissionClass::Inline;
@@ -55,26 +65,39 @@ TEST(ProcessStateTask13ConsumerTest, AllClosedEnumsAreAccessible) {
   auto emWrap = ProcessEmissionClass::Wrap;
   auto emUnwrap = ProcessEmissionClass::Unwrap;
   auto emFwd = ProcessEmissionClass::ForwardOnly;
-  (void)emCopy; (void)emInline; (void)emInvoke; (void)emWrap;
-  (void)emUnwrap; (void)emFwd;
+  (void)emCopy;
+  (void)emInline;
+  (void)emInvoke;
+  (void)emWrap;
+  (void)emUnwrap;
+  (void)emFwd;
 
   auto occOrig = ProcessOccurrenceKind::Original;
   auto occLoop = ProcessOccurrenceKind::SyntheticLoop;
   auto occWrap = ProcessOccurrenceKind::SyntheticWrapper;
   auto occConstS = ProcessOccurrenceKind::SyntheticConstant;
-  (void)occOrig; (void)occLoop; (void)occWrap; (void)occConstS;
+  (void)occOrig;
+  (void)occLoop;
+  (void)occWrap;
+  (void)occConstS;
 
   auto frameEntry = ProcessFrameKind::Entry;
   auto frameIf = ProcessFrameKind::ScfIf;
   auto frameFor = ProcessFrameKind::ScfFor;
   auto frameWhile = ProcessFrameKind::ScfWhile;
-  (void)frameEntry; (void)frameIf; (void)frameFor; (void)frameWhile;
+  (void)frameEntry;
+  (void)frameIf;
+  (void)frameFor;
+  (void)frameWhile;
 
   auto edgeBranch = ProcessControlEdgeKind::Branch;
   auto edgeCont = ProcessControlEdgeKind::LocalContinue;
   auto edgeSuspend = ProcessControlEdgeKind::Suspend;
   auto edgeTerm = ProcessControlEdgeKind::Terminate;
-  (void)edgeBranch; (void)edgeCont; (void)edgeSuspend; (void)edgeTerm;
+  (void)edgeBranch;
+  (void)edgeCont;
+  (void)edgeSuspend;
+  (void)edgeTerm;
 
   SUCCEED();
 }

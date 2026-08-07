@@ -1,5 +1,5 @@
-#include "acir/CodeGen/Manifest.h"
 #include "acir/CodeGen/Emitter.h"
+#include "acir/CodeGen/Manifest.h"
 
 #include "gtest/gtest.h"
 
@@ -116,8 +116,8 @@ TEST(CodeGenEmitterTest, EmitsEnum) {
 TEST(CodeGenEmitterTest, EmitsConstructor) {
   std::ostringstream os;
   CppEmitter e(os);
-  e.emitConstructor("Foo", {{"int", "x"}, {"int", "y"}},
-                     {"x_(x)", "y_(y)"}, "  init();\n");
+  e.emitConstructor("Foo", {{"int", "x"}, {"int", "y"}}, {"x_(x)", "y_(y)"},
+                    "  init();\n");
   EXPECT_NE(os.str().find("Foo(int x, int y)"), std::string::npos);
   EXPECT_NE(os.str().find(": x_(x)"), std::string::npos);
   EXPECT_NE(os.str().find("init()"), std::string::npos);
@@ -148,10 +148,8 @@ TEST(CodeGenEmitterTest, EmitsSwitch) {
 // ── Deterministic code generation ─────────────────────────────────────
 
 TEST(CodeGenGenTest, GenerateProcessHeader) {
-  auto sf = generateProcessHeader("Top", "workload",
-                                   {"entry", "pc00000001"},
-                                   {"uint32_t"},
-                                   {"counter_"});
+  auto sf = generateProcessHeader("Top", "workload", {"entry", "pc00000001"},
+                                  {"uint32_t"}, {"counter_"});
   EXPECT_FALSE(sf.content.empty());
   EXPECT_FALSE(sf.fingerprint.empty());
   EXPECT_EQ(sf.fingerprint.size(), 64u);
@@ -162,19 +160,15 @@ TEST(CodeGenGenTest, GenerateProcessHeader) {
 }
 
 TEST(CodeGenGenTest, GenerateProcessHeaderIsDeterministic) {
-  auto sf1 = generateProcessHeader("Top", "workload",
-                                    {"entry"}, {}, {});
-  auto sf2 = generateProcessHeader("Top", "workload",
-                                    {"entry"}, {}, {});
+  auto sf1 = generateProcessHeader("Top", "workload", {"entry"}, {}, {});
+  auto sf2 = generateProcessHeader("Top", "workload", {"entry"}, {}, {});
   EXPECT_EQ(sf1.content, sf2.content);
   EXPECT_EQ(sf1.fingerprint, sf2.fingerprint);
 }
 
 TEST(CodeGenGenTest, GenerateProcessSource) {
-  auto sf = generateProcessSource("Top", "workload",
-                                   {"entry", "pc00000001"},
-                                   {"uint32_t"},
-                                   {"counter_"});
+  auto sf = generateProcessSource("Top", "workload", {"entry", "pc00000001"},
+                                  {"uint32_t"}, {"counter_"});
   EXPECT_FALSE(sf.content.empty());
   EXPECT_NE(sf.content.find("Top_workload::doWork"), std::string::npos);
   EXPECT_NE(sf.content.find("switch (pc_)"), std::string::npos);

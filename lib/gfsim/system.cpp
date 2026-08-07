@@ -62,7 +62,8 @@ std::optional<Event> SimSystem::nextEvent() const {
 // ── Step: advance one (time, delta) ───────────────────────────────────
 
 bool SimSystem::step() {
-  if (terminated_) return false;
+  if (terminated_)
+    return false;
 
   // Check caps
   if (epoch_.time >= maxTicks_) {
@@ -83,13 +84,15 @@ bool SimSystem::step() {
   // Phase 1: Work — execute all scheduled objects
   for (auto id : impl_->workSet) {
     auto *obj = lookup(id);
-    if (obj) obj->doWork(epoch_);
+    if (obj)
+      obj->doWork(epoch_);
   }
 
   // Phase 2: Arbitration — each object arbitrates its proposals locally
   for (auto id : impl_->workSet) {
     auto *obj = lookup(id);
-    if (obj) obj->doArbitrate(epoch_);
+    if (obj)
+      obj->doArbitrate(epoch_);
   }
 
   // Phase 3: Xfer — commit accepted proposals atomically
@@ -97,7 +100,8 @@ bool SimSystem::step() {
   impl_->eventQueue.doXfer(epoch_);
   for (auto id : impl_->workSet) {
     auto *obj = lookup(id);
-    if (obj) obj->doXfer(epoch_);
+    if (obj)
+      obj->doXfer(epoch_);
   }
 
   impl_->workSet.clear();
@@ -158,7 +162,8 @@ TerminationResult SimSystem::run() {
   });
 
   while (!terminated_) {
-    if (!step()) break;
+    if (!step())
+      break;
   }
 
   result_.finalEpoch = epoch_;

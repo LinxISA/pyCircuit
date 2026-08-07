@@ -10,7 +10,7 @@ namespace acir::detail {
 
 LogicalResult
 PlanSetBuilder::planProcessLiveness(ControlPlan &control,
-                                     const ProcessStateLimits &limits) {
+                                    const ProcessStateLimits &limits) {
   // Occurrence-qualified SCF equivalence union-find:
   // For yield-only (no SCF), there are no live equivalence classes
   // that cross a suspension boundary, so no live slots are created.

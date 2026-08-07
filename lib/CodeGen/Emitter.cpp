@@ -1,7 +1,7 @@
 #include "acir/CodeGen/Emitter.h"
 
-#include <sstream>
 #include <algorithm>
+#include <sstream>
 
 namespace acir::codegen {
 
@@ -47,7 +47,7 @@ void CppEmitter::endNamespace() {
 }
 
 void CppEmitter::beginClass(const std::string &name, const std::string &base,
-                             bool isStruct) {
+                            bool isStruct) {
   writeIndent();
   os_ << (isStruct ? "struct " : "class ") << name;
   if (!base.empty())
@@ -89,40 +89,46 @@ void CppEmitter::emitProtected() {
 }
 
 void CppEmitter::emitMember(const std::string &type, const std::string &name,
-                              const std::string &init) {
+                            const std::string &init) {
   writeIndent();
   os_ << type << " " << name;
-  if (!init.empty()) os_ << " = " << init;
+  if (!init.empty())
+    os_ << " = " << init;
   os_ << ";\n";
   atLineStart_ = true;
 }
 
 void CppEmitter::emitStaticMember(const std::string &type,
-                                    const std::string &name,
-                                    const std::string &init) {
+                                  const std::string &name,
+                                  const std::string &init) {
   writeIndent();
   os_ << "static " << type << " " << name;
-  if (!init.empty()) os_ << " = " << init;
+  if (!init.empty())
+    os_ << " = " << init;
   os_ << ";\n";
   atLineStart_ = true;
 }
 
-void CppEmitter::emitMethod(const std::string &returnType,
-                              const std::string &name,
-                              const std::vector<std::pair<std::string, std::string>> &params,
-                              bool isConst, bool isOverride,
-                              bool isVirtual, bool isStatic) {
+void CppEmitter::emitMethod(
+    const std::string &returnType, const std::string &name,
+    const std::vector<std::pair<std::string, std::string>> &params,
+    bool isConst, bool isOverride, bool isVirtual, bool isStatic) {
   writeIndent();
-  if (isStatic) os_ << "static ";
-  if (isVirtual) os_ << "virtual ";
+  if (isStatic)
+    os_ << "static ";
+  if (isVirtual)
+    os_ << "virtual ";
   os_ << returnType << " " << name << "(";
   for (size_t i = 0; i < params.size(); ++i) {
     os_ << params[i].first << " " << params[i].second;
-    if (i + 1 < params.size()) os_ << ", ";
+    if (i + 1 < params.size())
+      os_ << ", ";
   }
   os_ << ")";
-  if (isConst) os_ << " const";
-  if (isOverride) os_ << " override";
+  if (isConst)
+    os_ << " const";
+  if (isOverride)
+    os_ << " override";
   os_ << ";\n";
   atLineStart_ = true;
 }
@@ -135,7 +141,8 @@ void CppEmitter::emitConstructor(
   os_ << className << "(";
   for (size_t i = 0; i < params.size(); ++i) {
     os_ << params[i].first << " " << params[i].second;
-    if (i + 1 < params.size()) os_ << ", ";
+    if (i + 1 < params.size())
+      os_ << ", ";
   }
   os_ << ")";
   if (!initializers.empty()) {
@@ -189,15 +196,16 @@ void CppEmitter::emitStatement(const std::string &stmt) {
 }
 
 void CppEmitter::emitEnum(const std::string &name,
-                            const std::vector<std::string> &values,
-                            const std::string &underlyingType) {
+                          const std::vector<std::string> &values,
+                          const std::string &underlyingType) {
   writeIndent();
   os_ << "enum class " << name << " : " << underlyingType << " {\n";
   indent();
   for (size_t i = 0; i < values.size(); ++i) {
     writeIndent();
     os_ << values[i];
-    if (i + 1 < values.size()) os_ << ",";
+    if (i + 1 < values.size())
+      os_ << ",";
     os_ << "\n";
   }
   dedent();
@@ -255,7 +263,8 @@ void CppEmitter::emitRaw(const std::string &code) {
 
 void CppEmitter::indent() { ++indent_; }
 void CppEmitter::dedent() {
-  if (indent_ > 0) --indent_;
+  if (indent_ > 0)
+    --indent_;
 }
 
 // ── Deterministic code generation ─────────────────────────────────────
@@ -265,11 +274,12 @@ static std::string className(const std::string &moduleName,
   return moduleName + "_" + processName;
 }
 
-SourceFile generateProcessHeader(
-    const std::string &moduleName, const std::string &processName,
-    const std::vector<std::string> &pcNames,
-    const std::vector<std::string> &liveSlotTypes,
-    const std::vector<std::string> &liveSlotNames) {
+SourceFile
+generateProcessHeader(const std::string &moduleName,
+                      const std::string &processName,
+                      const std::vector<std::string> &pcNames,
+                      const std::vector<std::string> &liveSlotTypes,
+                      const std::vector<std::string> &liveSlotNames) {
 
   std::ostringstream os;
   CppEmitter e(os);
@@ -288,8 +298,10 @@ SourceFile generateProcessHeader(
 
   e.emitPublic();
   e.emitEnum("Pc", pcNames);
-  e.emitConstructor(cls, {{"std::string", "name"}, {"gfsim::ObjectId", "id"},
-                          {"gfsim::SimObject *", "parent"}},
+  e.emitConstructor(cls,
+                    {{"std::string", "name"},
+                     {"gfsim::ObjectId", "id"},
+                     {"gfsim::SimObject *", "parent"}},
                     {"SimObject(gfsim::ObjectKind::Process, std::move(name), "
                      "id, parent)",
                      "pc_(Pc::" + pcNames.front() + ")"});
@@ -314,11 +326,12 @@ SourceFile generateProcessHeader(
   return sf;
 }
 
-SourceFile generateProcessSource(
-    const std::string &moduleName, const std::string &processName,
-    const std::vector<std::string> &pcNames,
-    const std::vector<std::string> &liveSlotTypes,
-    const std::vector<std::string> &liveSlotNames) {
+SourceFile
+generateProcessSource(const std::string &moduleName,
+                      const std::string &processName,
+                      const std::vector<std::string> &pcNames,
+                      const std::vector<std::string> &liveSlotTypes,
+                      const std::vector<std::string> &liveSlotNames) {
 
   std::ostringstream os;
   CppEmitter e(os);
@@ -335,7 +348,8 @@ SourceFile generateProcessSource(
             "(std::string name, gfsim::ObjectId id, gfsim::SimObject *parent)\n"
             "    : SimObject(gfsim::ObjectKind::Process, std::move(name), "
             "id, parent),\n"
-            "      pc_(Pc::" + pcNames.front() + ") {}\n\n");
+            "      pc_(Pc::" +
+            pcNames.front() + ") {}\n\n");
 
   // doWork
   e.emitRaw("void " + cls + "::doWork(gfsim::Epoch epoch) {\n");
@@ -370,9 +384,8 @@ SourceFile generateProcessSource(
   return sf;
 }
 
-SourceFile generateModuleHeader(
-    const std::string &moduleName,
-    const std::vector<std::string> &childNames) {
+SourceFile generateModuleHeader(const std::string &moduleName,
+                                const std::vector<std::string> &childNames) {
 
   std::ostringstream os;
   CppEmitter e(os);
@@ -388,8 +401,10 @@ SourceFile generateModuleHeader(
   std::string cls = moduleName + "Module";
   e.beginClass(cls, "gfsim::Module");
   e.emitPublic();
-  e.emitConstructor(cls, {{"std::string", "name"}, {"gfsim::ObjectId", "id"},
-                          {"gfsim::SimObject *", "parent"}},
+  e.emitConstructor(cls,
+                    {{"std::string", "name"},
+                     {"gfsim::ObjectId", "id"},
+                     {"gfsim::SimObject *", "parent"}},
                     {"Module(std::move(name), id, parent)"});
   e.emitMethod("void", "build", {}, false, false, false);
 
@@ -408,9 +423,8 @@ SourceFile generateModuleHeader(
   return sf;
 }
 
-SourceFile generateModuleSource(
-    const std::string &moduleName,
-    const std::vector<std::string> &childNames) {
+SourceFile generateModuleSource(const std::string &moduleName,
+                                const std::vector<std::string> &childNames) {
 
   std::ostringstream os;
   CppEmitter e(os);
@@ -430,11 +444,16 @@ SourceFile generateModuleSource(
   // build
   e.emitRaw("void " + cls + "::build() {\n");
   for (const auto &child : childNames) {
-    e.emitRaw("  " + child +
-              "_ = std::make_unique<gfsim::SimObject>(\n"
-              "      gfsim::ObjectKind::Compute, \"" +
-              child + "\", 0, this);\n");
-    e.emitRaw("  addChild(std::move(" + child + "_));\n");
+    std::string construction = "  " + child;
+    construction += "_ = std::make_unique<gfsim::SimObject>(\n"
+                    "      gfsim::ObjectKind::Compute, \"";
+    construction += child;
+    construction += "\", 0, this);\n";
+    e.emitRaw(construction);
+    std::string addChild = "  addChild(std::move(";
+    addChild += child;
+    addChild += "_));\n";
+    e.emitRaw(addChild);
   }
   e.emitRaw("}\n\n");
 

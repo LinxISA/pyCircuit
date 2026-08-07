@@ -64,7 +64,10 @@ public:
 
   void setFunction(ComputeFn fn) { fn_ = std::move(fn); }
 
-  void setInput(uint64_t value) { inputProposal_ = value; hasInput_ = true; }
+  void setInput(uint64_t value) {
+    inputProposal_ = value;
+    hasInput_ = true;
+  }
 
   void doWork(Epoch) override {
     if (hasInput_ && fn_) {
@@ -109,9 +112,7 @@ public:
   Sink(std::string name, ObjectId id, SimObject *parent)
       : SimObject(ObjectKind::Sink, std::move(name), id, parent) {}
 
-  void receive(uint64_t value) {
-    receivedProposals_.push_back(value);
-  }
+  void receive(uint64_t value) { receivedProposals_.push_back(value); }
 
   void doXfer(Epoch) override {
     for (auto v : receivedProposals_) {
@@ -146,7 +147,10 @@ public:
   Link(std::string name, ObjectId id, SimObject *parent)
       : SimObject(ObjectKind::Link, std::move(name), id, parent) {}
 
-  void forward(uint64_t value) { forwardedProposal_ = value; hasProposal_ = true; }
+  void forward(uint64_t value) {
+    forwardedProposal_ = value;
+    hasProposal_ = true;
+  }
 
   void doXfer(Epoch) override {
     if (hasProposal_) {
@@ -184,13 +188,15 @@ public:
   size_t capacity() const { return storage_.size(); }
 
   bool proposeWrite(size_t addr, uint64_t value) {
-    if (addr >= storage_.size()) return false;
+    if (addr >= storage_.size())
+      return false;
     writeProposals_[addr] = value;
     return true;
   }
 
   uint64_t read(size_t addr) const {
-    if (addr >= storage_.size()) return 0;
+    if (addr >= storage_.size())
+      return 0;
     return storage_[addr];
   }
 
@@ -212,8 +218,7 @@ private:
 
 // ── ReadyValid ────────────────────────────────────────────────────────
 
-template <typename T>
-class ReadyValid : public SimObject {
+template <typename T> class ReadyValid : public SimObject {
 public:
   ReadyValid(std::string name, ObjectId id, SimObject *parent)
       : SimObject(ObjectKind::Link, std::move(name), id, parent) {}
@@ -240,8 +245,10 @@ public:
   bool isRunnable(Epoch) const override { return valid_ && !ready_; }
 
   void reset() override {
-    valid_ = false; ready_ = false;
-    validProposal_ = false; readyProposal_ = false;
+    valid_ = false;
+    ready_ = false;
+    validProposal_ = false;
+    readyProposal_ = false;
     transferCount_ = 0;
   }
 
@@ -263,7 +270,8 @@ public:
         maxInFlight_(maxInFlight) {}
 
   bool sendRequest(Req req, uint64_t id) {
-    if (inFlight_ >= maxInFlight_) return false;
+    if (inFlight_ >= maxInFlight_)
+      return false;
     reqProposals_.push_back({std::move(req), id});
     return true;
   }
@@ -289,7 +297,8 @@ public:
     reqProposals_.clear();
     for (auto &r : respProposals_) {
       committedResps_.push_back(std::move(r));
-      if (inFlight_ > 0) --inFlight_;
+      if (inFlight_ > 0)
+        --inFlight_;
       ++totalCompleted_;
     }
     respProposals_.clear();
@@ -300,13 +309,19 @@ public:
   uint64_t totalCompleted() const { return totalCompleted_; }
 
   void reset() override {
-    reqProposals_.clear(); respProposals_.clear();
-    committedReqs_.clear(); committedResps_.clear();
-    inFlight_ = 0; totalCompleted_ = 0;
+    reqProposals_.clear();
+    respProposals_.clear();
+    committedReqs_.clear();
+    committedResps_.clear();
+    inFlight_ = 0;
+    totalCompleted_ = 0;
   }
 
 private:
-  struct ReqEntry { Req req; uint64_t correlationId; };
+  struct ReqEntry {
+    Req req;
+    uint64_t correlationId;
+  };
   size_t maxInFlight_, inFlight_ = 0;
   uint64_t totalCompleted_ = 0;
   std::vector<ReqEntry> reqProposals_, committedReqs_;
@@ -315,8 +330,7 @@ private:
 
 // ── PacketTraits ─────────────────────────────────────────────────────
 
-template <typename T>
-struct PacketTraits {
+template <typename T> struct PacketTraits {
   static constexpr const char *schema = nullptr;
   static constexpr size_t serializedSize = 0;
   static constexpr size_t alignment = alignof(T);
@@ -332,22 +346,34 @@ concept Packet = requires {
 // ── Protocol state ────────────────────────────────────────────────────
 
 enum class ProtocolPhase : uint8_t {
-  Idle, Request, Response, Transfer, Backpressure,
+  Idle,
+  Request,
+  Response,
+  Transfer,
+  Backpressure,
 };
 
 class ProtocolState {
 public:
-  explicit ProtocolState(size_t maxCredits = 1) : maxCredits_(maxCredits), credits_(maxCredits) {}
+  explicit ProtocolState(size_t maxCredits = 1)
+      : maxCredits_(maxCredits), credits_(maxCredits) {}
   ProtocolPhase phase() const { return phase_; }
   size_t credits() const { return credits_; }
   size_t inFlight() const { return inFlight_; }
   bool canSend() const { return credits_ > 0 && inFlight_ < maxCredits_; }
   bool canReceive() const { return inFlight_ > 0; }
   void startRequest() {
-    if (canSend()) { --credits_; ++inFlight_; phase_ = ProtocolPhase::Request; }
+    if (canSend()) {
+      --credits_;
+      ++inFlight_;
+      phase_ = ProtocolPhase::Request;
+    }
   }
   void completeRequest() {
-    if (inFlight_ > 0) { --inFlight_; ++credits_; }
+    if (inFlight_ > 0) {
+      --inFlight_;
+      ++credits_;
+    }
     phase_ = inFlight_ > 0 ? ProtocolPhase::Transfer : ProtocolPhase::Idle;
   }
   void setBackpressure(bool bp) {
@@ -358,6 +384,7 @@ public:
     credits_ = maxCredits_;
     inFlight_ = 0;
   }
+
 private:
   ProtocolPhase phase_ = ProtocolPhase::Idle;
   size_t maxCredits_, credits_;

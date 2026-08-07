@@ -3,11 +3,11 @@
 
 #include "gfsim/core.h"
 
+#include <cassert>
+#include <memory>
 #include <string>
 #include <string_view>
 #include <vector>
-#include <memory>
-#include <cassert>
 
 namespace gfsim {
 
@@ -93,25 +93,25 @@ public:
   /// Find a child by name (linear scan, acceptable for small fan-out).
   SimObject *findChild(std::string_view name) const {
     for (auto *c : children_)
-      if (c->name() == name) return c;
+      if (c->name() == name)
+        return c;
     return nullptr;
   }
 
   /// Walk all descendants recursively.
-  template <typename F>
-  void walk(F &&fn) {
+  template <typename F> void walk(F &&fn) {
     fn(*this);
     for (auto *c : children_) {
       if (auto *m = dynamic_cast<Module *>(c))
-        m->walk(std::forward<F>(fn));
+        m->walk(fn);
       else
-        fn(*c);
+        // NOLINTNEXTLINE(clang-analyzer-core.NonNullParamChecker)
+        fn(*c); // the children_ invariant guarantees non-null entries
     }
   }
 
   /// Walk all descendants (const version).
-  template <typename F>
-  void walk(F &&fn) const {
+  template <typename F> void walk(F &&fn) const {
     fn(*this);
     for (auto *c : children_) {
       if (auto *m = dynamic_cast<const Module *>(c))

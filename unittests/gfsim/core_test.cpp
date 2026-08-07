@@ -1,8 +1,8 @@
+#include "gfsim/components.h"
 #include "gfsim/core.h"
 #include "gfsim/object.h"
 #include "gfsim/queue.h"
 #include "gfsim/resource.h"
-#include "gfsim/components.h"
 
 #include "gtest/gtest.h"
 
@@ -180,7 +180,9 @@ TEST(GfsimQueueTest, PopAfterPushRoundTrip) {
 
 TEST(GfsimQueueTest, WatermarkTracksPeak) {
   SimQueue<int> q("q", 1, nullptr, 10);
-  q.proposePush(1); q.proposePush(2); q.proposePush(3);
+  q.proposePush(1);
+  q.proposePush(2);
+  q.proposePush(3);
   q.doArbitrate({0, 0});
   q.doXfer({0, 0});
   EXPECT_EQ(q.highWatermark(), 3u);
@@ -193,10 +195,12 @@ TEST(GfsimQueueTest, WatermarkTracksPeak) {
 
 TEST(GfsimQueueTest, MultiplePopsDrainQueue) {
   SimQueue<int> q("q", 1, nullptr, 3);
-  q.proposePush(10); q.proposePush(20);
+  q.proposePush(10);
+  q.proposePush(20);
   q.doArbitrate({0, 0});
   q.doXfer({0, 0});
-  q.proposePop(); q.proposePop();
+  q.proposePop();
+  q.proposePop();
   q.doArbitrate({0, 0});
   q.doXfer({0, 0});
   EXPECT_TRUE(q.isEmpty());
@@ -392,7 +396,8 @@ TEST(GfsimComponentsTest, ComputeTransformsInput) {
 
 TEST(GfsimComponentsTest, SinkAccumulatesValues) {
   Sink s("s", 1, nullptr);
-  s.receive(10); s.receive(20);
+  s.receive(10);
+  s.receive(20);
   s.doXfer({0, 0});
   EXPECT_EQ(s.totalReceived(), 2u);
   ASSERT_EQ(s.received().size(), 2u);
@@ -452,7 +457,8 @@ TEST(GfsimComponentsTest, ComputeResetClearsOutput) {
 
 TEST(GfsimComponentsTest, SinkResetClearsAll) {
   Sink s("s", 1, nullptr);
-  s.receive(1); s.receive(2);
+  s.receive(1);
+  s.receive(2);
   s.doXfer({0, 0});
   EXPECT_EQ(s.totalReceived(), 2u);
   s.reset();
@@ -547,7 +553,8 @@ TEST(GfsimIntegrationTest, ComputeToSinkPipeline) {
 
 TEST(GfsimIntegrationTest, QueueProducerConsumer) {
   SimQueue<int> q("fifo", 1, nullptr, 5);
-  q.proposePush(10); q.proposePush(20);
+  q.proposePush(10);
+  q.proposePush(20);
   q.doArbitrate({0, 0});
   q.doXfer({0, 0});
   auto v1 = q.proposePop();
@@ -555,8 +562,10 @@ TEST(GfsimIntegrationTest, QueueProducerConsumer) {
   auto v3 = q.proposePop();
   q.doArbitrate({0, 0});
   q.doXfer({0, 0});
-  ASSERT_TRUE(v1.has_value()); EXPECT_EQ(*v1, 10);
-  ASSERT_TRUE(v2.has_value()); EXPECT_EQ(*v2, 20);
+  ASSERT_TRUE(v1.has_value());
+  EXPECT_EQ(*v1, 10);
+  ASSERT_TRUE(v2.has_value());
+  EXPECT_EQ(*v2, 20);
   EXPECT_FALSE(v3.has_value());
   EXPECT_TRUE(q.isEmpty());
 }

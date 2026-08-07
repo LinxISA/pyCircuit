@@ -5,8 +5,8 @@
 
 #include <filesystem>
 #include <fstream>
-#include <sstream>
 #include <iomanip>
+#include <sstream>
 
 namespace acir::codegen {
 
@@ -15,23 +15,30 @@ Fingerprint computeFingerprint(const std::string &content) {
       reinterpret_cast<const uint8_t *>(content.data()), content.size()));
   std::ostringstream os;
   for (uint8_t byte : hash)
-    os << std::hex << std::setfill('0') << std::setw(2) << static_cast<int>(byte);
+    os << std::hex << std::setfill('0') << std::setw(2)
+       << static_cast<int>(byte);
   return os.str();
 }
 
 Fingerprint compositeFingerprint(const std::vector<Fingerprint> &inputs) {
   std::string combined;
-  for (const auto &fp : inputs) combined += fp + "\n";
+  for (const auto &fp : inputs)
+    combined += fp + "\n";
   return computeFingerprint(combined);
 }
 
 void BuildManifest::finalize() {
   std::vector<Fingerprint> inputs;
-  if (!inputFingerprint.empty()) inputs.push_back(inputFingerprint);
-  if (!toolchainFingerprint.empty()) inputs.push_back(toolchainFingerprint);
-  if (!profileFingerprint.empty()) inputs.push_back(profileFingerprint);
-  if (!bindingFingerprint.empty()) inputs.push_back(bindingFingerprint);
-  for (const auto &src : sources) inputs.push_back(src.fingerprint);
+  if (!inputFingerprint.empty())
+    inputs.push_back(inputFingerprint);
+  if (!toolchainFingerprint.empty())
+    inputs.push_back(toolchainFingerprint);
+  if (!profileFingerprint.empty())
+    inputs.push_back(profileFingerprint);
+  if (!bindingFingerprint.empty())
+    inputs.push_back(bindingFingerprint);
+  for (const auto &src : sources)
+    inputs.push_back(src.fingerprint);
   outputFingerprint = compositeFingerprint(inputs);
 }
 
@@ -67,12 +74,15 @@ std::string StagedOutput::writeManifest(const BuildManifest &manifest) {
   out << "  \"contract_epoch\": \"" << manifest.contractEpoch << "\",\n";
   out << "  \"schema\": \"" << manifest.schema << "\",\n";
   out << "  \"input_fingerprint\": \"" << manifest.inputFingerprint << "\",\n";
-  out << "  \"output_fingerprint\": \"" << manifest.outputFingerprint << "\",\n";
+  out << "  \"output_fingerprint\": \"" << manifest.outputFingerprint
+      << "\",\n";
   out << "  \"sources\": [\n";
   for (size_t i = 0; i < manifest.sources.size(); ++i) {
     out << "    { \"path\": \"" << manifest.sources[i].relativePath
-        << "\", \"fingerprint\": \"" << manifest.sources[i].fingerprint << "\" }";
-    if (i + 1 < manifest.sources.size()) out << ",";
+        << "\", \"fingerprint\": \"" << manifest.sources[i].fingerprint
+        << "\" }";
+    if (i + 1 < manifest.sources.size())
+      out << ",";
     out << "\n";
   }
   out << "  ]\n}\n";

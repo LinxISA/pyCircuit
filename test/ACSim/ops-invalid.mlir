@@ -25,6 +25,7 @@
 // RUN: %not %acir_opt %t/bind-pure-view-mismatch.mlir 2>&1 | %FileCheck %s --check-prefix=BIND-MISMATCH
 // RUN: %not %acir_opt %t/suspend-non-wake.mlir 2>&1 | %FileCheck %s --check-prefix=SUSPEND-WAKE
 // RUN: %not %acir_opt %t/export-ghost.mlir 2>&1 | %FileCheck %s --check-prefix=EXPORT-COVER
+// RUN: %not %acir_opt %t/port-bad-base.mlir 2>&1 | %FileCheck %s --check-prefix=PORT-BASE
 
 // GENERIC: error: generic ACIR operation spelling is internal-only
 // EPOCH: contract epoch must be exactly "0.1"
@@ -496,3 +497,51 @@ builtin.module {
   }
 }
 // EXPORT-COVER: error: 'acsim.module' op module exports must exactly cover its ordered interface records
+
+//--- port-bad-base.mlir
+builtin.module {
+  acsim.model @m epoch "0.1" root @M construction ["M.i"] destruction ["M.i"] fingerprints {
+    frozen_acir = "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    binding_lock = "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    provider = "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    profile = "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    toolchain = "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    schema_set = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+  } {
+    acsim.type @comb_domain cpp "gfsim::CombinationalDomain" kind "time_domain" fingerprint "sha256:0e00000000000000000000000000000000000000000000000000000000000000"
+    acsim.type @cpp_bool cpp "bool" kind "value" fingerprint "sha256:1000000000000000000000000000000000000000000000000000000000000000"
+    acsim.type @event_kind cpp "gfsim::EventWake" kind "wake" fingerprint "sha256:2000000000000000000000000000000000000000000000000000000000000000"
+    acsim.type @gfsim cpp "gfsim" kind "provider" fingerprint "sha256:3000000000000000000000000000000000000000000000000000000000000000"
+    acsim.type @interface cpp "gfsim::Stream" kind "interface" fingerprint "sha256:4000000000000000000000000000000000000000000000000000000000000000"
+    acsim.type @payload cpp "Packet" kind "packet" fingerprint "sha256:5000000000000000000000000000000000000000000000000000000000000000"
+    acsim.type @port_accessor cpp "output" kind "accessor" fingerprint "sha256:6000000000000000000000000000000000000000000000000000000000000000"
+    acsim.type @protocol cpp "gfsim::ReadyValid" kind "protocol" fingerprint "sha256:7000000000000000000000000000000000000000000000000000000000000000"
+    acsim.type @role cpp "gfsim::Producer" kind "role" fingerprint "sha256:c000000000000000000000000000000000000000000000000000000000000000"
+    acsim.type @stateful_impl cpp "gfsim::Fifo" kind "implementation" fingerprint "sha256:d000000000000000000000000000000000000000000000000000000000000000"
+    acsim.type @stateful_schema cpp "fifo.schema" kind "schema" fingerprint "sha256:e000000000000000000000000000000000000000000000000000000000000000"
+    acsim.binding @stateful record {
+      activation_sources = [{kind = @event_kind, name = "commit"}], availability = "available", binding = "stateful",
+      binding_schema = "acsim-binding-0.1", component_schema = @stateful_schema,
+      component_schema_fingerprint = "sha256:e000000000000000000000000000000000000000000000000000000000000000",
+      construction = {arguments = [], kind = "constructor"}, contract_epoch = "0.1",
+      cpp = {concept = "gfsim::StatefulModel", entry_points = {pure = "", reset = "fifo_reset", validate = "fifo_validate", work = "fifo_work", xfer = "fifo_xfer"}, header = "gfsim/fifo.hpp", symbol = "gfsim::Fifo", target = "gfsim"},
+      cpp_type = @cpp_bool, effect = "stateful", fingerprint = "sha256:1200000000000000000000000000000000000000000000000000000000000000",
+      implementation = @stateful_impl, ownership = {kind = "unique", placement = "member_or_array"},
+      parameters = [],
+      ports = [
+        {accessor = @port_accessor, cardinality = "exclusive", delegation = "forbidden", direction = "output", interface = @interface, ownership = "borrowed", payload = @payload, protocol = @protocol, role = @role, time_domain = @comb_domain}
+      ], provider = @gfsim,
+      provider_implementation_fingerprint = "sha256:d000000000000000000000000000000000000000000000000000000000000000",
+      resources = [], results = []
+    }
+    acsim.module @M interface {ports = [], resources = [], results = []} static [] specialization "sha256:0000000000000000000000000000000000000000000000000000000000000000" exports [] {
+      %inst = acsim.instance @i target @stateful args [] specialization "sha256:0000000000000000000000000000000000000000000000000000000000000000" : !acsim.owner<@stateful>
+      %p = acsim.port %inst accessor @port_accessor
+        : !acsim.owner<@stateful> -> !acsim.port<@interface, @role, @payload, @protocol>
+      %bad = acsim.port %p accessor @port_accessor
+        : !acsim.port<@interface, @role, @payload, @protocol> -> !acsim.port<@interface, @role, @payload, @protocol>
+      acsim.return
+    }
+  }
+}
+// PORT-BASE: error: 'acsim.port' op port projection requires a typed owner/ref and typed port result

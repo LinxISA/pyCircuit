@@ -72,14 +72,13 @@ TEST_F(ACIRToACSimTest, CapabilityBoundOverflowIsAtomicDispatchFailure) {
   options.maxExpandedRows = 1;
 
   std::string diagnostic;
-  mlir::ScopedDiagnosticHandler handler(
-      &context, [&](mlir::Diagnostic &diag) {
-        if (diag.getSeverity() == mlir::DiagnosticSeverity::Error) {
-          diagnostic += diag.str();
-          diagnostic += '\n';
-        }
-        return mlir::success();
-      });
+  mlir::ScopedDiagnosticHandler handler(&context, [&](mlir::Diagnostic &diag) {
+    if (diag.getSeverity() == mlir::DiagnosticSeverity::Error) {
+      diagnostic += diag.str();
+      diagnostic += '\n';
+    }
+    return mlir::success();
+  });
   mlir::PassManager manager(&context);
   manager.addPass(createACIRToACSimPass(options));
   EXPECT_TRUE(mlir::failed(manager.run(module.get())));

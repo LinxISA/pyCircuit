@@ -1,12 +1,12 @@
 #ifndef GFSIM_CORE_H
 #define GFSIM_CORE_H
 
-#include <cstdint>
 #include <compare>
+#include <cstdint>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
-#include <optional>
 
 namespace gfsim {
 
@@ -61,9 +61,9 @@ enum class ObjectKind : uint8_t {
 // ── Termination ───────────────────────────────────────────────────────
 
 enum class TerminationClass : uint8_t {
-  Completed,   // All work finished, no pending events, trace exhausted
-  Incomplete,  // Reached a declared cap without contract violation
-  Failed,      // Contract violation, assertion, or runtime error
+  Completed,  // All work finished, no pending events, trace exhausted
+  Incomplete, // Reached a declared cap without contract violation
+  Failed,     // Contract violation, assertion, or runtime error
 };
 
 struct TerminationResult {
@@ -78,10 +78,10 @@ struct TerminationResult {
 // ── Build profiles ────────────────────────────────────────────────────
 
 enum class BuildProfile : uint8_t {
-  Fast,       // Required representation, safety, capacity, and contract checks
-  Validated,  // Fast + post-pass verification, transaction-lifetime checks,
-              //   arbitration audits, event provenance, quiescence checks
-  Custom,     // Explicit pass pipeline retaining all mandatory Fast checks
+  Fast,      // Required representation, safety, capacity, and contract checks
+  Validated, // Fast + post-pass verification, transaction-lifetime checks,
+             //   arbitration audits, event provenance, quiescence checks
+  Custom,    // Explicit pass pipeline retaining all mandatory Fast checks
 };
 
 // ── Static preflight ──────────────────────────────────────────────────
