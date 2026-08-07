@@ -179,8 +179,7 @@ int runDriver(int argc, char **argv) {
         if (loweringOptions) {
           // Atomic whole-model lowering publishes canonical ACSim, so the
           // trailing ACIR whole-model gate does not apply to its output.
-          passManager.addPass(
-              acir::createACIRToACSimPass(*loweringOptions));
+          passManager.addPass(acir::createACIRToACSimPass(*loweringOptions));
           return mlir::success();
         }
         // The final whole-model gate makes a persisted freeze digest effective

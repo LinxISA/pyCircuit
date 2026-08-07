@@ -868,7 +868,9 @@ TEST(ProcessStatePlanBasicTest, EveryFrozenSemanticCorruptionIsRejected) {
       "process-state plan invariant violated: cost mismatch",
       "process-state plan invariant violated: definition key mismatch",
       "process-state plan invariant violated: callee specialization mismatch",
-      "process-state plan invariant violated: value-type specialization mismatch",
+      // NOLINTNEXTLINE(bugprone-suspicious-missing-comma) intentional split
+      "process-state plan invariant violated: value-type specialization "
+      "mismatch",
       "process-state plan invariant violated: effect mismatch",
       "process-state plan invariant violated: ID kind mismatch",
       "process-state plan invariant violated: wrong type key",
