@@ -44,6 +44,7 @@
 // RUN: %not %acir_opt %t/zero-size.mlir 2>&1 | %FileCheck %s --check-prefix=ZERO-SIZE
 // RUN: %not %acir_opt %t/interleave-alignment.mlir 2>&1 | %FileCheck %s --check-prefix=INTERLEAVE-ALIGNMENT
 // RUN: %not %acir_opt %t/mixed-interleave-overlap.mlir 2>&1 | %FileCheck %s --check-prefix=MIXED-INTERLEAVE-OVERLAP
+// RUN: %not %acir_opt %t/relation-limit.mlir 2>&1 | %FileCheck %s --check-prefix=RELATION-LIMIT
 // RUN: %not %acir_opt %t/different-granularity-overlap.mlir 2>&1 | %FileCheck %s --check-prefix=DIFFERENT-GRANULARITY-OVERLAP
 
 //--- period-zero.mlir
@@ -487,3 +488,113 @@ builtin.module attributes {ac.contract_epoch = "0.1"} {
   }) : () -> ()
 }
 // DIFFERENT-GRANULARITY-OVERLAP: overlapping selector intersections require explicit distinct priorities
+
+//--- relation-limit.mlir
+builtin.module attributes {ac.contract_epoch = "0.1"} {
+  "ac.module"() <{sym_name = "M", function_type = () -> (), static_params = {}}> ({
+    "ac.address_space"() <{sym_name = "space", stable_id = "space", path = "space", address_width = 8 : i64, address_unit = "byte"}> : () -> ()
+    "ac.address_map"() <{sym_name = "m", source = @space, entries = [
+      {base = 0 : i64, size = 16 : i64, target = @space, offset = 0 : i64,
+       permissions = ["read"], classes = [],
+       interleave = {granularity = 1 : i64, banks = 2 : i64, bank = 0 : i64}},
+      {base = 0 : i64, size = 16 : i64, target = @space, offset = 0 : i64,
+       permissions = ["read"], classes = [],
+       interleave = {granularity = 1 : i64, banks = 2 : i64, bank = 0 : i64}},
+      {base = 0 : i64, size = 16 : i64, target = @space, offset = 0 : i64,
+       permissions = ["read"], classes = [],
+       interleave = {granularity = 1 : i64, banks = 2 : i64, bank = 0 : i64}},
+      {base = 0 : i64, size = 16 : i64, target = @space, offset = 0 : i64,
+       permissions = ["read"], classes = [],
+       interleave = {granularity = 1 : i64, banks = 2 : i64, bank = 0 : i64}},
+      {base = 0 : i64, size = 16 : i64, target = @space, offset = 0 : i64,
+       permissions = ["read"], classes = [],
+       interleave = {granularity = 1 : i64, banks = 2 : i64, bank = 0 : i64}},
+      {base = 0 : i64, size = 16 : i64, target = @space, offset = 0 : i64,
+       permissions = ["read"], classes = [],
+       interleave = {granularity = 1 : i64, banks = 2 : i64, bank = 0 : i64}},
+      {base = 0 : i64, size = 16 : i64, target = @space, offset = 0 : i64,
+       permissions = ["read"], classes = [],
+       interleave = {granularity = 1 : i64, banks = 2 : i64, bank = 0 : i64}},
+      {base = 0 : i64, size = 16 : i64, target = @space, offset = 0 : i64,
+       permissions = ["read"], classes = [],
+       interleave = {granularity = 1 : i64, banks = 2 : i64, bank = 0 : i64}},
+      {base = 0 : i64, size = 16 : i64, target = @space, offset = 0 : i64,
+       permissions = ["read"], classes = [],
+       interleave = {granularity = 1 : i64, banks = 2 : i64, bank = 0 : i64}},
+      {base = 0 : i64, size = 16 : i64, target = @space, offset = 0 : i64,
+       permissions = ["read"], classes = [],
+       interleave = {granularity = 1 : i64, banks = 2 : i64, bank = 0 : i64}},
+      {base = 0 : i64, size = 16 : i64, target = @space, offset = 0 : i64,
+       permissions = ["read"], classes = [],
+       interleave = {granularity = 1 : i64, banks = 2 : i64, bank = 0 : i64}},
+      {base = 0 : i64, size = 16 : i64, target = @space, offset = 0 : i64,
+       permissions = ["read"], classes = [],
+       interleave = {granularity = 1 : i64, banks = 2 : i64, bank = 0 : i64}},
+      {base = 0 : i64, size = 16 : i64, target = @space, offset = 0 : i64,
+       permissions = ["read"], classes = [],
+       interleave = {granularity = 1 : i64, banks = 2 : i64, bank = 0 : i64}},
+      {base = 0 : i64, size = 16 : i64, target = @space, offset = 0 : i64,
+       permissions = ["read"], classes = [],
+       interleave = {granularity = 1 : i64, banks = 2 : i64, bank = 0 : i64}},
+      {base = 0 : i64, size = 16 : i64, target = @space, offset = 0 : i64,
+       permissions = ["read"], classes = [],
+       interleave = {granularity = 1 : i64, banks = 2 : i64, bank = 0 : i64}},
+      {base = 0 : i64, size = 16 : i64, target = @space, offset = 0 : i64,
+       permissions = ["read"], classes = [],
+       interleave = {granularity = 1 : i64, banks = 2 : i64, bank = 0 : i64}},
+      {base = 0 : i64, size = 16 : i64, target = @space, offset = 0 : i64,
+       permissions = ["read"], classes = [],
+       interleave = {granularity = 1 : i64, banks = 2 : i64, bank = 0 : i64}},
+      {base = 0 : i64, size = 16 : i64, target = @space, offset = 0 : i64,
+       permissions = ["read"], classes = [],
+       interleave = {granularity = 1 : i64, banks = 4 : i64, bank = 2 : i64}},
+      {base = 0 : i64, size = 16 : i64, target = @space, offset = 0 : i64,
+       permissions = ["read"], classes = [],
+       interleave = {granularity = 1 : i64, banks = 4 : i64, bank = 2 : i64}},
+      {base = 0 : i64, size = 16 : i64, target = @space, offset = 0 : i64,
+       permissions = ["read"], classes = [],
+       interleave = {granularity = 1 : i64, banks = 4 : i64, bank = 2 : i64}},
+      {base = 0 : i64, size = 16 : i64, target = @space, offset = 0 : i64,
+       permissions = ["read"], classes = [],
+       interleave = {granularity = 1 : i64, banks = 4 : i64, bank = 2 : i64}},
+      {base = 0 : i64, size = 16 : i64, target = @space, offset = 0 : i64,
+       permissions = ["read"], classes = [],
+       interleave = {granularity = 1 : i64, banks = 4 : i64, bank = 2 : i64}},
+      {base = 0 : i64, size = 16 : i64, target = @space, offset = 0 : i64,
+       permissions = ["read"], classes = [],
+       interleave = {granularity = 1 : i64, banks = 4 : i64, bank = 2 : i64}},
+      {base = 0 : i64, size = 16 : i64, target = @space, offset = 0 : i64,
+       permissions = ["read"], classes = [],
+       interleave = {granularity = 1 : i64, banks = 4 : i64, bank = 2 : i64}},
+      {base = 0 : i64, size = 16 : i64, target = @space, offset = 0 : i64,
+       permissions = ["read"], classes = [],
+       interleave = {granularity = 1 : i64, banks = 4 : i64, bank = 2 : i64}},
+      {base = 0 : i64, size = 16 : i64, target = @space, offset = 0 : i64,
+       permissions = ["read"], classes = [],
+       interleave = {granularity = 1 : i64, banks = 4 : i64, bank = 2 : i64}},
+      {base = 0 : i64, size = 16 : i64, target = @space, offset = 0 : i64,
+       permissions = ["read"], classes = [],
+       interleave = {granularity = 1 : i64, banks = 4 : i64, bank = 2 : i64}},
+      {base = 0 : i64, size = 16 : i64, target = @space, offset = 0 : i64,
+       permissions = ["read"], classes = [],
+       interleave = {granularity = 1 : i64, banks = 4 : i64, bank = 2 : i64}},
+      {base = 0 : i64, size = 16 : i64, target = @space, offset = 0 : i64,
+       permissions = ["read"], classes = [],
+       interleave = {granularity = 1 : i64, banks = 4 : i64, bank = 2 : i64}},
+      {base = 0 : i64, size = 16 : i64, target = @space, offset = 0 : i64,
+       permissions = ["read"], classes = [],
+       interleave = {granularity = 1 : i64, banks = 4 : i64, bank = 2 : i64}},
+      {base = 0 : i64, size = 16 : i64, target = @space, offset = 0 : i64,
+       permissions = ["read"], classes = [],
+       interleave = {granularity = 1 : i64, banks = 4 : i64, bank = 2 : i64}},
+      {base = 0 : i64, size = 16 : i64, target = @space, offset = 0 : i64,
+       permissions = ["read"], classes = [],
+       interleave = {granularity = 1 : i64, banks = 4 : i64, bank = 2 : i64}},
+      {base = 0 : i64, size = 16 : i64, target = @space, offset = 0 : i64,
+       permissions = ["read"], classes = [],
+       interleave = {granularity = 1 : i64, banks = 4 : i64, bank = 2 : i64}}
+    ], default_behavior = {kind = "unmapped"}}> : () -> ()
+    "ac.return"() : () -> ()
+  }) : () -> ()
+}
+// RELATION-LIMIT: general mixed interleave analysis exceeds ACIR v0.1 limit 256
