@@ -4,6 +4,8 @@
 // RUN: %not %acir_opt %t/bad-stat.mlir 2>&1 | %FileCheck %s --check-prefix=STAT
 // RUN: %not %acir_opt %t/monitor-effect.mlir 2>&1 | %FileCheck %s --check-prefix=MONITOR
 // RUN: %not %acir_opt %t/static-assert.mlir 2>&1 | %FileCheck %s --check-prefix=STATIC-ASSERT
+// RUN: %not %acir_opt %t/require-non-boolean.mlir 2>&1 | %FileCheck %s --check-prefix=REQUIRE-TYPE
+// RUN: %not %acir_opt %t/ensure-non-boolean.mlir 2>&1 | %FileCheck %s --check-prefix=ENSURE-TYPE
 
 //--- probe-dataflow.mlir
 builtin.module attributes {ac.contract_epoch = "0.1"} {
@@ -66,3 +68,23 @@ builtin.module attributes {ac.contract_epoch = "0.1"} {
   }
 }
 // STATIC-ASSERT: operation is not legal in an ac.module structural Graph region
+
+//--- require-non-boolean.mlir
+builtin.module attributes {ac.contract_epoch = "0.1"} {
+  ac.module @M() parameters {} graph {
+    %bad = arith.constant 1 : i32
+    ac.require %bad, "non-boolean require"
+    ac.return
+  }
+}
+// REQUIRE-TYPE: error: use of value '%bad' expects different type than prior uses: 'i1' vs 'i32'
+
+//--- ensure-non-boolean.mlir
+builtin.module attributes {ac.contract_epoch = "0.1"} {
+  ac.module @M() parameters {} graph {
+    %bad = arith.constant 1 : i32
+    ac.ensure %bad, "non-boolean ensure"
+    ac.return
+  }
+}
+// ENSURE-TYPE: error: use of value '%bad' expects different type than prior uses: 'i1' vs 'i32'

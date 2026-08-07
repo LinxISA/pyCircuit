@@ -11,6 +11,8 @@
 // RUN: %not %acir_opt %t/for-induction-cursor.mlir 2>&1 | %FileCheck %s --check-prefix=FOR-INDUCTION
 // RUN: %not %acir_opt %t/decode-non-next.mlir 2>&1 | %FileCheck %s --check-prefix=DECODE-NON-NEXT
 // RUN: %not %acir_opt %t/decode-not-in-process.mlir 2>&1 | %FileCheck %s --check-prefix=DECODE-NOT-PROCESS
+// RUN: %not %acir_opt %t/eof-non-cursor.mlir 2>&1 | %FileCheck %s --check-prefix=EOF-TYPE
+// RUN: %not %acir_opt %t/position-non-cursor.mlir 2>&1 | %FileCheck %s --check-prefix=POSITION-TYPE
 
 //--- forked-cursor.mlir
 builtin.module attributes {ac.contract_epoch = "0.1"} {
@@ -201,3 +203,29 @@ builtin.module attributes {ac.contract_epoch = "0.1"} {
     ac.return
   }
 }
+
+//--- eof-non-cursor.mlir
+builtin.module attributes {ac.contract_epoch = "0.1"} {
+  ac.module @M() parameters {} graph {
+    ac.process @p kind "workload" {
+      %bad = arith.constant 1 : i32
+      %eof = ac.trace.eof %bad from source "pto"
+      ac.yield_sim
+    }
+    ac.return
+  }
+}
+// EOF-TYPE: error: use of value '%bad' expects different type than prior uses: 'index' vs 'i32'
+
+//--- position-non-cursor.mlir
+builtin.module attributes {ac.contract_epoch = "0.1"} {
+  ac.module @M() parameters {} graph {
+    ac.process @p kind "workload" {
+      %bad = arith.constant 1 : i32
+      %position = ac.trace.position %bad from source "pto"
+      ac.yield_sim
+    }
+    ac.return
+  }
+}
+// POSITION-TYPE: error: use of value '%bad' expects different type than prior uses: 'index' vs 'i32'

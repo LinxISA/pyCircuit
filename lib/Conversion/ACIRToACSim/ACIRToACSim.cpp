@@ -598,13 +598,9 @@ ACIRToACSimPass::planInstanceTarget(Operation *placement,
                             "' requires a stateful binding, but binding '" +
                             record.binding() + "' has effect '" +
                             record.effect() + "'");
+    // Registry validation has already proven that every stateful record
+    // carries its exact work/xfer/reset/validate entry points.
     const bindings::CppEntryPoints &entryPoints = record.cpp().entryPoints;
-    if (entryPoints.work.empty() || entryPoints.xfer.empty() ||
-        entryPoints.reset.empty() || entryPoints.validate.empty())
-      return lowerError(placement, "ACLOWER-DISPATCH",
-                        "binding '" + record.binding() +
-                            "' has empty dispatch entry points and cannot "
-                            "realize a runtime object");
     planned.targetSymbol = record.binding().str();
     planned.targetIsBinding = true;
     OpBuilder builder(placement->getContext());
@@ -1025,8 +1021,10 @@ mlir::LogicalResult ACIRToACSimPass::plan(mlir::ModuleOp input) {
     return lowerError(input, "ACLOWER-OWNERSHIP",
                       "module instantiation cycle cannot produce canonical "
                       "ACSim ownership order");
-  if (constructionOrder.size() > kMaxExpandedRows ||
-      runtimeRows.size() > kMaxExpandedRows)
+  const uint64_t maxExpandedRows =
+      options.maxExpandedRows != 0 ? options.maxExpandedRows : kMaxExpandedRows;
+  if (constructionOrder.size() > maxExpandedRows ||
+      runtimeRows.size() > maxExpandedRows)
     return lowerError(input, "ACLOWER-DISPATCH",
                       "expanded hierarchy exceeds the v0.1 capability bound");
   return mlir::success();

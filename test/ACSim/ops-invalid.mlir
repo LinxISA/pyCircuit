@@ -19,6 +19,12 @@
 // RUN: %not %acir_opt %t/continue-missing.mlir 2>&1 | %FileCheck %s --check-prefix=CONTINUE-MISSING
 // RUN: %not %acir_opt %t/dispatch-negative.mlir 2>&1 | %FileCheck %s --check-prefix=DISPATCH-NEGATIVE
 // RUN: %not %acir_opt %t/activate-types.mlir 2>&1 | %FileCheck %s --check-prefix=ACTIVATE-TYPES
+// RUN: %not %acir_opt %t/binding-missing-field.mlir 2>&1 | %FileCheck %s --check-prefix=BINDING-SHAPE
+// RUN: %not %acir_opt %t/element-out-of-bounds.mlir 2>&1 | %FileCheck %s --check-prefix=ELEMENT-BOUNDS
+// RUN: %not %acir_opt %t/resource-bad-accessor.mlir 2>&1 | %FileCheck %s --check-prefix=RESOURCE-ACCESSOR
+// RUN: %not %acir_opt %t/bind-pure-view-mismatch.mlir 2>&1 | %FileCheck %s --check-prefix=BIND-MISMATCH
+// RUN: %not %acir_opt %t/suspend-non-wake.mlir 2>&1 | %FileCheck %s --check-prefix=SUSPEND-WAKE
+// RUN: %not %acir_opt %t/export-ghost.mlir 2>&1 | %FileCheck %s --check-prefix=EXPORT-COVER
 
 // GENERIC: error: generic ACIR operation spelling is internal-only
 // EPOCH: contract epoch must be exactly "0.1"
@@ -339,3 +345,154 @@ builtin.module {
     acsim.activate %obj to %act : !acsim.object_id to !acsim.activation_id
   }
 }
+
+//--- binding-missing-field.mlir
+builtin.module {
+  acsim.model @m epoch "0.1" root @M construction [] destruction [] fingerprints {
+    frozen_acir = "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    binding_lock = "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    provider = "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    profile = "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    toolchain = "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    schema_set = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+  } {
+    acsim.type @cpp_bool cpp "bool" kind "value" fingerprint "sha256:1000000000000000000000000000000000000000000000000000000000000000"
+    acsim.type @gfsim cpp "gfsim" kind "provider" fingerprint "sha256:3000000000000000000000000000000000000000000000000000000000000000"
+    acsim.type @pure_impl cpp "gfsim::is_ready" kind "implementation" fingerprint "sha256:8000000000000000000000000000000000000000000000000000000000000000"
+    acsim.type @pure_schema cpp "pure.schema" kind "schema" fingerprint "sha256:9000000000000000000000000000000000000000000000000000000000000000"
+    acsim.binding @pure record {
+      activation_sources = [], availability = "available", binding = "pure",
+      binding_schema = "acsim-binding-0.1", component_schema = @pure_schema,
+      component_schema_fingerprint = "sha256:9000000000000000000000000000000000000000000000000000000000000000",
+      construction = {arguments = [], kind = "constructor"}, contract_epoch = "0.1",
+      cpp = {concept = "gfsim::PureModel", entry_points = {pure = "gfsim::is_ready", reset = "", validate = "", work = "", xfer = ""}, header = "gfsim/pure.hpp", symbol = "gfsim::Pure", target = "gfsim"},
+      cpp_type = @cpp_bool, effect = "pure", fingerprint = "sha256:1100000000000000000000000000000000000000000000000000000000000000",
+      implementation = @pure_impl, ownership = {kind = "none", placement = "inline"},
+      parameters = [], ports = [], provider = @gfsim,
+      provider_implementation_fingerprint = "sha256:8000000000000000000000000000000000000000000000000000000000000000",
+      resources = []
+    }
+    acsim.module @M interface {ports = [], resources = [], results = []} static [] specialization "sha256:0000000000000000000000000000000000000000000000000000000000000000" exports [] {
+      acsim.return
+    }
+  }
+}
+// BINDING-SHAPE: error: 'acsim.binding' op binding lock must contain exactly the acsim-binding-0.1 fields
+
+//--- element-out-of-bounds.mlir
+builtin.module {
+  acsim.model @m epoch "0.1" root @M construction ["M.lanes[0]", "M.lanes[1]"] destruction ["M.lanes[1]", "M.lanes[0]"] fingerprints {
+    frozen_acir = "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    binding_lock = "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    provider = "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    profile = "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    toolchain = "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    schema_set = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+  } {
+    acsim.module @A interface {ports = [], resources = [], results = []} static [] specialization "sha256:0000000000000000000000000000000000000000000000000000000000000000" exports [] {
+      acsim.return
+    }
+    acsim.module @M interface {ports = [], resources = [], results = []} static [] specialization "sha256:0000000000000000000000000000000000000000000000000000000000000000" exports [] {
+      %lanes = acsim.array @lanes target @A args [] specialization "sha256:0000000000000000000000000000000000000000000000000000000000000000" shape [2] : !acsim.array<[2], !acsim.owner<@A>>
+      %lane5 = acsim.element %lanes indices [5] : !acsim.array<[2], !acsim.owner<@A>> -> !acsim.ref<@A>
+      acsim.return
+    }
+  }
+}
+// ELEMENT-BOUNDS: error: 'acsim.element' op element index is out of static bounds
+
+//--- resource-bad-accessor.mlir
+builtin.module {
+  acsim.model @m epoch "0.1" root @M construction ["M.i"] destruction ["M.i"] fingerprints {
+    frozen_acir = "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    binding_lock = "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    provider = "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    profile = "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    toolchain = "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    schema_set = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+  } {
+    acsim.type @init cpp "gfsim::Initiator" kind "role" fingerprint "sha256:3f00000000000000000000000000000000000000000000000000000000000000"
+    acsim.type @rk cpp "gfsim::Memory" kind "resource" fingerprint "sha256:b000000000000000000000000000000000000000000000000000000000000000"
+    acsim.module @A interface {ports = [], resources = [], results = []} static [] specialization "sha256:0000000000000000000000000000000000000000000000000000000000000000" exports [] {
+      acsim.return
+    }
+    acsim.module @M interface {ports = [], resources = [], results = []} static [] specialization "sha256:0000000000000000000000000000000000000000000000000000000000000000" exports [] {
+      %inst = acsim.instance @i target @A args [] specialization "sha256:0000000000000000000000000000000000000000000000000000000000000000" : !acsim.owner<@A>
+      %r = acsim.resource %inst accessor @init : !acsim.owner<@A> -> !acsim.resource<@rk, @init>
+      acsim.return
+    }
+  }
+}
+// RESOURCE-ACCESSOR: error: 'acsim.resource' op resource accessor reference '@init' has incompatible acsim.type kind 'role'
+
+//--- bind-pure-view-mismatch.mlir
+builtin.module {
+  acsim.model @m epoch "0.1" root @M construction [] destruction [] fingerprints {
+    frozen_acir = "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    binding_lock = "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    provider = "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    profile = "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    toolchain = "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    schema_set = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+  } {
+    acsim.type @cpp_bool cpp "bool" kind "value" fingerprint "sha256:1000000000000000000000000000000000000000000000000000000000000000"
+    acsim.type @cpp_other cpp "int" kind "value" fingerprint "sha256:1100000000000000000000000000000000000000000000000000000000000000"
+    acsim.type @pure_impl cpp "gfsim::is_ready" kind "implementation" fingerprint "sha256:8000000000000000000000000000000000000000000000000000000000000000"
+    acsim.module @M interface {ports = [], resources = [], results = []} static [] specialization "sha256:0000000000000000000000000000000000000000000000000000000000000000" exports [] {
+      %a = acsim.inline @pure_impl() : () -> !acsim.expr<@cpp_bool>
+      %b = acsim.inline @pure_impl() : () -> !acsim.expr<@cpp_other>
+      acsim.bind %a to %b kind "pure_view" : !acsim.expr<@cpp_bool> to !acsim.expr<@cpp_other>
+      acsim.return
+    }
+  }
+}
+// BIND-MISMATCH: error: 'acsim.bind' op pure_view target must directly consume the source expression
+
+//--- suspend-non-wake.mlir
+builtin.module {
+  acsim.model @m epoch "0.1" root @M construction ["M.p"] destruction ["M.p"] fingerprints {
+    frozen_acir = "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    binding_lock = "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    provider = "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    profile = "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    toolchain = "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    schema_set = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+  } {
+    acsim.type @cpp_bool cpp "bool" kind "value" fingerprint "sha256:1000000000000000000000000000000000000000000000000000000000000000"
+    acsim.module @M interface {ports = [], resources = [], results = []} static [] specialization "sha256:0000000000000000000000000000000000000000000000000000000000000000" exports [] {
+      acsim.process @p captures() names [] entry @entry pcs [@entry, @done] live [] fairness 1 specialization "sha256:0000000000000000000000000000000000000000000000000000000000000000" {
+        state @entry {
+          %scalar = acsim.inline @cpp_bool() : () -> i32
+          acsim.suspend @done on %scalar : i32
+        }
+        state @done { acsim.terminate "success" }
+      }
+      acsim.return
+    }
+    %obj, %act = acsim.dispatch @M::@p path "M.p" indices [] object 0 activation 0 work "w" xfer "x" reset "r" validate "v" : !acsim.object_id, !acsim.activation_id
+    acsim.activate %act to %obj : !acsim.activation_id to !acsim.object_id
+  }
+}
+// SUSPEND-WAKE: error: 'acsim.suspend' op suspend requires one exact typed wake and a closed next PC
+
+//--- export-ghost.mlir
+builtin.module {
+  acsim.model @m epoch "0.1" root @M construction [] destruction [] fingerprints {
+    frozen_acir = "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    binding_lock = "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    provider = "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    profile = "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    toolchain = "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    schema_set = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+  } {
+    acsim.type @cpp_bool cpp "bool" kind "value" fingerprint "sha256:1000000000000000000000000000000000000000000000000000000000000000"
+    acsim.type @pure_impl cpp "gfsim::is_ready" kind "implementation" fingerprint "sha256:8000000000000000000000000000000000000000000000000000000000000000"
+    acsim.type @role cpp "gfsim::Producer" kind "role" fingerprint "sha256:c000000000000000000000000000000000000000000000000000000000000000"
+    acsim.module @M interface {ports = [], resources = [], results = []} static [] specialization "sha256:0000000000000000000000000000000000000000000000000000000000000000" exports [@ghost] {
+      %e = acsim.inline @pure_impl() : () -> !acsim.expr<@cpp_bool>
+      %x = acsim.export @ghost %e role @role : !acsim.expr<@cpp_bool> -> !acsim.expr<@cpp_bool>
+      acsim.return %x : !acsim.expr<@cpp_bool>
+    }
+  }
+}
+// EXPORT-COVER: error: 'acsim.module' op module exports must exactly cover its ordered interface records

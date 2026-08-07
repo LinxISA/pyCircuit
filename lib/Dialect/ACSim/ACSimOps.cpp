@@ -1827,6 +1827,10 @@ LogicalResult verifyModulesAndTypedGraph(ModelOp model,
             return failure();
 
     if (auto binding = dyn_cast<BindingOp>(operation)) {
+      // The field projections below assume the exact lock shape; malformed
+      // records must be rejected before any of them are dereferenced.
+      if (failed(verifyBindingLockShape(binding)))
+        return failure();
       const std::array<StringRef, 2> cppKinds = {"value", "packet"};
       const std::array<StringRef, 1> schemaKinds = {"schema"};
       const std::array<StringRef, 1> providerKinds = {"provider"};
@@ -1908,6 +1912,10 @@ LogicalResult verifyModulesAndTypedGraph(ModelOp model,
           return failure();
       }
     } else if (auto module = dyn_cast<ModuleOp>(operation)) {
+      // As with binding locks, the interface projections below assume the
+      // exact module interface shape.
+      if (failed(verifyModuleInterfaceShape(module)))
+        return failure();
       for (StringRef field : {StringRef("ports"), StringRef("resources")})
         for (Attribute item : module.getInterface().getAs<ArrayAttr>(field)) {
           auto endpoint = cast<DictionaryAttr>(item);

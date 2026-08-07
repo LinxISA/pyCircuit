@@ -17,6 +17,8 @@
 // RUN: %not %acir_opt %t/malformed-named.mlir 2>&1 | %FileCheck %s --check-prefix=MALFORMED-NAMED
 // RUN: %not %acir_opt %t/malformed-aggregate.mlir 2>&1 | %FileCheck %s --check-prefix=MALFORMED-AGGREGATE
 // RUN: %not %acir_opt %t/malformed-topology.mlir 2>&1 | %FileCheck %s --check-prefix=MALFORMED-TOPOLOGY
+// RUN: %not %acir_opt %t/union-non-symbol.mlir 2>&1 | %FileCheck %s --check-prefix=UNION-PARAM
+// RUN: %not %acir_opt %t/address-non-symbol.mlir 2>&1 | %FileCheck %s --check-prefix=ADDRESS-PARAM
 
 // VECTOR-ZERO: error: vector length must be positive
 // VECTOR-NEGATIVE: error: vector length must be positive
@@ -132,3 +134,15 @@ builtin.module attributes {ac.contract_epoch = "0.1"} {
 builtin.module attributes {ac.contract_epoch = "0.1"} {
   "builtin.unrealized_conversion_cast"() : () -> !ac.flow<i8>
 }
+
+//--- union-non-symbol.mlir
+builtin.module attributes {ac.contract_epoch = "0.1"} {
+  "builtin.unrealized_conversion_cast"() : () -> !ac.union<i32>
+}
+// UNION-PARAM: error: invalid kind of attribute specified
+
+//--- address-non-symbol.mlir
+builtin.module attributes {ac.contract_epoch = "0.1"} {
+  "builtin.unrealized_conversion_cast"() : () -> !ac.address<i32>
+}
+// ADDRESS-PARAM: error: invalid kind of attribute specified

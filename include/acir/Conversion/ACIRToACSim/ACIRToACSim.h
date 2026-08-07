@@ -22,6 +22,10 @@ struct ACIRToACSimPassOptions {
   std::vector<bindings::BindingRequest> requests;
   std::string profile;
   std::string target;
+  /// Test hook: when non-zero, replaces the built-in v0.1 expanded-row
+  /// capability bound so the ACLOWER-DISPATCH overflow path is observable
+  /// without a million-row input. Production drivers leave this at zero.
+  uint64_t maxExpandedRows = 0;
 };
 
 /// Create the atomic `ac-lower-to-acsim` pass.

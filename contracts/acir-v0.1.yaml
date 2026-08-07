@@ -1,0 +1,84 @@
+# Normative ACIR v0.1 public inventory.
+#
+# This manifest is the contract-side source of truth for the public ACIR
+# surface. scripts/check-ir-coverage.py requires the ODS definitions to
+# match these lists exactly: any added, renamed, or removed public operation
+# or type must be reflected here in the same commit, and every entry must
+# have observable lit coverage.
+schema: acir-ir-inventory
+contract_epoch: "0.1"
+dialect: acir
+operations:
+  - ac.system
+  - ac.type_scope
+  - ac.type_alias
+  - ac.module
+  - ac.module.extern
+  - ac.module.generated
+  - ac.instance
+  - ac.array
+  - ac.instances
+  - ac.view
+  - ac.port
+  - ac.return
+  - ac.queue
+  - ac.event_queue
+  - ac.resource
+  - ac.address_space
+  - ac.address_map
+  - ac.time_domain
+  - ac.struct
+  - ac.enum
+  - ac.union
+  - ac.packet
+  - ac.transaction
+  - ac.interface
+  - ac.protocol
+  - ac.role
+  - ac.state
+  - ac.event
+  - ac.transition
+  - ac.guarantee
+  - ac.process
+  - ac.record.create
+  - ac.record.get
+  - ac.record.with
+  - ac.packet.serialize
+  - ac.packet.deserialize
+  - ac.try_send
+  - ac.try_recv
+  - ac.schedule
+  - ac.wait_until
+  - ac.wait_for
+  - ac.await_event
+  - ac.yield_sim
+  - ac.trace.open
+  - ac.trace.next
+  - ac.trace.decode
+  - ac.trace.eof
+  - ac.trace.position
+  - ac.require
+  - ac.ensure
+  - ac.assert
+  - ac.probe
+  - ac.stat
+  - ac.stat.add
+  - ac.instrumentation
+types:
+  - struct
+  - packet
+  - transaction
+  - enum
+  - union
+  - optional
+  - list
+  - vector
+  - flow
+  - endpoint
+  - resource_ref
+  - channel
+  - duration
+  - rate
+  - event
+  - address
+  - resource_token
