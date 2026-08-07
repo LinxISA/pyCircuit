@@ -328,6 +328,17 @@ def render_ledger(root, surface):
         for entry in types:
             lines.append(_ledger_row(entry))
         lines.append("")
+    reviewed_path = root / "docs/implementation/reviewed-commits.txt"
+    lines.append("## Reviewed commits")
+    lines.append("")
+    if reviewed_path.is_file():
+        for raw in reviewed_path.read_text().splitlines():
+            sha = raw.strip()
+            if sha and not sha.startswith("#"):
+                lines.append(f"- `{sha}`")
+    else:
+        lines.append("(none recorded)")
+    lines.append("")
     return "\n".join(lines)
 
 
