@@ -417,7 +417,7 @@ struct ModulePlan {
   std::string name;
   ArrayAttr staticParams;
   std::string specialization;
-  llvm::SmallVector<PlacementPlan> placements;
+  llvm::SmallVector<PlacementPlan, 0> placements;
 };
 
 // ---------------------------------------------------------------------------
@@ -660,7 +660,7 @@ mlir::LogicalResult ACIRToACSimPass::planModule(ac::ModuleOp module,
   planned.staticParams = builder.getArrayAttr(staticValues);
   planned.specialization = moduleFingerprint(module);
 
-  llvm::SmallVector<PlacementPlan> processes;
+  llvm::SmallVector<PlacementPlan, 0> processes;
   for (Operation &operation : module.getBody().front()) {
     if (auto instance = dyn_cast<ac::InstanceOp>(operation)) {
       PlacementPlan placement;
