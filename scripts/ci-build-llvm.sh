@@ -12,4 +12,7 @@ cmake -S ".cache/llvm-project-${LLVM_RELEASE}.src/llvm" \
   -DLLVM_INCLUDE_TESTS=OFF \
   -DLLVM_INCLUDE_BENCHMARKS=OFF \
   -DLLVM_INCLUDE_EXAMPLES=OFF
-cmake --build .cache/llvm-build --target mlir-opt
+# mlir-opt drives the MLIR package verification; FileCheck, not, split-file,
+# and count are the lit substitutions used by test/lit.cfg.py, so they must
+# exist in the cached build outputs as well.
+cmake --build .cache/llvm-build --target mlir-opt FileCheck not split-file count

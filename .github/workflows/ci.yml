@@ -88,6 +88,10 @@ jobs:
       - name: Verify exact LLVM build outputs
         run: |
           test -x .cache/llvm-build/bin/mlir-opt
+          test -x .cache/llvm-build/bin/FileCheck
+          test -x .cache/llvm-build/bin/not
+          test -x .cache/llvm-build/bin/split-file
+          test -x .cache/llvm-build/bin/count
           test -f .cache/llvm-build/lib/cmake/llvm/LLVMConfigVersion.cmake
           test -f .cache/llvm-build/lib/cmake/mlir/MLIRConfigVersion.cmake
           .cache/llvm-build/bin/mlir-opt --version | grep -F "LLVM version ${LLVM_RELEASE}"
