@@ -109,7 +109,11 @@ jobs:
         run: cmake --build --preset dev-llvm22
 
       - name: Run lit and FileCheck suite
-        run: cmake --build --preset dev-llvm22 --target check-acir
+        # Run lit directly with -v so failed tests print their command output;
+        # the add_lit_testsuite default is succinct and hides failure bodies.
+        run: |
+          cmake --build --preset dev-llvm22 --target acir-opt acir-opt-internal
+          lit -v build/dev-llvm22/test
 
       - name: Run unit tests with assertions
         run: ctest --test-dir build/dev-llvm22 --output-on-failure
