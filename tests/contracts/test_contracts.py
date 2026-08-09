@@ -101,8 +101,13 @@ class RepositoryContractsTest(unittest.TestCase):
             workflow,
             re.DOTALL,
         ).group()
-        build_cache_step = re.search(
-            r"      - name: Cache exact LLVM build outputs.*?(?=\n      - name:)",
+        build_cache_restore_step = re.search(
+            r"      - name: Restore exact LLVM build outputs.*?(?=\n      - name:)",
+            workflow,
+            re.DOTALL,
+        ).group()
+        build_cache_save_step = re.search(
+            r"      - name: Save exact LLVM build outputs.*?(?=\n      - name:)",
             workflow,
             re.DOTALL,
         ).group()
@@ -129,7 +134,6 @@ class RepositoryContractsTest(unittest.TestCase):
         self.assertEqual(1, source_cache_step.count(".cache/"), source_cache_step)
         self.assertNotRegex(verification_step, r"(?m)^\s+if:")
         self.assertIn("sha256sum --check --strict", verification_step)
-        self.assertIn("path: .cache/llvm-build", build_cache_step)
         expected_build_cache_key = (
             "key: llvm-build-${{ runner.os }}-${{ runner.arch }}-"
             "${{ env.LLVM_SOURCE_SHA256 }}-"
@@ -137,7 +141,31 @@ class RepositoryContractsTest(unittest.TestCase):
             "'scripts/ci-build-llvm.sh') }}-"
             "${{ steps.llvm-build-fingerprint.outputs.value }}"
         )
-        self.assertIn(expected_build_cache_key, build_cache_step)
+        self.assertIn(
+            "uses: actions/cache/restore@"
+            "5a3ec84eff668545956fd18022155c47e93e2684",
+            build_cache_restore_step,
+        )
+        self.assertIn("path: .cache/llvm-build", build_cache_restore_step)
+        self.assertIn(expected_build_cache_key, build_cache_restore_step)
+        self.assertIn(
+            "uses: actions/cache/save@"
+            "5a3ec84eff668545956fd18022155c47e93e2684",
+            build_cache_save_step,
+        )
+        self.assertIn("path: .cache/llvm-build", build_cache_save_step)
+        self.assertIn(expected_build_cache_key, build_cache_save_step)
+        # The hour-long LLVM build must be cached even when a later test step
+        # fails, but a partially built tree must never be cached.
+        self.assertIn("if: always()", build_cache_save_step)
+        self.assertIn(
+            "steps.llvm-build-cache.outputs.cache-hit != 'true'",
+            build_cache_save_step,
+        )
+        self.assertIn(
+            "steps.llvm-build.outputs.conclusion == 'success'",
+            build_cache_save_step,
+        )
         for fingerprint_input in (
             "pwd -P",
             "command -v c++",
