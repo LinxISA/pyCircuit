@@ -3,6 +3,7 @@
 
 #include "gfsim/core.h"
 #include "gfsim/object.h"
+#include "gfsim/packet.h"
 
 #include <cstddef>
 #include <optional>
@@ -11,15 +12,6 @@
 #include <vector>
 
 namespace gfsim {
-
-/// Static packet layout information used by bounded runtime containers.
-/// Public packet schemas specialize this primary template.
-template <typename T> struct PacketTraits {
-  static constexpr const char *schema = nullptr;
-  static constexpr size_t serializedSize = sizeof(T);
-  static constexpr size_t alignment = alignof(T);
-  static constexpr bool littleEndian = true;
-};
 
 // ── SimQueue<T> ───────────────────────────────────────────────────────
 

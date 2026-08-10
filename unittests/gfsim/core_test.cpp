@@ -2,6 +2,7 @@
 #include "gfsim/core.h"
 #include "gfsim/dispatch.h"
 #include "gfsim/object.h"
+#include "gfsim/packet.h"
 #include "gfsim/process.h"
 #include "gfsim/queue.h"
 #include "gfsim/resource.h"
@@ -14,6 +15,64 @@
 #include <random>
 
 namespace gfsim {
+
+struct TestPacket {
+  uint16_t opcode = 0;
+  uint32_t payload = 0;
+  auto operator<=>(const TestPacket &) const = default;
+};
+
+struct InvalidPacket {};
+
+template <> struct PacketTraits<InvalidPacket> {
+  static constexpr bool isPacket = true;
+  static constexpr std::string_view schema = {};
+  static constexpr size_t serializedSize = 1;
+  static constexpr size_t maximumSerializedSize = serializedSize;
+  static constexpr size_t alignment = 1;
+  static constexpr PacketEndianness endianness = PacketEndianness::Little;
+  static constexpr std::array<PacketField, 1> fields{{{"field", 1, 1}}};
+  static constexpr std::optional<std::string_view> routingField = std::nullopt;
+  static constexpr std::optional<std::string_view> correlationField =
+      std::nullopt;
+};
+
+template <> struct PacketTraits<TestPacket> {
+  static constexpr bool isPacket = true;
+  static constexpr std::string_view schema = "test.Packet@0.1";
+  static constexpr size_t serializedSize = 6;
+  static constexpr size_t maximumSerializedSize = serializedSize;
+  static constexpr size_t alignment = alignof(TestPacket);
+  static constexpr PacketEndianness endianness = PacketEndianness::Little;
+  static constexpr std::array<PacketField, 2> fields{{
+      {"opcode", 0, 2},
+      {"payload", 2, 4},
+  }};
+  static constexpr std::optional<std::string_view> routingField = std::nullopt;
+  static constexpr std::optional<std::string_view> correlationField =
+      std::nullopt;
+
+  using Serialized = std::array<std::byte, serializedSize>;
+  static Serialized serialize(const TestPacket &packet) {
+    return {std::byte(packet.opcode),        std::byte(packet.opcode >> 8),
+            std::byte(packet.payload),       std::byte(packet.payload >> 8),
+            std::byte(packet.payload >> 16), std::byte(packet.payload >> 24)};
+  }
+  static std::optional<TestPacket>
+  deserialize(std::span<const std::byte> bytes) {
+    if (bytes.size() != serializedSize)
+      return std::nullopt;
+    return TestPacket{
+        static_cast<uint16_t>(std::to_integer<uint16_t>(bytes[0]) |
+                              (std::to_integer<uint16_t>(bytes[1]) << 8)),
+        std::to_integer<uint32_t>(bytes[2]) |
+            (std::to_integer<uint32_t>(bytes[3]) << 8) |
+            (std::to_integer<uint32_t>(bytes[4]) << 16) |
+            (std::to_integer<uint32_t>(bytes[5]) << 24),
+    };
+  }
+};
+
 namespace {
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -777,6 +836,131 @@ TEST(GfsimComponentsTest, SchedulerRejectsDuplicateIdentityAndResets) {
   EXPECT_EQ(scheduler.size(), 0u);
   EXPECT_TRUE(scheduler.rejectedTransactions().empty());
   EXPECT_TRUE(scheduler.proposeSchedule(20, 0, 0, 0, 7, 99));
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// Protocols and packets
+// ═══════════════════════════════════════════════════════════════════════
+
+static_assert(Packet<TestPacket>);
+static_assert(!Packet<uint64_t>);
+static_assert(!Packet<InvalidPacket>);
+
+TEST(GfsimPacketTest, FixedPacketRoundTripsWithStableReflection) {
+  const TestPacket packet{0x1234, 0x89abcdef};
+  const auto bytes = serializePacket(packet);
+  EXPECT_EQ(bytes, (PacketTraits<TestPacket>::Serialized{
+                       std::byte{0x34}, std::byte{0x12}, std::byte{0xef},
+                       std::byte{0xcd}, std::byte{0xab}, std::byte{0x89}}));
+  EXPECT_EQ(deserializePacket<TestPacket>(bytes), packet);
+  EXPECT_EQ(PacketTraits<TestPacket>::maximumSerializedSize, bytes.size());
+  EXPECT_EQ(PacketTraits<TestPacket>::endianness, PacketEndianness::Little);
+  ASSERT_EQ(PacketTraits<TestPacket>::fields.size(), 2u);
+  EXPECT_EQ(PacketTraits<TestPacket>::fields[0], (PacketField{"opcode", 0, 2}));
+  EXPECT_EQ(PacketTraits<TestPacket>::fields[1],
+            (PacketField{"payload", 2, 4}));
+}
+
+TEST(GfsimPacketTest, DeserializationRejectsWrongSerializedSize) {
+  const std::array<std::byte, 5> shortBytes{};
+  EXPECT_EQ(deserializePacket<TestPacket>(shortBytes), std::nullopt);
+}
+
+TEST(GfsimPacketTest, QueueUsesSerializedPacketSizeInsteadOfNativeLayout) {
+  static_assert(sizeof(TestPacket) > PacketTraits<TestPacket>::serializedSize);
+  Queue<TestPacket> queue("packets", 1, nullptr, 2,
+                          PacketTraits<TestPacket>::serializedSize);
+  EXPECT_TRUE(queue.proposePush({1, 2}));
+  EXPECT_FALSE(queue.proposePush({3, 4}));
+  queue.doXfer({0, 0});
+  EXPECT_EQ(queue.committedBytes(), PacketTraits<TestPacket>::serializedSize);
+}
+
+TEST(GfsimProtocolTest, ReadyValidRetainsOfferAndTransfersExactlyOnce) {
+  ReadyValid<uint64_t> channel("channel", 1, nullptr);
+  EXPECT_TRUE(channel.proposeOffer(7));
+  EXPECT_FALSE(channel.proposeOffer(8));
+  channel.doXfer({0, 0});
+
+  ASSERT_NE(channel.peekOffer(), nullptr);
+  EXPECT_EQ(*channel.peekOffer(), 7u);
+  EXPECT_EQ(channel.transferCount(), 0u);
+
+  channel.proposeReady(true);
+  channel.doXfer({1, 0});
+  EXPECT_EQ(channel.peekOffer(), nullptr);
+  EXPECT_EQ(channel.lastTransferred(), 7u);
+  EXPECT_EQ(channel.transferCount(), 1u);
+
+  channel.proposeReady(true);
+  channel.doXfer({2, 0});
+  EXPECT_EQ(channel.transferCount(), 1u);
+  EXPECT_TRUE(channel.validate());
+}
+
+TEST(GfsimProtocolTest, RequestResponseEnforcesBoundsAndCorrelation) {
+  RequestResponse<uint64_t, uint64_t> channel("channel", 1, nullptr, 2);
+  EXPECT_TRUE(channel.proposeRequest(11, 101));
+  EXPECT_TRUE(channel.proposeRequest(22, 102));
+  EXPECT_FALSE(channel.proposeRequest(33, 103));
+  EXPECT_FALSE(channel.proposeRequest(44, 101));
+  channel.doXfer({0, 0});
+  EXPECT_EQ(channel.inFlight(), 2u);
+
+  auto first = channel.proposePopRequest();
+  auto second = channel.proposePopRequest();
+  ASSERT_TRUE(first.has_value());
+  ASSERT_TRUE(second.has_value());
+  EXPECT_EQ(first->payload, 11u);
+  EXPECT_EQ(first->correlationId, 101u);
+  EXPECT_EQ(second->payload, 22u);
+  EXPECT_EQ(second->correlationId, 102u);
+  channel.doXfer({1, 0});
+
+  EXPECT_FALSE(channel.proposeResponse(999, 999));
+  EXPECT_TRUE(channel.proposeResponse(111, 101));
+  EXPECT_FALSE(channel.proposeResponse(222, 101));
+  channel.doXfer({2, 0});
+  EXPECT_EQ(channel.inFlight(), 1u);
+  EXPECT_EQ(channel.totalCompleted(), 1u);
+
+  auto response = channel.proposePopResponse();
+  ASSERT_TRUE(response.has_value());
+  EXPECT_EQ(response->payload, 111u);
+  EXPECT_EQ(response->correlationId, 101u);
+  channel.doXfer({3, 0});
+  EXPECT_FALSE(channel.proposePopResponse().has_value());
+  EXPECT_TRUE(channel.validate());
+}
+
+TEST(GfsimProtocolTest, ProtocolStatePreservesCreditAndPhaseInvariants) {
+  ProtocolState state(2);
+  EXPECT_TRUE(state.validate());
+  EXPECT_TRUE(state.startRequest());
+  EXPECT_TRUE(state.startRequest());
+  EXPECT_FALSE(state.startRequest());
+  EXPECT_EQ(state.credits(), 0u);
+  EXPECT_EQ(state.inFlight(), 2u);
+
+  EXPECT_TRUE(state.beginResponse());
+  EXPECT_TRUE(state.completeResponse());
+  EXPECT_EQ(state.phase(), ProtocolPhase::Transfer);
+  EXPECT_EQ(state.credits(), 1u);
+  EXPECT_EQ(state.inFlight(), 1u);
+
+  EXPECT_TRUE(state.setBackpressure(true));
+  EXPECT_EQ(state.phase(), ProtocolPhase::Backpressure);
+  EXPECT_FALSE(state.startRequest());
+  EXPECT_TRUE(state.setBackpressure(false));
+  EXPECT_EQ(state.phase(), ProtocolPhase::Transfer);
+
+  EXPECT_TRUE(state.beginResponse());
+  EXPECT_TRUE(state.completeResponse());
+  EXPECT_EQ(state.phase(), ProtocolPhase::Idle);
+  EXPECT_EQ(state.credits(), 2u);
+  EXPECT_EQ(state.inFlight(), 0u);
+  EXPECT_FALSE(state.completeResponse());
+  EXPECT_TRUE(state.validate());
 }
 
 // ═══════════════════════════════════════════════════════════════════════

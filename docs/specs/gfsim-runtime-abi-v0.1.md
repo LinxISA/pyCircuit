@@ -307,11 +307,39 @@ validation, and commit behavior. Validation can check legal transitions,
 immutable pending offers, exactly-once transfer, credit conservation, in-flight
 bounds, request-response correlation, cancellation, and timeout rules.
 
+`ReadyValid<T>` admits at most one producer-owned offer. A rejected replacement
+does not mutate that offer. Readiness and offers are private proposals until
+Xfer; an offer remains committed and byte-for-byte stable under backpressure,
+then transfers exactly once when committed readiness and validity coincide.
+
+`RequestResponse<Request,Response>` uses explicit request and response
+envelopes containing the payload and a `uint64_t` correlation ID. Admission
+counts committed plus proposed requests against the static maximum in-flight
+bound and rejects a duplicate live correlation ID. A responder may propose a
+response only after the matching request pop commits. Response commit completes
+that exact correlation, releases one in-flight slot, and retains the correlated
+response until its consumer pop commits.
+
+`ProtocolState` preserves `credits + in_flight == max_credits`. Request,
+response, transfer, and backpressure phase transitions reject illegal moves;
+leaving backpressure restores the exact prior phase rather than guessing an
+idle state.
+
 Every public packet type supplies static `PacketTraits<T>` behavior for its
 exact ACIR schema identity, serialized size, maximum size, alignment,
 endianness, serialization, deserialization, stable field reflection, and any
 declared routing or correlation fields. Native layout may differ from serialized
 layout. Offered packet values have immutable observable value semantics.
+
+The C++20 `Packet<T>` concept requires `PacketTraits<T>::isPacket`, non-empty
+`schema`, positive `serializedSize`, `maximumSerializedSize`, `alignment`,
+`endianness`, ordered non-overlapping `PacketField` reflection, and optional
+`routingField` and `correlationField` names that resolve in that reflection.
+Fixed-width serialization returns
+`std::array<std::byte, PacketTraits<T>::serializedSize>`; deserialization takes
+`std::span<const std::byte>` and returns `std::optional<T>`. The runtime rejects
+an input whose byte count differs from the exact serialized size before calling
+the packet specialization.
 
 ## Component model-library contract
 

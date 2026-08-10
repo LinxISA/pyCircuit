@@ -21,7 +21,7 @@ Exit gate: runtime and component concept tests, sanitizer builds, randomized
 work-order determinism tests, inactive-module suppression tests, protocol and
 resource invariant tests, and PTO trace streaming tests all pass.
 
-## Current state (after T5 on `codex/phase2-gfsim-runtime`)
+## Current state (after T6 on `codex/phase2-gfsim-runtime`)
 
 The branch already carries a runtime foundation (commits `125a72a`, `d44406d`,
 `8ce3f99`, `4efa785`):
@@ -32,6 +32,8 @@ The branch already carries a runtime foundation (commits `125a72a`, `d44406d`,
 - `include/gfsim/object.h` — `SimObject` ownership tree with `walk`
   (uses `dynamic_cast`; requires RTTI — the build keeps RTTI on for gfsim).
 - `include/gfsim/queue.h` — `SimQueue<T>`, public `Queue<T>`, `EventQueue`.
+- `include/gfsim/packet.h` — exact fixed-width `Packet<T>` and
+  `PacketTraits<T>` serialization/reflection contract.
 - `include/gfsim/resource.h` — `Resource` with reservation/release proposals.
 - `include/gfsim/components.h` — `TraceSource<T>`, `Scheduler<T>`,
   `Compute<Input,Output,FunctionalPolicy>`, `Sink<T>`, `Link<T>`, `Memory<T>`,
@@ -39,7 +41,7 @@ The branch already carries a runtime foundation (commits `125a72a`, `d44406d`,
   `ProtocolState`; `NoProgressReport`.
 - `lib/gfsim/system.cpp` — `SimSystem`: object registry, work set, global
   event queue, termination classification.
-- `unittests/gfsim/core_test.cpp` — 91 unit tests after T5.
+- `unittests/gfsim/core_test.cpp` — 97 unit tests after T6.
 
 ## Gap analysis vs roadmap scope
 
@@ -52,8 +54,8 @@ The branch already carries a runtime foundation (commits `125a72a`, `d44406d`,
 | Activation adjacency | T2 complete | Canonical compressed arrays, next-tick wakes, inactive suppression |
 | Queues / event queues | T5 complete | Finite public `Queue<T>`, commit and statistic invariants |
 | Resources / arbitration | T3 complete | Stable-key contention, identity, owner scope, cancellation, conservation |
-| Protocol state | Partial (`ProtocolState`) | Phase-transition invariants |
-| Packets | Partial (`PacketTraits`) | Serialize/deserialize round trips per ACIR packet ops |
+| Protocol state | T6 complete | Immutable ready-valid offers, exact correlation, phase/credit invariants |
+| Packets | T6 complete | Static layout validation, reflection, exact round trips, queue byte sizing |
 | Processes | T4 complete | CRTP enum-PC runtime, exact wake/continuation, fairness failure propagation |
 | Diagnostics / statistics | Partial (`StatSnapshot`) | Full statistics surface + diagnostics taxonomy |
 | Trace cursor | Missing (`TraceSource` emits; no cursor) | Cursor API + PTO trace streaming |
@@ -81,7 +83,9 @@ The branch already carries a runtime foundation (commits `125a72a`, `d44406d`,
 5. **T5 — Components `Queue`/`Scheduler` (complete)**: all seven baseline
    names are reusable C++20 templates with exact compile-time catalog identity;
    finite Queue/Scheduler behavior and per-component concept tests pass.
-6. **T6 — Protocol and packet runtime**: phase invariants, packet round trips.
+6. **T6 — Protocol and packet runtime (complete)**: ready-valid exactly-once
+   offers, bounded correlated request-response, credit/phase invariants, and
+   compile-time packet layout plus exact serialization round trips.
 7. **T7 — Trace cursor**: cursor API, PTO trace streaming tests.
 8. **T8 — Statistics and diagnostics**: full `StatSnapshot` surface,
    no-progress detection loop, termination end-to-end tests.

@@ -12,6 +12,7 @@
 #include <iterator>
 #include <map>
 #include <optional>
+#include <set>
 #include <string>
 #include <tuple>
 #include <utility>
@@ -424,53 +425,57 @@ public:
   ReadyValid(std::string name, ObjectId id, SimObject *parent)
       : SimObject(ObjectKind::Link, std::move(name), id, parent) {}
 
-  void setValid(bool v) {
-    validProposal_ = v;
-    hasProposal_ = true;
+  bool proposeOffer(T data) {
+    if (offer_ || offerProposal_)
+      return false;
+    offerProposal_ = std::move(data);
+    return true;
   }
-  void setData(T data) {
-    dataProposal_ = data;
-    hasProposal_ = true;
-  }
+
+  void proposeReady(bool ready) { readyProposal_ = ready; }
   bool isReady() const { return ready_; }
-  void setReady(bool r) {
-    readyProposal_ = r;
-    hasProposal_ = true;
-  }
-  bool isValid() const { return valid_; }
-  T data() const { return data_; }
+  bool hasOffer() const { return offer_.has_value(); }
+  const T *peekOffer() const { return offer_ ? &*offer_ : nullptr; }
 
   void doXfer(Epoch) override {
-    valid_ = validProposal_;
-    ready_ = readyProposal_;
-    data_ = dataProposal_;
-    if (valid_ && ready_) {
-      lastTransferred_ = data_;
+    if (readyProposal_)
+      ready_ = *readyProposal_;
+    if (offerProposal_)
+      offer_ = std::move(offerProposal_);
+    readyProposal_.reset();
+    offerProposal_.reset();
+
+    if (offer_ && ready_) {
+      lastTransferred_ = *offer_;
+      offer_.reset();
       ++transferCount_;
     }
-    hasProposal_ = false;
   }
 
-  bool hasPendingCommit() const override { return hasProposal_; }
+  bool hasPendingCommit() const override {
+    return offerProposal_.has_value() || readyProposal_.has_value();
+  }
 
-  T lastTransferred() const { return lastTransferred_; }
+  const T &lastTransferred() const { return lastTransferred_; }
   uint64_t transferCount() const { return transferCount_; }
-  bool isRunnable(Epoch) const override { return valid_ && !ready_; }
+  bool isRunnable(Epoch) const override { return hasPendingCommit(); }
+  bool validate() const { return !(offer_ && ready_); }
 
   void reset() override {
-    valid_ = false;
     ready_ = false;
-    validProposal_ = false;
-    readyProposal_ = false;
+    offer_.reset();
+    offerProposal_.reset();
+    readyProposal_.reset();
+    lastTransferred_ = {};
     transferCount_ = 0;
-    hasProposal_ = false;
   }
 
 private:
-  bool valid_ = false, ready_ = false;
-  bool hasProposal_ = false;
-  bool validProposal_ = false, readyProposal_ = false;
-  T data_{}, dataProposal_{}, lastTransferred_{};
+  bool ready_ = false;
+  std::optional<T> offer_;
+  std::optional<T> offerProposal_;
+  std::optional<bool> readyProposal_;
+  T lastTransferred_{};
   uint64_t transferCount_ = 0;
 };
 
@@ -487,73 +492,147 @@ public:
       : SimObject(ObjectKind::Link, std::move(name), id, parent),
         maxInFlight_(maxInFlight) {}
 
-  bool sendRequest(Req req, uint64_t id) {
-    if (inFlight_ >= maxInFlight_)
+  struct RequestEnvelope {
+    Req payload;
+    uint64_t correlationId;
+  };
+  struct ResponseEnvelope {
+    Resp payload;
+    uint64_t correlationId;
+  };
+
+  bool proposeRequest(Req request, uint64_t correlationId) {
+    if (active_.size() + requestProposals_.size() >= maxInFlight_ ||
+        containsCorrelation(correlationId))
       return false;
-    reqProposals_.push_back({std::move(req), id});
+    requestProposals_.push_back({std::move(request), correlationId});
     return true;
   }
 
-  const Req *peekRequest() const {
-    return committedReqs_.empty() ? nullptr : &committedReqs_.front().req;
+  const RequestEnvelope *peekRequest() const {
+    return committedRequests_.empty() ? nullptr : &committedRequests_.front();
   }
 
-  void sendResponse(Resp resp) { respProposals_.push_back(std::move(resp)); }
-  bool hasResponse() const { return !committedResps_.empty(); }
+  std::optional<RequestEnvelope> proposePopRequest() {
+    if (requestPopCount_ >= committedRequests_.size())
+      return std::nullopt;
+    return committedRequests_[requestPopCount_++];
+  }
 
-  Resp popResponse() {
-    Resp r = std::move(committedResps_.front());
-    committedResps_.erase(committedResps_.begin());
-    return r;
+  bool proposeResponse(Resp response, uint64_t correlationId) {
+    if (!active_.contains(correlationId) ||
+        !deliveredRequests_.contains(correlationId) ||
+        std::any_of(responseProposals_.begin(), responseProposals_.end(),
+                    [&](const ResponseEnvelope &entry) {
+                      return entry.correlationId == correlationId;
+                    }))
+      return false;
+    responseProposals_.push_back({std::move(response), correlationId});
+    return true;
+  }
+
+  bool hasResponse() const { return !committedResponses_.empty(); }
+  const ResponseEnvelope *peekResponse() const {
+    return committedResponses_.empty() ? nullptr : &committedResponses_.front();
+  }
+  std::optional<ResponseEnvelope> proposePopResponse() {
+    if (responsePopCount_ >= committedResponses_.size())
+      return std::nullopt;
+    return committedResponses_[responsePopCount_++];
   }
 
   void doXfer(Epoch) override {
-    for (auto &p : reqProposals_) {
-      committedReqs_.push_back(std::move(p));
-      ++inFlight_;
+    size_t requestPops = std::min(requestPopCount_, committedRequests_.size());
+    for (size_t index = 0; index < requestPops; ++index)
+      deliveredRequests_.insert(committedRequests_[index].correlationId);
+    committedRequests_.erase(committedRequests_.begin(),
+                             committedRequests_.begin() + requestPops);
+    requestPopCount_ = 0;
+
+    size_t responsePops =
+        std::min(responsePopCount_, committedResponses_.size());
+    committedResponses_.erase(committedResponses_.begin(),
+                              committedResponses_.begin() + responsePops);
+    responsePopCount_ = 0;
+
+    for (auto &request : requestProposals_) {
+      active_.insert(request.correlationId);
+      committedRequests_.push_back(std::move(request));
     }
-    reqProposals_.clear();
-    for (auto &r : respProposals_) {
-      committedResps_.push_back(std::move(r));
-      if (inFlight_ > 0)
-        --inFlight_;
+    requestProposals_.clear();
+
+    for (auto &response : responseProposals_) {
+      active_.erase(response.correlationId);
+      deliveredRequests_.erase(response.correlationId);
+      committedResponses_.push_back(std::move(response));
       ++totalCompleted_;
     }
-    respProposals_.clear();
+    responseProposals_.clear();
   }
 
   bool hasPendingCommit() const override {
-    return !reqProposals_.empty() || !respProposals_.empty();
+    return !requestProposals_.empty() || !responseProposals_.empty() ||
+           requestPopCount_ != 0 || responsePopCount_ != 0;
   }
 
-  size_t inFlight() const { return inFlight_; }
+  size_t inFlight() const { return active_.size(); }
   size_t maxInFlight() const { return maxInFlight_; }
   uint64_t totalCompleted() const { return totalCompleted_; }
 
+  bool validate() const {
+    if (active_.size() > maxInFlight_ ||
+        active_.size() + requestProposals_.size() > maxInFlight_)
+      return false;
+    for (uint64_t correlationId : deliveredRequests_)
+      if (!active_.contains(correlationId))
+        return false;
+    for (const RequestEnvelope &request : committedRequests_)
+      if (!active_.contains(request.correlationId))
+        return false;
+    for (const ResponseEnvelope &response : responseProposals_)
+      if (!active_.contains(response.correlationId) ||
+          !deliveredRequests_.contains(response.correlationId))
+        return false;
+    return true;
+  }
+
   void reset() override {
-    reqProposals_.clear();
-    respProposals_.clear();
-    committedReqs_.clear();
-    committedResps_.clear();
-    inFlight_ = 0;
+    requestProposals_.clear();
+    responseProposals_.clear();
+    committedRequests_.clear();
+    committedResponses_.clear();
+    active_.clear();
+    deliveredRequests_.clear();
+    requestPopCount_ = 0;
+    responsePopCount_ = 0;
     totalCompleted_ = 0;
   }
 
 private:
-  struct ReqEntry {
-    Req req;
-    uint64_t correlationId;
-  };
-  size_t maxInFlight_, inFlight_ = 0;
-  uint64_t totalCompleted_ = 0;
-  std::vector<ReqEntry> reqProposals_, committedReqs_;
-  std::vector<Resp> respProposals_, committedResps_;
-};
+  bool containsCorrelation(uint64_t correlationId) const {
+    auto requestMatches = [&](const RequestEnvelope &entry) {
+      return entry.correlationId == correlationId;
+    };
+    auto responseMatches = [&](const ResponseEnvelope &entry) {
+      return entry.correlationId == correlationId;
+    };
+    return active_.contains(correlationId) ||
+           std::any_of(requestProposals_.begin(), requestProposals_.end(),
+                       requestMatches) ||
+           std::any_of(committedResponses_.begin(), committedResponses_.end(),
+                       responseMatches);
+  }
 
-template <typename T>
-concept Packet = requires {
-  { PacketTraits<T>::schema } -> std::convertible_to<const char *>;
-  { PacketTraits<T>::serializedSize } -> std::convertible_to<size_t>;
+  size_t maxInFlight_;
+  uint64_t totalCompleted_ = 0;
+  std::vector<RequestEnvelope> requestProposals_;
+  std::vector<RequestEnvelope> committedRequests_;
+  std::vector<ResponseEnvelope> responseProposals_;
+  std::vector<ResponseEnvelope> committedResponses_;
+  std::set<uint64_t> active_;
+  std::set<uint64_t> deliveredRequests_;
+  size_t requestPopCount_ = 0;
+  size_t responsePopCount_ = 0;
 };
 
 // ── Protocol state ────────────────────────────────────────────────────
@@ -573,33 +652,66 @@ public:
   ProtocolPhase phase() const { return phase_; }
   size_t credits() const { return credits_; }
   size_t inFlight() const { return inFlight_; }
-  bool canSend() const { return credits_ > 0 && inFlight_ < maxCredits_; }
+  bool canSend() const {
+    return phase_ != ProtocolPhase::Backpressure && credits_ > 0 &&
+           inFlight_ < maxCredits_;
+  }
   bool canReceive() const { return inFlight_ > 0; }
-  void startRequest() {
-    if (canSend()) {
-      --credits_;
-      ++inFlight_;
-      phase_ = ProtocolPhase::Request;
-    }
+  bool startRequest() {
+    if (!canSend())
+      return false;
+    --credits_;
+    ++inFlight_;
+    phase_ = ProtocolPhase::Request;
+    return true;
   }
-  void completeRequest() {
-    if (inFlight_ > 0) {
-      --inFlight_;
-      ++credits_;
-    }
+  bool beginResponse() {
+    if (phase_ == ProtocolPhase::Backpressure || inFlight_ == 0)
+      return false;
+    phase_ = ProtocolPhase::Response;
+    return true;
+  }
+  bool completeResponse() {
+    if (phase_ != ProtocolPhase::Response || inFlight_ == 0)
+      return false;
+    --inFlight_;
+    ++credits_;
     phase_ = inFlight_ > 0 ? ProtocolPhase::Transfer : ProtocolPhase::Idle;
+    return true;
   }
-  void setBackpressure(bool bp) {
-    phase_ = bp ? ProtocolPhase::Backpressure : ProtocolPhase::Idle;
+  bool setBackpressure(bool enabled) {
+    if (enabled) {
+      if (phase_ == ProtocolPhase::Backpressure)
+        return false;
+      resumePhase_ = phase_;
+      phase_ = ProtocolPhase::Backpressure;
+      return true;
+    }
+    if (phase_ != ProtocolPhase::Backpressure)
+      return false;
+    phase_ = resumePhase_;
+    return true;
+  }
+  bool validate() const {
+    if (credits_ > maxCredits_ || inFlight_ > maxCredits_ ||
+        credits_ + inFlight_ != maxCredits_)
+      return false;
+    if (phase_ == ProtocolPhase::Idle)
+      return inFlight_ == 0;
+    if (phase_ == ProtocolPhase::Backpressure)
+      return resumePhase_ == ProtocolPhase::Idle || inFlight_ > 0;
+    return inFlight_ > 0;
   }
   void reset() {
     phase_ = ProtocolPhase::Idle;
+    resumePhase_ = ProtocolPhase::Idle;
     credits_ = maxCredits_;
     inFlight_ = 0;
   }
 
 private:
   ProtocolPhase phase_ = ProtocolPhase::Idle;
+  ProtocolPhase resumePhase_ = ProtocolPhase::Idle;
   size_t maxCredits_, credits_;
   size_t inFlight_ = 0;
 };
