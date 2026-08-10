@@ -80,6 +80,8 @@ install(DIRECTORY include/acir DESTINATION include)
 install(
   DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/include/acir"
   DESTINATION include
+  FILES_MATCHING
+  PATTERN "*.h.inc"
 )
 
 add_subdirectory(include)

@@ -17,11 +17,17 @@ add_subdirectory(Transforms)
 add_subdirectory(Conversion)
 add_subdirectory(CodeGen)
 
-# The installed package exposes the dialect and analysis surface required by
-# the public ProcessStatePlan API. Internal pass, conversion, and runtime
-# libraries stay build-tree only.
+# Install every library that owns symbols declared by the installed public
+# headers. The gfsim runtime remains a separate build-tree surface.
 install(
-  TARGETS ACIRDialect ACSimDialect ACIRBindings ACIRAnalysis
+  TARGETS
+    ACIRDialect
+    ACSimDialect
+    ACIRBindings
+    ACIRAnalysis
+    ACIRTransforms
+    ACIRToACSim
+    ACIRCodeGen
   EXPORT AgenticCircuitTargets
   ARCHIVE DESTINATION lib
   LIBRARY DESTINATION lib

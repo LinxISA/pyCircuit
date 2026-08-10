@@ -17,4 +17,5 @@ target_link_libraries(
   process-state-plan-consumer
   PRIVATE
     AgenticCircuit::ACIRAnalysis
+    MLIRParser
 )

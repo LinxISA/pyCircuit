@@ -36,11 +36,11 @@ struct ACIRToACSimPassOptions {
 /// is diagnosed with an ACLOWER-* code before any mutation, so a failed
 /// lowering never publishes a partial acsim.model.
 ///
-/// v0.1 stage boundary (rejected with an explicit diagnostic, never silently
-/// dropped): module signatures other than `() -> ()`, queue/resource/address/
-/// time-domain/view topology constructs, heterogeneous array
-/// specializations, non-canonical module declaration order, and process
-/// bodies beyond the yield-only form planned by ProcessStatePlan.
+/// The v0.1 lowering covers generated ownership, homogeneous arrays, exact
+/// pure/stateful bindings, typed endpoint graph edges and exports, and the
+/// complete public ProcessStatePlan state machine. Unsupported topology kinds
+/// and heterogeneous specializations fail with an explicit diagnostic and are
+/// never silently dropped.
 std::unique_ptr<mlir::Pass>
 createACIRToACSimPass(ACIRToACSimPassOptions options);
 
