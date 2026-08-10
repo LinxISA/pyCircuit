@@ -107,6 +107,8 @@ public:
                            ACIR_TEST_BINARY_DIR
                            "/lib/Bindings/libACIRBindings.a"};
     request_.linkerFlags = {"-L" ACIR_TEST_LLVM_LIB_DIR, "-lLLVM"};
+    if (llvm::StringRef(ACIR_TEST_SANITIZER_FLAG).size())
+      request_.linkerFlags.push_back(ACIR_TEST_SANITIZER_FLAG);
     request_.outputRoot = outputRoot.str();
   }
 

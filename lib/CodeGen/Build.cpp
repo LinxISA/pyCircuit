@@ -157,8 +157,16 @@ llvm::Expected<std::string> queryFingerprint(llvm::StringRef executable,
       std::nullopt, reportPath, reportPath};
   const int status = llvm::sys::ExecuteAndWait(executable, arguments,
                                                std::nullopt, redirects, 30);
-  if (status != 0)
-    return buildError("embedded fingerprint query failed");
+  if (status != 0) {
+    auto report = readFileBytes(reportPath);
+    if (!report)
+      return report.takeError();
+    constexpr size_t maxDiagnosticBytes = size_t{64} * 1024;
+    if (report->size() > maxDiagnosticBytes)
+      report->resize(maxDiagnosticBytes);
+    return buildError(llvm::Twine("embedded fingerprint query failed: ") +
+                      *report);
+  }
   auto bytes = readFileBytes(reportPath);
   if (!bytes)
     return bytes.takeError();
@@ -270,7 +278,7 @@ BuildServices makeRealBuildServices() {
       auto report = readFileBytes(outputPath);
       if (!report)
         return report.takeError();
-      constexpr size_t maxDiagnosticBytes = 64 * 1024;
+      constexpr size_t maxDiagnosticBytes = size_t{64} * 1024;
       if (report->size() > maxDiagnosticBytes)
         report->resize(maxDiagnosticBytes);
       return buildError(llvm::Twine("compiler or linker command failed: ") +

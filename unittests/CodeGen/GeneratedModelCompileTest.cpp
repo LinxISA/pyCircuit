@@ -118,6 +118,8 @@ TEST(GeneratedModelCompileTest,
   std::vector<std::string> ownedArguments = {
       ACIR_TEST_CXX_COMPILER, "-std=c++20", "-I" + generatedInclude.str().str(),
       "-I" ACIR_TEST_SOURCE_DIR "/include"};
+  if (llvm::StringRef(ACIR_TEST_SANITIZER_FLAG).size())
+    ownedArguments.push_back(ACIR_TEST_SANITIZER_FLAG);
   for (const GeneratedFile &file : bundle->files) {
     if (!llvm::StringRef(file.relativePath).ends_with(".cpp"))
       continue;
