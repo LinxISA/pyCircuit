@@ -452,12 +452,32 @@ objects and processes, subscriptions, queue occupancy, pending offers, protocol
 state, reservations, next event if any, trace position, and available
 dependency or correlation chains.
 
+The runtime obtains diagnostic state outside the hot dispatch path and emits
+blocked objects in ascending stable object-ID order. A committed non-empty
+queue or scheduler, live resource reservation, retained protocol or trace
+offer, active request-response correlation, runnable unscheduled process, or
+suspended process is unfinished state. The report aggregates queue occupancy,
+pending offers, and active reservations, preserves exact wake subscriptions,
+and carries the trace cursor position and last committed sequence ID. An empty
+schedule is `completed` only when this report has no blocked object and the
+event queue is empty.
+
 ## Statistics, replay, and determinism
 
 Statistics and event logs are deterministic and machine-readable. Logging and
 probes MUST NOT affect decisions. A run is reproducible from the generated
 binary fingerprint, exact trace hash, and statically selected validation and
 instrumentation declarations.
+
+A statistic is a counter, gauge, or histogram with a stable local name and
+owner object path. Mutations are proposals and become visible only at Xfer.
+Counters admit additive proposals, gauges admit at most one set proposal per
+barrier, and histograms admit observations into strictly increasing inclusive
+upper bounds plus one `UINT64_MAX` overflow bucket. Arithmetic overflow rejects
+the proposal without mutation. A `StatSnapshot` contains kind, scalar value,
+count, sum, minimum, maximum, bucket counts, and exact last-update epoch;
+fields not applicable to its kind are zero or empty. System snapshots are
+ordered by `(object_path, statistic_name)`.
 
 Host thread scheduling, pointer values, allocation layout, unordered-container
 iteration, wall-clock time, and skipped idle ticks MUST NOT affect committed

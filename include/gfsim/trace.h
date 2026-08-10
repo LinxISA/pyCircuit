@@ -276,6 +276,45 @@ public:
     return true;
   }
 
+  RuntimeObjectState runtimeState(Epoch epoch) const override {
+    RuntimeObjectState state = SimObject::runtimeState(epoch);
+    state.traceOwner = true;
+    state.tracePosition = position_.nextRecordIndex;
+    state.traceLastCommittedSequenceId = position_.lastCommittedSequenceId;
+    state.traceEof = position_.endOfTrace;
+    state.pendingOffers =
+        committedOffer_.has_value() || offerProposal_.has_value();
+    state.quiescent = position_.endOfTrace && !hasPendingCommit() &&
+                      !committedOffer_.has_value();
+    if (state.quiescent)
+      state.reason.clear();
+    else if (committedOffer_)
+      state.reason = "trace_offer_blocked";
+    else if (hasPendingCommit())
+      state.reason = "pending_commit";
+    else if (position_.nextRecordIndex < document_.records.size()) {
+      const PtoTraceRecord &record =
+          document_.records[position_.nextRecordIndex];
+      for (uint64_t dependency : record.dependencies)
+        if (!completedSequences_.contains(dependency))
+          state.dependencyChain.push_back(dependency);
+      if (!state.dependencyChain.empty())
+        state.reason = "trace_dependency_blocked";
+      else if (record.issueTime && epoch.time < *record.issueTime)
+        state.reason = "trace_issue_time_pending";
+      else
+        state.reason = "trace_runnable_unscheduled";
+    }
+    return state;
+  }
+
+  void collectStatistics(std::vector<StatSnapshot> &out) const override {
+    out.push_back({.name = "trace_position",
+                   .objectPath = std::string(path()),
+                   .kind = StatisticKind::Gauge,
+                   .value = position_.nextRecordIndex});
+  }
+
   bool validate() const {
     return !(committedOffer_ && offerProposal_) &&
            (committedOffer_.has_value() == committedSequenceId_.has_value()) &&

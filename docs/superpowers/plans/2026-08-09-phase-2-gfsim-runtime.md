@@ -21,7 +21,7 @@ Exit gate: runtime and component concept tests, sanitizer builds, randomized
 work-order determinism tests, inactive-module suppression tests, protocol and
 resource invariant tests, and PTO trace streaming tests all pass.
 
-## Current state (after T7 on `codex/phase2-gfsim-runtime`)
+## Current state (after T8 on `codex/phase2-gfsim-runtime`)
 
 The branch already carries a runtime foundation (commits `125a72a`, `d44406d`,
 `8ce3f99`, `4efa785`):
@@ -43,7 +43,9 @@ The branch already carries a runtime foundation (commits `125a72a`, `d44406d`,
   `ProtocolState`; `NoProgressReport`.
 - `lib/gfsim/system.cpp` — `SimSystem`: object registry, work set, global
   event queue, termination classification.
-- `unittests/gfsim/core_test.cpp` — 104 unit tests after T7.
+- `include/gfsim/statistics.h` — proposal/Xfer counters, gauges, and
+  histograms with deterministic snapshots.
+- `unittests/gfsim/core_test.cpp` — 112 unit tests after T8.
 
 ## Gap analysis vs roadmap scope
 
@@ -59,10 +61,10 @@ The branch already carries a runtime foundation (commits `125a72a`, `d44406d`,
 | Protocol state | T6 complete | Immutable ready-valid offers, exact correlation, phase/credit invariants |
 | Packets | T6 complete | Static layout validation, reflection, exact round trips, queue byte sizing |
 | Processes | T4 complete | CRTP enum-PC runtime, exact wake/continuation, fairness failure propagation |
-| Diagnostics / statistics | Partial (`StatSnapshot`) | Full statistics surface + diagnostics taxonomy |
+| Diagnostics / statistics | T8 complete | Full snapshots, stable ordering, blocked-state taxonomy |
 | Trace cursor | T7 complete | Exact schema preflight, streamed equivalence, dependencies, backpressure, position/EOF |
-| No-progress handling | Partial (`NoProgressReport`) | Detection loop + reporting tests |
-| Termination results | Done (`TerminationResult` + classification) | End-to-end termination tests |
+| No-progress handling | T8 complete | Stable aggregate report + detection loop |
+| Termination results | T8 complete | End-to-end completion, cap, deadlock, and cursor tests |
 | Baseline component templates | T5 complete | Exact compile-time identities, concepts, finite Queue/Scheduler behavior |
 | Frozen catalog schemas | Missing | JSON schemas per catalog entry, wired into the schema gate |
 | Sanitizer builds in CI | Presets exist locally (`asan-llvm22`, `ubsan-llvm22`) | CI job legs |
@@ -91,8 +93,9 @@ The branch already carries a runtime foundation (commits `125a72a`, `d44406d`,
 7. **T7 — Trace cursor (complete)**: exact closed-schema preflight, typed PTO
    records, bounded streaming equivalence, dependency/issue-time readiness,
    stable diagnostics, and commit-only cursor advancement under backpressure.
-8. **T8 — Statistics and diagnostics**: full `StatSnapshot` surface,
-   no-progress detection loop, termination end-to-end tests.
+8. **T8 — Statistics and diagnostics (complete)**: full `StatSnapshot`
+   surface, stable component diagnostics, no-progress detection loop, trace
+   cap enforcement, and termination end-to-end tests.
 9. **T9 — Frozen catalog schemas**: one JSON schema per catalog entry,
    unavailable entries explicit; wired into `scripts/check-contracts.py`.
 10. **T10 — Sanitizer CI legs**: ASAN and UBSAN job legs reusing the existing

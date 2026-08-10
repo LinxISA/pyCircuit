@@ -112,7 +112,9 @@ public:
     }
   }
 
-  void doXfer(Epoch) override {
+  void doXfer(Epoch epoch) override {
+    bool changed = !acceptedProposals_.empty() || !releaseProposals_.empty() ||
+                   !cancellationProposals_.empty();
     for (const Reservation &reservation : acceptedProposals_) {
       reservations_.emplace(reservation.transactionId, reservation);
       activeCapacity_ += reservation.amount;
@@ -137,11 +139,41 @@ public:
     cancellationProposals_.clear();
     if (activeCapacity_ > highWatermark_)
       highWatermark_ = activeCapacity_;
+    if (changed)
+      lastUpdate_ = epoch;
   }
 
   bool hasPendingCommit() const override {
     return !acceptedProposals_.empty() || !releaseProposals_.empty() ||
            !cancellationProposals_.empty();
+  }
+
+  RuntimeObjectState runtimeState(Epoch epoch) const override {
+    RuntimeObjectState state = SimObject::runtimeState(epoch);
+    state.activeReservations = activeCapacity_;
+    state.pendingOffers = proposals_.size() + acceptedProposals_.size() +
+                          releaseProposals_.size() +
+                          cancellationProposals_.size();
+    state.quiescent = reservations_.empty() && state.pendingOffers == 0;
+    if (!state.quiescent)
+      state.reason = state.pendingOffers ? "resource_pending_proposal"
+                                         : "resource_reservation_live";
+    return state;
+  }
+
+  void collectStatistics(std::vector<StatSnapshot> &out) const override {
+    auto append = [&](std::string name, uint64_t value) {
+      out.push_back({.name = std::move(name),
+                     .objectPath = std::string(path()),
+                     .kind = StatisticKind::Gauge,
+                     .value = value,
+                     .lastUpdate = lastUpdate_});
+    };
+    append("active_reservations", activeCapacity_);
+    append("high_watermark", highWatermark_);
+    append("total_reservations", totalReservations_);
+    append("total_releases", totalReleases_);
+    append("total_cancellations", totalCancellations_);
   }
 
   bool hasReservation(uint64_t transactionId) const {
@@ -198,6 +230,7 @@ public:
     totalReservations_ = 0;
     totalReleases_ = 0;
     totalCancellations_ = 0;
+    lastUpdate_ = {};
   }
 
 private:
@@ -259,6 +292,7 @@ private:
   std::vector<ReleaseProposal> releaseProposals_;
   std::vector<uint64_t> cancellationProposals_;
   std::map<uint64_t, Reservation> reservations_;
+  Epoch lastUpdate_;
 };
 
 } // namespace gfsim

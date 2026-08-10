@@ -1,8 +1,11 @@
 #include "gfsim/object.h"
 #include "gfsim/queue.h"
 
+#include <algorithm>
 #include <map>
 #include <set>
+#include <string>
+#include <tuple>
 #include <utility>
 
 namespace gfsim {
@@ -15,6 +18,9 @@ struct SimSystem::Impl {
   ActivationPlan activation;
   uint64_t committedEventCount = 0;
   bool executingEpoch = false;
+  NoProgressReport noProgress;
+  size_t traceOwnerCount = 0;
+  bool traceEof = true;
 };
 
 SimSystem::~SimSystem() = default;
@@ -37,6 +43,102 @@ bool SimSystem::fail(std::string code, std::string message) {
   result_.diagnosticCode = std::move(code);
   result_.message = std::move(message);
   return false;
+}
+
+std::vector<SimObject *> SimSystem::runtimeObjects() const {
+  std::map<ObjectId, SimObject *> objects;
+  for (const auto &[id, object] : impl_->objects)
+    if (id != kSystemObjectId && object)
+      objects[id] = object;
+  root_->walk([&](const SimObject &object) {
+    if (object.kind() != ObjectKind::Module)
+      objects[object.id()] = const_cast<SimObject *>(&object);
+  });
+  for (ObjectId id = 0; id < impl_->dispatch.size(); ++id)
+    if (const DispatchRow *row = impl_->dispatch.lookup(id))
+      objects[id] = static_cast<SimObject *>(row->object);
+
+  std::vector<SimObject *> result;
+  result.reserve(objects.size());
+  for (const auto &[id, object] : objects)
+    result.push_back(object);
+  return result;
+}
+
+void SimSystem::refreshRuntimeSummary() {
+  impl_->noProgress = {};
+  impl_->noProgress.nextEvent = impl_->eventQueue.nextEvent();
+  impl_->traceOwnerCount = 0;
+  impl_->traceEof = true;
+
+  for (SimObject *object : runtimeObjects()) {
+    RuntimeObjectState state = object->runtimeState(epoch_);
+    if (state.traceOwner) {
+      ++impl_->traceOwnerCount;
+      impl_->traceEof = impl_->traceEof && state.traceEof;
+      impl_->noProgress.tracePosition = state.tracePosition;
+      impl_->noProgress.lastCommittedSequenceId =
+          state.traceLastCommittedSequenceId;
+    }
+    impl_->noProgress.queueOccupancy += state.queueOccupancy;
+    impl_->noProgress.pendingOffers += state.pendingOffers;
+    impl_->noProgress.activeReservations += state.activeReservations;
+    if (state.quiescent)
+      continue;
+    impl_->noProgress.blockedObjects.push_back(
+        {.id = object->id(),
+         .path = std::string(object->path()),
+         .reason = std::move(state.reason),
+         .subscriptions = std::move(state.subscriptions),
+         .dependencyChain = std::move(state.dependencyChain),
+         .correlationChain = std::move(state.correlationChain),
+         .queueOccupancy = state.queueOccupancy,
+         .pendingOffers = state.pendingOffers,
+         .activeReservations = state.activeReservations,
+         .protocolState = std::move(state.protocolState)});
+  }
+  result_.tracePosition = impl_->noProgress.tracePosition;
+  result_.traceLastCommittedSequenceId =
+      impl_->noProgress.lastCommittedSequenceId;
+  if (!impl_->noProgress.blockedObjects.empty())
+    impl_->noProgress.summary =
+        "unfinished runtime state has no scheduled wake or future event";
+}
+
+bool SimSystem::stopAtTraceCap() {
+  refreshRuntimeSummary();
+  if (impl_->traceOwnerCount > 1) {
+    fail("multiple_trace_owners",
+         "the runtime must have exactly one committed trace cursor owner");
+    return true;
+  }
+  if (impl_->traceOwnerCount == 0 || impl_->traceEof ||
+      result_.tracePosition < maxTraceRecords_)
+    return false;
+  terminated_ = true;
+  impl_->executingEpoch = false;
+  result_.classification = TerminationClass::Incomplete;
+  result_.finalEpoch = epoch_;
+  result_.committedEventCount = impl_->committedEventCount;
+  result_.terminationCap = maxTraceRecords_;
+  result_.diagnosticCode = "max_trace_records_reached";
+  return true;
+}
+
+NoProgressReport SimSystem::noProgressReport() const {
+  return impl_->noProgress;
+}
+
+std::vector<StatSnapshot> SimSystem::statistics() const {
+  std::vector<StatSnapshot> snapshots;
+  for (const SimObject *object : runtimeObjects())
+    object->collectStatistics(snapshots);
+  std::stable_sort(snapshots.begin(), snapshots.end(),
+                   [](const StatSnapshot &left, const StatSnapshot &right) {
+                     return std::tie(left.objectPath, left.name) <
+                            std::tie(right.objectPath, right.name);
+                   });
+  return snapshots;
 }
 
 void SimSystem::registerObject(SimObject *obj) {
@@ -123,6 +225,8 @@ std::optional<Event> SimSystem::nextEvent() const {
 bool SimSystem::step() {
   if (terminated_)
     return false;
+  if (stopAtTraceCap())
+    return false;
 
   auto stopAtEventCap = [this] {
     if (impl_->committedEventCount < maxEvents_)
@@ -132,6 +236,7 @@ bool SimSystem::step() {
     result_.classification = TerminationClass::Incomplete;
     result_.finalEpoch = epoch_;
     result_.committedEventCount = impl_->committedEventCount;
+    result_.terminationCap = maxEvents_;
     result_.diagnosticCode = "max_events_reached";
     return true;
   };
@@ -140,6 +245,7 @@ bool SimSystem::step() {
     terminated_ = true;
     result_.classification = TerminationClass::Incomplete;
     result_.finalEpoch = epoch_;
+    result_.terminationCap = maxTicks_;
     result_.diagnosticCode = "max_ticks_reached";
     return false;
   }
@@ -243,6 +349,11 @@ bool SimSystem::step() {
     nextEpoch = event->readyTime;
 
   if (!nextEpoch) {
+    if (stopAtTraceCap())
+      return false;
+    refreshRuntimeSummary();
+    if (!impl_->noProgress.blockedObjects.empty())
+      return fail("no_progress", impl_->noProgress.summary);
     terminated_ = true;
     result_.classification = TerminationClass::Completed;
     result_.finalEpoch = epoch_;
@@ -259,11 +370,10 @@ bool SimSystem::step() {
 TerminationResult SimSystem::run() {
   epoch_ = {0, 0};
 
-  root_->walk([this](SimObject &obj) {
-    if (obj.kind() == ObjectKind::Process ||
-        obj.kind() == ObjectKind::TraceSource)
-      scheduleWork(obj.id(), epoch_);
-  });
+  for (SimObject *object : runtimeObjects())
+    if (object->kind() == ObjectKind::Process ||
+        object->kind() == ObjectKind::TraceSource)
+      scheduleWork(object->id(), epoch_);
 
   while (!terminated_)
     if (!step())
@@ -271,6 +381,7 @@ TerminationResult SimSystem::run() {
 
   result_.finalEpoch = epoch_;
   result_.committedEventCount = impl_->committedEventCount;
+  refreshRuntimeSummary();
   return result_;
 }
 
@@ -282,6 +393,9 @@ void SimSystem::reset() {
   impl_->eventQueue.reset();
   impl_->committedEventCount = 0;
   impl_->executingEpoch = false;
+  impl_->noProgress = {};
+  impl_->traceOwnerCount = 0;
+  impl_->traceEof = true;
   if (!impl_->dispatch.empty()) {
     for (ObjectId id = 0; id < impl_->dispatch.size(); ++id) {
       const DispatchRow *row = impl_->dispatch.lookup(id);

@@ -284,7 +284,8 @@ public:
     proposals_.clear();
   }
 
-  void doXfer(Epoch) override {
+  void doXfer(Epoch epoch) override {
+    bool changed = hasPendingCommit();
     size_t popped = std::min(popProposalCount_, committed_.size());
     committed_.erase(committed_.begin(), committed_.begin() + popped);
     totalPops_ += popped;
@@ -301,11 +302,39 @@ public:
       rejectedTransactions_.push_back(entry.transactionId);
     rejected_.clear();
     highWatermark_ = std::max(highWatermark_, committed_.size());
+    if (changed)
+      lastUpdate_ = epoch;
   }
 
   bool hasPendingCommit() const override {
     return !proposals_.empty() || !accepted_.empty() || !rejected_.empty() ||
            popProposalCount_ != 0;
+  }
+
+  RuntimeObjectState runtimeState(Epoch epoch) const override {
+    RuntimeObjectState state = SimObject::runtimeState(epoch);
+    state.queueOccupancy = committed_.size();
+    state.pendingOffers =
+        proposals_.size() + accepted_.size() + rejected_.size();
+    state.quiescent = committed_.empty() && !hasPendingCommit();
+    if (!state.quiescent)
+      state.reason = hasPendingCommit() ? "scheduler_pending_proposal"
+                                        : "scheduler_not_empty";
+    return state;
+  }
+
+  void collectStatistics(std::vector<StatSnapshot> &out) const override {
+    auto append = [&](std::string name, uint64_t value) {
+      out.push_back({.name = std::move(name),
+                     .objectPath = std::string(path()),
+                     .kind = StatisticKind::Gauge,
+                     .value = value,
+                     .lastUpdate = lastUpdate_});
+    };
+    append("occupancy", committed_.size());
+    append("high_watermark", highWatermark_);
+    append("total_scheduled", totalScheduled_);
+    append("total_pops", totalPops_);
   }
 
   bool isRunnable(Epoch) const override { return !proposals_.empty(); }
@@ -339,6 +368,7 @@ public:
     highWatermark_ = 0;
     totalScheduled_ = 0;
     totalPops_ = 0;
+    lastUpdate_ = {};
   }
 
 private:
@@ -382,6 +412,7 @@ private:
   size_t highWatermark_ = 0;
   uint64_t totalScheduled_ = 0;
   uint64_t totalPops_ = 0;
+  Epoch lastUpdate_;
 };
 
 // ── ReadyValid ────────────────────────────────────────────────────────
@@ -406,7 +437,8 @@ public:
   bool hasOffer() const { return offer_.has_value(); }
   const T *peekOffer() const { return offer_ ? &*offer_ : nullptr; }
 
-  void doXfer(Epoch) override {
+  void doXfer(Epoch epoch) override {
+    bool changed = hasPendingCommit() || (offer_ && ready_);
     if (readyProposal_)
       ready_ = *readyProposal_;
     if (offerProposal_)
@@ -419,10 +451,31 @@ public:
       offer_.reset();
       ++transferCount_;
     }
+    if (changed)
+      lastUpdate_ = epoch;
   }
 
   bool hasPendingCommit() const override {
     return offerProposal_.has_value() || readyProposal_.has_value();
+  }
+
+  RuntimeObjectState runtimeState(Epoch epoch) const override {
+    RuntimeObjectState state = SimObject::runtimeState(epoch);
+    state.pendingOffers = offer_.has_value() + offerProposal_.has_value();
+    state.protocolState = ready_ ? "ready" : "backpressure";
+    state.quiescent = !offer_ && !hasPendingCommit();
+    if (!state.quiescent)
+      state.reason =
+          offer_ ? "ready_valid_offer_blocked" : "ready_valid_pending_proposal";
+    return state;
+  }
+
+  void collectStatistics(std::vector<StatSnapshot> &out) const override {
+    out.push_back({.name = "transfers",
+                   .objectPath = std::string(path()),
+                   .kind = StatisticKind::Counter,
+                   .value = transferCount_,
+                   .lastUpdate = lastUpdate_});
   }
 
   const T &lastTransferred() const { return lastTransferred_; }
@@ -437,6 +490,7 @@ public:
     readyProposal_.reset();
     lastTransferred_ = {};
     transferCount_ = 0;
+    lastUpdate_ = {};
   }
 
 private:
@@ -446,6 +500,7 @@ private:
   std::optional<bool> readyProposal_;
   T lastTransferred_{};
   uint64_t transferCount_ = 0;
+  Epoch lastUpdate_;
 };
 
 // ── RequestResponse ──────────────────────────────────────────────────
@@ -510,7 +565,8 @@ public:
     return committedResponses_[responsePopCount_++];
   }
 
-  void doXfer(Epoch) override {
+  void doXfer(Epoch epoch) override {
+    bool changed = hasPendingCommit();
     size_t requestPops = std::min(requestPopCount_, committedRequests_.size());
     for (size_t index = 0; index < requestPops; ++index)
       deliveredRequests_.insert(committedRequests_[index].correlationId);
@@ -537,11 +593,35 @@ public:
       ++totalCompleted_;
     }
     responseProposals_.clear();
+    if (changed)
+      lastUpdate_ = epoch;
   }
 
   bool hasPendingCommit() const override {
     return !requestProposals_.empty() || !responseProposals_.empty() ||
            requestPopCount_ != 0 || responsePopCount_ != 0;
+  }
+
+  RuntimeObjectState runtimeState(Epoch epoch) const override {
+    RuntimeObjectState state = SimObject::runtimeState(epoch);
+    state.pendingOffers = requestProposals_.size() + responseProposals_.size() +
+                          committedRequests_.size() +
+                          committedResponses_.size();
+    state.correlationChain.assign(active_.begin(), active_.end());
+    state.protocolState = active_.empty() ? "idle" : "in_flight";
+    state.quiescent =
+        active_.empty() && state.pendingOffers == 0 && !hasPendingCommit();
+    if (!state.quiescent)
+      state.reason = "request_response_blocked";
+    return state;
+  }
+
+  void collectStatistics(std::vector<StatSnapshot> &out) const override {
+    out.push_back({.name = "completed",
+                   .objectPath = std::string(path()),
+                   .kind = StatisticKind::Counter,
+                   .value = totalCompleted_,
+                   .lastUpdate = lastUpdate_});
   }
 
   size_t inFlight() const { return active_.size(); }
@@ -575,6 +655,7 @@ public:
     requestPopCount_ = 0;
     responsePopCount_ = 0;
     totalCompleted_ = 0;
+    lastUpdate_ = {};
   }
 
 private:
@@ -602,6 +683,7 @@ private:
   std::set<uint64_t> deliveredRequests_;
   size_t requestPopCount_ = 0;
   size_t responsePopCount_ = 0;
+  Epoch lastUpdate_;
 };
 
 // ── Protocol state ────────────────────────────────────────────────────
@@ -686,23 +768,6 @@ private:
 };
 
 // ── No-progress diagnostics ──────────────────────────────────────────
-
-struct BlockedObject {
-  ObjectId id = 0;
-  std::string path;
-  std::string reason;
-};
-
-struct NoProgressReport {
-  std::vector<BlockedObject> blockedObjects;
-  size_t queueOccupancy = 0;
-  size_t pendingOffers = 0;
-  size_t activeReservations = 0;
-  std::optional<Event> nextEvent;
-  uint64_t tracePosition = 0;
-  std::string summary;
-  bool empty() const { return blockedObjects.empty() && !nextEvent; }
-};
 
 } // namespace gfsim
 

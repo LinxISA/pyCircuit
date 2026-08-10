@@ -6,6 +6,7 @@
 #include "gfsim/process.h"
 #include "gfsim/queue.h"
 #include "gfsim/resource.h"
+#include "gfsim/statistics.h"
 #include "gfsim/trace.h"
 
 #include "gtest/gtest.h"
@@ -1157,9 +1158,175 @@ TEST(GfsimTraceTest, IssueTimeSchedulesAnExactWakeInsteadOfPolling) {
 
   TerminationResult result = system.run();
   EXPECT_EQ(result.finalEpoch, (Epoch{2, 0}));
+  EXPECT_EQ(result.classification, TerminationClass::Failed);
+  EXPECT_EQ(result.diagnosticCode, "no_progress");
   ASSERT_NE(sourcePtr->peekOffer(), nullptr);
   EXPECT_EQ(sourcePtr->peekOffer()->sequenceId, 10u);
   EXPECT_EQ(sourcePtr->position().nextRecordIndex, 0u);
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// Statistics, diagnostics, and termination
+// ═══════════════════════════════════════════════════════════════════════
+
+TEST(GfsimStatisticsTest, CounterGaugeAndHistogramCommitDeterministically) {
+  Statistic counter("accepted", 1, nullptr, StatisticKind::Counter);
+  EXPECT_TRUE(counter.proposeAdd(2));
+  EXPECT_TRUE(counter.proposeAdd(3));
+  counter.doXfer({4, 0});
+  StatSnapshot counterSnapshot = counter.snapshot();
+  EXPECT_EQ(counterSnapshot.value, 5u);
+  EXPECT_EQ(counterSnapshot.lastUpdate, (Epoch{4, 0}));
+
+  Statistic gauge("occupancy", 2, nullptr, StatisticKind::Gauge);
+  EXPECT_TRUE(gauge.proposeSet(7));
+  EXPECT_FALSE(gauge.proposeSet(8));
+  gauge.doXfer({4, 0});
+  EXPECT_EQ(gauge.snapshot().value, 7u);
+
+  Statistic histogram("latency", 3, nullptr, {10, 20});
+  EXPECT_TRUE(histogram.proposeObserve(25));
+  EXPECT_TRUE(histogram.proposeObserve(5));
+  EXPECT_TRUE(histogram.proposeObserve(15));
+  histogram.doXfer({5, 0});
+  StatSnapshot histogramSnapshot = histogram.snapshot();
+  EXPECT_EQ(histogramSnapshot.count, 3u);
+  EXPECT_EQ(histogramSnapshot.sum, 45u);
+  EXPECT_EQ(histogramSnapshot.minimum, 5u);
+  EXPECT_EQ(histogramSnapshot.maximum, 25u);
+  EXPECT_EQ(histogramSnapshot.buckets,
+            (std::vector<HistogramBucket>{{10, 1}, {20, 1}, {UINT64_MAX, 1}}));
+}
+
+TEST(GfsimStatisticsTest, SystemSnapshotsAreStableByPathAndName) {
+  SimSystem system;
+  Statistic second("zeta", 2, nullptr, StatisticKind::Counter);
+  Statistic first("alpha", 1, nullptr, StatisticKind::Gauge);
+  second.setPath("/system/zeta");
+  first.setPath("/system/alpha");
+  ASSERT_TRUE(second.proposeAdd(2));
+  ASSERT_TRUE(first.proposeSet(1));
+  second.doXfer({1, 0});
+  first.doXfer({1, 0});
+  system.registerObject(&second);
+  system.registerObject(&first);
+
+  std::vector<StatSnapshot> snapshots = system.statistics();
+  ASSERT_EQ(snapshots.size(), 2u);
+  EXPECT_EQ(snapshots[0].objectPath, "/system/alpha");
+  EXPECT_EQ(snapshots[0].name, "alpha");
+  EXPECT_EQ(snapshots[1].objectPath, "/system/zeta");
+  EXPECT_EQ(snapshots[1].name, "zeta");
+}
+
+TEST(GfsimSystemTest, NonEmptyQueueWithoutWakeFailsWithNoProgressReport) {
+  SimSystem system;
+  Queue<uint64_t> queue("queue", 1, nullptr, 2);
+  queue.setPath("/system/queue");
+  ASSERT_TRUE(queue.proposePush(7));
+  queue.doXfer({0, 0});
+  system.registerObject(&queue);
+
+  TerminationResult result = system.run();
+  EXPECT_EQ(result.classification, TerminationClass::Failed);
+  EXPECT_EQ(result.diagnosticCode, "no_progress");
+  NoProgressReport report = system.noProgressReport();
+  ASSERT_EQ(report.blockedObjects.size(), 1u);
+  EXPECT_EQ(report.blockedObjects[0].id, 1u);
+  EXPECT_EQ(report.blockedObjects[0].reason, "queue_not_empty");
+  EXPECT_EQ(report.queueOccupancy, 1u);
+}
+
+TEST(GfsimSystemTest, TraceLimitIsIncompleteAndReportsExactPosition) {
+  TraceLoadResult loaded = parsePtoTrace(ValidPtoTrace);
+  ASSERT_TRUE(loaded.succeeded());
+  SimSystem system;
+  TraceSource<> source("trace", 1, nullptr, std::move(*loaded.document));
+  source.setPath("/system/trace");
+  system.registerObject(&source);
+  system.setMaxTraceRecords(0);
+
+  TerminationResult result = system.run();
+  EXPECT_EQ(result.classification, TerminationClass::Incomplete);
+  EXPECT_EQ(result.diagnosticCode, "max_trace_records_reached");
+  EXPECT_EQ(result.tracePosition, 0u);
+  EXPECT_EQ(result.terminationCap, 0u);
+}
+
+TEST(GfsimSystemTest, ExhaustedTraceCompletesWithCommittedCursorIdentity) {
+  constexpr std::string_view oneRecord = R"json({
+    "schema":"pto-trace","version":"0.1","contract_epoch":"0.1",
+    "metadata":{"record_count":1},"records":[{
+      "sequence_id":9,"opcode":"pto.done","operands":[],
+      "dependencies":[],"attributes":{}}]})json";
+  TraceLoadResult loaded = parsePtoTrace(oneRecord);
+  ASSERT_TRUE(loaded.succeeded());
+  TraceSource<> source("trace", 1, nullptr, std::move(*loaded.document));
+  source.doWork({0, 0});
+  source.doXfer({0, 0});
+  ASSERT_TRUE(source.proposeAccept());
+  source.doXfer({1, 0});
+  ASSERT_TRUE(source.eof());
+
+  SimSystem system;
+  source.setPath("/system/trace");
+  system.registerObject(&source);
+  TerminationResult result = system.run();
+  EXPECT_EQ(result.classification, TerminationClass::Completed);
+  EXPECT_EQ(result.tracePosition, 1u);
+  EXPECT_EQ(result.traceLastCommittedSequenceId, 9u);
+  EXPECT_TRUE(system.noProgressReport().empty());
+}
+
+TEST(GfsimSystemTest, MultipleTraceCursorOwnersFailDeterministically) {
+  TraceLoadResult firstDocument = parsePtoTrace(ValidPtoTrace);
+  TraceLoadResult secondDocument = parsePtoTrace(ValidPtoTrace);
+  ASSERT_TRUE(firstDocument.succeeded());
+  ASSERT_TRUE(secondDocument.succeeded());
+  TraceSource<> first("first", 1, nullptr, std::move(*firstDocument.document));
+  TraceSource<> second("second", 2, nullptr,
+                       std::move(*secondDocument.document));
+  SimSystem system;
+  system.registerObject(&first);
+  system.registerObject(&second);
+
+  TerminationResult result = system.run();
+  EXPECT_EQ(result.classification, TerminationClass::Failed);
+  EXPECT_EQ(result.diagnosticCode, "multiple_trace_owners");
+}
+
+TEST(GfsimSystemTest,
+     NoProgressReportIncludesReservationsProtocolsAndCorrelations) {
+  SimSystem system;
+  Resource resource("resource", 1, nullptr, 1);
+  ReadyValid<uint64_t> readyValid("ready_valid", 2, nullptr);
+  RequestResponse<uint64_t, uint64_t> requestResponse("request_response", 3,
+                                                      nullptr, 1);
+  resource.setPath("/system/resource");
+  readyValid.setPath("/system/ready_valid");
+  requestResponse.setPath("/system/request_response");
+
+  ASSERT_TRUE(resource.proposeReserve(9, 1, {0, 0}, 101));
+  resource.doArbitrate({0, 0});
+  resource.doXfer({0, 0});
+  ASSERT_TRUE(readyValid.proposeOffer(5));
+  readyValid.doXfer({0, 0});
+  ASSERT_TRUE(requestResponse.proposeRequest(6, 202));
+  requestResponse.doXfer({0, 0});
+  system.registerObject(&resource);
+  system.registerObject(&readyValid);
+  system.registerObject(&requestResponse);
+
+  TerminationResult result = system.run();
+  EXPECT_EQ(result.diagnosticCode, "no_progress");
+  NoProgressReport report = system.noProgressReport();
+  ASSERT_EQ(report.blockedObjects.size(), 3u);
+  EXPECT_EQ(report.activeReservations, 1u);
+  EXPECT_EQ(report.pendingOffers, 2u);
+  EXPECT_EQ(report.blockedObjects[0].reason, "resource_reservation_live");
+  EXPECT_EQ(report.blockedObjects[1].protocolState, "backpressure");
+  EXPECT_EQ(report.blockedObjects[2].correlationChain,
+            (std::vector<uint64_t>{202}));
 }
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -1625,6 +1792,22 @@ TEST(GfsimProcessTest, ProcessFailureTerminatesTheSystem) {
             TerminationClass::Failed);
   EXPECT_EQ(system.terminationResult().diagnosticCode,
             "process_fairness_exceeded");
+}
+
+TEST(GfsimProcessTest, SuspendedProcessProducesExactNoProgressSubscription) {
+  SimSystem system("test");
+  SuspendingProcess process;
+  std::array rows = {makeDispatchRow(&process)};
+  ASSERT_TRUE(system.setDispatchTable(rows));
+  ASSERT_TRUE(system.scheduleWork(0, {0, 0}));
+
+  EXPECT_FALSE(system.step());
+  EXPECT_EQ(system.terminationResult().diagnosticCode, "no_progress");
+  NoProgressReport report = system.noProgressReport();
+  ASSERT_EQ(report.blockedObjects.size(), 1u);
+  EXPECT_EQ(report.blockedObjects[0].reason, "process_suspended");
+  EXPECT_EQ(report.blockedObjects[0].subscriptions,
+            (std::vector<std::string>{"event_queue:7"}));
 }
 
 // ═══════════════════════════════════════════════════════════════════════

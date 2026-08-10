@@ -64,6 +64,20 @@ public:
   /// Returns true if this object has work to do at the given epoch.
   virtual bool isRunnable(Epoch epoch) const { return false; }
 
+  /// Describe committed liveness state for diagnostics outside the hot path.
+  virtual RuntimeObjectState runtimeState(Epoch epoch) const {
+    const bool pending = hasPendingCommit();
+    const bool runnable = isRunnable(epoch);
+    return {.quiescent = !pending && !runnable,
+            .runnable = runnable,
+            .pendingCommit = pending,
+            .reason =
+                pending ? "pending_commit" : (runnable ? "runnable" : "")};
+  }
+
+  /// Append deterministic snapshots owned by this object.
+  virtual void collectStatistics(std::vector<StatSnapshot> &) const {}
+
   // ── Reset ───────────────────────────────────────────────────────────
 
   virtual void reset() {}
@@ -190,6 +204,8 @@ public:
 
   bool isTerminated() const { return terminated_; }
   TerminationResult terminationResult() const { return result_; }
+  NoProgressReport noProgressReport() const;
+  std::vector<StatSnapshot> statistics() const;
 
   // ── Object registry ─────────────────────────────────────────────────
 
@@ -221,6 +237,9 @@ private:
   std::unique_ptr<Impl> impl_;
 
   bool fail(std::string code, std::string message);
+  std::vector<SimObject *> runtimeObjects() const;
+  void refreshRuntimeSummary();
+  bool stopAtTraceCap();
 };
 
 } // namespace gfsim

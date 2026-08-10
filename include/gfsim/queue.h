@@ -79,6 +79,7 @@ public:
   // ── Xfer ────────────────────────────────────────────────────────────
 
   void doXfer(Epoch epoch) override {
+    bool changed = hasPendingCommit();
     // Commit push proposals
     for (auto &elem : pushProposals_) {
       committed_.push_back(std::move(elem));
@@ -96,10 +97,36 @@ public:
     // Update statistics
     if (committedSize() > highWatermark_)
       highWatermark_ = committedSize();
+    if (changed)
+      lastUpdate_ = epoch;
   }
 
   bool hasPendingCommit() const override {
     return !pushProposals_.empty() || popProposalCount_ != 0;
+  }
+
+  RuntimeObjectState runtimeState(Epoch epoch) const override {
+    RuntimeObjectState state = SimObject::runtimeState(epoch);
+    state.queueOccupancy = committedSize();
+    state.pendingOffers = pushProposals_.size();
+    state.quiescent = committed_.empty() && !hasPendingCommit();
+    if (!state.quiescent)
+      state.reason = hasPendingCommit() ? "pending_commit" : "queue_not_empty";
+    return state;
+  }
+
+  void collectStatistics(std::vector<StatSnapshot> &out) const override {
+    auto append = [&](std::string suffix, uint64_t value) {
+      out.push_back({.name = std::move(suffix),
+                     .objectPath = std::string(path()),
+                     .kind = StatisticKind::Gauge,
+                     .value = value,
+                     .lastUpdate = lastUpdate_});
+    };
+    append("occupancy", committedSize());
+    append("high_watermark", highWatermark_);
+    append("total_pushes", totalPushes_);
+    append("total_pops", totalPops_);
   }
 
   // ── Statistics ──────────────────────────────────────────────────────
@@ -115,6 +142,7 @@ public:
     highWatermark_ = 0;
     totalPushes_ = 0;
     totalPops_ = 0;
+    lastUpdate_ = {};
   }
 
 private:
@@ -132,6 +160,7 @@ private:
   size_t highWatermark_ = 0;
   uint64_t totalPushes_ = 0;
   uint64_t totalPops_ = 0;
+  Epoch lastUpdate_;
 };
 
 /// Standard-library finite FIFO component. The distinct name is the public

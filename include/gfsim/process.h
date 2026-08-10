@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <limits>
 #include <optional>
+#include <string>
 #include <string_view>
 #include <utility>
 
@@ -135,6 +136,44 @@ public:
   bool hasPendingCommit() const override { return pendingCommit_; }
   bool isRunnable(Epoch) const override {
     return committedStatus_ == ProcessStatus::Runnable && !pendingCommit_;
+  }
+
+  RuntimeObjectState runtimeState(Epoch epoch) const override {
+    RuntimeObjectState state = SimObject::runtimeState(epoch);
+    state.quiescent =
+        !pendingCommit_ && (committedStatus_ == ProcessStatus::Terminated ||
+                            committedStatus_ == ProcessStatus::Failed);
+    if (state.quiescent) {
+      state.reason.clear();
+      return state;
+    }
+    if (pendingCommit_)
+      state.reason = "pending_commit";
+    else if (committedStatus_ == ProcessStatus::Runnable)
+      state.reason = "process_runnable_unscheduled";
+    else {
+      state.reason = "process_suspended";
+      if (committedWake_) {
+        std::string kind;
+        switch (committedWake_->kind) {
+        case ProcessWakeKind::Condition:
+          kind = "condition";
+          break;
+        case ProcessWakeKind::Resource:
+          kind = "resource";
+          break;
+        case ProcessWakeKind::EventQueue:
+          kind = "event_queue";
+          break;
+        case ProcessWakeKind::NextDelta:
+          kind = "next_delta";
+          break;
+        }
+        state.subscriptions.push_back(kind + ":" +
+                                      std::to_string(committedWake_->id));
+      }
+    }
+    return state;
   }
 
   bool wake(ProcessWake wake, uint64_t continuationId) {

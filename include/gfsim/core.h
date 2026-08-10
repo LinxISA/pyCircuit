@@ -2,6 +2,7 @@
 #define GFSIM_CORE_H
 
 #include <compare>
+#include <cstddef>
 #include <cstdint>
 #include <limits>
 #include <optional>
@@ -75,6 +76,8 @@ struct TerminationResult {
   Epoch finalEpoch;
   uint64_t committedEventCount = 0;
   uint64_t tracePosition = 0;
+  std::optional<uint64_t> traceLastCommittedSequenceId;
+  std::optional<uint64_t> terminationCap;
   std::string diagnosticCode;
   std::optional<std::string> message;
 };
@@ -129,11 +132,68 @@ struct Event {
 
 // ── Statistics ────────────────────────────────────────────────────────
 
+enum class StatisticKind : uint8_t { Counter, Gauge, Histogram };
+
+struct HistogramBucket {
+  uint64_t upperBound = 0;
+  uint64_t count = 0;
+  bool operator==(const HistogramBucket &) const = default;
+};
+
 struct StatSnapshot {
   std::string name;
   std::string objectPath;
+  StatisticKind kind = StatisticKind::Counter;
   uint64_t value = 0;
+  uint64_t count = 0;
+  uint64_t sum = 0;
+  uint64_t minimum = 0;
+  uint64_t maximum = 0;
+  std::vector<HistogramBucket> buckets;
   Epoch lastUpdate;
+};
+
+struct RuntimeObjectState {
+  bool quiescent = true;
+  bool runnable = false;
+  bool pendingCommit = false;
+  std::string reason;
+  std::vector<std::string> subscriptions;
+  std::vector<uint64_t> dependencyChain;
+  std::vector<uint64_t> correlationChain;
+  size_t queueOccupancy = 0;
+  size_t pendingOffers = 0;
+  size_t activeReservations = 0;
+  std::string protocolState;
+  bool traceOwner = false;
+  uint64_t tracePosition = 0;
+  std::optional<uint64_t> traceLastCommittedSequenceId;
+  bool traceEof = false;
+};
+
+struct BlockedObject {
+  ObjectId id = kInvalidObjectId;
+  std::string path;
+  std::string reason;
+  std::vector<std::string> subscriptions;
+  std::vector<uint64_t> dependencyChain;
+  std::vector<uint64_t> correlationChain;
+  size_t queueOccupancy = 0;
+  size_t pendingOffers = 0;
+  size_t activeReservations = 0;
+  std::string protocolState;
+};
+
+struct NoProgressReport {
+  std::vector<BlockedObject> blockedObjects;
+  size_t queueOccupancy = 0;
+  size_t pendingOffers = 0;
+  size_t activeReservations = 0;
+  std::optional<Event> nextEvent;
+  uint64_t tracePosition = 0;
+  std::optional<uint64_t> lastCommittedSequenceId;
+  std::string summary;
+  bool empty() const { return blockedObjects.empty() && !nextEvent; }
 };
 
 } // namespace gfsim
