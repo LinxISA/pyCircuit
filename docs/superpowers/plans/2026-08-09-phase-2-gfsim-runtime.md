@@ -1,7 +1,9 @@
 # Phase 2 implementation plan — C++20 gfsim runtime and standard library
 
-Status: **active**. Phase 1 passed its completion audit and was merged to
-`main` at `65aabec` before this phase branch was created.
+Status: **complete**. Phase 1 passed its completion audit and was merged to
+`main` at `65aabec` before this phase branch was created. Phase 2 passed its
+completion audit at `29064b7`; the evidence is recorded in
+[phase-2-audit.md](../../implementation/phase-2-audit.md).
 
 Roadmap scope (verbatim from
 [2026-08-04-agentic-circuit-roadmap.md](2026-08-04-agentic-circuit-roadmap.md),
@@ -21,7 +23,7 @@ Exit gate: runtime and component concept tests, sanitizer builds, randomized
 work-order determinism tests, inactive-module suppression tests, protocol and
 resource invariant tests, and PTO trace streaming tests all pass.
 
-## Current state (after T10 implementation on `codex/phase2-gfsim-runtime`)
+## Final state (after the completion audit on `codex/phase2-gfsim-runtime`)
 
 The branch already carries a runtime foundation (commits `125a72a`, `d44406d`,
 `8ce3f99`, `4efa785`):
@@ -45,11 +47,15 @@ The branch already carries a runtime foundation (commits `125a72a`, `d44406d`,
   event queue, termination classification.
 - `include/gfsim/statistics.h` — proposal/Xfer counters, gauges, and
   histograms with deterministic snapshots.
-- `unittests/gfsim/core_test.cpp` — 112 unit tests after T8.
+- `unittests/gfsim/core_test.cpp` — 120 unit tests after the completion audit.
 - `schemas/stdlib/` — 36 fingerprinted component records plus an explicit
   availability catalog and deterministic generator/checker.
 - `.github/workflows/ci.yml` — ASAN and UBSAN matrix legs reuse the locked LLVM
   cache and existing sanitizer presets for gfsim and codegen tests.
+
+The completion audit additionally closed identity-shadowing, recursive path,
+private arbitration-result, repeated same-tick commit, exact time-cap, reset
+coverage, and frozen observation-schema gaps.
 
 ## Gap analysis vs roadmap scope
 
