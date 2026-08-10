@@ -79,6 +79,12 @@ TEST(GeneratorTest, EmitsExactOrderedFileSetAndTypedOwnership) {
   EXPECT_NE(header->content.find("gfsim::Fifo fifo_;"), std::string::npos);
   EXPECT_NE(header->content.find("std::array<gfsim::Fifo, 2> lanes_;"),
             std::string::npos);
+  EXPECT_NE(source->content.find("fifo_(\"fifo\", 0, this)"),
+            std::string::npos);
+  EXPECT_NE(source->content.find("gfsim::Fifo(\"lanes[0]\", 1, this)"),
+            std::string::npos);
+  EXPECT_NE(source->content.find("tick_(\"tick\", 3, this, lanes_[0])"),
+            std::string::npos);
   EXPECT_NE(source->content.find("attachChild(fifo_)"), std::string::npos);
   EXPECT_FALSE(hasError(validateSourceBundle(*plan, *bundle)));
 }
@@ -91,6 +97,7 @@ TEST(GeneratorTest, RepeatedGenerationIsByteIdentical) {
   auto second = generateModelSources(*plan);
   ASSERT_TRUE(static_cast<bool>(first));
   ASSERT_TRUE(static_cast<bool>(second));
+  EXPECT_EQ(first->buildFingerprint, second->buildFingerprint);
   ASSERT_EQ(first->files.size(), second->files.size());
   for (size_t index = 0; index < first->files.size(); ++index) {
     EXPECT_EQ(first->files[index].relativePath,
@@ -194,6 +201,28 @@ TEST(GeneratorTest, RejectsProcessSuspendWithoutExactWake) {
   ASSERT_FALSE(bundle);
   EXPECT_NE(llvm::toString(bundle.takeError()).find("ACLOWER-PROCESS-STATE"),
             std::string::npos);
+}
+
+TEST(GeneratorTest, EmitsDenseDispatchAndCanonicalActivation) {
+  mlir::MLIRContext context;
+  auto plan = fixturePlan(context);
+  ASSERT_TRUE(static_cast<bool>(plan));
+  auto bundle = generateModelSources(*plan);
+  ASSERT_TRUE(static_cast<bool>(bundle));
+  const GeneratedFile *dispatch =
+      findFile(*bundle, "include/generated/dispatch.h");
+  ASSERT_NE(dispatch, nullptr);
+
+  EXPECT_NE(dispatch->content.find("std::array<gfsim::DispatchRow, 4>"),
+            std::string::npos);
+  EXPECT_LT(dispatch->content.find("makeDispatchRow(&model.top_.fifo_)"),
+            dispatch->content.find("makeDispatchRow(&model.top_.lanes_[0])"));
+  EXPECT_LT(dispatch->content.find("makeDispatchRow(&model.top_.lanes_[1])"),
+            dispatch->content.find("makeDispatchRow(&model.top_.tick_)"));
+  EXPECT_NE(dispatch->content.find("kActivationOffsets"), std::string::npos);
+  EXPECT_NE(dispatch->content.find("{0, 1, 4, 5, 6}"), std::string::npos);
+  EXPECT_NE(dispatch->content.find("kActivationTargets"), std::string::npos);
+  EXPECT_NE(dispatch->content.find("{0, 1, 2, 3, 2, 3}"), std::string::npos);
 }
 
 } // namespace

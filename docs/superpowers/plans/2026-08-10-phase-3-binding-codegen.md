@@ -677,7 +677,7 @@ git commit -m "feat(codegen): emit enum pc processes"
 - Consumes: dense runtime rows and activation edges from `ModelPlan`, `gfsim::DispatchRow`, and hierarchy attachment.
 - Produces: `generated/model.h`, `generated/model.cpp`, `generated/dispatch.h`, `generated/main.cpp`, and a readable embedded build fingerprint.
 
-- [ ] **Step 1: Add failing harness and dispatch tests**
+- [x] **Step 1: Add failing harness and dispatch tests**
 
 ```cpp
 TEST(GeneratorTest, EmitsDenseDispatchAndCanonicalActivation) {
@@ -699,31 +699,31 @@ TEST(GeneratedModelCompileTest, MinimalBundleCompilesLinksAndPrintsFingerprint) 
 }
 ```
 
-- [ ] **Step 2: Run and observe missing harness behavior**
+- [x] **Step 2: Run and observe missing harness behavior**
 
 Run: `cmake --build --preset dev-llvm22 --target CodeGenTests && build/dev-llvm22/bin/CodeGenTests --gtest_filter='GeneratorTest.EmitsDenseDispatchAndCanonicalActivation:GeneratedModelCompileTest.*'`
 
 Expected: tests fail because the complete runnable harness and embedded fingerprint are absent.
 
-- [ ] **Step 3: Emit static construction and runtime tables**
+- [x] **Step 3: Emit static construction and runtime tables**
 
 Emit a final root model owning its top module, one `std::array<gfsim::DispatchRow, N>` in object-ID order using `makeDispatchRow(&typed_member)`, and canonical activation offsets/targets. Construct `SimSystem` with the supplied tables; do not walk hierarchy to discover runtime objects.
 
-- [ ] **Step 4: Emit a bounded fingerprint query**
+- [x] **Step 4: Emit a bounded fingerprint query**
 
 Embed `inline constexpr std::string_view kBuildFingerprint = "sha256:..."` in generated model code and make generated `main` accept only the internal `--build-fingerprint` preflight query plus normal simulator startup. The build library compares the exact newline-trimmed response before publication.
 
-- [ ] **Step 5: Compile and link the minimal generated model**
+- [x] **Step 5: Compile and link the minimal generated model**
 
 Use `llvm::sys::ExecuteAndWait` with explicit argument vectors, the configured test compiler, repository include roots, built gfsim library, and a private temporary directory. Record the exact command vector on failure; do not invoke a shell.
 
-- [ ] **Step 6: Run harness, generator, and gfsim tests**
+- [x] **Step 6: Run harness, generator, and gfsim tests**
 
 Run: `cmake --build --preset dev-llvm22 --target CodeGenTests GfsimTests && build/dev-llvm22/bin/CodeGenTests --gtest_filter='GeneratorTest.*:GeneratedModelCompileTest.*' && ctest --test-dir build/dev-llvm22 -R '^(CodeGenTests|GfsimTests)$' --output-on-failure`
 
 Expected: the minimal generated executable links and reports the planned fingerprint; dispatch is dense and activation is canonical.
 
-- [ ] **Step 7: Commit the generated harness**
+- [x] **Step 7: Commit the generated harness**
 
 ```bash
 git add lib/CodeGen/Generator.cpp unittests/CodeGen/GeneratorTest.cpp unittests/CodeGen/GeneratedModelCompileTest.cpp unittests/CodeGen/CMakeLists.txt

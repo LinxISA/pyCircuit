@@ -80,6 +80,31 @@ const ModulePlan *findModule(const ModelPlan &plan, llvm::StringRef symbol) {
   return found == plan.modules.end() ? nullptr : &*found;
 }
 
+const ModulePlan *rootModule(const ModelPlan &plan) {
+  return findModule(plan, plan.rootSymbol);
+}
+
+Fingerprint generatedBuildFingerprint(const ModelPlan &plan) {
+  std::string preimage = "acir-generated-model@0.1\n";
+  preimage.append(plan.modelSymbol)
+      .append("\n")
+      .append(plan.rootSymbol)
+      .append("\n")
+      .append(plan.frozenAcirFingerprint)
+      .append("\n")
+      .append(plan.bindingLockFingerprint)
+      .append("\n")
+      .append(plan.providerFingerprint)
+      .append("\n")
+      .append(plan.profileFingerprint)
+      .append("\n")
+      .append(plan.toolchainFingerprint)
+      .append("\n")
+      .append(plan.schemaSetFingerprint)
+      .append("\n");
+  return computeFingerprint(preimage);
+}
+
 llvm::Expected<std::string> placementType(const ModelPlan &plan,
                                           const PlacementPlan &placement) {
   llvm::StringRef target = placement.target;
@@ -135,7 +160,8 @@ llvm::Expected<GeneratedFile> moduleHeader(const ModelPlan &plan,
            << ".h\"\n";
   output << "\nnamespace acsim_generated {\n\nclass " << module.className
          << " final : public gfsim::Module {\npublic:\n  " << module.className
-         << "();\n\nprivate:\n";
+         << "(std::string name, gfsim::ObjectId id, gfsim::SimObject "
+            "*parent);\n\nprivate:\n  friend struct DispatchAccess;\n";
   for (const PlacementPlan &placement : module.placements) {
     auto type = placementType(plan, placement);
     if (!type)
@@ -149,13 +175,141 @@ llvm::Expected<GeneratedFile> moduleHeader(const ModelPlan &plan,
                   output.str());
 }
 
-GeneratedFile moduleSource(const ModulePlan &module) {
+const RuntimeObjectPlan *
+findRuntimeObject(const ModelPlan &plan, llvm::StringRef target,
+                  const std::vector<uint64_t> &indices) {
+  auto found = std::find_if(
+      plan.runtimeObjects.begin(), plan.runtimeObjects.end(),
+      [&](const RuntimeObjectPlan &object) {
+        return object.targetSymbol == target && object.indices == indices;
+      });
+  return found == plan.runtimeObjects.end() ? nullptr : &*found;
+}
+
+llvm::Expected<std::string> moduleValueExpression(const ModulePlan &module,
+                                                  llvm::StringRef value) {
+  auto placement =
+      std::find_if(module.placements.begin(), module.placements.end(),
+                   [&](const PlacementPlan &candidate) {
+                     return candidate.resultValue == value;
+                   });
+  if (placement != module.placements.end())
+    return placement->memberName;
+
+  auto projection =
+      std::find_if(module.projections.begin(), module.projections.end(),
+                   [&](const ProjectionPlan &candidate) {
+                     return candidate.resultValue == value;
+                   });
+  if (projection == module.projections.end())
+    return generatorError("ACLOWER-OWNERSHIP",
+                          "process capture has no owned source");
+  auto base = moduleValueExpression(module, projection->baseValue);
+  if (!base)
+    return base.takeError();
+  for (uint64_t index : projection->indices)
+    base->append("[").append(std::to_string(index)).append("]");
+  if (projection->kind != ProjectionKind::Element)
+    base->append(".").append(projection->accessor).append("()");
+  return base;
+}
+
+llvm::Expected<std::string>
+arrayInitializer(const ModelPlan &plan, const ModulePlan &module,
+                 const PlacementPlan &placement, const BindingPlan &binding,
+                 size_t dimension, std::vector<uint64_t> &indices) {
+  std::string result = "{";
+  const uint64_t extent = placement.shape[dimension];
+  for (uint64_t index = 0; index < extent; ++index) {
+    if (index != 0)
+      result.append(", ");
+    indices.push_back(index);
+    if (dimension + 1 != placement.shape.size()) {
+      auto nested = arrayInitializer(plan, module, placement, binding,
+                                     dimension + 1, indices);
+      if (!nested)
+        return nested.takeError();
+      result.append(*nested);
+    } else {
+      const std::string target = module.symbol + "::" + placement.symbol;
+      const RuntimeObjectPlan *runtime =
+          findRuntimeObject(plan, target, indices);
+      if (!runtime)
+        return generatorError("ACLOWER-DISPATCH",
+                              "array element has no dense runtime row");
+      result.append(binding.cppSymbol).append("(\"").append(placement.symbol);
+      for (uint64_t element : indices)
+        result.append("[").append(std::to_string(element)).append("]");
+      result.append("\", ")
+          .append(std::to_string(runtime->objectId))
+          .append(", this)");
+    }
+    indices.pop_back();
+  }
+  result.append("}");
+  return result;
+}
+
+llvm::Expected<GeneratedFile> moduleSource(const ModelPlan &plan,
+                                           const ModulePlan &module) {
+  std::vector<std::string> initializers;
+  for (const PlacementPlan &placement : module.placements) {
+    if (placement.kind == PlacementKind::GeneratedModule) {
+      initializers.push_back(placement.memberName + "()");
+      continue;
+    }
+    llvm::StringRef target = placement.target;
+    target = target.take_until([](char value) { return value == ':'; });
+    const BindingPlan *binding = findBinding(plan, target);
+    if (!binding)
+      return generatorError("ACLOWER-BINDING-MISSING",
+                            "placement has no selected binding");
+    if (placement.shape.empty()) {
+      const RuntimeObjectPlan *runtime =
+          findRuntimeObject(plan, module.symbol + "::" + placement.symbol, {});
+      if (!runtime)
+        return generatorError("ACLOWER-DISPATCH",
+                              "placement has no dense runtime row");
+      initializers.push_back(placement.memberName + "(\"" + placement.symbol +
+                             "\", " + std::to_string(runtime->objectId) +
+                             ", this)");
+    } else {
+      std::vector<uint64_t> indices;
+      auto initializer =
+          arrayInitializer(plan, module, placement, *binding, 0, indices);
+      if (!initializer)
+        return initializer.takeError();
+      initializers.push_back(placement.memberName + *initializer);
+    }
+  }
+  for (const ProcessPlan &process : module.processes) {
+    const RuntimeObjectPlan *runtime =
+        findRuntimeObject(plan, module.symbol + "::" + process.symbol, {});
+    if (!runtime)
+      return generatorError("ACLOWER-DISPATCH",
+                            "process has no dense runtime row");
+    std::string initializer = process.symbol + "_(\"" + process.symbol +
+                              "\", " + std::to_string(runtime->objectId) +
+                              ", this";
+    for (const CapturePlan &capture : process.captures) {
+      auto expression = moduleValueExpression(module, capture.sourceValue);
+      if (!expression)
+        return expression.takeError();
+      initializer.append(", ").append(*expression);
+    }
+    initializer.append(")");
+    initializers.push_back(std::move(initializer));
+  }
+
   std::ostringstream output;
   output << "#include \"generated/modules/" << module.className
          << ".h\"\n\n#include <stdexcept>\n\nnamespace acsim_generated {\n\n"
          << module.className << "::" << module.className
-         << "() : gfsim::Module(\"" << module.symbol
-         << "\", gfsim::kInvalidObjectId, nullptr) {\n";
+         << "(std::string name, gfsim::ObjectId id, gfsim::SimObject *parent)\n"
+            "    : gfsim::Module(std::move(name), id, parent)";
+  for (const std::string &initializer : initializers)
+    output << ",\n    " << initializer;
+  output << " {\n";
   for (const PlacementPlan &placement : module.placements) {
     if (placement.shape.empty()) {
       output << "  if (!attachChild(" << placement.memberName << "))\n"
@@ -172,6 +326,147 @@ GeneratedFile moduleSource(const ModulePlan &module) {
   output << "}\n\n} // namespace acsim_generated\n";
   return makeFile("src/generated/modules/" + module.className + ".cpp",
                   output.str());
+}
+
+llvm::Expected<std::string>
+runtimeObjectExpression(const ModelPlan &plan,
+                        const RuntimeObjectPlan &runtimeObject) {
+  llvm::StringRef target = runtimeObject.targetSymbol;
+  auto [moduleSymbol, memberSymbol] = target.split("::");
+  if (moduleSymbol != plan.rootSymbol || memberSymbol.empty() ||
+      memberSymbol.contains("::"))
+    return generatorError("ACLOWER-DISPATCH",
+                          "runtime target is not a direct root member");
+  const ModulePlan *module = rootModule(plan);
+  if (!module)
+    return generatorError("ACLOWER-OWNERSHIP",
+                          "root module has no generated specialization");
+
+  std::string expression = "model.top_.";
+  auto placement =
+      std::find_if(module->placements.begin(), module->placements.end(),
+                   [&](const PlacementPlan &candidate) {
+                     return candidate.symbol == memberSymbol;
+                   });
+  if (placement != module->placements.end()) {
+    expression.append(placement->memberName);
+  } else {
+    auto process =
+        std::find_if(module->processes.begin(), module->processes.end(),
+                     [&](const ProcessPlan &candidate) {
+                       return candidate.symbol == memberSymbol;
+                     });
+    if (process == module->processes.end())
+      return generatorError("ACLOWER-DISPATCH",
+                            "runtime target has no generated member");
+    expression.append(process->symbol).append("_");
+  }
+  for (uint64_t index : runtimeObject.indices)
+    expression.append("[").append(std::to_string(index)).append("]");
+  return expression;
+}
+
+llvm::Expected<GeneratedFile> dispatchHeader(const ModelPlan &plan) {
+  std::vector<uint32_t> offsets(plan.runtimeObjects.size() + 1, 0);
+  std::vector<uint32_t> targets;
+  size_t edgeIndex = 0;
+  for (size_t source = 0; source < plan.runtimeObjects.size(); ++source) {
+    while (edgeIndex < plan.activationEdges.size() &&
+           plan.activationEdges[edgeIndex].sourceId == source) {
+      targets.push_back(plan.activationEdges[edgeIndex].targetId);
+      ++edgeIndex;
+    }
+    offsets[source + 1] = static_cast<uint32_t>(targets.size());
+  }
+
+  std::ostringstream output;
+  output << "#pragma once\n\n#include \"generated/model.h\"\n"
+            "#include \"gfsim/dispatch.h\"\n\n#include <array>\n\n"
+            "namespace acsim_generated {\n\nstruct DispatchAccess {\n"
+            "  static std::array<gfsim::DispatchRow, "
+         << plan.runtimeObjects.size() << "> makeRows(Model &model) {\n"
+         << "    return {";
+  for (auto [index, runtimeObject] : llvm::enumerate(plan.runtimeObjects)) {
+    auto expression = runtimeObjectExpression(plan, runtimeObject);
+    if (!expression)
+      return expression.takeError();
+    if (index != 0)
+      output << ", ";
+    output << "gfsim::makeDispatchRow(&" << *expression << ")";
+  }
+  output << "};\n  }\n};\n\ninline constexpr std::array<uint32_t, "
+         << offsets.size() << "> kActivationOffsets = {";
+  for (auto [index, offset] : llvm::enumerate(offsets)) {
+    if (index != 0)
+      output << ", ";
+    output << offset;
+  }
+  output << "};\ninline constexpr std::array<gfsim::ObjectId, "
+         << targets.size() << "> kActivationTargets = {";
+  for (auto [index, target] : llvm::enumerate(targets)) {
+    if (index != 0)
+      output << ", ";
+    output << target;
+  }
+  output << "};\n\n} // namespace acsim_generated\n";
+  return makeFile("include/generated/dispatch.h", output.str());
+}
+
+llvm::Expected<GeneratedFile> modelHeader(const ModelPlan &plan,
+                                          llvm::StringRef fingerprint) {
+  const ModulePlan *root = rootModule(plan);
+  if (!root)
+    return generatorError("ACLOWER-OWNERSHIP",
+                          "root module has no generated specialization");
+  std::ostringstream output;
+  output
+      << "#pragma once\n\n#include \"generated/modules/" << root->className
+      << ".h\"\n#include \"gfsim/dispatch.h\"\n#include \"gfsim/object.h\"\n\n"
+         "#include <array>\n#include <string_view>\n\n"
+         "namespace acsim_generated {\n\ninline constexpr std::string_view "
+         "kBuildFingerprint = \""
+      << fingerprint.str()
+      << "\";\n\nstruct DispatchAccess;\n\nclass Model final {\n"
+         "public:\n  Model();\n  int run();\n\nprivate:\n  friend struct "
+         "DispatchAccess;\n  "
+      << "gfsim::SimSystem system_;\n  " << root->className << " top_;\n"
+      << "  std::array<gfsim::DispatchRow, " << plan.runtimeObjects.size()
+      << "> dispatch_;\n};\n\n} // namespace acsim_generated\n";
+  return makeFile("include/generated/model.h", output.str());
+}
+
+GeneratedFile modelSource() {
+  std::ostringstream output;
+  output
+      << "#include \"generated/dispatch.h\"\n\n#include <stdexcept>\n\n"
+         "namespace acsim_generated {\n\nModel::Model()\n"
+         "    : system_(\"generated\"),\n"
+         "      top_(\"root-model\", gfsim::kRootObjectId - 1, "
+         "&system_.root()),\n      "
+         "dispatch_(DispatchAccess::makeRows(*this)) {\n"
+         "  if (!system_.root().attachChild(top_))\n"
+         "    throw std::logic_error(\"ACLOWER-OWNERSHIP\");\n"
+         "  if (!system_.setDispatchTable(dispatch_))\n"
+         "    throw std::logic_error(\"ACLOWER-DISPATCH\");\n"
+         "  if (!system_.setActivationPlan(kActivationOffsets, "
+         "kActivationTargets))\n"
+         "    throw std::logic_error(\"ACLOWER-ACTIVATION\");\n"
+         "}\n\nint Model::run() {\n"
+         "  const gfsim::TerminationResult result = system_.run();\n"
+         "  return result.classification == gfsim::TerminationClass::Completed "
+         "? 0 : 1;\n}\n\n} // namespace acsim_generated\n";
+  return makeFile("src/generated/model.cpp", output.str());
+}
+
+GeneratedFile mainSource() {
+  return makeFile(
+      "src/generated/main.cpp",
+      "#include \"generated/model.h\"\n\n#include <iostream>\n#include "
+      "<string_view>\n\nint main(int argc, char **argv) {\n  if (argc == "
+      "2 && std::string_view(argv[1]) == \"--build-fingerprint\") {\n    "
+      "std::cout << acsim_generated::kBuildFingerprint << '\\n';\n    return "
+      "0;\n  }\n  if (argc != 1)\n    return 2;\n  acsim_generated::Model "
+      "model;\n  return model.run();\n}\n");
 }
 
 std::vector<std::string> expectedPaths(const ModelPlan &plan) {
@@ -216,23 +511,26 @@ llvm::Expected<SourceBundle> generateModelSources(const ModelPlan &plan) {
   }
 
   SourceBundle bundle;
-  bundle.files.push_back(makeFile("include/generated/dispatch.h",
-                                  "#pragma once\n\n// Static dispatch is "
-                                  "emitted with the model harness.\n"));
-  bundle.files.push_back(makeFile(
-      "include/generated/model.h",
-      "#pragma once\n\n// Deterministic generated model declarations.\n"));
-  bundle.files.push_back(
-      makeFile("src/generated/main.cpp",
-               "#include \"generated/model.h\"\n\nint main() { return 0; }\n"));
-  bundle.files.push_back(
-      makeFile("src/generated/model.cpp", "#include \"generated/model.h\"\n"));
+  bundle.buildFingerprint = generatedBuildFingerprint(plan);
+  auto generatedDispatch = dispatchHeader(plan);
+  if (!generatedDispatch)
+    return generatedDispatch.takeError();
+  auto generatedModel = modelHeader(plan, bundle.buildFingerprint);
+  if (!generatedModel)
+    return generatedModel.takeError();
+  bundle.files.push_back(std::move(*generatedDispatch));
+  bundle.files.push_back(std::move(*generatedModel));
+  bundle.files.push_back(mainSource());
+  bundle.files.push_back(modelSource());
   for (const ModulePlan &module : plan.modules) {
     auto header = moduleHeader(plan, module);
     if (!header)
       return header.takeError();
     bundle.files.push_back(std::move(*header));
-    bundle.files.push_back(moduleSource(module));
+    auto source = moduleSource(plan, module);
+    if (!source)
+      return source.takeError();
+    bundle.files.push_back(std::move(*source));
     for (const ProcessPlan &process : module.processes) {
       auto header = detail::generateProcessHeader(plan, process);
       if (!header)
@@ -256,6 +554,9 @@ llvm::Expected<SourceBundle> generateModelSources(const ModelPlan &plan) {
 llvm::Error validateSourceBundle(const ModelPlan &plan,
                                  const SourceBundle &bundle) {
   const std::vector<std::string> required = expectedPaths(plan);
+  if (!isValidFingerprint(bundle.buildFingerprint))
+    return generatorError("ACLOWER-FINGERPRINT",
+                          "source bundle build fingerprint is invalid");
   if (bundle.files.size() != required.size())
     return generatorError("ACLOWER-FINGERPRINT",
                           "source bundle has an incomplete file set");
