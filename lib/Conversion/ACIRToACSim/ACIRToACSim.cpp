@@ -544,8 +544,6 @@ private:
   TypeSymbolTable typeSymbols;
   std::vector<std::string> generatedCalleeIdentities;
   std::vector<std::string> valueTypeIdentities;
-  std::vector<std::string> scalarWrapIdentities;
-  std::vector<std::string> scalarUnwrapIdentities;
   llvm::StringMap<std::string> wakeTypeIdentities;
 
   struct RuntimeRow {
@@ -1191,8 +1189,6 @@ mlir::LogicalResult ACIRToACSimPass::planProcesses(mlir::ModuleOp input) {
       return mlir::failure();
   }
   valueTypeIdentities.resize(processPlans->valueTypes().size());
-  scalarWrapIdentities.resize(processPlans->valueTypes().size());
-  scalarUnwrapIdentities.resize(processPlans->valueTypes().size());
   for (const ProcessValueTypePlan &valueType : processPlans->valueTypes()) {
     llvm::StringRef symbol = valueType.symbol();
     symbol.consume_front("@");
@@ -1202,17 +1198,6 @@ mlir::LogicalResult ACIRToACSimPass::planProcesses(mlir::ModuleOp input) {
     if (failed(typeSymbols.intern(input, symbol, kind, valueType.cpp(),
                                   valueType.fingerprint())))
       return mlir::failure();
-    if (valueType.kind() == ProcessValueTypeKind::Value) {
-      std::string wrap = (symbol + "_wrap").str();
-      std::string unwrap = (symbol + "_unwrap").str();
-      scalarWrapIdentities[valueType.id().value()] = wrap;
-      scalarUnwrapIdentities[valueType.id().value()] = unwrap;
-      if (failed(typeSymbols.intern(input, wrap, "implementation",
-                                    (valueType.cpp() + "::wrap").str())) ||
-          failed(typeSymbols.intern(input, unwrap, "implementation",
-                                    (valueType.cpp() + "::unwrap").str())))
-        return mlir::failure();
-    }
   }
 
   // Attach plan-derived fairness caps to the module placements.
@@ -1732,19 +1717,8 @@ void ACIRToACSimPass::emitProcessBody(
       auto loaded =
           acsim::LiveLoadOp::create(builder, placement.process->getLoc(),
                                     storedType, placement.name, slot.name());
-      Value replacement = loaded.getResult();
-      if (!scalarUnwrapIdentities[slot.storageType().value()].empty()) {
-        llvm::StringRef unwrap =
-            scalarUnwrapIdentities[slot.storageType().value()];
-        replacement =
-            acsim::InlineOp::create(
-                builder, placement.process->getLoc(), slot.type(),
-                ValueRange{loaded.getResult()},
-                FlatSymbolRefAttr::get(context, typeSymbols.symbolFor(unwrap)))
-                .getResult();
-      }
       for (const ProcessPlannedValue &planned : load.replacements())
-        values[plannedValueKey(planned)] = replacement;
+        values[plannedValueKey(planned)] = loaded.getResult();
     }
 
     llvm::StringSet<> requiredValues;
@@ -1805,12 +1779,22 @@ void ACIRToACSimPass::emitProcessBody(
                  action.emission() == ProcessEmissionClass::Unwrap) {
         llvm::StringRef identity =
             generatedCalleeIdentities[action.callee()->value()];
-        results.push_back(acsim::InlineOp::create(
-                              builder, placement.process->getLoc(),
-                              action.resultTypes().front(), operands,
-                              FlatSymbolRefAttr::get(
-                                  context, typeSymbols.symbolFor(identity)))
-                              .getResult());
+        Type resultType = action.resultTypes().front();
+        if (action.emission() == ProcessEmissionClass::Wrap) {
+          ProcessLiveSlotId slot =
+              action.occurrence().syntheticWrapper().slot();
+          llvm::StringRef valueIdentity = valueTypeIdentities
+              [plan->liveSlots()[slot.value()].storageType().value()];
+          resultType = acsim::ValueType::get(
+              context, FlatSymbolRefAttr::get(
+                           context, typeSymbols.symbolFor(valueIdentity)));
+        }
+        results.push_back(
+            acsim::InlineOp::create(
+                builder, placement.process->getLoc(), resultType, operands,
+                FlatSymbolRefAttr::get(context,
+                                       typeSymbols.symbolFor(identity)))
+                .getResult());
       } else if (action.emission() == ProcessEmissionClass::Invoke) {
         llvm::StringRef identity =
             generatedCalleeIdentities[action.callee()->value()];
@@ -1878,15 +1862,8 @@ void ACIRToACSimPass::emitProcessBody(
       auto storedType = acsim::ValueType::get(
           context, FlatSymbolRefAttr::get(
                        context, typeSymbols.symbolFor(valueIdentity)));
-      if (stored.getType() != storedType) {
-        llvm::StringRef wrap = scalarWrapIdentities[slot.storageType().value()];
-        stored =
-            acsim::InlineOp::create(
-                builder, placement.process->getLoc(), storedType,
-                ValueRange{stored},
-                FlatSymbolRefAttr::get(context, typeSymbols.symbolFor(wrap)))
-                .getResult();
-      }
+      assert(stored.getType() == storedType &&
+             "validated scalar wrapper must produce the live storage type");
       acsim::LiveStoreOp::create(builder, placement.process->getLoc(), stored,
                                  placement.name, slot.name());
     }

@@ -34,20 +34,13 @@ PlanSetBuilder::planProcessCost(ControlPlan &control,
   for (auto &block : control.blocks) {
     block->cost = 0;
 
-    // Count entry loads. Builtin scalar slots additionally require the
-    // generated unwrap helper when materialized as ACSim storage values.
+    // Count entry loads. Scalar unwraps are explicit actions below.
     block->cost += static_cast<uint64_t>(block->loads.size());
-    for (const ProcessTransitionLoadPlan &load : block->loads) {
-      if (load.slot().value() >= control.liveSlots.size())
-        return failure();
-      mlir::Type type = control.liveSlots[load.slot().value()]->type;
-      if (mlir::isa<mlir::IntegerType, mlir::IndexType>(type))
-        ++block->cost;
-    }
 
     // Count scalar_unwrap, copy_scalar, inline, invoke actions
     for (const auto &action : block->actions) {
-      if (action.kind() == ProcessActionKind::ScalarUnwrap ||
+      if (action.kind() == ProcessActionKind::ScalarWrap ||
+          action.kind() == ProcessActionKind::ScalarUnwrap ||
           action.emission() == ProcessEmissionClass::CopyScalar ||
           action.emission() == ProcessEmissionClass::Inline ||
           action.emission() == ProcessEmissionClass::Invoke ||
@@ -64,14 +57,6 @@ PlanSetBuilder::planProcessCost(ControlPlan &control,
       if (transition.value() >= control.transitions.size())
         return failure();
       block->cost += control.transitions[transition.value()]->stores.size();
-      for (const ProcessTransitionStorePlan &store :
-           control.transitions[transition.value()]->stores) {
-        if (store.slot().value() >= control.liveSlots.size())
-          return failure();
-        mlir::Type type = control.liveSlots[store.slot().value()]->type;
-        if (mlir::isa<mlir::IntegerType, mlir::IndexType>(type))
-          ++block->cost;
-      }
       // Wake invoke + acsim.suspend
       block->cost += 2;
     } else if (block->edge.has_value()) {

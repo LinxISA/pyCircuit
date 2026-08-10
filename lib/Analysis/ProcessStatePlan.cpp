@@ -14,6 +14,7 @@
 #include <array>
 #include <cassert>
 #include <limits>
+#include <set>
 #include <tuple>
 
 namespace acir {
@@ -337,20 +338,6 @@ detail::PlanSetBuilder::buildProduction(mlir::ModuleOp module,
                       .str();
     callees.push_back(std::move(callee));
   }
-  llvm::sort(callees, [](const auto &lhs, const auto &rhs) {
-    return lhs->specializationBytes < rhs->specializationBytes;
-  });
-  std::array<ProcessCalleeId, 4> wakeCalleeIds = {
-      ProcessCalleeId(0), ProcessCalleeId(0), ProcessCalleeId(0),
-      ProcessCalleeId(0)};
-  for (auto [index, callee] : llvm::enumerate(callees)) {
-    callee->id = ProcessCalleeId(index);
-    unsigned kindIndex =
-        static_cast<unsigned>(callee->role) -
-        static_cast<unsigned>(ProcessHelperRole::WakeCondition);
-    wakeCalleeIds[kindIndex] = ProcessCalleeId(index);
-  }
-
   auto typeSpelling = [](mlir::Type type) {
     std::string storage;
     llvm::raw_string_ostream stream(storage);
@@ -398,6 +385,86 @@ detail::PlanSetBuilder::buildProduction(mlir::ModuleOp module,
   for (auto [index, type] : llvm::enumerate(valueTypes))
     type->id = ProcessValueTypeId(index);
 
+  auto addScalarCallee = [&](const auto &type,
+                             ProcessHelperRole role) -> llvm::Error {
+    std::string scalarKey = "mlir:" + typeSpelling(type->acirType);
+    std::string valueKey =
+        "storage:value:" +
+        llvm::StringRef(type->fingerprint).drop_front(7).str();
+    auto payload = std::make_shared<ProcessGeneratedCalleePayload::Impl>();
+    payload->role = role;
+    if (role == ProcessHelperRole::ScalarWrap) {
+      auto arm = std::make_shared<ProcessScalarWrapPayload::Impl>();
+      arm->direction = ProcessWrapperDirection::Wrap;
+      arm->scalar = scalarKey;
+      arm->valueType = valueKey;
+      payload->scalarWrap = ProcessScalarWrapPayload(arm);
+    } else {
+      auto arm = std::make_shared<ProcessScalarUnwrapPayload::Impl>();
+      arm->direction = ProcessWrapperDirection::Unwrap;
+      arm->scalar = scalarKey;
+      arm->valueType = valueKey;
+      payload->scalarUnwrap = ProcessScalarUnwrapPayload(arm);
+    }
+    auto callee = std::make_shared<ProcessGeneratedCalleePlan::Impl>();
+    callee->effect = ProcessEffectKind::Pure;
+    callee->role = role;
+    callee->payload = ProcessGeneratedCalleePayload(payload);
+    if (role == ProcessHelperRole::ScalarWrap) {
+      callee->inputTypeKeyStorage = {scalarKey};
+      callee->resultTypeKeyStorage = {valueKey};
+    } else {
+      callee->inputTypeKeyStorage = {valueKey};
+      callee->resultTypeKeyStorage = {scalarKey};
+    }
+    callee->inputTypeKeys = {callee->inputTypeKeyStorage.front()};
+    callee->resultTypeKeys = {callee->resultTypeKeyStorage.front()};
+    ProcessGeneratedCalleePlan value(callee);
+    auto canonical = canonicalGeneratedCalleeSpecialization(value);
+    if (!canonical)
+      return canonical.takeError();
+    callee->specializationBytes = std::move(*canonical);
+    callee->fingerprint =
+        bindings::sha256Fingerprint(callee->specializationBytes);
+    llvm::StringRef digest = llvm::StringRef(callee->fingerprint).drop_front(7);
+    callee->symbol =
+        ("@acir_impl_" + helperRoleSpelling(role) + "_" + digest).str();
+    callee->cpp =
+        ("acir::generated::impl_" + helperRoleSpelling(role) + "_" + digest)
+            .str();
+    callees.push_back(std::move(callee));
+    return llvm::Error::success();
+  };
+  for (const auto &type : valueTypes) {
+    if (llvm::Error error =
+            addScalarCallee(type, ProcessHelperRole::ScalarWrap)) {
+      llvm::consumeError(std::move(error));
+      return mlir::failure();
+    }
+    if (llvm::Error error =
+            addScalarCallee(type, ProcessHelperRole::ScalarUnwrap)) {
+      llvm::consumeError(std::move(error));
+      return mlir::failure();
+    }
+  }
+
+  llvm::sort(callees, [](const auto &lhs, const auto &rhs) {
+    return lhs->specializationBytes < rhs->specializationBytes;
+  });
+  std::array<ProcessCalleeId, 4> wakeCalleeIds = {
+      ProcessCalleeId(0), ProcessCalleeId(0), ProcessCalleeId(0),
+      ProcessCalleeId(0)};
+  for (auto [index, callee] : llvm::enumerate(callees)) {
+    callee->id = ProcessCalleeId(index);
+    if (callee->role >= ProcessHelperRole::WakeCondition &&
+        callee->role <= ProcessHelperRole::WakeNextDelta) {
+      unsigned kindIndex =
+          static_cast<unsigned>(callee->role) -
+          static_cast<unsigned>(ProcessHelperRole::WakeCondition);
+      wakeCalleeIds[kindIndex] = ProcessCalleeId(index);
+    }
+  }
+
   auto set = std::make_shared<ProcessStatePlanSet::Impl>();
   for (auto &callee : callees)
     set->callees.push_back(ProcessGeneratedCalleePlan(callee));
@@ -425,7 +492,41 @@ detail::PlanSetBuilder::buildProduction(mlir::ModuleOp module,
       if (found == valueTypes.end())
         return mlir::failure();
       slot->storageType = (*found)->id;
+      std::string scalarKey = "mlir:" + typeSpelling(slot->type);
+      std::string valueKey =
+          "storage:value:" +
+          llvm::StringRef((*found)->fingerprint).drop_front(7).str();
+      auto wrap = llvm::find_if(callees, [&](const auto &callee) {
+        return callee->role == ProcessHelperRole::ScalarWrap &&
+               callee->inputTypeKeys.front() == scalarKey &&
+               callee->resultTypeKeys.front() == valueKey;
+      });
+      auto unwrap = llvm::find_if(callees, [&](const auto &callee) {
+        return callee->role == ProcessHelperRole::ScalarUnwrap &&
+               callee->inputTypeKeys.front() == valueKey &&
+               callee->resultTypeKeys.front() == scalarKey;
+      });
+      if (wrap == callees.end() || unwrap == callees.end())
+        return mlir::failure();
+      slot->wrapCallee = (*wrap)->id;
+      slot->unwrapCallee = (*unwrap)->id;
       process->liveSlots.push_back(ProcessLiveSlotPlan(slot));
+    }
+    for (auto &block : item.control->blocks) {
+      for (const ProcessActionPlan &action : block->actions) {
+        if (action.kind() != ProcessActionKind::ScalarWrap &&
+            action.kind() != ProcessActionKind::ScalarUnwrap)
+          continue;
+        auto mutableAction =
+            std::const_pointer_cast<ProcessActionPlan::Impl>(action.impl_);
+        ProcessLiveSlotId slot = action.occurrence().syntheticWrapper().slot();
+        if (slot.value() >= item.control->liveSlots.size())
+          return mlir::failure();
+        mutableAction->callee =
+            action.kind() == ProcessActionKind::ScalarWrap
+                ? item.control->liveSlots[slot.value()]->wrapCallee
+                : item.control->liveSlots[slot.value()]->unwrapCallee;
+      }
     }
     for (auto [index, operand] : llvm::enumerate(item.process->getOperands())) {
       auto capture = std::make_shared<ProcessCapturePlan::Impl>();
@@ -3125,6 +3226,8 @@ mlir::LogicalResult verifyProcessStatePlan(const ProcessStatePlanSet &plans,
           capture.entryArgument().getType() != capture.type())
         return reject(
             plans, "process-state plan invariant violated: non-dense ordinal");
+    std::set<std::tuple<uint32_t, uint32_t, ProcessWrapperDirection>>
+        wrapperActions;
     for (auto [index, slot] : llvm::enumerate(plan.liveSlots())) {
       if (slot.id().value() != index ||
           slot.storageType().value() >= plans.valueTypes().size() ||
@@ -3142,6 +3245,11 @@ mlir::LogicalResult verifyProcessStatePlan(const ProcessStatePlanSet &plans,
           return reject(plans, "process-state plan invariant violated: invalid "
                                "live-slot wrapper pair");
       }
+      bool builtinScalar =
+          mlir::isa<mlir::IntegerType, mlir::IndexType>(slot.type());
+      if (builtinScalar != slot.wrapCallee().has_value())
+        return reject(plans, "process-state plan invariant violated: invalid "
+                             "live-slot wrapper pair");
       if (llvm::any_of(slot.memberValues(), [&](const auto &value) {
             return !plannedReferencesClose(value);
           }))
@@ -3280,6 +3388,24 @@ mlir::LogicalResult verifyProcessStatePlan(const ProcessStatePlanSet &plans,
           return reject(
               plans,
               "process-state plan invariant violated: invalid action arm");
+        if (expectedWrapperDirection) {
+          const ProcessSyntheticWrapperOccurrence &wrapper =
+              action.occurrence().syntheticWrapper();
+          const ProcessLiveSlotPlan &slot =
+              plan.liveSlots()[wrapper.slot().value()];
+          std::optional<ProcessCalleeId> expectedCallee =
+              *expectedWrapperDirection == ProcessWrapperDirection::Wrap
+                  ? slot.wrapCallee()
+                  : slot.unwrapCallee();
+          if (!expectedCallee || action.callee() != expectedCallee ||
+              action.operands().size() != 1 || action.results().size() != 1)
+            return reject(
+                plans,
+                "process-state plan invariant violated: invalid action arm");
+          wrapperActions.emplace(wrapper.transition().value(),
+                                 wrapper.slot().value(),
+                                 *expectedWrapperDirection);
+        }
         if (action.resultTypes().size() != action.results().size())
           return reject(
               plans, "process-state plan invariant violated: wrong type key");
@@ -3355,20 +3481,12 @@ mlir::LogicalResult verifyProcessStatePlan(const ProcessStatePlanSet &plans,
           return reject(plans, "process-state plan invariant violated: "
                                "unsorted canonical order");
       uint64_t expectedCost = block.loads().size();
-      for (const ProcessTransitionLoadPlan &load : block.loads())
-        if (mlir::isa<mlir::IntegerType, mlir::IndexType>(
-                plan.liveSlots()[load.slot().value()].type()))
-          ++expectedCost;
       for (const ProcessActionPlan &action : block.actions())
         expectedCost += action.cost();
       if (block.edge().kind() == ProcessControlEdgeKind::Suspend) {
         const ProcessTransitionPlan &transition =
             plan.transitions()[block.edge().transition().value()];
         expectedCost += transition.stores().size() + 2;
-        for (const ProcessTransitionStorePlan &store : transition.stores())
-          if (mlir::isa<mlir::IntegerType, mlir::IndexType>(
-                  plan.liveSlots()[store.slot().value()].type()))
-            ++expectedCost;
       } else {
         ++expectedCost;
       }
@@ -3439,6 +3557,12 @@ mlir::LogicalResult verifyProcessStatePlan(const ProcessStatePlanSet &plans,
           return reject(
               plans,
               "process-state plan invariant violated: dangling reference");
+        else if (plan.liveSlots()[store.slot().value()].wrapCallee() &&
+                 !wrapperActions.contains({transition.id().value(),
+                                           store.slot().value(),
+                                           ProcessWrapperDirection::Wrap}))
+          return reject(plans, "process-state plan invariant violated: missing "
+                               "scalar wrapper action");
       for (const ProcessTransitionLoadPlan &load : transition.loads())
         if (load.slot().value() >= plan.liveSlots().size() ||
             llvm::any_of(load.replacements(), [&](const auto &value) {
@@ -3447,6 +3571,12 @@ mlir::LogicalResult verifyProcessStatePlan(const ProcessStatePlanSet &plans,
           return reject(
               plans,
               "process-state plan invariant violated: dangling reference");
+        else if (plan.liveSlots()[load.slot().value()].unwrapCallee() &&
+                 !wrapperActions.contains({transition.id().value(),
+                                           load.slot().value(),
+                                           ProcessWrapperDirection::Unwrap}))
+          return reject(plans, "process-state plan invariant violated: missing "
+                               "scalar wrapper action");
       for (size_t i = 1; i < transition.stores().size(); ++i)
         if (transition.stores()[i - 1].slot().value() >=
             transition.stores()[i].slot().value())

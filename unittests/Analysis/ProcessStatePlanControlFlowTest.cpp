@@ -106,6 +106,26 @@ TEST(ProcessStatePlanControlFlowTest,
   EXPECT_GT(process.blocks().size(), 1u);
   EXPECT_EQ(process.liveSlots().size(), 1u);
   EXPECT_EQ(process.transitions().front().stores().size(), 1u);
+  ASSERT_TRUE(process.liveSlots().front().wrapCallee());
+  ASSERT_TRUE(process.liveSlots().front().unwrapCallee());
+  EXPECT_EQ(plans->callees()[process.liveSlots().front().wrapCallee()->value()]
+                .role(),
+            ProcessHelperRole::ScalarWrap);
+  EXPECT_EQ(
+      plans->callees()[process.liveSlots().front().unwrapCallee()->value()]
+          .role(),
+      ProcessHelperRole::ScalarUnwrap);
+
+  size_t wrapActions = 0;
+  size_t unwrapActions = 0;
+  for (const ProcessBlockPlan &block : process.blocks()) {
+    for (const ProcessActionPlan &action : block.actions()) {
+      wrapActions += action.kind() == ProcessActionKind::ScalarWrap;
+      unwrapActions += action.kind() == ProcessActionKind::ScalarUnwrap;
+    }
+  }
+  EXPECT_EQ(wrapActions, 1u);
+  EXPECT_EQ(unwrapActions, 1u);
 
   auto branch =
       llvm::find_if(process.blocks(), [](const ProcessBlockPlan &block) {

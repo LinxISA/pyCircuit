@@ -20,7 +20,9 @@ builtin.module attributes {ac.contract_epoch = "0.1"} {
 // CHECK: acsim.process @workload
 // CHECK-SAME: pcs [@entry, @pc00000001]
 // CHECK-SAME: live [{{.*}}name = "live00000000"{{.*}}]
+// CHECK: acsim.inline @acir_impl_scalar_wrap_
 // CHECK: acsim.live.store
 // CHECK: acsim.suspend @pc00000001
 // CHECK: acsim.live.load
+// CHECK: acsim.inline @acir_impl_scalar_unwrap_
 // CHECK: acsim.suspend @entry
