@@ -38,7 +38,7 @@ The branch already carries a runtime foundation (commits `125a72a`, `d44406d`,
   `ProtocolState`; `NoProgressReport`.
 - `lib/gfsim/system.cpp` — `SimSystem`: object registry, work set, global
   event queue, termination classification.
-- `unittests/gfsim/core_test.cpp` — 73 unit tests after T2.
+- `unittests/gfsim/core_test.cpp` — 78 unit tests after T3.
 
 ## Gap analysis vs roadmap scope
 
@@ -50,7 +50,7 @@ The branch already carries a runtime foundation (commits `125a72a`, `d44406d`,
 | Snapshot/proposal/Xfer barrier | T2 complete | Immutable Work snapshot and typed pending-commit reporting |
 | Activation adjacency | T2 complete | Canonical compressed arrays, next-tick wakes, inactive suppression |
 | Queues / event queues | Done (`SimQueue`, `EventQueue`) | Invariant tests |
-| Resources / arbitration | Partial (`Resource` proposals) | Arbitration owner resolution, contention tests |
+| Resources / arbitration | T3 complete | Stable-key contention, identity, owner scope, cancellation, conservation |
 | Protocol state | Partial (`ProtocolState`) | Phase-transition invariants |
 | Packets | Partial (`PacketTraits`) | Serialize/deserialize round trips per ACIR packet ops |
 | Processes | Missing (`ObjectKind::Process` only) | Process objects, wake/suspend, fairness caps |
@@ -71,8 +71,9 @@ The branch already carries a runtime foundation (commits `125a72a`, `d44406d`,
 2. **T2 — Barrier semantics (complete)**: snapshot/proposal/Xfer barrier across
    modules, queues, resources; generated activation adjacency, next-tick wake
    semantics, and inactive-module suppression tests.
-3. **T3 — Resources and arbitration**: owner resolution, contention and
-   arbitration invariant tests.
+3. **T3 — Resources and arbitration (complete)**: owner/root-transaction
+   identity, stable-key contention, owner-scoped release/cancellation, exact
+   ready epochs, and conservation invariant tests.
 4. **T4 — Processes**: process objects with wake/suspend, fairness caps,
    continuation identity (mirrors the compiler-side process-state plan).
 5. **T5 — Components `Queue`/`Scheduler`**: complete the seven baseline

@@ -241,9 +241,21 @@ arbitration, reservation, release, cancellation, and statistics. Its state
 includes total capacity, active reservations, owner and root transaction
 identity, issue time, and exact `ready_time`.
 
+Each reservation has a globally unique transaction ID while proposed or
+active. Proposal admission validates identity, owner, capacity width, and time,
+but contention is resolved only at arbitration. Lower numeric priority wins;
+remaining ties use port index, instance index, owner object ID, root transaction
+ID, and transaction ID, in that order. Proposal insertion order MUST NOT affect
+the result. Releases and cancellations are owner-scoped and cannot mutate a
+reservation owned by another object. Partial release deterministically consumes
+that owner's reservations in the same stable order.
+
 Reservations commit only at Xfer. Completion schedules an event at
 `ready_time`; no resource relies on countdown polling. Resource conservation is
-a required validation invariant.
+a required validation invariant: the sum of active reservation amounts equals
+the active-capacity counter and never exceeds total capacity. Ready reservation
+queries use exact epoch equality and return the same stable order used by local
+arbitration.
 
 ## Processes
 

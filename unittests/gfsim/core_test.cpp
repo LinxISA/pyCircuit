@@ -358,7 +358,7 @@ TEST(GfsimResourceTest, HighWatermarkPersistsAfterRelease) {
   EXPECT_EQ(r.activeReservations(), 2u);
 }
 
-TEST(GfsimResourceTest, MultipleReservationsArbitratedFifo) {
+TEST(GfsimResourceTest, MultipleReservationsUseStableOwnerOrder) {
   Resource r("r", 1, nullptr, 5);
   // Two reservers each want 3, total capacity is 5
   r.proposeReserve(10, 3, {0, 0}, 100);
@@ -408,6 +408,104 @@ TEST(GfsimResourceTest, PendingCommitBeginsAfterArbitration) {
   EXPECT_TRUE(resource.hasPendingCommit());
   resource.doXfer({0, 0});
   EXPECT_FALSE(resource.hasPendingCommit());
+}
+
+TEST(GfsimResourceTest, ContentionUsesStableKeysNotProposalOrder) {
+  for (unsigned seed = 0; seed < 32; ++seed) {
+    Resource resource("resource", 1, nullptr, 5);
+    struct Request {
+      ObjectId owner;
+      uint32_t amount;
+      uint64_t transaction;
+    };
+    std::array requests = {Request{2, 3, 20}, Request{1, 3, 30},
+                           Request{1, 2, 10}};
+    std::mt19937 random(seed);
+    std::shuffle(requests.begin(), requests.end(), random);
+    for (const Request &request : requests)
+      ASSERT_TRUE(resource.proposeReserve(request.owner, request.amount, {0, 0},
+                                          request.transaction));
+
+    resource.doArbitrate({0, 0});
+    resource.doXfer({0, 0});
+    EXPECT_TRUE(resource.hasReservation(10));
+    EXPECT_TRUE(resource.hasReservation(30));
+    EXPECT_FALSE(resource.hasReservation(20));
+    EXPECT_EQ(resource.rejectedTransactions(), (std::vector<uint64_t>{20}));
+    EXPECT_TRUE(resource.validate());
+  }
+}
+
+TEST(GfsimResourceTest, ExplicitPriorityPrecedesStableTieBreakKeys) {
+  Resource resource("resource", 1, nullptr, 1);
+  ASSERT_TRUE(resource.proposeReserve({.ownerId = 1,
+                                       .amount = 1,
+                                       .issueTime = {0, 0},
+                                       .readyTime = {1, 0},
+                                       .transactionId = 10,
+                                       .rootTransactionId = 10,
+                                       .priority = 5}));
+  ASSERT_TRUE(resource.proposeReserve({.ownerId = 2,
+                                       .amount = 1,
+                                       .issueTime = {0, 0},
+                                       .readyTime = {1, 0},
+                                       .transactionId = 20,
+                                       .rootTransactionId = 20,
+                                       .priority = 1}));
+  resource.doArbitrate({0, 0});
+  resource.doXfer({0, 0});
+  EXPECT_TRUE(resource.hasReservation(20));
+  EXPECT_FALSE(resource.hasReservation(10));
+}
+
+TEST(GfsimResourceTest, ReservationIdentityAndOwnerAreUnique) {
+  Resource resource("resource", 1, nullptr, 4);
+  ASSERT_TRUE(resource.proposeReserve(7, 2, {0, 0}, 100, {4, 0}, 55));
+  EXPECT_FALSE(resource.proposeReserve(8, 1, {0, 0}, 100, {5, 0}, 66));
+  resource.doArbitrate({0, 0});
+  resource.doXfer({0, 0});
+
+  const auto *reservation = resource.findReservation(100);
+  ASSERT_NE(reservation, nullptr);
+  EXPECT_EQ(reservation->ownerId, 7u);
+  EXPECT_EQ(reservation->rootTransactionId, 55u);
+  EXPECT_EQ(reservation->readyTime, (Epoch{4, 0}));
+  EXPECT_TRUE(resource.validate());
+}
+
+TEST(GfsimResourceTest, ReleaseAndCancellationAreOwnerScoped) {
+  Resource resource("resource", 1, nullptr, 4);
+  ASSERT_TRUE(resource.proposeReserve(7, 2, {0, 0}, 100));
+  ASSERT_TRUE(resource.proposeReserve(8, 2, {0, 0}, 200));
+  resource.doArbitrate({0, 0});
+  resource.doXfer({0, 0});
+
+  EXPECT_FALSE(resource.proposeCancel(8, 100));
+  EXPECT_TRUE(resource.proposeCancel(7, 100));
+  EXPECT_FALSE(resource.proposeRelease(7, 1));
+  EXPECT_TRUE(resource.proposeRelease(8, 1));
+  resource.doXfer({1, 0});
+
+  EXPECT_FALSE(resource.hasReservation(100));
+  const auto *remaining = resource.findReservation(200);
+  ASSERT_NE(remaining, nullptr);
+  EXPECT_EQ(remaining->amount, 1u);
+  EXPECT_EQ(resource.activeReservations(), 1u);
+  EXPECT_TRUE(resource.validate());
+}
+
+TEST(GfsimResourceTest, ReadyReservationsUseExactEpochAndStableOrder) {
+  Resource resource("resource", 1, nullptr, 3);
+  ASSERT_TRUE(resource.proposeReserve(2, 1, {0, 0}, 20, {3, 1}, 20));
+  ASSERT_TRUE(resource.proposeReserve(1, 1, {0, 0}, 10, {3, 1}, 10));
+  resource.doArbitrate({0, 0});
+  resource.doXfer({0, 0});
+
+  EXPECT_TRUE(resource.readyReservations({3, 0}).empty());
+  auto ready = resource.readyReservations({3, 1});
+  ASSERT_EQ(ready.size(), 2u);
+  EXPECT_EQ(ready[0]->transactionId, 10u);
+  EXPECT_EQ(ready[1]->transactionId, 20u);
 }
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -893,7 +991,11 @@ TEST(GfsimIntegrationTest, ResourceProducerConsumer) {
   r.doArbitrate({0, 0});
   r.doXfer({0, 0});
   EXPECT_EQ(r.activeReservations(), 2u);
-  EXPECT_FALSE(r.proposeReserve(200, 2, {0, 0}, 2));
+  EXPECT_TRUE(r.proposeReserve(200, 2, {0, 0}, 2));
+  r.doArbitrate({0, 0});
+  r.doXfer({0, 0});
+  EXPECT_FALSE(r.hasReservation(2));
+  EXPECT_EQ(r.rejectedTransactions(), (std::vector<uint64_t>{2}));
   r.proposeRelease(100, 1);
   r.doXfer({0, 0});
   EXPECT_EQ(r.activeReservations(), 1u);

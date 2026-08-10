@@ -4,14 +4,30 @@
 #include "gfsim/core.h"
 #include "gfsim/object.h"
 
+#include <algorithm>
 #include <cstdint>
+#include <map>
 #include <string>
+#include <tuple>
+#include <utility>
 #include <vector>
 
 namespace gfsim {
 
 class Resource : public SimObject {
 public:
+  struct Reservation {
+    ObjectId ownerId = kInvalidObjectId;
+    uint32_t amount = 0;
+    Epoch issueTime;
+    Epoch readyTime;
+    uint64_t transactionId = 0;
+    uint64_t rootTransactionId = 0;
+    uint32_t priority = 0;
+    uint32_t portIndex = 0;
+    uint32_t instanceIndex = 0;
+  };
+
   Resource(std::string name, ObjectId id, SimObject *parent,
            uint32_t totalCapacity)
       : SimObject(ObjectKind::Resource, std::move(name), id, parent),
@@ -19,103 +35,232 @@ public:
 
   uint32_t totalCapacity() const { return totalCapacity_; }
   uint32_t availableCapacity() const {
-    return totalCapacity_ - activeReservations_;
+    return totalCapacity_ - activeCapacity_;
   }
-  uint32_t activeReservations() const { return activeReservations_; }
+  uint32_t activeReservations() const { return activeCapacity_; }
   bool canReserve(uint32_t amount = 1) const {
-    return availableCapacity() >= amount + proposedReservations_;
+    return amount != 0 && availableCapacity() >= amount;
   }
-
-  struct ReservationProposal {
-    ObjectId ownerId;
-    uint32_t amount;
-    Epoch issueTime;
-    uint64_t transactionId;
-  };
 
   bool proposeReserve(ObjectId owner, uint32_t amount, Epoch issueTime,
-                      uint64_t txnId) {
-    if (!canReserve(amount))
+                      uint64_t transactionId) {
+    return proposeReserve(owner, amount, issueTime, transactionId, issueTime,
+                          transactionId);
+  }
+
+  bool proposeReserve(ObjectId owner, uint32_t amount, Epoch issueTime,
+                      uint64_t transactionId, Epoch readyTime,
+                      uint64_t rootTransactionId) {
+    return proposeReserve({owner, amount, issueTime, readyTime, transactionId,
+                           rootTransactionId});
+  }
+
+  bool proposeReserve(Reservation request) {
+    if (request.ownerId == kInvalidObjectId || request.amount == 0 ||
+        request.amount > totalCapacity_ ||
+        request.readyTime < request.issueTime ||
+        hasReservation(request.transactionId) ||
+        std::ranges::any_of(
+            proposals_,
+            [&](const Reservation &proposal) {
+              return proposal.transactionId == request.transactionId;
+            }))
       return false;
-    proposals_.push_back({owner, amount, issueTime, txnId});
-    proposedReservations_ += amount;
+    proposals_.push_back(request);
     return true;
   }
 
   bool proposeRelease(ObjectId owner, uint32_t amount) {
+    if (amount == 0)
+      return false;
+    uint32_t releasable = 0;
+    for (const auto &[transactionId, reservation] : reservations_) {
+      if (reservation.ownerId == owner && !isCancellationPending(transactionId))
+        releasable += reservation.amount;
+    }
+    for (const ReleaseProposal &release : releaseProposals_)
+      if (release.ownerId == owner)
+        releasable =
+            release.amount > releasable ? 0 : releasable - release.amount;
+    if (amount > releasable)
+      return false;
     releaseProposals_.push_back({owner, amount});
+    return true;
+  }
+
+  bool proposeCancel(ObjectId owner, uint64_t transactionId) {
+    const Reservation *reservation = findReservation(transactionId);
+    if (!reservation || reservation->ownerId != owner ||
+        isCancellationPending(transactionId))
+      return false;
+    cancellationProposals_.push_back(transactionId);
     return true;
   }
 
   void doArbitrate(Epoch) override {
     acceptedProposals_.clear();
-    rejectedProposals_.clear();
+    rejectedTransactions_.clear();
+    std::sort(proposals_.begin(), proposals_.end(), reservationLess);
     uint32_t remaining = availableCapacity();
-    for (auto &p : proposals_) {
-      if (p.amount <= remaining) {
-        acceptedProposals_.push_back(p);
-        remaining -= p.amount;
+    for (const Reservation &proposal : proposals_) {
+      if (proposal.amount <= remaining) {
+        acceptedProposals_.push_back(proposal);
+        remaining -= proposal.amount;
       } else {
-        rejectedProposals_.push_back(p);
+        rejectedTransactions_.push_back(proposal.transactionId);
       }
     }
   }
 
   void doXfer(Epoch) override {
-    for (auto &p : acceptedProposals_) {
-      activeReservations_ += p.amount;
-      totalReservations_ += p.amount;
+    for (const Reservation &reservation : acceptedProposals_) {
+      reservations_.emplace(reservation.transactionId, reservation);
+      activeCapacity_ += reservation.amount;
+      totalReservations_ += reservation.amount;
     }
-    for (auto &r : releaseProposals_) {
-      if (r.amount <= activeReservations_)
-        activeReservations_ -= r.amount;
-      totalReleases_ += r.amount;
+
+    for (uint64_t transactionId : cancellationProposals_) {
+      auto reservation = reservations_.find(transactionId);
+      if (reservation == reservations_.end())
+        continue;
+      activeCapacity_ -= reservation->second.amount;
+      totalCancellations_ += reservation->second.amount;
+      reservations_.erase(reservation);
     }
+
+    for (const ReleaseProposal &release : releaseProposals_)
+      applyRelease(release);
+
     proposals_.clear();
     acceptedProposals_.clear();
-    rejectedProposals_.clear();
     releaseProposals_.clear();
-    proposedReservations_ = 0;
-    if (activeReservations_ > highWatermark_)
-      highWatermark_ = activeReservations_;
+    cancellationProposals_.clear();
+    if (activeCapacity_ > highWatermark_)
+      highWatermark_ = activeCapacity_;
   }
 
   bool hasPendingCommit() const override {
-    return !acceptedProposals_.empty() || !releaseProposals_.empty();
+    return !acceptedProposals_.empty() || !releaseProposals_.empty() ||
+           !cancellationProposals_.empty();
+  }
+
+  bool hasReservation(uint64_t transactionId) const {
+    return reservations_.contains(transactionId);
+  }
+
+  const Reservation *findReservation(uint64_t transactionId) const {
+    auto reservation = reservations_.find(transactionId);
+    return reservation == reservations_.end() ? nullptr : &reservation->second;
+  }
+
+  std::vector<const Reservation *> readyReservations(Epoch epoch) const {
+    std::vector<const Reservation *> ready;
+    for (const auto &[transactionId, reservation] : reservations_)
+      if (reservation.readyTime == epoch)
+        ready.push_back(&reservation);
+    std::sort(ready.begin(), ready.end(),
+              [](const Reservation *left, const Reservation *right) {
+                return reservationLess(*left, *right);
+              });
+    return ready;
+  }
+
+  const std::vector<uint64_t> &rejectedTransactions() const {
+    return rejectedTransactions_;
+  }
+
+  bool validate() const {
+    uint64_t capacity = 0;
+    for (const auto &[transactionId, reservation] : reservations_) {
+      if (transactionId != reservation.transactionId ||
+          reservation.ownerId == kInvalidObjectId || reservation.amount == 0 ||
+          reservation.readyTime < reservation.issueTime)
+        return false;
+      capacity += reservation.amount;
+    }
+    return capacity == activeCapacity_ && capacity <= totalCapacity_;
   }
 
   uint32_t highWatermark() const { return highWatermark_; }
   uint64_t totalReservations() const { return totalReservations_; }
   uint64_t totalReleases() const { return totalReleases_; }
+  uint64_t totalCancellations() const { return totalCancellations_; }
 
   void reset() override {
-    activeReservations_ = 0;
-    proposedReservations_ = 0;
+    activeCapacity_ = 0;
     proposals_.clear();
     acceptedProposals_.clear();
-    rejectedProposals_.clear();
+    rejectedTransactions_.clear();
     releaseProposals_.clear();
+    cancellationProposals_.clear();
+    reservations_.clear();
     highWatermark_ = 0;
     totalReservations_ = 0;
     totalReleases_ = 0;
+    totalCancellations_ = 0;
   }
 
 private:
-  uint32_t totalCapacity_;
-  uint32_t activeReservations_ = 0;
-  uint32_t proposedReservations_ = 0;
-  uint32_t highWatermark_ = 0;
-  uint64_t totalReservations_ = 0;
-  uint64_t totalReleases_ = 0;
-  std::vector<ReservationProposal> proposals_;
-  std::vector<ReservationProposal> acceptedProposals_;
-  std::vector<ReservationProposal> rejectedProposals_;
   struct ReleaseProposal {
     ObjectId ownerId;
     uint32_t amount;
   };
+
+  static bool reservationLess(const Reservation &left,
+                              const Reservation &right) {
+    return std::tie(left.priority, left.portIndex, left.instanceIndex,
+                    left.ownerId, left.rootTransactionId, left.transactionId) <
+           std::tie(right.priority, right.portIndex, right.instanceIndex,
+                    right.ownerId, right.rootTransactionId,
+                    right.transactionId);
+  }
+
+  bool isCancellationPending(uint64_t transactionId) const {
+    return std::ranges::find(cancellationProposals_, transactionId) !=
+           cancellationProposals_.end();
+  }
+
+  void applyRelease(const ReleaseProposal &release) {
+    std::vector<Reservation *> owned;
+    for (auto &[transactionId, reservation] : reservations_)
+      if (reservation.ownerId == release.ownerId)
+        owned.push_back(&reservation);
+    std::sort(owned.begin(), owned.end(),
+              [](const Reservation *left, const Reservation *right) {
+                return reservationLess(*left, *right);
+              });
+
+    uint32_t remaining = release.amount;
+    std::vector<uint64_t> emptyReservations;
+    for (Reservation *reservation : owned) {
+      uint32_t released = std::min(remaining, reservation->amount);
+      reservation->amount -= released;
+      activeCapacity_ -= released;
+      totalReleases_ += released;
+      remaining -= released;
+      if (reservation->amount == 0)
+        emptyReservations.push_back(reservation->transactionId);
+      if (remaining == 0)
+        break;
+    }
+    for (uint64_t transactionId : emptyReservations)
+      reservations_.erase(transactionId);
+  }
+
+  uint32_t totalCapacity_ = 0;
+  uint32_t activeCapacity_ = 0;
+  uint32_t highWatermark_ = 0;
+  uint64_t totalReservations_ = 0;
+  uint64_t totalReleases_ = 0;
+  uint64_t totalCancellations_ = 0;
+  std::vector<Reservation> proposals_;
+  std::vector<Reservation> acceptedProposals_;
+  std::vector<uint64_t> rejectedTransactions_;
   std::vector<ReleaseProposal> releaseProposals_;
+  std::vector<uint64_t> cancellationProposals_;
+  std::map<uint64_t, Reservation> reservations_;
 };
 
 } // namespace gfsim
-#endif
+
+#endif // GFSIM_RESOURCE_H
