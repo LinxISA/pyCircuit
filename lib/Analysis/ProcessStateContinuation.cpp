@@ -211,6 +211,175 @@ PlanSetBuilder::planProcessContinuation(const ExpandedProcess &expanded,
     ++nextBlockId;
   }
 
+  // A suspension nested directly in an scf.if does not dominate the
+  // continuation after the if.  Materialize the branch in the current PC and
+  // clone the post-if continuation for the non-suspending arm.  The original
+  // continuation remains the resume PC for the suspending arm.
+  //
+  // Expansion deliberately keeps occurrence-qualified leaf actions, so this
+  // repair operates on the immutable action records and never rewrites the
+  // frozen source IR.
+  ac::ProcessOp process = expanded.process;
+  for (const Susp &susp : suspensions) {
+    auto ifOp = susp.op->getParentOfType<scf::IfOp>();
+    if (!ifOp || ifOp->getParentOp() != process.getOperation())
+      continue;
+
+    auto belongsTo = [&](Operation *operation, Region &region) {
+      if (!operation)
+        return false;
+      Operation *nested = operation;
+      while (nested && nested->getParentOp() != ifOp.getOperation())
+        nested = nested->getParentOp();
+      return nested && nested->getParentRegion() == &region;
+    };
+    bool suspendedInThen = belongsTo(susp.op, ifOp.getThenRegion());
+    bool suspendedInElse = !ifOp.getElseRegion().empty() &&
+                           belongsTo(susp.op, ifOp.getElseRegion());
+    if (!suspendedInThen && !suspendedInElse)
+      continue;
+    Region *otherRegion =
+        suspendedInThen ? &ifOp.getElseRegion() : &ifOp.getThenRegion();
+    if (llvm::any_of(suspensions, [&](const Susp &candidate) {
+          return candidate.op != susp.op && !otherRegion->empty() &&
+                 belongsTo(candidate.op, *otherRegion);
+        }))
+      continue;
+
+    auto branchBlockIt = llvm::find_if(plan->blocks, [&](const auto &block) {
+      return llvm::any_of(block->actions, [&](const ProcessActionPlan &action) {
+        return action.sourceOperation() == susp.op;
+      });
+    });
+    if (branchBlockIt == plan->blocks.end() ||
+        !(*branchBlockIt)->edge.has_value() ||
+        (*branchBlockIt)->edge->kind() != ProcessControlEdgeKind::Suspend)
+      continue;
+
+    auto appendRenumbered = [](std::vector<ProcessActionPlan> &target,
+                               const ProcessActionPlan &source) {
+      auto action = std::make_shared<ProcessActionPlan::Impl>(*source.impl_);
+      action->id = static_cast<uint32_t>(target.size());
+      target.push_back(ProcessActionPlan(action));
+    };
+    std::vector<ProcessActionPlan> prefix;
+    std::vector<ProcessActionPlan> thenActions;
+    std::vector<ProcessActionPlan> elseActions;
+    for (const ProcessActionPlan &action : (*branchBlockIt)->actions) {
+      if (belongsTo(action.sourceOperation(), ifOp.getThenRegion()))
+        appendRenumbered(thenActions, action);
+      else if (!ifOp.getElseRegion().empty() &&
+               belongsTo(action.sourceOperation(), ifOp.getElseRegion()))
+        appendRenumbered(elseActions, action);
+      else
+        appendRenumbered(prefix, action);
+    }
+    std::vector<ProcessActionPlan> &suspendingActions =
+        suspendedInThen ? thenActions : elseActions;
+    std::vector<ProcessActionPlan> &continuingActions =
+        suspendedInThen ? elseActions : thenActions;
+    if (llvm::none_of(suspendingActions, [&](const ProcessActionPlan &action) {
+          return action.sourceOperation() == susp.op;
+        }))
+      continue;
+
+    ProcessTransitionId originalTransition =
+        (*branchBlockIt)->edge->transition();
+    if (originalTransition.value() >= plan->transitions.size())
+      return failure();
+    ProcessPcId resumePc =
+        plan->transitions[originalTransition.value()]->targetPc.value();
+    auto resumeBlockIt = llvm::find_if(plan->blocks, [&](const auto &block) {
+      return block->pc == resumePc &&
+             block->path == plan->pcs[resumePc.value()]->entryPath;
+    });
+    if (resumeBlockIt == plan->blocks.end() ||
+        !(*resumeBlockIt)->edge.has_value())
+      return failure();
+
+    ProcessPcId branchPc = (*branchBlockIt)->pc.value();
+    auto suspendingBlock = std::make_shared<ProcessBlockPlan::Impl>();
+    suspendingBlock->id = ProcessBlockId(nextBlockId++);
+    suspendingBlock->pc = branchPc;
+    suspendingBlock->originBlock = susp.op->getBlock();
+    suspendingBlock->originRegion = susp.op->getParentRegion();
+    suspendingBlock->path =
+        blockPath(expanded.definitionKey, plan->pcs[branchPc.value()]->name,
+                  suspendingBlock->id->value());
+    suspendingBlock->actions = std::move(suspendingActions);
+    suspendingBlock->edge = (*branchBlockIt)->edge;
+
+    auto continuingBlock = std::make_shared<ProcessBlockPlan::Impl>();
+    continuingBlock->id = ProcessBlockId(nextBlockId++);
+    continuingBlock->pc = branchPc;
+    continuingBlock->originBlock =
+        otherRegion->empty() ? ifOp->getBlock() : &otherRegion->front();
+    continuingBlock->originRegion =
+        otherRegion->empty() ? ifOp->getParentRegion() : otherRegion;
+    continuingBlock->path =
+        blockPath(expanded.definitionKey, plan->pcs[branchPc.value()]->name,
+                  continuingBlock->id->value());
+    continuingBlock->actions = std::move(continuingActions);
+    for (const ProcessActionPlan &action : (*resumeBlockIt)->actions)
+      appendRenumbered(continuingBlock->actions, action);
+
+    const ProcessControlEdgePlan &resumeEdge = *(*resumeBlockIt)->edge;
+    if (resumeEdge.kind() == ProcessControlEdgeKind::Suspend) {
+      ProcessTransitionId resumeTransition = resumeEdge.transition();
+      if (resumeTransition.value() >= plan->transitions.size())
+        return failure();
+      auto transition = std::make_shared<ProcessTransitionPlan::Impl>(
+          *plan->transitions[resumeTransition.value()]);
+      transition->id = ProcessTransitionId(nextTransitionId++);
+      transition->sourcePc = branchPc;
+      ProcessWakeId resumeWake = transition->wake.value();
+      if (resumeWake.value() >= plan->wakes.size())
+        return failure();
+      auto wake = std::make_shared<ProcessWakePlan::Impl>(
+          *plan->wakes[resumeWake.value()]);
+      wake->id = ProcessWakeId(nextWakeId++);
+      transition->wake = wake->id;
+      auto edge = std::make_shared<ProcessControlEdgePlan::Impl>();
+      edge->kind = ProcessControlEdgeKind::Suspend;
+      edge->transition = transition->id;
+      continuingBlock->edge = ProcessControlEdgePlan(edge);
+      plan->wakes.push_back(std::move(wake));
+      plan->transitions.push_back(std::move(transition));
+    } else {
+      continuingBlock->edge = resumeEdge;
+    }
+
+    std::optional<ProcessPlannedValue> condition;
+    for (const ExpandedAction &action : expanded.actions) {
+      for (const ProcessPlannedValue &result : action.results) {
+        if (result.kind() == ProcessPlannedValueKind::Original &&
+            result.original().value() == ifOp.getCondition()) {
+          condition = result;
+          break;
+        }
+      }
+      if (condition)
+        break;
+    }
+    if (!condition)
+      return failure();
+
+    auto edge = std::make_shared<ProcessControlEdgePlan::Impl>();
+    edge->kind = ProcessControlEdgeKind::Branch;
+    edge->condition = *condition;
+    edge->trueBlock =
+        suspendedInThen ? suspendingBlock->id : continuingBlock->id;
+    edge->falseBlock =
+        suspendedInThen ? continuingBlock->id : suspendingBlock->id;
+    (*branchBlockIt)->actions = std::move(prefix);
+    (*branchBlockIt)->edge = ProcessControlEdgePlan(edge);
+
+    plan->pcs[branchPc.value()]->blocks.push_back(*suspendingBlock->id);
+    plan->pcs[branchPc.value()]->blocks.push_back(*continuingBlock->id);
+    plan->blocks.push_back(std::move(suspendingBlock));
+    plan->blocks.push_back(std::move(continuingBlock));
+  }
+
   return plan;
 }
 

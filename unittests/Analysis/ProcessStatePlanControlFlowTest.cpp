@@ -106,6 +106,21 @@ TEST(ProcessStatePlanControlFlowTest,
   EXPECT_GT(process.blocks().size(), 1u);
   EXPECT_EQ(process.liveSlots().size(), 1u);
   EXPECT_EQ(process.transitions().front().stores().size(), 1u);
+
+  auto branch =
+      llvm::find_if(process.blocks(), [](const ProcessBlockPlan &block) {
+        return block.edge().kind() == ProcessControlEdgeKind::Branch;
+      });
+  ASSERT_NE(branch, process.blocks().end());
+  EXPECT_EQ(process.blocks()[branch->edge().trueBlock().value()].pc(),
+            branch->pc());
+  EXPECT_EQ(process.blocks()[branch->edge().falseBlock().value()].pc(),
+            branch->pc());
+
+  uint64_t largestBlockCost = 0;
+  for (const ProcessBlockPlan &block : process.blocks())
+    largestBlockCost = std::max(largestBlockCost, block.cost());
+  EXPECT_GT(process.fairnessWork(), largestBlockCost);
 }
 
 } // namespace

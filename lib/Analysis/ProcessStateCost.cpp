@@ -4,6 +4,8 @@
 #include "llvm/ADT/SmallVector.h"
 
 #include <algorithm>
+#include <limits>
+#include <optional>
 
 using namespace mlir;
 
@@ -61,10 +63,73 @@ PlanSetBuilder::planProcessCost(ControlPlan &control,
     }
   }
 
-  // Fairness: for yield-only with a single block, fairness = block cost
+  // Compute the longest path in each PC-local DAG with Kahn traversal.  Block
+  // IDs are dense global ordinals, while each PC owns a canonical ordered
+  // subset of those IDs.
   uint64_t fairness = 0;
-  for (const auto &block : control.blocks) {
-    fairness = std::max(fairness, block->cost);
+  for (const auto &pc : control.pcs) {
+    if (pc->blocks.empty())
+      return failure();
+    SmallVector<uint32_t> indegree(control.blocks.size());
+    SmallVector<std::optional<uint64_t>> distance(control.blocks.size());
+    auto successors = [](const ProcessControlEdgePlan &edge) {
+      SmallVector<ProcessBlockId, 2> result;
+      if (edge.kind() == ProcessControlEdgeKind::Branch) {
+        result.push_back(edge.trueBlock());
+        result.push_back(edge.falseBlock());
+      } else if (edge.kind() == ProcessControlEdgeKind::LocalContinue) {
+        result.push_back(edge.targetBlock());
+      }
+      return result;
+    };
+    for (ProcessBlockId id : pc->blocks) {
+      if (id.value() >= control.blocks.size() ||
+          control.blocks[id.value()]->pc != pc->id)
+        return failure();
+      for (ProcessBlockId successor :
+           successors(*control.blocks[id.value()]->edge)) {
+        if (successor.value() >= control.blocks.size() ||
+            control.blocks[successor.value()]->pc != pc->id)
+          return failure();
+        ++indegree[successor.value()];
+      }
+    }
+
+    SmallVector<ProcessBlockId> ready;
+    for (ProcessBlockId id : pc->blocks)
+      if (indegree[id.value()] == 0)
+        ready.push_back(id);
+    ProcessBlockId entry = pc->blocks.front();
+    distance[entry.value()] = control.blocks[entry.value()]->cost;
+    size_t processed = 0;
+    uint64_t pcWork = 0;
+    for (size_t cursor = 0; cursor < ready.size(); ++cursor) {
+      ProcessBlockId id = ready[cursor];
+      ++processed;
+      if (distance[id.value()])
+        pcWork = std::max(pcWork, *distance[id.value()]);
+      for (ProcessBlockId successor :
+           successors(*control.blocks[id.value()]->edge)) {
+        if (distance[id.value()]) {
+          uint64_t successorCost = control.blocks[successor.value()]->cost;
+          if (*distance[id.value()] >
+              std::numeric_limits<uint64_t>::max() - successorCost)
+            return failure();
+          uint64_t candidate = *distance[id.value()] + successorCost;
+          if (!distance[successor.value()] ||
+              candidate > *distance[successor.value()])
+            distance[successor.value()] = candidate;
+        }
+        if (--indegree[successor.value()] == 0)
+          ready.push_back(successor);
+      }
+    }
+    if (processed != pc->blocks.size() ||
+        llvm::any_of(pc->blocks, [&](ProcessBlockId id) {
+          return !distance[id.value()].has_value();
+        }))
+      return failure();
+    fairness = std::max(fairness, pcWork);
   }
 
   if (fairness == 0)
