@@ -1,7 +1,16 @@
 #include "acir/CodeGen/Build.h"
+#include "BuildInternal.h"
 
+#include "acir/Dialect/ACSim/ACSimDialect.h"
+
+#include "mlir/IR/MLIRContext.h"
+#include "mlir/Parser/Parser.h"
+#include "llvm/ADT/SmallString.h"
+#include "llvm/Support/FileSystem.h"
+#include "llvm/Support/MemoryBuffer.h"
 #include "gtest/gtest.h"
 
+#include <array>
 #include <string>
 
 namespace acir::codegen {
@@ -16,6 +25,90 @@ bool hasError(llvm::Error error) {
   llvm::consumeError(std::move(error));
   return true;
 }
+
+std::string readFile(llvm::StringRef path) {
+  auto buffer = llvm::MemoryBuffer::getFile(path);
+  return buffer ? buffer.get()->getBuffer().str() : std::string();
+}
+
+class TempOutputRoot {
+public:
+  TempOutputRoot() {
+    EXPECT_FALSE(
+        llvm::sys::fs::createUniqueDirectory("acir-build-test", path_));
+  }
+  ~TempOutputRoot() { llvm::sys::fs::remove_directories(path_); }
+  std::string path() const { return path_.str().str(); }
+
+private:
+  llvm::SmallString<256> path_;
+};
+
+llvm::Expected<Fingerprint> jsonFingerprint(llvm::json::Value value) {
+  return fingerprintCanonicalJson(value);
+}
+
+class PublishFixture {
+public:
+  explicit PublishFixture(llvm::StringRef outputRoot) {
+    context_.loadDialect<acsim::ACSimDialect>();
+    auto toolchain = identifyToolchain(ACIR_TEST_CXX_COMPILER, "libc++",
+                                       "default", "mach-o", {"-std=c++20"});
+    EXPECT_TRUE(static_cast<bool>(toolchain));
+    if (!toolchain)
+      return;
+    request_.toolchain = std::move(*toolchain);
+    const std::string frozenBytes = "minimal frozen acir\n";
+    const std::string lockBytes = "[]";
+    auto profile = jsonFingerprint(llvm::json::Value("fast"));
+    auto target =
+        jsonFingerprint(llvm::json::Value(request_.toolchain.targetTriple));
+    auto emptySet = jsonFingerprint(llvm::json::Value(llvm::json::Array{}));
+    EXPECT_TRUE(static_cast<bool>(profile));
+    EXPECT_TRUE(static_cast<bool>(target));
+    EXPECT_TRUE(static_cast<bool>(emptySet));
+    if (!profile || !target || !emptySet)
+      return;
+
+    const std::string zero = kFingerprint.str();
+    std::string source =
+        "builtin.module attributes {ac.contract_epoch = \"0.1\"} {\n"
+        "  acsim.model @minimal epoch \"0.1\" root @Top construction [] "
+        "destruction [] fingerprints {frozen_acir = \"" +
+        computeFingerprint(frozenBytes) + "\", binding_lock = \"" +
+        computeFingerprint(lockBytes) + "\", provider = \"" + *emptySet +
+        "\", profile = \"" + *profile + "\", toolchain = \"" + *target +
+        "\", schema_set = \"" + *emptySet +
+        "\"} {\n"
+        "    acsim.module @Top interface {ports = [], resources = [], results "
+        "= []} static [] specialization \"" +
+        zero + "\" exports [] { acsim.return }\n  }\n}\n";
+    module_ = mlir::parseSourceString<mlir::ModuleOp>(source, &context_);
+    EXPECT_TRUE(static_cast<bool>(module_));
+    if (!module_)
+      return;
+
+    request_.project = {"project", "project.example"};
+    request_.system = {"system", "system.example"};
+    request_.canonicalACSim = *module_;
+    request_.frozenAcirBytes = frozenBytes;
+    request_.bindingLockBytes = lockBytes;
+    request_.profile = "fast";
+    request_.includeRoots = {ACIR_TEST_SOURCE_DIR "/include"};
+    request_.linkInputs = {ACIR_TEST_BINARY_DIR "/lib/gfsim/libgfsim.a",
+                           ACIR_TEST_BINARY_DIR
+                           "/lib/Bindings/libACIRBindings.a"};
+    request_.linkerFlags = {"-L" ACIR_TEST_LLVM_LIB_DIR, "-lLLVM"};
+    request_.outputRoot = outputRoot.str();
+  }
+
+  BuildRequest &request() { return request_; }
+
+private:
+  mlir::MLIRContext context_;
+  mlir::OwningOpRef<mlir::ModuleOp> module_;
+  BuildRequest request_;
+};
 
 llvm::Expected<BuildRequest> makeBuildRequest() {
   auto toolchain = identifyToolchain(ACIR_TEST_CXX_COMPILER, "libc++",
@@ -130,6 +223,96 @@ TEST(BuildTest, RejectsNonCanonicalPathsAndSourceFingerprintMismatch) {
   plan = createCompilePlan(*request, bundle);
   EXPECT_FALSE(plan);
   llvm::consumeError(plan.takeError());
+}
+
+TEST(BuildTest, ExactSecondBuildIsCacheHitAndUnequalInputMisses) {
+  TempOutputRoot output;
+  PublishFixture fixture(output.path());
+  auto first = buildGeneratedModel(fixture.request());
+  auto second = buildGeneratedModel(fixture.request());
+  if (!first || !second) {
+    if (!first)
+      ADD_FAILURE() << llvm::toString(first.takeError());
+    if (!second)
+      ADD_FAILURE() << llvm::toString(second.takeError());
+    return;
+  }
+  EXPECT_FALSE(first->cacheHit);
+  EXPECT_TRUE(second->cacheHit);
+  EXPECT_EQ(first->buildFingerprint, second->buildFingerprint);
+
+  fixture.request().instrumentationLayers.push_back("trace");
+  auto third = buildGeneratedModel(fixture.request());
+  ASSERT_TRUE(static_cast<bool>(third));
+  EXPECT_FALSE(third->cacheHit);
+  EXPECT_NE(first->buildFingerprint, third->buildFingerprint);
+}
+
+TEST(BuildTest, FailedStagePreservesPublishedBuildAndCurrentPointer) {
+  TempOutputRoot output;
+  PublishFixture fixture(output.path());
+  auto first = buildGeneratedModel(fixture.request());
+  if (!first) {
+    ADD_FAILURE() << llvm::toString(first.takeError());
+    return;
+  }
+  const std::string pointerPath = output.path() + "/current.json";
+  const std::string previousCurrent = readFile(pointerPath);
+
+  BuildServices services = makeRealBuildServices();
+  services.failurePoint = BuildFailurePoint::AfterLink;
+  auto failed = buildGeneratedModelForTesting(fixture.request(), services);
+  EXPECT_FALSE(failed);
+  llvm::consumeError(failed.takeError());
+  EXPECT_EQ(readFile(pointerPath), previousCurrent);
+  EXPECT_FALSE(
+      readFile(first->buildDirectory + "/build-manifest.json").empty());
+}
+
+TEST(BuildTest, RejectsEveryEscapingOrNonCanonicalArtifactPath) {
+  for (llvm::StringRef path : {"", "/absolute", "../escape", "a/../b", "./file",
+                               "a//b", "trailing/"}) {
+    auto normalized = normalizeArtifactPath(path);
+    EXPECT_FALSE(normalized) << path.str();
+    llvm::consumeError(normalized.takeError());
+  }
+  auto normalized = normalizeArtifactPath("reports/compile.txt");
+  ASSERT_TRUE(static_cast<bool>(normalized));
+  EXPECT_EQ(*normalized, "reports/compile.txt");
+}
+
+TEST(BuildTest, EveryInjectedBoundaryPreservesPublishedState) {
+  TempOutputRoot output;
+  PublishFixture fixture(output.path());
+  auto baseline = buildGeneratedModel(fixture.request());
+  if (!baseline) {
+    ADD_FAILURE() << llvm::toString(baseline.takeError());
+    return;
+  }
+  const std::string pointerPath = output.path() + "/current.json";
+  const std::string manifestPath =
+      baseline->buildDirectory + "/build-manifest.json";
+  const std::string previousCurrent = readFile(pointerPath);
+  const std::string previousManifest = readFile(manifestPath);
+  const std::array failurePoints = {BuildFailurePoint::AfterInputValidation,
+                                    BuildFailurePoint::AfterSourceWrite,
+                                    BuildFailurePoint::AfterContractCheck,
+                                    BuildFailurePoint::AfterCompile,
+                                    BuildFailurePoint::AfterLink,
+                                    BuildFailurePoint::AfterFingerprintQuery,
+                                    BuildFailurePoint::AfterManifestWrite,
+                                    BuildFailurePoint::AfterImmutableRename,
+                                    BuildFailurePoint::BeforeCurrentRename};
+  for (BuildFailurePoint failurePoint : failurePoints) {
+    BuildServices services = makeRealBuildServices();
+    services.failurePoint = failurePoint;
+    auto failed = buildGeneratedModelForTesting(fixture.request(), services);
+    EXPECT_FALSE(failed);
+    if (!failed)
+      llvm::consumeError(failed.takeError());
+    EXPECT_EQ(readFile(pointerPath), previousCurrent);
+    EXPECT_EQ(readFile(manifestPath), previousManifest);
+  }
 }
 
 } // namespace

@@ -44,6 +44,17 @@ bool isNormalizedRelativePath(llvm::StringRef path) {
   return true;
 }
 
+bool isCanonicalIncludeRoot(llvm::StringRef path) {
+  if (isNormalizedRelativePath(path))
+    return true;
+  if (!llvm::sys::path::is_absolute(path) || path.contains('\0') ||
+      path.contains('\\') || path.contains("//") || path.ends_with('/'))
+    return false;
+  llvm::SmallString<256> normalized(path);
+  llvm::sys::path::remove_dots(normalized, true);
+  return normalized == path;
+}
+
 bool isSortedUnique(const std::vector<std::string> &values) {
   return std::adjacent_find(values.begin(), values.end(),
                             std::greater_equal<>()) == values.end();
@@ -342,6 +353,10 @@ llvm::Error CompilePlan::validate() const {
   if (!isSortedUnique(includeRoots) || !isSortedUnique(definitions))
     return buildError("ACLOWER-FINGERPRINT",
                       "compile plan set-like fields are not canonical");
+  for (llvm::StringRef root : includeRoots)
+    if (!isCanonicalIncludeRoot(root))
+      return buildError("ACLOWER-FINGERPRINT",
+                        "compile plan include root is not canonical");
   for (llvm::StringRef path : sourceUnits)
     if (!isNormalizedRelativePath(path))
       return buildError("ACLOWER-FINGERPRINT",
@@ -390,6 +405,7 @@ llvm::Expected<CompilePlan> createCompilePlan(const BuildRequest &request,
 
   CompilePlan plan;
   plan.includeRoots = request.includeRoots;
+  plan.includeRoots.push_back("include");
   plan.definitions = request.definitions;
   std::sort(plan.includeRoots.begin(), plan.includeRoots.end());
   plan.includeRoots.erase(
@@ -400,7 +416,7 @@ llvm::Expected<CompilePlan> createCompilePlan(const BuildRequest &request,
       std::unique(plan.definitions.begin(), plan.definitions.end()),
       plan.definitions.end());
   for (llvm::StringRef path : plan.includeRoots)
-    if (!isNormalizedRelativePath(path))
+    if (!isCanonicalIncludeRoot(path))
       return buildError("ACLOWER-FINGERPRINT",
                         "include root is not a normalized relative path");
   plan.compilerFlags = request.compilerFlags;

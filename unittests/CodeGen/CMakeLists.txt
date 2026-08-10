@@ -9,6 +9,7 @@ add_executable(CodeGenTests
 )
 target_include_directories(CodeGenTests PRIVATE
   ${PROJECT_SOURCE_DIR}/include
+  ${PROJECT_SOURCE_DIR}/lib/CodeGen
 )
 target_link_libraries(CodeGenTests PRIVATE
   ACIRCodeGen

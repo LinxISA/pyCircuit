@@ -7,6 +7,7 @@ add_acir_library(ACIRCodeGen SOURCES
   ModelPlan.cpp
   ModelPlanDetails.cpp
   ProcessGenerator.cpp
+  Staging.cpp
 )
 target_link_libraries(ACIRCodeGen PUBLIC
   ACIRBindings

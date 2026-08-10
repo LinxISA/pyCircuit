@@ -866,7 +866,7 @@ git commit -m "feat(codegen): plan same toolchain builds"
 - Consumes: validated `BuildRequest`, `SourceBundle`, `CompilePlan`, and provisional `BuildManifest`.
 - Produces: internal `BuildServices`/`BuildFailurePoint` injection, clean private stages, exact cache-hit comparison, immutable build publication, and atomic `current.json` selection.
 
-- [ ] **Step 1: Add failure-injection and cache tests**
+- [x] **Step 1: Add failure-injection and cache tests**
 
 ```cpp
 TEST(BuildTest, FailedStagePreservesPublishedBuildAndCurrentPointer) {
@@ -898,13 +898,13 @@ TEST(BuildTest, ExactSecondBuildIsCacheHitAndUnequalInputMisses) {
 }
 ```
 
-- [ ] **Step 2: Run and confirm staging atomicity is unimplemented**
+- [x] **Step 2: Run and confirm staging atomicity is unimplemented**
 
 Run: `cmake --build --preset dev-llvm22 --target CodeGenTests && build/dev-llvm22/bin/CodeGenTests --gtest_filter='BuildTest.FailedStage*:BuildTest.ExactSecond*'`
 
 Expected: tests fail because the build does not stage/publish atomically.
 
-- [ ] **Step 3: Implement strict normalized-relative-path containment**
+- [x] **Step 3: Implement strict normalized-relative-path containment**
 
 Keep fault injection out of `include/acir/CodeGen/Build.h`. Define the internal seam exactly as:
 
@@ -924,25 +924,25 @@ buildGeneratedModelForTesting(const BuildRequest &, BuildServices &);
 
 Create `normalizeArtifactPath` that rejects empty paths, roots, absolute paths, `.`/`..` components, NULs, and any normalized result outside the private stage. Every write goes through `writeFileExclusive(stageRoot, relativePath, bytes)` and verifies exact length and SHA-256 after close.
 
-- [ ] **Step 4: Implement the ordered private-stage pipeline**
+- [x] **Step 4: Implement the ordered private-stage pipeline**
 
 Write frozen ACIR, canonical ACSim, binding lock, every source, `compile-plan.json`, validation reports, and provisional manifest. Run concept/source checks, compile units, link, query the executable fingerprint, finalize artifact hashes and passed gates, then write the final canonical manifest. Bound captured compiler output and strip only explicitly declared stage/source path prefixes in reports.
 
-- [ ] **Step 5: Publish without overwriting immutable state**
+- [x] **Step 5: Publish without overwriting immutable state**
 
 Rename the completed private stage to `builds/<build-fingerprint>`. If that directory exists, compare canonical manifest bytes and every artifact hash; equal means cache hit and unequal means `ACLOWER-FINGERPRINT`. Write canonical `current.json` to a sibling temporary file, flush it and its directory as supported, then atomically rename it over the pointer. Cleanup may remove only the exact private stage created by the current invocation.
 
-- [ ] **Step 6: Exercise every injected failure boundary**
+- [x] **Step 6: Exercise every injected failure boundary**
 
 Table-drive failure points after input validation, source write, contract check, compile, link, embedded-fingerprint query, manifest write, immutable rename, and before pointer rename. For each, assert the previous build tree and pointer are byte-identical and no immutable directory is mutated.
 
-- [ ] **Step 7: Run Build tests and sanitizer-focused staging tests**
+- [x] **Step 7: Run Build tests and sanitizer-focused staging tests**
 
 Run: `cmake --build --preset dev-llvm22 --target CodeGenTests && build/dev-llvm22/bin/CodeGenTests --gtest_filter='BuildTest.*'`
 
 Expected: cache and publication are exact, contained, and failure-atomic.
 
-- [ ] **Step 8: Commit staging and publication**
+- [x] **Step 8: Commit staging and publication**
 
 ```bash
 git add include/acir/CodeGen/Build.h lib/CodeGen/BuildInternal.h lib/CodeGen/Build.cpp lib/CodeGen/Staging.cpp lib/CodeGen/CMakeLists.txt unittests/CodeGen/BuildTest.cpp
