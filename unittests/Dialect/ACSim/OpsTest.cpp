@@ -1821,7 +1821,8 @@ TEST(ACSimOpsTest, ReusableExpansionCycleAndTotalCapFailExplicitly) {
       OwnerType::get(&context, mlir::FlatSymbolRefAttr::get(&context, "Leaf")));
   std::string cycleDiagnostic = expectVerificationFailure(*cycleFile);
   EXPECT_TRUE(llvm::StringRef(cycleDiagnostic)
-                  .contains("active module specialization cycle"))
+                  .contains("module instantiation cycle has no canonical "
+                            "declaration order"))
       << cycleDiagnostic;
 
   auto capFile = parseReusableModel(context);

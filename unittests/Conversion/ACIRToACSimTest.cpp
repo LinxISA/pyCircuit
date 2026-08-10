@@ -3,6 +3,7 @@
 #include "acir/Dialect/ACIR/ACIROps.h"
 #include "acir/Dialect/ACSim/ACSimDialect.h"
 #include "acir/Dialect/ACSim/ACSimOps.h"
+#include "acir/Transforms/Passes.h"
 
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
@@ -27,6 +28,33 @@ module attributes {ac.contract_epoch = "0.1", ac.freeze_epoch = "0.1", ac.frozen
     ac.process @workload kind "workload" {
       ac.yield_sim
     } {ac.frozen_owners = [{kind = "ac.process", owner = @Top::@workload, path = "root.workload", stable_id = "root/workload"}], ac.frozen_process_skeleton = ["process/r0/b0/o0 ac.yield_sim{}props=<<NULL ATTRIBUTE>> operands= results= regions="]}
+    ac.return
+  }
+}
+)mlir";
+
+llvm::StringRef kAdversarialModuleOrder = R"mlir(
+module attributes {ac.contract_epoch = "0.1"} {
+  ac.system @soc root @A as "root" tick 0 "cycle" workload @A::@workload seed {kind = "fixed", value = 7 : i64} instrumentation [] results {format = "json", id = "default"} selected true
+  ac.module @A() parameters {} graph {
+    ac.instance @child of @Z() static {} id "child" path "child" : () -> ()
+    ac.process @workload kind "workload" { ac.yield_sim }
+    ac.return
+  }
+  ac.module @Z() parameters {} graph { ac.return }
+}
+)mlir";
+
+llvm::StringRef kCyclicModuleOrder = R"mlir(
+module attributes {ac.contract_epoch = "0.1"} {
+  ac.system @soc root @A as "root" tick 0 "cycle" workload @A::@workload seed {kind = "fixed", value = 7 : i64} instrumentation [] results {format = "json", id = "default"} selected true
+  ac.module @A() parameters {} graph {
+    ac.instance @b of @B() static {} id "b" path "b" : () -> ()
+    ac.process @workload kind "workload" { ac.yield_sim }
+    ac.return
+  }
+  ac.module @B() parameters {} graph {
+    ac.instance @a of @A() static {} id "a" path "a" : () -> ()
     ac.return
   }
 }
@@ -87,6 +115,46 @@ TEST_F(ACIRToACSimTest, CapabilityBoundOverflowIsAtomicDispatchFailure) {
   // Atomicity: the frozen ACIR is untouched, no partial ACSim leaked out.
   EXPECT_TRUE(mlir::isa<ac::SystemOp>(module->getBody()->front()));
   EXPECT_TRUE(module->getBody()->getOps<acsim::ModelOp>().empty());
+}
+
+TEST_F(ACIRToACSimTest, ModuleReferencesDoNotDependOnSymbolOrder) {
+  auto module = mlir::parseSourceString<mlir::ModuleOp>(kAdversarialModuleOrder,
+                                                        &context);
+  ASSERT_TRUE(module);
+  ACIRToACSimPassOptions options;
+  options.profile = "fast";
+  options.target = "arm64-apple-darwin";
+  mlir::PassManager freezer(&context);
+  freezer.addPass(createFreezeTopologyPass());
+  ASSERT_TRUE(mlir::succeeded(freezer.run(module.get())));
+  mlir::PassManager manager(&context);
+  manager.addPass(createACIRToACSimPass(options));
+  ASSERT_TRUE(mlir::succeeded(manager.run(module.get())));
+  auto model = mlir::cast<acsim::ModelOp>(module->getBody()->front());
+  llvm::SmallVector<llvm::StringRef> names;
+  for (acsim::ModuleOp realized : model.getOps<acsim::ModuleOp>())
+    names.push_back(realized.getSymName());
+  EXPECT_EQ(names, (llvm::SmallVector<llvm::StringRef>{"Z", "A"}));
+}
+
+TEST_F(ACIRToACSimTest, ModuleInstantiationCycleHasOwnershipDiagnostic) {
+  auto module =
+      mlir::parseSourceString<mlir::ModuleOp>(kCyclicModuleOrder, &context);
+  ASSERT_TRUE(module);
+  ACIRToACSimPassOptions options;
+  options.profile = "fast";
+  options.target = "arm64-apple-darwin";
+  std::string diagnostic;
+  mlir::ScopedDiagnosticHandler handler(&context, [&](mlir::Diagnostic &diag) {
+    if (diag.getSeverity() == mlir::DiagnosticSeverity::Error)
+      diagnostic += diag.str();
+    return mlir::success();
+  });
+  mlir::PassManager manager(&context);
+  manager.addPass(createFreezeTopologyPass());
+  manager.addPass(createACIRToACSimPass(options));
+  EXPECT_TRUE(mlir::failed(manager.run(module.get())));
+  EXPECT_NE(diagnostic.find("cycle"), std::string::npos) << diagnostic;
 }
 
 } // namespace

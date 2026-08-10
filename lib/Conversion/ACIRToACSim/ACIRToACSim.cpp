@@ -41,6 +41,7 @@
 #include <cmath>
 #include <map>
 #include <optional>
+#include <set>
 #include <string>
 #include <utility>
 #include <vector>
@@ -456,7 +457,6 @@ private:
   mlir::LogicalResult planInstanceTarget(Operation *placement,
                                          llvm::StringRef definition,
                                          DictionaryAttr staticArgs,
-                                         llvm::StringRef enclosingModule,
                                          PlacementPlan &planned);
   mlir::LogicalResult planProcesses(mlir::ModuleOp input);
   mlir::LogicalResult expand(mlir::ModuleOp input);
@@ -557,7 +557,7 @@ std::string ACIRToACSimPass::bindingInstanceFingerprint(llvm::StringRef binding,
 
 mlir::LogicalResult ACIRToACSimPass::planInstanceTarget(
     Operation *placement, llvm::StringRef definition, DictionaryAttr staticArgs,
-    llvm::StringRef enclosingModule, PlacementPlan &planned) {
+    PlacementPlan &planned) {
   auto externIt = externByName.find(definition);
   auto moduleIt = moduleIndexByName.find(definition);
   if (externIt == externByName.end() && moduleIt == moduleIndexByName.end())
@@ -626,13 +626,6 @@ mlir::LogicalResult ACIRToACSimPass::planInstanceTarget(
 
   // Concrete generated module target.
   ModulePlan &target = modules[moduleIt->second];
-  if (definition >= enclosingModule)
-    return lowerError(
-        placement, "ACLOWER-OWNERSHIP",
-        "canonical ACSim declares modules in strictly symbol-sorted order, so "
-        "module '@" +
-            enclosingModule + "' cannot instantiate '@" + definition +
-            "'; rename so every instantiated module sorts before its parent");
   planned.targetSymbol = target.name;
   planned.targetIsBinding = false;
   planned.staticArgs = target.staticParams;
@@ -667,8 +660,7 @@ mlir::LogicalResult ACIRToACSimPass::planModule(ac::ModuleOp module,
       placement.kind = PlacementPlan::Kind::Instance;
       placement.name = instance.getSymName().str();
       if (failed(planInstanceTarget(instance, instance.getDefinition(),
-                                    instance.getStaticArgs(), planned.name,
-                                    placement)))
+                                    instance.getStaticArgs(), placement)))
         return mlir::failure();
       planned.placements.push_back(std::move(placement));
       continue;
@@ -695,7 +687,7 @@ mlir::LogicalResult ACIRToACSimPass::planModule(ac::ModuleOp module,
                             "ordered named members instead");
       }
       if (failed(planInstanceTarget(array, array.getDefinition(), first,
-                                    planned.name, placement)))
+                                    placement)))
         return mlir::failure();
       planned.placements.push_back(std::move(placement));
       continue;
@@ -711,7 +703,7 @@ mlir::LogicalResult ACIRToACSimPass::planModule(ac::ModuleOp module,
         placement.name =
             cast<StringAttr>(collection.getNames()[index]).getValue().str();
         if (failed(planInstanceTarget(collection, definition.getValue(),
-                                      arguments, planned.name, placement)))
+                                      arguments, placement)))
           return mlir::failure();
         planned.placements.push_back(std::move(placement));
       }
@@ -889,6 +881,52 @@ mlir::LogicalResult ACIRToACSimPass::plan(mlir::ModuleOp input) {
   for (auto [index, module] : llvm::enumerate(modules))
     moduleIndexByName[module.name] = index;
 
+  llvm::SmallVector<uint32_t> dependencyCount(modules.size());
+  llvm::SmallVector<llvm::SmallVector<unsigned, 2>> parentsByChild(
+      modules.size());
+  for (auto [ownerIndex, module] : llvm::enumerate(modules)) {
+    llvm::SmallSet<unsigned, 8> dependencies;
+    auto addDependency = [&](llvm::StringRef definition) {
+      auto target = moduleIndexByName.find(definition);
+      if (target != moduleIndexByName.end())
+        dependencies.insert(target->second);
+    };
+    for (Operation &operation : module.source.getBody().front()) {
+      if (auto instance = dyn_cast<ac::InstanceOp>(operation))
+        addDependency(instance.getDefinition());
+      else if (auto array = dyn_cast<ac::ArrayOp>(operation))
+        addDependency(array.getDefinition());
+      else if (auto collection = dyn_cast<ac::InstancesOp>(operation))
+        for (Attribute definition : collection.getDefinitions())
+          addDependency(cast<FlatSymbolRefAttr>(definition).getValue());
+    }
+    dependencyCount[ownerIndex] = dependencies.size();
+    for (unsigned childIndex : dependencies)
+      parentsByChild[childIndex].push_back(ownerIndex);
+  }
+  std::set<std::pair<std::string, unsigned>> readyModules;
+  for (auto [index, module] : llvm::enumerate(modules))
+    if (dependencyCount[index] == 0)
+      readyModules.emplace(module.name, index);
+  llvm::SmallVector<ModulePlan, 0> orderedModules;
+  orderedModules.reserve(modules.size());
+  while (!readyModules.empty()) {
+    unsigned childIndex = readyModules.begin()->second;
+    readyModules.erase(readyModules.begin());
+    orderedModules.push_back(std::move(modules[childIndex]));
+    for (unsigned parentIndex : parentsByChild[childIndex])
+      if (--dependencyCount[parentIndex] == 0)
+        readyModules.emplace(modules[parentIndex].name, parentIndex);
+  }
+  if (orderedModules.size() != modules.size())
+    return lowerError(input, "ACLOWER-OWNERSHIP",
+                      "module instantiation cycle cannot produce canonical "
+                      "ACSim module order");
+  modules = std::move(orderedModules);
+  moduleIndexByName.clear();
+  for (auto [index, module] : llvm::enumerate(modules))
+    moduleIndexByName[module.name] = index;
+
   // The selected root must be a concrete generated module.
   llvm::StringRef rootName = selectedSystem.getRoot();
   if (!moduleIndexByName.count(rootName))
@@ -909,6 +947,18 @@ mlir::LogicalResult ACIRToACSimPass::plan(mlir::ModuleOp input) {
     return mlir::failure();
   }
   resolution = std::move(*resolved);
+
+  // Module references may point forward in canonical symbol order.  Freeze
+  // every target identity before any body consults it so spelling never
+  // constrains the legal instantiation graph.
+  OpBuilder identityBuilder(input.getContext());
+  for (ModulePlan &module : modules) {
+    llvm::SmallVector<Attribute> staticValues;
+    for (NamedAttribute named : module.source.getStaticParams())
+      staticValues.push_back(named.getValue());
+    module.staticParams = identityBuilder.getArrayAttr(staticValues);
+    module.specialization = moduleFingerprint(module.source);
+  }
 
   // Plan every concrete module body.
   for (auto [index, module] : llvm::enumerate(modules))
@@ -1232,7 +1282,8 @@ void ACIRToACSimPass::emit(mlir::ModuleOp input) {
                                    builder, *record, typeSymbols)));
   }
 
-  // Rank 2: acsim.module declarations, strictly symbol-sorted.
+  // Rank 2: acsim.module declarations, child-before-parent with
+  // symbol-sorted ties between independent nodes.
   for (const ModulePlan &planned : modules)
     emitModuleBody(builder, planned);
 

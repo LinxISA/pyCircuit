@@ -1103,7 +1103,7 @@ LogicalResult verifyDeterministicOrder(ModelOp model) {
       return operation.emitOpError(
           "model declarations are not in deterministic canonical order");
     StringAttr name = symbolName(&operation);
-    if (!first && rank == previousRank && name &&
+    if (!first && rank == previousRank && rank != 2 && name &&
         name.getValue() <= previousName)
       return operation.emitOpError(
           "same-kind model declarations must be strictly symbol-sorted");
@@ -1111,6 +1111,55 @@ LogicalResult verifyDeterministicOrder(ModelOp model) {
     previousName = name ? name.getValue().str() : std::string();
     first = false;
   }
+
+  SmallVector<ModuleOp> moduleOrder;
+  llvm::StringMap<unsigned> moduleIndex;
+  for (ModuleOp module : model.getOps<ModuleOp>()) {
+    moduleIndex[module.getSymName()] = moduleOrder.size();
+    moduleOrder.push_back(module);
+  }
+  SmallVector<uint32_t> dependencyCount(moduleOrder.size());
+  SmallVector<SmallVector<unsigned, 2>> parentsByChild(moduleOrder.size());
+  for (auto [ownerIndex, module] : llvm::enumerate(moduleOrder)) {
+    llvm::SmallSet<unsigned, 8> dependencies;
+    for (Operation &operation : module.getBody().front()) {
+      SymbolRefAttr target;
+      if (auto instance = dyn_cast<InstanceOp>(operation))
+        target = instance.getTargetAttr();
+      else if (auto array = dyn_cast<ArrayOp>(operation))
+        target = array.getTargetAttr();
+      if (!target)
+        continue;
+      auto child = moduleIndex.find(target.getRootReference().getValue());
+      if (child != moduleIndex.end())
+        dependencies.insert(child->second);
+    }
+    dependencyCount[ownerIndex] = dependencies.size();
+    for (unsigned childIndex : dependencies)
+      parentsByChild[childIndex].push_back(ownerIndex);
+  }
+  std::set<std::pair<std::string, unsigned>> readyModules;
+  for (auto [index, module] : llvm::enumerate(moduleOrder))
+    if (dependencyCount[index] == 0)
+      readyModules.emplace(module.getSymName().str(), index);
+  SmallVector<unsigned> expectedModuleOrder;
+  while (!readyModules.empty()) {
+    unsigned childIndex = readyModules.begin()->second;
+    readyModules.erase(readyModules.begin());
+    expectedModuleOrder.push_back(childIndex);
+    for (unsigned parentIndex : parentsByChild[childIndex])
+      if (--dependencyCount[parentIndex] == 0)
+        readyModules.emplace(moduleOrder[parentIndex].getSymName().str(),
+                             parentIndex);
+  }
+  if (expectedModuleOrder.size() != moduleOrder.size())
+    return model.emitOpError(
+        "module instantiation cycle has no canonical declaration order");
+  for (auto [actualIndex, expectedIndex] : llvm::enumerate(expectedModuleOrder))
+    if (actualIndex != expectedIndex)
+      return moduleOrder[actualIndex].emitOpError(
+          "module declarations must use child-before-parent topological "
+          "order with symbol-sorted ties");
 
   for (Operation &operation : model.getBody().front()) {
     auto module = dyn_cast<ModuleOp>(operation);

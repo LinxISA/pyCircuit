@@ -3,8 +3,7 @@
 // RUN: %not %acir_opt --ac-lower-to-acsim --ac-binding-registry=%S/Inputs/pure-fast.json --ac-binding-profile=fast --ac-binding-target=arm64-apple-darwin %t/extern.frozen -o %t/pure.out 2>&1 | %FileCheck %s --check-prefix=PURE
 // RUN: test ! -s %t/pure.out
 // RUN: %acir_opt --verify-each=false --pass-pipeline='builtin.module(ac-freeze-topology)' %t/sort-order.mlir -o %t/sort-order.frozen
-// RUN: %not %acir_opt --ac-lower-to-acsim --ac-binding-profile=fast --ac-binding-target=arm64-apple-darwin %t/sort-order.frozen -o %t/sort.out 2>&1 | %FileCheck %s --check-prefix=SORT
-// RUN: test ! -s %t/sort.out
+// RUN: %acir_opt --ac-lower-to-acsim --ac-binding-profile=fast --ac-binding-target=arm64-apple-darwin %t/sort-order.frozen | %FileCheck %s --check-prefix=SORT
 // RUN: %acir_opt --verify-each=false --pass-pipeline='builtin.module(ac-freeze-topology)' %t/heterogeneous-array.mlir -o %t/heterogeneous-array.frozen
 // RUN: %not %acir_opt --ac-lower-to-acsim --ac-binding-registry=%S/Inputs/stateful-fast.json --ac-binding-profile=fast --ac-binding-target=arm64-apple-darwin %t/heterogeneous-array.frozen -o %t/array.out 2>&1 | %FileCheck %s --check-prefix=ARRAY
 // RUN: test ! -s %t/array.out
@@ -77,7 +76,8 @@ builtin.module attributes {ac.contract_epoch = "0.1"} {
 }
 
 // PURE: error: ACLOWER-OWNERSHIP: ownership placement of external declaration '@Leaf' requires a stateful binding, but binding 'Leaf' has effect 'pure'
-// SORT: error: ACLOWER-OWNERSHIP: canonical ACSim declares modules in strictly symbol-sorted order, so module '@Top' cannot instantiate '@Zebra'; rename so every instantiated module sorts before its parent
+// SORT: acsim.module @Zebra
+// SORT: acsim.module @Top
 // ARRAY: error: ACLOWER-ARRAY: differently specialized array elements are outside the v0.1 lowering stage; lower them as ordered named members instead
 // ACERR: error: ACLOWER-UNSUPPORTED-CONSTRUCT: operation 'ac.time_domain' has no ACSim realization in the v0.1 lowering stage {{.*}}
 // REGISTRY: error: ACLOWER-BINDING-REGISTRY: registry must contain exactly candidates and requests arrays
