@@ -241,6 +241,15 @@ TEST(GfsimObjectTest, NestedModuleWalkVisitsAllLevels) {
   EXPECT_EQ(count, 3);
 }
 
+TEST(GfsimObjectTest, WalkUsesModuleCapabilityRatherThanKindTag) {
+  Module root("root", 1);
+  root.addChild(std::make_unique<SimObject>(ObjectKind::Module, "tagged", 2));
+
+  std::vector<ObjectId> visited;
+  root.walk([&](SimObject &object) { visited.push_back(object.id()); });
+  EXPECT_EQ(visited, (std::vector<ObjectId>{1, 2}));
+}
+
 TEST(GfsimObjectTest, FindChildByName) {
   Module root("root", 1);
   root.addChild(std::make_unique<SimObject>(ObjectKind::Compute, "alu", 2));

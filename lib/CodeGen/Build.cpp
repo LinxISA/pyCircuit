@@ -14,6 +14,7 @@
 
 #include <algorithm>
 #include <array>
+#include <map>
 #include <optional>
 #include <set>
 #include <system_error>
@@ -164,9 +165,10 @@ llvm::Expected<std::string> queryFingerprint(llvm::StringRef executable,
   return llvm::StringRef(*bytes).trim().str();
 }
 
-BuildManifest makeManifest(const BuildRequest &request, const ModelPlan &model,
-                           const SourceBundle &bundle,
-                           llvm::ArrayRef<Artifact> artifacts) {
+llvm::Expected<BuildManifest> makeManifest(const BuildRequest &request,
+                                           const ModelPlan &model,
+                                           const SourceBundle &bundle,
+                                           llvm::ArrayRef<Artifact> artifacts) {
   BuildManifest manifest;
   manifest.project = request.project;
   manifest.system = request.system;
@@ -176,6 +178,25 @@ BuildManifest makeManifest(const BuildRequest &request, const ModelPlan &model,
                        request.toolchain.targetTriple};
   manifest.passPipeline = {"acsim-emit-cxx", "acsim-check-cxx-contract",
                            "compile", "link"};
+  std::map<std::string, std::string> providerNamespaces;
+  for (const TypePlan &type : model.types)
+    if (type.kind == TypeKind::Provider)
+      providerNamespaces.emplace(type.symbol, type.cppType);
+  std::map<std::string, Fingerprint> providerImplementations;
+  for (const BindingPlan &binding : model.bindings) {
+    auto provider = providerNamespaces.find(binding.provider);
+    if (provider == providerNamespaces.end())
+      return buildError("binding references an unknown provider identity");
+    auto [iterator, inserted] = providerImplementations.emplace(
+        provider->second, binding.providerImplementationFingerprint);
+    if (!inserted &&
+        iterator->second != binding.providerImplementationFingerprint)
+      return buildError(
+          "one provider has conflicting implementation identities");
+  }
+  for (const auto &[nameSpace, implementation] : providerImplementations)
+    manifest.providers.push_back(
+        {nameSpace, model.schemaSetFingerprint, implementation});
   for (const ModulePlan &module : model.modules)
     manifest.componentSpecializations.push_back(
         {module.symbol, model.schemaSetFingerprint,
@@ -383,8 +404,10 @@ buildGeneratedModelForTesting(const BuildRequest &request,
                                    BuildFailurePoint::AfterFingerprintQuery))
     return std::move(error);
 
-  BuildManifest manifest = makeManifest(request, *model, *bundle, artifacts);
-  auto manifestBytes = manifest.canonicalJson();
+  auto manifest = makeManifest(request, *model, *bundle, artifacts);
+  if (!manifest)
+    return manifest.takeError();
+  auto manifestBytes = manifest->canonicalJson();
   if (!manifestBytes)
     return manifestBytes.takeError();
   if (auto error =

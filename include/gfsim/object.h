@@ -14,6 +14,8 @@
 
 namespace gfsim {
 
+class Module;
+
 // ── SimObject ─────────────────────────────────────────────────────────
 
 /// Every runtime object has one owning parent (except the root system),
@@ -84,6 +86,10 @@ public:
 
   virtual void reset() {}
 
+  /// Return this object as a hierarchy module without requiring RTTI.
+  virtual Module *asModule() { return nullptr; }
+  virtual const Module *asModule() const { return nullptr; }
+
 protected:
   void setRuntimeFailureCode(std::string_view code) {
     runtimeFailureCode_ = code;
@@ -131,6 +137,9 @@ public:
 
   std::vector<SimObject *> children() const override { return children_; }
 
+  Module *asModule() override { return this; }
+  const Module *asModule() const override { return this; }
+
   void setPath(std::string path) override {
     SimObject::setPath(std::move(path));
     for (SimObject *child : children_)
@@ -150,8 +159,8 @@ public:
   template <typename F> void walk(F &&fn) {
     fn(*this);
     for (auto *c : children_) {
-      if (auto *m = dynamic_cast<Module *>(c))
-        m->walk(fn);
+      if (Module *module = c->asModule())
+        module->walk(fn);
       else
         // NOLINTNEXTLINE(clang-analyzer-core.NonNullParamChecker)
         fn(*c); // the children_ invariant guarantees non-null entries
@@ -162,8 +171,8 @@ public:
   template <typename F> void walk(F &&fn) const {
     fn(*this);
     for (auto *c : children_) {
-      if (auto *m = dynamic_cast<const Module *>(c))
-        m->walk(std::forward<F>(fn));
+      if (const Module *module = c->asModule())
+        module->walk(std::forward<F>(fn));
       else
         fn(*c);
     }

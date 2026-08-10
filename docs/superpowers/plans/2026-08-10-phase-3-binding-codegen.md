@@ -1022,11 +1022,11 @@ git commit -m "feat(codegen): add internal cxx generation driver"
 - Consumes: complete internal driver and compiler library.
 - Produces: proof that a provider extension needs no generic emitter change, equivalent inputs are byte-identical, forbidden mechanisms are absent, and idle objects do not increase active-frontier work.
 
-- [ ] **Step 1: Add the external stateful provider fixture**
+- [x] **Step 1: Add the external stateful provider fixture**
 
 Define one `ac.test.Counter` schema and exact binding record whose C++ class satisfies the gfsim component concept, has typed constructor constants, and exposes Work/Xfer/reset/validate entry points. The fixture files are the only extension-specific production inputs.
 
-- [ ] **Step 2: Add failing extension compile/link/run coverage**
+- [x] **Step 2: Add failing extension compile/link/run coverage**
 
 ```mlir
 // RUN: acir-cxxgen %s --binding-lock=%S/Inputs/extension/extension.binding.json \
@@ -1038,15 +1038,15 @@ Define one `ac.test.Counter` schema and exact binding record whose C++ class sat
 
 The test also records a hash of generic `lib/CodeGen/*.cpp` before/after fixture setup and requires no source modification to recognize `ac.test.Counter`.
 
-- [ ] **Step 3: Add byte-for-byte determinism coverage**
+- [x] **Step 3: Add byte-for-byte determinism coverage**
 
 Build two legal canonical input permutations into separate output roots with identical explicit identities. Compare the model-plan report, generated files, compile plan, build manifest, executable fingerprint query, and build fingerprint with `cmp`; normalize no content after generation.
 
-- [ ] **Step 4: Add forbidden-dependency scanning**
+- [x] **Step 4: Add forbidden-dependency scanning**
 
 Scan generated source and linked dependency metadata for component-name conditionals, `Python`, `pybind`, schema/catalog traversal, `dlopen`/plugin loaders, runtime factories, descriptor interpretation, topology mutation, `co_await`, `std::function`, `dynamic_cast`, and RTTI flags. Allow test fixture names only in generated typed declarations and manifest data, never in generic emitter source branches.
 
-- [ ] **Step 5: Add the active-frontier sparsity test**
+- [x] **Step 5: Add the active-frontier sparsity test**
 
 ```cpp
 TEST(GeneratedModelRuntimeTest, PermanentlyIdleObjectsDoNotIncreaseHotWork) {
@@ -1058,13 +1058,13 @@ TEST(GeneratedModelRuntimeTest, PermanentlyIdleObjectsDoNotIncreaseHotWork) {
 }
 ```
 
-- [ ] **Step 6: Run all conformance tests**
+- [x] **Step 6: Run all conformance tests**
 
 Run: `cmake --build --preset dev-llvm22 --target CodeGenTests acir-cxxgen && build/dev-llvm22/bin/CodeGenTests --gtest_filter='GeneratedModelRuntimeTest.*:GeneratedModelCompileTest.*' && lit -v build/dev-llvm22/test/CodeGen`
 
 Expected: extension, determinism, forbidden scans, compile/link/run, and sparsity all pass.
 
-- [ ] **Step 7: Commit Phase 3 conformance coverage**
+- [x] **Step 7: Commit Phase 3 conformance coverage**
 
 ```bash
 git add test/CodeGen unittests/CodeGen/GeneratedModelRuntimeTest.cpp unittests/CodeGen/CMakeLists.txt

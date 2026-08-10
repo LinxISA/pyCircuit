@@ -256,13 +256,14 @@ int runDriver() {
   auto lock = readFile(bindingLock);
   if (!lock)
     return fail(stopAfter, lock.takeError());
-  auto acsimBytes = readFile(inputFile);
-  if (!acsimBytes)
-    return fail(stopAfter, acsimBytes.takeError());
+  std::string acsimBytes;
+  llvm::raw_string_ostream acsimStream(acsimBytes);
+  module->print(acsimStream);
+  acsimStream.flush();
   request->canonicalACSim = *module;
   request->frozenAcirBytes = std::move(*frozen);
   request->bindingLockBytes = std::move(*lock);
-  request->canonicalACSimBytes = std::move(*acsimBytes);
+  request->canonicalACSimBytes = std::move(acsimBytes);
   auto result = acir::codegen::buildGeneratedModel(*request);
   if (!result)
     return fail(stopAfter, result.takeError());

@@ -4,6 +4,7 @@ add_executable(CodeGenTests
   BuildTest.cpp
   CodeGenTest.cpp
   GeneratedModelCompileTest.cpp
+  GeneratedModelRuntimeTest.cpp
   GeneratorTest.cpp
   ModelPlanTest.cpp
 )
@@ -13,6 +14,7 @@ target_include_directories(CodeGenTests PRIVATE
 )
 target_link_libraries(CodeGenTests PRIVATE
   ACIRCodeGen
+  gfsim
   MLIRIndexDialect
   MLIRParser
   GTest::gtest_main
