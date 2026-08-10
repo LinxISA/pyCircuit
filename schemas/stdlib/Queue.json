@@ -1,0 +1,154 @@
+{
+  "schema_kind": "agentic-circuit-component",
+  "schema_version": "0.1",
+  "contract_epoch": "0.1",
+  "canonical_name": "ac.std.Queue",
+  "family": "transport",
+  "provider_namespace": "ac.std",
+  "stability": "provisional",
+  "cpp_binding": {
+    "header": "gfsim/queue.h",
+    "symbol": "gfsim::Queue",
+    "language": "c++20",
+    "concept": "gfsim::Component",
+    "toolchain_target": "ac-gfsim-cxx20-v0.1",
+    "functional_policy": "none"
+  },
+  "static_parameters": [
+    {
+      "name": "T",
+      "acir_type": "!ac.static_type<ac.std.T>",
+      "required": true,
+      "default": null,
+      "constraint": "ac.std.Packet",
+      "cpp_mapping": "template_argument"
+    },
+    {
+      "name": "capacity",
+      "acir_type": "index",
+      "required": true,
+      "default": null,
+      "constraint": "value >= 1",
+      "cpp_mapping": "constructor_constant"
+    }
+  ],
+  "bindings": [
+    {
+      "name": "input",
+      "binding_kind": "endpoint",
+      "acir_type": "!ac.endpoint<!ac.interface<ac.std.Stream<!ac.packet<ac.std.Transaction>,ac.std.ready_valid>>,consumer>",
+      "direction": "in",
+      "role": "consumer",
+      "cardinality": 1,
+      "linearity": "linear",
+      "ownership": "borrowed",
+      "delegation": "forbidden",
+      "result_mapping": null
+    },
+    {
+      "name": "output",
+      "binding_kind": "endpoint",
+      "acir_type": "!ac.endpoint<!ac.interface<ac.std.Stream<!ac.packet<ac.std.Transaction>,ac.std.ready_valid>>,producer>",
+      "direction": "out",
+      "role": "producer",
+      "cardinality": 1,
+      "linearity": "linear",
+      "ownership": "borrowed",
+      "delegation": "forbidden",
+      "result_mapping": null
+    }
+  ],
+  "results": [],
+  "resources": [
+    {
+      "name": "capacity",
+      "class": "queue",
+      "capacity": "capacity",
+      "lanes": 1,
+      "issue_width": 1,
+      "initiation_interval": 1,
+      "latency_policy": "ac.std.FixedLatency<0>",
+      "reservation_owner": "self",
+      "transaction_classes": [
+        "ac.std.Transaction"
+      ],
+      "statistics": [
+        "accepted_transactions",
+        "queue_occupancy"
+      ]
+    }
+  ],
+  "address_behavior": {
+    "consumes": [
+      "ac.std.system"
+    ],
+    "produces": [
+      "ac.std.system"
+    ],
+    "ranges": [],
+    "translation": "static",
+    "routing": "address_range",
+    "unmapped": "diagnostic"
+  },
+  "protocol_contracts": [
+    {
+      "protocol": "ac.std.ready_valid",
+      "role": "consumer",
+      "ordering": "fifo",
+      "delivery": "exactly_once_on_transfer",
+      "correlation": "none",
+      "completion": "transfer",
+      "failure": "protocol_violation"
+    },
+    {
+      "protocol": "ac.std.ready_valid",
+      "role": "producer",
+      "ordering": "fifo",
+      "delivery": "exactly_once_on_transfer",
+      "correlation": "none",
+      "completion": "transfer",
+      "failure": "protocol_violation"
+    }
+  ],
+  "effect": {
+    "kind": "stateful",
+    "requirements": [
+      "input offers remain immutable until committed transfer"
+    ],
+    "guarantees": [
+      "accepted transactions commit exactly once in stable order"
+    ],
+    "observable_effects": [
+      "accepted_transactions",
+      "stalled_cycles",
+      "queue_occupancy"
+    ],
+    "failure_behavior": "terminate_with_diagnostic"
+  },
+  "activation": {
+    "sources": [
+      "input.transfer",
+      "output.transfer"
+    ],
+    "predicate": "an input is transferable or an output can accept",
+    "wakeup_contract": [
+      "input.transfer",
+      "output.transfer"
+    ],
+    "quiescence": "all inputs are closed and all committed internal state is empty"
+  },
+  "observation": {
+    "probes": [],
+    "counters": [
+      "accepted_transactions",
+      "stalled_cycles"
+    ],
+    "gauges": [
+      "queue_occupancy"
+    ],
+    "histograms": [
+      "latency_cycles"
+    ]
+  },
+  "schema_fingerprint": "sha256:262cf4fe3ddc05c1c3208af4e5abaf18b2c3ade4607643098f8cdf406a20eca3"
+}

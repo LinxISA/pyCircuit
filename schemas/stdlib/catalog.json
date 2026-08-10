@@ -1,0 +1,223 @@
+{
+  "catalog": "ac.std",
+  "version": "0.1",
+  "contract_epoch": "0.1",
+  "entries": [
+    {
+      "canonical_name": "ac.std.AddressTranslator",
+      "availability": "declared_unavailable",
+      "schema_path": "schemas/stdlib/AddressTranslator.json",
+      "schema_fingerprint": "sha256:c22d488e8eb31aad1ea4622aaa7378aabaa6c32beabf8ef5643c48d839859891"
+    },
+    {
+      "canonical_name": "ac.std.Arbiter",
+      "availability": "declared_unavailable",
+      "schema_path": "schemas/stdlib/Arbiter.json",
+      "schema_fingerprint": "sha256:a4a6a470e439a5718be19a5a4b28d672fd311e5b61b4f17903ad2043c36cddd0"
+    },
+    {
+      "canonical_name": "ac.std.Barrier",
+      "availability": "declared_unavailable",
+      "schema_path": "schemas/stdlib/Barrier.json",
+      "schema_fingerprint": "sha256:3a56b5ae8ac041c9b4833dbd6f6533af7da78ee9fd6ecf77d59ae18a8f6793fc"
+    },
+    {
+      "canonical_name": "ac.std.Broadcast",
+      "availability": "declared_unavailable",
+      "schema_path": "schemas/stdlib/Broadcast.json",
+      "schema_fingerprint": "sha256:5b7e671ea8a6c9399f962c1694baf801f67a0b28a145f32984373884889d01df"
+    },
+    {
+      "canonical_name": "ac.std.Bus",
+      "availability": "declared_unavailable",
+      "schema_path": "schemas/stdlib/Bus.json",
+      "schema_fingerprint": "sha256:000e10a2486eea562ea635ea0ce1fcd45b5848bbe447509f3619e6e46bcf55ee"
+    },
+    {
+      "canonical_name": "ac.std.Cache",
+      "availability": "declared_unavailable",
+      "schema_path": "schemas/stdlib/Cache.json",
+      "schema_fingerprint": "sha256:47d7546967df824f6168353baebe17ecc4badc0c902bde4f1cc89c2f316bd89b"
+    },
+    {
+      "canonical_name": "ac.std.Compute",
+      "availability": "available",
+      "schema_path": "schemas/stdlib/Compute.json",
+      "schema_fingerprint": "sha256:0090a8f34eb4a4d92798f399bff5acbf37e7e29914935bfedd38c683646cac1c"
+    },
+    {
+      "canonical_name": "ac.std.Crossbar",
+      "availability": "declared_unavailable",
+      "schema_path": "schemas/stdlib/Crossbar.json",
+      "schema_fingerprint": "sha256:82423e15338a0d6366f543b3260d6010b41fe28b2fcbe4a776ba127b84168329"
+    },
+    {
+      "canonical_name": "ac.std.DependencyTracker",
+      "availability": "declared_unavailable",
+      "schema_path": "schemas/stdlib/DependencyTracker.json",
+      "schema_fingerprint": "sha256:956de836b8906b3bf8ce87c9f3bee565c56e60f2dfac20975b7452a983414fb7"
+    },
+    {
+      "canonical_name": "ac.std.Dispatcher",
+      "availability": "declared_unavailable",
+      "schema_path": "schemas/stdlib/Dispatcher.json",
+      "schema_fingerprint": "sha256:3479f42f6060c16cbd58dc873453d3986354d453d7a28c1dda5ab3eed756129c"
+    },
+    {
+      "canonical_name": "ac.std.Dma",
+      "availability": "declared_unavailable",
+      "schema_path": "schemas/stdlib/Dma.json",
+      "schema_fingerprint": "sha256:613c978d6018e1df55efafc34588d4c9229168d3a97d6bf0be313ac35a52de61"
+    },
+    {
+      "canonical_name": "ac.std.Fork",
+      "availability": "declared_unavailable",
+      "schema_path": "schemas/stdlib/Fork.json",
+      "schema_fingerprint": "sha256:f29c7d77820705f2fd3ac4624a1126c6e8a2f946e03df2ea486e0ebff58d3625"
+    },
+    {
+      "canonical_name": "ac.std.Join",
+      "availability": "declared_unavailable",
+      "schema_path": "schemas/stdlib/Join.json",
+      "schema_fingerprint": "sha256:8eb75a0f4eeb80aca9a2470369d1d0dd2d2d949f03364da139db1a664a3fc8b4"
+    },
+    {
+      "canonical_name": "ac.std.Link",
+      "availability": "available",
+      "schema_path": "schemas/stdlib/Link.json",
+      "schema_fingerprint": "sha256:7466c7ec5950ea6ee636e2f3d11b672f3c6cf19ef52a101731a34058542bbd88"
+    },
+    {
+      "canonical_name": "ac.std.LoadStore",
+      "availability": "declared_unavailable",
+      "schema_path": "schemas/stdlib/LoadStore.json",
+      "schema_fingerprint": "sha256:e95f511a670b8469c398cc6a6dd54fc1c856d499f789a14a4f0407c53ff90760"
+    },
+    {
+      "canonical_name": "ac.std.Memory",
+      "availability": "available",
+      "schema_path": "schemas/stdlib/Memory.json",
+      "schema_fingerprint": "sha256:7008a242c110ff886c345041042dfbf8573d0078fb4ba6b4f5836a3f8cad23bf"
+    },
+    {
+      "canonical_name": "ac.std.MemoryController",
+      "availability": "declared_unavailable",
+      "schema_path": "schemas/stdlib/MemoryController.json",
+      "schema_fingerprint": "sha256:879eab3b325ee329ed5ee7dc6e3c63d4b9e085619e1b1c0ad98abe638e794fd6"
+    },
+    {
+      "canonical_name": "ac.std.MemoryManagement",
+      "availability": "declared_unavailable",
+      "schema_path": "schemas/stdlib/MemoryManagement.json",
+      "schema_fingerprint": "sha256:e0a2bcb0670a8ab58466ceb1a8b0e37db11acb9c08a35c746430e4aa8ad65668"
+    },
+    {
+      "canonical_name": "ac.std.Packetizer",
+      "availability": "declared_unavailable",
+      "schema_path": "schemas/stdlib/Packetizer.json",
+      "schema_fingerprint": "sha256:48fbe5cce2f8e4b7bf3509c4c6f82ab9a3b1c614d9f4f1bf6ff637d053aef350"
+    },
+    {
+      "canonical_name": "ac.std.ProtocolAdapter",
+      "availability": "declared_unavailable",
+      "schema_path": "schemas/stdlib/ProtocolAdapter.json",
+      "schema_fingerprint": "sha256:8dab69635fa792ab8419eac3b00223160a635e8cc8a5f4d287079ba534f4950f"
+    },
+    {
+      "canonical_name": "ac.std.Queue",
+      "availability": "available",
+      "schema_path": "schemas/stdlib/Queue.json",
+      "schema_fingerprint": "sha256:262cf4fe3ddc05c1c3208af4e5abaf18b2c3ade4607643098f8cdf406a20eca3"
+    },
+    {
+      "canonical_name": "ac.std.Reassembler",
+      "availability": "declared_unavailable",
+      "schema_path": "schemas/stdlib/Reassembler.json",
+      "schema_fingerprint": "sha256:ef649b4a4fbed5bca1ba14a7be75214801688e08a40c439412a1d4063b7d6997"
+    },
+    {
+      "canonical_name": "ac.std.RegisterFile",
+      "availability": "declared_unavailable",
+      "schema_path": "schemas/stdlib/RegisterFile.json",
+      "schema_fingerprint": "sha256:15e9ebe8a6c77f5ed423daaeff754113c357cb35d4d69c197ae26dac720a7096"
+    },
+    {
+      "canonical_name": "ac.std.Router",
+      "availability": "declared_unavailable",
+      "schema_path": "schemas/stdlib/Router.json",
+      "schema_fingerprint": "sha256:b079a57806f3c14fb749e6a003e97ec3d98b94f444f6efb21640592d6f433a7e"
+    },
+    {
+      "canonical_name": "ac.std.Scheduler",
+      "availability": "available",
+      "schema_path": "schemas/stdlib/Scheduler.json",
+      "schema_fingerprint": "sha256:4bfcead40435ab8ab51f51fb4ff1b916464a683871051523612aea941e9d6886"
+    },
+    {
+      "canonical_name": "ac.std.Scoreboard",
+      "availability": "declared_unavailable",
+      "schema_path": "schemas/stdlib/Scoreboard.json",
+      "schema_fingerprint": "sha256:1b1ccbc219bf0b78cdb24697319d75b5c5089613bd67463915656340eac6e0c5"
+    },
+    {
+      "canonical_name": "ac.std.Scratchpad",
+      "availability": "declared_unavailable",
+      "schema_path": "schemas/stdlib/Scratchpad.json",
+      "schema_fingerprint": "sha256:23e0e851217737287aa760a2206d70cb142a30cc60b06f95fda8e19765345c80"
+    },
+    {
+      "canonical_name": "ac.std.Sink",
+      "availability": "available",
+      "schema_path": "schemas/stdlib/Sink.json",
+      "schema_fingerprint": "sha256:fbb0ab1bec9068f160e615fe3eac124b5f79f4368ac6b547da3b53e86f0e6ff5"
+    },
+    {
+      "canonical_name": "ac.std.Switch",
+      "availability": "declared_unavailable",
+      "schema_path": "schemas/stdlib/Switch.json",
+      "schema_fingerprint": "sha256:925f9804f07cbfafdd6cb620cf401c2a9236e1dc27f1865ec9e829fd3a7c5bf0"
+    },
+    {
+      "canonical_name": "ac.std.TimeDomainBridge",
+      "availability": "declared_unavailable",
+      "schema_path": "schemas/stdlib/TimeDomainBridge.json",
+      "schema_fingerprint": "sha256:670ce7fccc1f5b3439a4a09e3a09a4e2e23e8de2f94eb3705e8be044061dd3a2"
+    },
+    {
+      "canonical_name": "ac.std.Tlb",
+      "availability": "declared_unavailable",
+      "schema_path": "schemas/stdlib/Tlb.json",
+      "schema_fingerprint": "sha256:7dde792b4936108b41338a5e03fd35c94ea8833218d98ef5dec1464cc56146e4"
+    },
+    {
+      "canonical_name": "ac.std.TraceSource",
+      "availability": "available",
+      "schema_path": "schemas/stdlib/TraceSource.json",
+      "schema_fingerprint": "sha256:4feb89d6d413dffe0e3aa9e75281dd756c6925d581b46db3d6cb16dd7446f870"
+    },
+    {
+      "canonical_name": "ac.std.TrafficSource",
+      "availability": "declared_unavailable",
+      "schema_path": "schemas/stdlib/TrafficSource.json",
+      "schema_fingerprint": "sha256:2c38b59d80d82d10a9a4948b77bb0c1dda0016106af0637ba3fdb827e3c447f4"
+    },
+    {
+      "canonical_name": "ac.std.WidthAdapter",
+      "availability": "declared_unavailable",
+      "schema_path": "schemas/stdlib/WidthAdapter.json",
+      "schema_fingerprint": "sha256:e5451915baf7168be0d4379cc4260809c98c625e64efc54efd2141883376d5ae"
+    },
+    {
+      "canonical_name": "ac.std.ready_valid",
+      "availability": "available",
+      "schema_path": "schemas/stdlib/ready_valid.json",
+      "schema_fingerprint": "sha256:777eae3b26bc0d2c2e50afe8c7a7c975c3ba7bb2f027dcb94a685a9875a6037d"
+    },
+    {
+      "canonical_name": "ac.std.request_response",
+      "availability": "available",
+      "schema_path": "schemas/stdlib/request_response.json",
+      "schema_fingerprint": "sha256:6860c77753b208228d3bfe1bcb801b9df8ff9858a61ccd3cc12e1351c76fa087"
+    }
+  ]
+}

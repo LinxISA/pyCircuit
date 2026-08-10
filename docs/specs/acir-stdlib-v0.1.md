@@ -25,6 +25,13 @@ The canonical machine-readable component record is
 specification defines the semantic constraints that JSON Schema alone cannot
 express.
 
+The frozen epoch `0.1` component records and their explicit profile
+availability are published in
+[`schemas/stdlib/catalog.json`](../../schemas/stdlib/catalog.json). Every
+catalog entry names exactly one `ComponentSchema` file and repeats its verified
+RFC 8785 fingerprint. The catalog is canonical-name ordered; omission is not an
+availability state.
+
 ## Core and library boundary
 
 ACIR Core defines universal semantics such as modules, channels, protocols,

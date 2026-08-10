@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import importlib.util
+import hashlib
 import json
 import re
 import subprocess
@@ -31,6 +32,61 @@ EXPECTED_LLVM = {
     "package_version_policy": "exact",
 }
 
+AVAILABLE_STDLIB_COMPONENTS = {
+    "ac.std.TraceSource",
+    "ac.std.Queue",
+    "ac.std.Scheduler",
+    "ac.std.Compute",
+    "ac.std.Link",
+    "ac.std.Memory",
+    "ac.std.Sink",
+    "ac.std.ready_valid",
+    "ac.std.request_response",
+}
+AVAILABLE_STDLIB_BINDINGS = {
+    "ac.std.TraceSource": ("gfsim/trace.h", "gfsim::TraceSource"),
+    "ac.std.Queue": ("gfsim/queue.h", "gfsim::Queue"),
+    "ac.std.Scheduler": ("gfsim/components.h", "gfsim::Scheduler"),
+    "ac.std.Compute": ("gfsim/components.h", "gfsim::Compute"),
+    "ac.std.Link": ("gfsim/components.h", "gfsim::Link"),
+    "ac.std.Memory": ("gfsim/components.h", "gfsim::Memory"),
+    "ac.std.Sink": ("gfsim/components.h", "gfsim::Sink"),
+    "ac.std.ready_valid": ("gfsim/components.h", "gfsim::ReadyValid"),
+    "ac.std.request_response": (
+        "gfsim/components.h",
+        "gfsim::RequestResponse",
+    ),
+}
+UNAVAILABLE_STDLIB_COMPONENTS = {
+    "ac.std.Arbiter",
+    "ac.std.Dispatcher",
+    "ac.std.Scoreboard",
+    "ac.std.DependencyTracker",
+    "ac.std.Bus",
+    "ac.std.Crossbar",
+    "ac.std.Router",
+    "ac.std.Switch",
+    "ac.std.Dma",
+    "ac.std.Packetizer",
+    "ac.std.Reassembler",
+    "ac.std.LoadStore",
+    "ac.std.RegisterFile",
+    "ac.std.Scratchpad",
+    "ac.std.Cache",
+    "ac.std.Tlb",
+    "ac.std.MemoryController",
+    "ac.std.Fork",
+    "ac.std.Join",
+    "ac.std.Broadcast",
+    "ac.std.Barrier",
+    "ac.std.ProtocolAdapter",
+    "ac.std.WidthAdapter",
+    "ac.std.TimeDomainBridge",
+    "ac.std.AddressTranslator",
+    "ac.std.MemoryManagement",
+    "ac.std.TrafficSource",
+}
+
 
 def check_governance(errors):
     for name in GOVERNANCE_FILES:
@@ -51,7 +107,7 @@ def check_epochs(errors):
     pyproject = (ROOT / "pyproject.toml").read_text()
     match = re.search(r'^contract-epoch\s*=\s*"([^"]+)"\s*$', pyproject, re.MULTILINE)
     if match is None or match.group(1) != EPOCH:
-        errors.append("pyproject.toml must declare contract-epoch = \"0.1\"")
+        errors.append('pyproject.toml must declare contract-epoch = "0.1"')
 
 
 def check_schemas(errors):
@@ -70,6 +126,120 @@ def check_schemas(errors):
             Draft202012Validator.check_schema(document)
         except SchemaError as exc:
             errors.append(f"{path.relative_to(ROOT)} does not compile: {exc.message}")
+
+
+def check_stdlib_catalog(errors):
+    if importlib.util.find_spec("jsonschema") is None:
+        return
+    from jsonschema.validators import Draft202012Validator
+
+    catalog_root = ROOT / "schemas" / "stdlib"
+    catalog_path = catalog_root / "catalog.json"
+    if not catalog_path.is_file():
+        errors.append("missing standard-library catalog: schemas/stdlib/catalog.json")
+        return
+
+    catalog = json.loads(catalog_path.read_text())
+    expected_names = AVAILABLE_STDLIB_COMPONENTS | UNAVAILABLE_STDLIB_COMPONENTS
+    expected_availability = {
+        **{name: "available" for name in AVAILABLE_STDLIB_COMPONENTS},
+        **{name: "declared_unavailable" for name in UNAVAILABLE_STDLIB_COMPONENTS},
+    }
+    if set(catalog) != {"catalog", "version", "contract_epoch", "entries"}:
+        errors.append("standard-library catalog has unknown or missing fields")
+        return
+    if (
+        catalog["catalog"] != "ac.std"
+        or catalog["version"] != "0.1"
+        or catalog["contract_epoch"] != EPOCH
+        or not isinstance(catalog["entries"], list)
+    ):
+        errors.append("standard-library catalog identity is invalid")
+        return
+
+    entries = catalog["entries"]
+    names = [entry.get("canonical_name") for entry in entries]
+    if names != sorted(expected_names):
+        errors.append("standard-library catalog names are incomplete or non-canonical")
+        return
+
+    component_schema = json.loads((ROOT / "schemas/component.schema.json").read_text())
+    validator = Draft202012Validator(component_schema)
+    seen_paths = set()
+    for entry in entries:
+        if set(entry) != {
+            "canonical_name",
+            "availability",
+            "schema_path",
+            "schema_fingerprint",
+        }:
+            errors.append(f"catalog entry has invalid fields: {entry!r}")
+            continue
+        name = entry["canonical_name"]
+        if entry["availability"] != expected_availability[name]:
+            errors.append(f"catalog availability mismatch for {name}")
+        schema_path = ROOT / entry["schema_path"]
+        try:
+            schema_path.relative_to(catalog_root)
+        except ValueError:
+            errors.append(f"catalog schema escapes schemas/stdlib: {name}")
+            continue
+        if not schema_path.is_file():
+            errors.append(f"missing catalog component schema: {entry['schema_path']}")
+            continue
+        seen_paths.add(schema_path.resolve())
+        record = json.loads(schema_path.read_text())
+        record_errors = sorted(
+            validator.iter_errors(record), key=lambda error: list(error.path)
+        )
+        if record_errors:
+            errors.append(
+                f"invalid component schema {name}: {record_errors[0].message}"
+            )
+            continue
+        if record["canonical_name"] != name:
+            errors.append(f"component schema canonical name mismatch for {name}")
+        if record["cpp_binding"] is None:
+            errors.append(f"component schema omits frozen C++ binding for {name}")
+        elif entry["availability"] == "available":
+            binding = record["cpp_binding"]
+            expected_header, expected_symbol = AVAILABLE_STDLIB_BINDINGS[name]
+            if (
+                binding["header"] != expected_header
+                or binding["symbol"] != expected_symbol
+                or binding["concept"] != "gfsim::Component"
+            ):
+                errors.append(f"available component binding mismatch for {name}")
+            header = ROOT / "include" / binding["header"]
+            if not header.is_file():
+                errors.append(f"available component header is missing for {name}")
+        digest_input = dict(record)
+        digest_input.pop("schema_fingerprint", None)
+        canonical = json.dumps(
+            digest_input, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+        ).encode()
+        fingerprint = "sha256:" + hashlib.sha256(canonical).hexdigest()
+        if record["schema_fingerprint"] != fingerprint:
+            errors.append(f"component schema fingerprint mismatch for {name}")
+        if entry["schema_fingerprint"] != fingerprint:
+            errors.append(f"catalog fingerprint mismatch for {name}")
+
+    extra_paths = {
+        path.resolve()
+        for path in catalog_root.glob("*.json")
+        if path.name != "catalog.json"
+    } - seen_paths
+    if extra_paths:
+        errors.append("unlisted standard-library component schema files are present")
+
+    generation = subprocess.run(
+        [sys.executable, ROOT / "scripts/generate-stdlib-catalog.py", "--check"],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+    )
+    if generation.returncode:
+        errors.append(generation.stderr.strip() or "standard-library catalog is stale")
 
 
 def tracked_markdown_files():
@@ -95,7 +265,9 @@ def markdown_prose_lines(path):
     fence_length = 0
     for line in path.read_text().splitlines():
         if fence_character is not None:
-            closing_fence = rf"^ {{0,3}}{re.escape(fence_character)}{{{fence_length},}}\s*$"
+            closing_fence = (
+                rf"^ {{0,3}}{re.escape(fence_character)}{{{fence_length},}}\s*$"
+            )
             if re.match(closing_fence, line):
                 fence_character = None
                 fence_length = 0
@@ -153,12 +325,16 @@ def check_links(errors):
         prose = "\n".join(markdown_prose_lines(path))
         for raw_target in pattern.findall(prose):
             target = markdown_destination(raw_target)
-            if not target or target.startswith("//") or re.match(
-                r"^[a-z][a-z0-9+.-]*:", target, re.IGNORECASE
+            if (
+                not target
+                or target.startswith("//")
+                or re.match(r"^[a-z][a-z0-9+.-]*:", target, re.IGNORECASE)
             ):
                 continue
             destination, separator, fragment = target.partition("#")
-            target_path = path if not destination else path.parent / unquote(destination)
+            target_path = (
+                path if not destination else path.parent / unquote(destination)
+            )
             target_path = target_path.resolve()
             if not target_path.exists():
                 errors.append(f"broken link: {path.relative_to(ROOT)} -> {target}")
@@ -181,7 +357,10 @@ def check_placeholders(errors):
         if path.is_file() and marker.search(path.read_text()):
             errors.append(f"placeholder marker in {name}")
     readme = (ROOT / "README.md").read_text()
-    if "proposed Python" in readme or "No implementation contract is approved yet" in readme:
+    if (
+        "proposed Python" in readme
+        or "No implementation contract is approved yet" in readme
+    ):
         errors.append("README.md still describes a specification-only placeholder")
 
 
@@ -198,6 +377,7 @@ def main():
     check_governance(errors)
     check_epochs(errors)
     check_schemas(errors)
+    check_stdlib_catalog(errors)
     check_links(errors)
     check_placeholders(errors)
     check_llvm_lock(errors)
@@ -205,7 +385,10 @@ def main():
         for error in errors:
             print(f"error: {error}", file=sys.stderr)
         return 1
-    print("repository contracts: OK (10 schemas, epoch 0.1, LLVM 22.1.8)")
+    print(
+        "repository contracts: OK "
+        "(10 public schemas, 36 stdlib components, epoch 0.1, LLVM 22.1.8)"
+    )
     return 0
 
 

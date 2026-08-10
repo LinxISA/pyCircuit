@@ -66,7 +66,7 @@ The branch already carries a runtime foundation (commits `125a72a`, `d44406d`,
 | No-progress handling | T8 complete | Stable aggregate report + detection loop |
 | Termination results | T8 complete | End-to-end completion, cap, deadlock, and cursor tests |
 | Baseline component templates | T5 complete | Exact compile-time identities, concepts, finite Queue/Scheduler behavior |
-| Frozen catalog schemas | Missing | JSON schemas per catalog entry, wired into the schema gate |
+| Frozen catalog schemas | T9 complete | 36 component records, explicit availability, fingerprint/generation gate |
 | Sanitizer builds in CI | Presets exist locally (`asan-llvm22`, `ubsan-llvm22`) | CI job legs |
 
 ## Proposed task breakdown
@@ -96,8 +96,9 @@ The branch already carries a runtime foundation (commits `125a72a`, `d44406d`,
 8. **T8 — Statistics and diagnostics (complete)**: full `StatSnapshot`
    surface, stable component diagnostics, no-progress detection loop, trace
    cap enforcement, and termination end-to-end tests.
-9. **T9 — Frozen catalog schemas**: one JSON schema per catalog entry,
-   unavailable entries explicit; wired into `scripts/check-contracts.py`.
+9. **T9 — Frozen catalog schemas (complete)**: one validated, fingerprinted
+   JSON component schema per catalog entry; unavailable entries explicit;
+   deterministic regeneration wired into `scripts/check-contracts.py`.
 10. **T10 — Sanitizer CI legs**: ASAN and UBSAN job legs reusing the existing
     presets.
 
