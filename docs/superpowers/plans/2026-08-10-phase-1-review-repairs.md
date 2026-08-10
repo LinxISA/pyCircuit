@@ -25,6 +25,7 @@
 **Files:**
 - Modify: `include/acir/Analysis/ProcessStatePlan.h`
 - Modify: `lib/Analysis/ProcessStatePlan.cpp`
+- Modify: `lib/Analysis/ProcessStatePlanInternal.h`
 - Modify: `lib/Analysis/ProcessStateLiveness.cpp`
 - Modify: `lib/Analysis/ProcessStateWake.cpp`
 - Modify: `lib/Analysis/ProcessStateCost.cpp`
@@ -355,4 +356,3 @@
   git add CMakeLists.txt lib tests/install-consumer docs/implementation
   git commit -m "docs(audit): close Phase 1 independent review"
   ```
-
