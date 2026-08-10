@@ -9,6 +9,7 @@ add_dependencies(ACSimDialect
   ACSimTypesIncGen
 )
 target_link_libraries(ACSimDialect PUBLIC
+  MLIRControlFlowDialect
   MLIRSideEffectInterfaces
 )
 target_include_directories(ACSimDialect PUBLIC
