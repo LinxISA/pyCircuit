@@ -273,6 +273,23 @@ static fairness cap. It does not poll its wait condition. A process that can
 loop without suspension, bounded progress, or a state change is invalid or
 produces a capped-execution diagnostic, according to its static build profile.
 
+Generated processes are final CRTP specializations of `ProcessRuntime<T>`.
+Their hot step entry is the statically bound
+`T::executeProcessStep(uint32_t, Epoch)`; no coroutine, virtual step dispatch,
+`std::function`, interpreter, or dynamic continuation frame is permitted. A
+step returns exactly one of continue, suspend, terminate, or fail. Suspension
+commits a non-zero continuation ID, next PC, and exact `(wake_kind, wake_id)` at
+Xfer. A wake resumes the process only when both the subscription and
+continuation ID match exactly.
+
+The generated fairness bound is the compiler-planned `fairness_work` value and
+MUST be non-zero. Exhausting it commits process failure code
+`process_fairness_exceeded`; an invalid zero continuation commits
+`invalid_process_continuation`. Committed process failures propagate to the
+system termination result rather than being reclassified as quiescent success.
+Reset restores the entry PC and clears continuation, subscription, diagnostic,
+and pending proposal state.
+
 ## Protocols and packets
 
 Each bound channel has a statically selected protocol descriptor and

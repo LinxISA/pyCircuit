@@ -191,9 +191,10 @@ bool SimSystem::step() {
   std::vector<ObjectId> committedSources;
   for (ObjectId id : currentWork) {
     bool committed = false;
+    SimObject *object = lookup(id);
     if (const DispatchRow *row = impl_->dispatch.lookup(id))
       committed = row->xfer(row->object, epoch_, XferPhase::Commit);
-    else if (SimObject *object = lookup(id)) {
+    else if (object) {
       committed = object->hasPendingCommit();
       object->doXfer(epoch_);
     }
@@ -201,6 +202,9 @@ bool SimSystem::step() {
       committedSources.push_back(id);
     if (terminated_)
       return false;
+    if (object && !object->runtimeFailureCode().empty())
+      return fail(std::string(object->runtimeFailureCode()),
+                  "runtime object reported a committed failure");
   }
   impl_->eventQueue.doXfer(epoch_);
 

@@ -333,6 +333,11 @@ generator, or component schema.
   `acsim.live.store`, then `acsim.live.load` and a generated pure unwrap inline
   call after resumption. These helpers allocate no runtime object and create no
   generated binding record.
+- The emitted class is final and derives from `gfsim::ProcessRuntime<Derived>`.
+  Its `fairness_work` constant comes directly from `ProcessStatePlan`, and its
+  generated `executeProcessStep` switch returns an explicit continue, suspend,
+  terminate, or fail action for every closed PC case. Runtime continuation and
+  wake matching are exact; generated step dispatch is statically bound.
 
 ### Dispatch and activation
 

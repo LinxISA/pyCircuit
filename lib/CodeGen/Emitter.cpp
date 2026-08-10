@@ -51,9 +51,11 @@ void CppEmitter::endNamespace() {
 }
 
 void CppEmitter::beginClass(const std::string &name, const std::string &base,
-                            bool isStruct) {
+                            bool isStruct, bool isFinal) {
   writeIndent();
   os_ << (isStruct ? "struct " : "class ") << name;
+  if (isFinal)
+    os_ << " final";
   if (!base.empty())
     os_ << " : public " << base;
   os_ << " {\n";
@@ -149,6 +151,11 @@ void CppEmitter::emitConstructor(
       os_ << ", ";
   }
   os_ << ")";
+  if (body.empty()) {
+    os_ << ";\n";
+    atLineStart_ = true;
+    return;
+  }
   if (!initializers.empty()) {
     os_ << "\n";
     writeIndent();
@@ -160,14 +167,10 @@ void CppEmitter::emitConstructor(
       }
     }
   }
-  if (!body.empty()) {
-    os_ << " {\n";
-    os_ << body;
-    writeIndent();
-    os_ << "}\n";
-  } else {
-    os_ << " = default;\n";
-  }
+  os_ << " {\n";
+  os_ << body;
+  writeIndent();
+  os_ << "}\n";
   atLineStart_ = true;
 }
 
@@ -278,44 +281,44 @@ static std::string className(const std::string &moduleName,
   return moduleName + "_" + processName;
 }
 
-SourceFile
-generateProcessHeader(const std::string &moduleName,
-                      const std::string &processName,
-                      const std::vector<std::string> &pcNames,
-                      const std::vector<std::string> &liveSlotTypes,
-                      const std::vector<std::string> &liveSlotNames) {
+SourceFile generateProcessHeader(const std::string &moduleName,
+                                 const std::string &processName,
+                                 const std::vector<std::string> &pcNames,
+                                 const std::vector<std::string> &liveSlotTypes,
+                                 const std::vector<std::string> &liveSlotNames,
+                                 uint64_t fairnessWork) {
 
   std::ostringstream os;
   CppEmitter e(os);
 
   e.emitPragmaOnce();
   e.emitInclude("cstdint");
-  e.emitInclude("gfsim/core.h", true);
-  e.emitInclude("gfsim/object.h", true);
+  e.emitInclude("gfsim/process.h", true);
   e.emitNewline();
 
   std::string ns = "gfsim::generated::" + moduleName;
   e.beginNamespace(ns);
 
   std::string cls = className(moduleName, processName);
-  e.beginClass(cls, "gfsim::SimObject");
+  e.beginClass(cls, "gfsim::ProcessRuntime<" + cls + ">", false, true);
 
   e.emitPublic();
   e.emitEnum("Pc", pcNames);
+  e.emitStaticMember("constexpr uint64_t", "kFairnessWork",
+                     std::to_string(fairnessWork));
   e.emitConstructor(cls,
                     {{"std::string", "name"},
                      {"gfsim::ObjectId", "id"},
                      {"gfsim::SimObject *", "parent"}},
-                    {"SimObject(gfsim::ObjectKind::Process, std::move(name), "
-                     "id, parent)",
-                     "pc_(Pc::" + pcNames.front() + ")"});
+                    {"ProcessRuntime(std::move(name), id, parent, "
+                     "static_cast<uint32_t>(Pc::" +
+                     pcNames.front() + "), " + std::to_string(fairnessWork) +
+                     ")"});
 
-  e.emitMethod("void", "doWork", {{"gfsim::Epoch", "epoch"}}, false, true);
-  e.emitMethod("void", "doXfer", {{"gfsim::Epoch", "epoch"}}, false, true);
-  e.emitMethod("bool", "isRunnable", {{"gfsim::Epoch", "epoch"}}, true, true);
+  e.emitMethod("gfsim::ProcessStep", "executeProcessStep",
+               {{"uint32_t", "pc"}, {"gfsim::Epoch", "epoch"}});
 
   e.emitPrivate();
-  e.emitMember("Pc", "pc_", "Pc::" + pcNames.front());
   for (size_t i = 0; i < liveSlotNames.size(); ++i)
     e.emitMember(liveSlotTypes[i], liveSlotNames[i]);
 
@@ -330,12 +333,17 @@ generateProcessHeader(const std::string &moduleName,
   return sf;
 }
 
-SourceFile
-generateProcessSource(const std::string &moduleName,
-                      const std::string &processName,
-                      const std::vector<std::string> &pcNames,
-                      const std::vector<std::string> &liveSlotTypes,
-                      const std::vector<std::string> &liveSlotNames) {
+SourceFile generateProcessSource(const std::string &moduleName,
+                                 const std::string &processName,
+                                 const std::vector<std::string> &pcNames,
+                                 const std::vector<std::string> &liveSlotTypes,
+                                 const std::vector<std::string> &liveSlotNames,
+                                 const std::vector<std::string> &pcStepBodies,
+                                 uint64_t fairnessWork) {
+
+  if (pcNames.empty() || pcStepBodies.size() != pcNames.size())
+    throw std::invalid_argument(
+        "generated process requires exactly one body for every PC");
 
   std::ostringstream os;
   CppEmitter e(os);
@@ -350,32 +358,21 @@ generateProcessSource(const std::string &moduleName,
   // Constructor definition
   e.emitRaw(cls + "::" + cls +
             "(std::string name, gfsim::ObjectId id, gfsim::SimObject *parent)\n"
-            "    : SimObject(gfsim::ObjectKind::Process, std::move(name), "
-            "id, parent),\n"
-            "      pc_(Pc::" +
-            pcNames.front() + ") {}\n\n");
+            "    : ProcessRuntime(std::move(name), id, parent, "
+            "static_cast<uint32_t>(Pc::" +
+            pcNames.front() + "), " + std::to_string(fairnessWork) +
+            ") {}\n\n");
 
-  // doWork
-  e.emitRaw("void " + cls + "::doWork(gfsim::Epoch epoch) {\n");
-  e.emitSwitch("pc_");
+  e.emitRaw("gfsim::ProcessStep " + cls +
+            "::executeProcessStep(uint32_t pc, gfsim::Epoch epoch) {\n");
+  e.emitSwitch("static_cast<Pc>(pc)");
   for (size_t i = 0; i < pcNames.size(); ++i) {
     e.emitCase("Pc::" + pcNames[i]);
-    e.emitStatement("// state machine logic for " + pcNames[i]);
-    e.emitBreak();
+    e.emitRaw("    " + pcStepBodies[i] + "\n");
   }
   e.emitDefault();
-  e.emitBreak();
+  e.emitRaw("    return gfsim::ProcessStep::fail(\"invalid_process_pc\");\n");
   e.endSwitch();
-  e.emitRaw("}\n\n");
-
-  // doXfer
-  e.emitRaw("void " + cls + "::doXfer(gfsim::Epoch epoch) {\n");
-  e.emitRaw("  // commit live state changes\n");
-  e.emitRaw("}\n\n");
-
-  // isRunnable
-  e.emitRaw("bool " + cls + "::isRunnable(gfsim::Epoch) const {\n");
-  e.emitRaw("  return true;\n");
   e.emitRaw("}\n\n");
 
   e.endNamespace();

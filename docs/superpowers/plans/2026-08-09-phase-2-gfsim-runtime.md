@@ -38,7 +38,7 @@ The branch already carries a runtime foundation (commits `125a72a`, `d44406d`,
   `ProtocolState`; `NoProgressReport`.
 - `lib/gfsim/system.cpp` — `SimSystem`: object registry, work set, global
   event queue, termination classification.
-- `unittests/gfsim/core_test.cpp` — 78 unit tests after T3.
+- `unittests/gfsim/core_test.cpp` — 83 unit tests after T4.
 
 ## Gap analysis vs roadmap scope
 
@@ -53,7 +53,7 @@ The branch already carries a runtime foundation (commits `125a72a`, `d44406d`,
 | Resources / arbitration | T3 complete | Stable-key contention, identity, owner scope, cancellation, conservation |
 | Protocol state | Partial (`ProtocolState`) | Phase-transition invariants |
 | Packets | Partial (`PacketTraits`) | Serialize/deserialize round trips per ACIR packet ops |
-| Processes | Missing (`ObjectKind::Process` only) | Process objects, wake/suspend, fairness caps |
+| Processes | T4 complete | CRTP enum-PC runtime, exact wake/continuation, fairness failure propagation |
 | Diagnostics / statistics | Partial (`StatSnapshot`) | Full statistics surface + diagnostics taxonomy |
 | Trace cursor | Missing (`TraceSource` emits; no cursor) | Cursor API + PTO trace streaming |
 | No-progress handling | Partial (`NoProgressReport`) | Detection loop + reporting tests |
@@ -74,8 +74,9 @@ The branch already carries a runtime foundation (commits `125a72a`, `d44406d`,
 3. **T3 — Resources and arbitration (complete)**: owner/root-transaction
    identity, stable-key contention, owner-scoped release/cancellation, exact
    ready epochs, and conservation invariant tests.
-4. **T4 — Processes**: process objects with wake/suspend, fairness caps,
-   continuation identity (mirrors the compiler-side process-state plan).
+4. **T4 — Processes (complete)**: final CRTP process objects with committed
+   wake/suspend state, exact continuation identity, compiler-supplied fairness
+   caps, reset behavior, and system failure propagation.
 5. **T5 — Components `Queue`/`Scheduler`**: complete the seven baseline
    component templates; per-component concept tests.
 6. **T6 — Protocol and packet runtime**: phase invariants, packet round trips.

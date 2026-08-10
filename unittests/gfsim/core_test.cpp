@@ -2,6 +2,7 @@
 #include "gfsim/core.h"
 #include "gfsim/dispatch.h"
 #include "gfsim/object.h"
+#include "gfsim/process.h"
 #include "gfsim/queue.h"
 #include "gfsim/resource.h"
 
@@ -942,6 +943,120 @@ TEST(GfsimSystemTest, SystemCanBeReset) {
   EXPECT_FALSE(sys.isTerminated());
   EXPECT_EQ(sys.currentEpoch(), (Epoch{0, 0}));
   EXPECT_FALSE(sys.nextEvent());
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// Process runtime
+// ═══════════════════════════════════════════════════════════════════════
+
+class SuspendingProcess final : public ProcessRuntime<SuspendingProcess> {
+public:
+  SuspendingProcess() : ProcessRuntime("process", 0, nullptr, 0, 4) {}
+
+  ProcessStep executeProcessStep(uint32_t pc, Epoch) {
+    ++stepCount;
+    switch (pc) {
+    case 0:
+      return ProcessStep::continueAt(1);
+    case 1:
+      return ProcessStep::suspendAt(
+          2, {.kind = ProcessWakeKind::EventQueue, .id = 7}, 42);
+    default:
+      return ProcessStep::terminate();
+    }
+  }
+
+  uint64_t stepCount = 0;
+};
+
+class UnboundedProcess final : public ProcessRuntime<UnboundedProcess> {
+public:
+  UnboundedProcess() : ProcessRuntime("unbounded", 0, nullptr, 0, 3) {}
+
+  ProcessStep executeProcessStep(uint32_t pc, Epoch) {
+    ++stepCount;
+    return ProcessStep::continueAt(pc);
+  }
+
+  uint64_t stepCount = 0;
+};
+
+class InvalidContinuationProcess final
+    : public ProcessRuntime<InvalidContinuationProcess> {
+public:
+  InvalidContinuationProcess() : ProcessRuntime("invalid", 0, nullptr, 0, 1) {}
+
+  ProcessStep executeProcessStep(uint32_t, Epoch) {
+    return ProcessStep::suspendAt(
+        1, {.kind = ProcessWakeKind::Condition, .id = 1}, 0);
+  }
+};
+
+TEST(GfsimProcessTest, SuspensionCommitsContinuationAndRequiresExactWake) {
+  SuspendingProcess process;
+  EXPECT_TRUE(process.isRunnable({0, 0}));
+  process.doWork({0, 0});
+  EXPECT_EQ(process.stepCount, 2u);
+  EXPECT_EQ(process.pc(), 0u);
+  EXPECT_TRUE(process.hasPendingCommit());
+  process.doXfer({0, 0});
+
+  EXPECT_EQ(process.status(), ProcessStatus::Suspended);
+  EXPECT_EQ(process.pc(), 2u);
+  EXPECT_EQ(process.continuationId(), 42u);
+  EXPECT_FALSE(process.wake({ProcessWakeKind::EventQueue, 8}, 42));
+  EXPECT_FALSE(process.wake({ProcessWakeKind::EventQueue, 7}, 41));
+  EXPECT_TRUE(process.wake({ProcessWakeKind::EventQueue, 7}, 42));
+  EXPECT_TRUE(process.isRunnable({1, 0}));
+
+  process.doWork({1, 0});
+  process.doXfer({1, 0});
+  EXPECT_EQ(process.status(), ProcessStatus::Terminated);
+}
+
+TEST(GfsimProcessTest, FairnessCapProducesDeterministicFailure) {
+  UnboundedProcess process;
+  process.doWork({0, 0});
+  EXPECT_EQ(process.stepCount, 3u);
+  EXPECT_TRUE(process.hasPendingCommit());
+  process.doXfer({0, 0});
+  EXPECT_EQ(process.status(), ProcessStatus::Failed);
+  EXPECT_EQ(process.diagnosticCode(), "process_fairness_exceeded");
+  EXPECT_FALSE(process.isRunnable({1, 0}));
+}
+
+TEST(GfsimProcessTest, ResetRestoresEntryState) {
+  SuspendingProcess process;
+  process.doWork({0, 0});
+  process.doXfer({0, 0});
+  ASSERT_EQ(process.status(), ProcessStatus::Suspended);
+  process.reset();
+  EXPECT_EQ(process.status(), ProcessStatus::Runnable);
+  EXPECT_EQ(process.pc(), 0u);
+  EXPECT_EQ(process.continuationId(), 0u);
+  EXPECT_FALSE(process.hasPendingCommit());
+}
+
+TEST(GfsimProcessTest, InvalidContinuationFailsAtCommitBarrier) {
+  InvalidContinuationProcess process;
+  process.doWork({0, 0});
+  process.doXfer({0, 0});
+  EXPECT_EQ(process.status(), ProcessStatus::Failed);
+  EXPECT_EQ(process.diagnosticCode(), "invalid_process_continuation");
+}
+
+TEST(GfsimProcessTest, ProcessFailureTerminatesTheSystem) {
+  SimSystem system("test");
+  UnboundedProcess process;
+  std::array rows = {makeDispatchRow(&process)};
+  ASSERT_TRUE(system.setDispatchTable(rows));
+  ASSERT_TRUE(system.scheduleWork(0, {0, 0}));
+
+  EXPECT_FALSE(system.step());
+  EXPECT_EQ(system.terminationResult().classification,
+            TerminationClass::Failed);
+  EXPECT_EQ(system.terminationResult().diagnosticCode,
+            "process_fairness_exceeded");
 }
 
 // ═══════════════════════════════════════════════════════════════════════

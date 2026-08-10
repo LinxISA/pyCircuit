@@ -35,7 +35,7 @@ public:
   // ── Class ───────────────────────────────────────────────────────────
 
   void beginClass(const std::string &name, const std::string &base = "",
-                  bool isStruct = false);
+                  bool isStruct = false, bool isFinal = false);
   void endClass();
 
   // ── Access ─────────────────────────────────────────────────────────
@@ -111,14 +111,17 @@ SourceFile generateProcessHeader(const std::string &moduleName,
                                  const std::string &processName,
                                  const std::vector<std::string> &pcNames,
                                  const std::vector<std::string> &liveSlotTypes,
-                                 const std::vector<std::string> &liveSlotNames);
+                                 const std::vector<std::string> &liveSlotNames,
+                                 uint64_t fairnessWork = 1);
 
 /// Generate a deterministic C++ source for a process state machine.
 SourceFile generateProcessSource(const std::string &moduleName,
                                  const std::string &processName,
                                  const std::vector<std::string> &pcNames,
                                  const std::vector<std::string> &liveSlotTypes,
-                                 const std::vector<std::string> &liveSlotNames);
+                                 const std::vector<std::string> &liveSlotNames,
+                                 const std::vector<std::string> &pcStepBodies,
+                                 uint64_t fairnessWork = 1);
 
 /// Generate a deterministic C++ header for a hierarchical module.
 SourceFile generateModuleHeader(const std::string &moduleName,

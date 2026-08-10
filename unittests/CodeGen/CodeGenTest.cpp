@@ -126,6 +126,13 @@ TEST(CodeGenEmitterTest, EmitsConstructor) {
   EXPECT_NE(os.str().find("init()"), std::string::npos);
 }
 
+TEST(CodeGenEmitterTest, ConstructorDeclarationOmitsInitializers) {
+  std::ostringstream os;
+  CppEmitter emitter(os);
+  emitter.emitConstructor("Foo", {{"int", "x"}}, {"x_(x)"});
+  EXPECT_EQ(os.str(), "Foo(int x);\n");
+}
+
 TEST(CodeGenEmitterTest, EmitsMethod) {
   std::ostringstream os;
   CppEmitter e(os);
@@ -152,12 +159,15 @@ TEST(CodeGenEmitterTest, EmitsSwitch) {
 
 TEST(CodeGenGenTest, GenerateProcessHeader) {
   auto sf = generateProcessHeader("Top", "workload", {"entry", "pc00000001"},
-                                  {"uint32_t"}, {"counter_"});
+                                  {"uint32_t"}, {"counter_"}, 17);
   EXPECT_FALSE(sf.content.empty());
   EXPECT_FALSE(sf.fingerprint.empty());
   EXPECT_EQ(sf.fingerprint.size(), 64u);
   EXPECT_NE(sf.content.find("Top_workload"), std::string::npos);
-  EXPECT_NE(sf.content.find("class Top_workload"), std::string::npos);
+  EXPECT_NE(sf.content.find("class Top_workload final"), std::string::npos);
+  EXPECT_NE(sf.content.find("ProcessRuntime<Top_workload>"), std::string::npos);
+  EXPECT_NE(sf.content.find("executeProcessStep"), std::string::npos);
+  EXPECT_NE(sf.content.find("kFairnessWork = 17"), std::string::npos);
   EXPECT_NE(sf.content.find("Pc"), std::string::npos);
   EXPECT_NE(sf.content.find("entry"), std::string::npos);
 }
@@ -171,11 +181,20 @@ TEST(CodeGenGenTest, GenerateProcessHeaderIsDeterministic) {
 
 TEST(CodeGenGenTest, GenerateProcessSource) {
   auto sf = generateProcessSource("Top", "workload", {"entry", "pc00000001"},
-                                  {"uint32_t"}, {"counter_"});
+                                  {"uint32_t"}, {"counter_"},
+                                  {"return gfsim::ProcessStep::continueAt(1);",
+                                   "return gfsim::ProcessStep::terminate();"});
   EXPECT_FALSE(sf.content.empty());
-  EXPECT_NE(sf.content.find("Top_workload::doWork"), std::string::npos);
-  EXPECT_NE(sf.content.find("switch (pc_)"), std::string::npos);
+  EXPECT_NE(sf.content.find("Top_workload::executeProcessStep"),
+            std::string::npos);
+  EXPECT_NE(sf.content.find("switch (static_cast<Pc>(pc))"), std::string::npos);
   EXPECT_NE(sf.content.find("Pc::entry"), std::string::npos);
+  EXPECT_NE(sf.content.find("ProcessStep::continueAt(1)"), std::string::npos);
+}
+
+TEST(CodeGenGenTest, GenerateProcessSourceRequiresOneBodyPerPc) {
+  EXPECT_THROW(generateProcessSource("Top", "workload", {"entry"}, {}, {}, {}),
+               std::invalid_argument);
 }
 
 TEST(CodeGenGenTest, GenerateModuleHeader) {

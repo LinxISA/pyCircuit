@@ -30,6 +30,7 @@ public:
   std::string_view name() const { return name_; }
   std::string_view path() const { return path_; }
   SimObject *parent() const { return parent_; }
+  std::string_view runtimeFailureCode() const { return runtimeFailureCode_; }
 
   /// Set the canonical hierarchy path (called during construction).
   void setPath(std::string path) { path_ = std::move(path); }
@@ -68,11 +69,17 @@ public:
   virtual void reset() {}
 
 protected:
+  void setRuntimeFailureCode(std::string_view code) {
+    runtimeFailureCode_ = code;
+  }
+  void clearRuntimeFailureCode() { runtimeFailureCode_ = {}; }
+
   ObjectKind kind_;
   std::string name_;
   ObjectId id_ = kInvalidObjectId;
   std::string path_;
   SimObject *parent_ = nullptr;
+  std::string_view runtimeFailureCode_;
 };
 
 // ── Module ────────────────────────────────────────────────────────────
