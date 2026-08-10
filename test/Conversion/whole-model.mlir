@@ -31,13 +31,17 @@ builtin.module attributes {ac.contract_epoch = "0.1"} {
   ac.module @Top() -> !ac.endpoint<@Wire, @source> parameters {} graph {
     ac.array @cells of @Cell shape [2]() static [{}, {}]
         id "cells" path "cells" : () -> ()
+    %captured = ac.instance @captured of @Producer() static {}
+        id "captured" path "captured" : () -> !ac.endpoint<@Wire, @source>
     %connected = ac.instance @producer of @Producer() static {}
         id "producer" path "producer" : () -> !ac.endpoint<@Wire, @source>
     ac.instance @consumer of @Consumer(%connected) static {}
         id "consumer" path "consumer" : (!ac.endpoint<@Wire, @source>) -> ()
     %exported = ac.instance @exporter of @Producer() static {}
         id "exporter" path "exporter" : () -> !ac.endpoint<@Wire, @source>
-    ac.process @workload kind "workload" {
+    ac.process @workload kind "workload"
+        captures(%captured : !ac.endpoint<@Wire, @source>) {
+    ^bb0(%capture : !ac.endpoint<@Wire, @source>):
       %ready = arith.constant true
       %value = arith.constant 7 : i32
       ac.wait_until %ready
@@ -62,10 +66,11 @@ builtin.module attributes {ac.contract_epoch = "0.1"} {
 // CHECK: acsim.bind {{.*}} kind "port"
 // CHECK: acsim.export @port_00000000 {{.*}} role @source
 // CHECK: acsim.process @workload
+// CHECK-SAME: captures({{.*}}!acsim.port<@Wire, @source, @cpp_i8, @wire>)
 // CHECK-SAME: pcs [@entry, @pc00000001]
 // CHECK-SAME: live [{{.*}}name = "live00000000"{{.*}}]
 // CHECK: acsim.live.store
 // CHECK: acsim.live.load
 // CHECK: acsim.return {{.*}} : !acsim.port<@Wire, @source, @cpp_i8, @wire>
-// CHECK-COUNT-4: acsim.dispatch
-// CHECK-COUNT-5: acsim.activate
+// CHECK-COUNT-5: acsim.dispatch
+// CHECK-COUNT-7: acsim.activate

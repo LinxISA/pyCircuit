@@ -522,7 +522,8 @@ private:
   mlir::FailureOr<mlir::OwningOpRef<mlir::ModuleOp>> emit(mlir::ModuleOp input);
   void publish(mlir::ModuleOp input, mlir::ModuleOp staged);
   void emitModuleBody(OpBuilder &builder, const ModulePlan &planned);
-  void emitProcessBody(OpBuilder &builder, const PlacementPlan &placement);
+  void emitProcessBody(OpBuilder &builder, const PlacementPlan &placement,
+                       const llvm::DenseMap<Value, Value> &moduleValues);
 
   std::string moduleFingerprint(ac::ModuleOp module);
   std::string processFingerprint(const ModulePlan &module,
@@ -1084,6 +1085,27 @@ mlir::LogicalResult ACIRToACSimPass::planModule(ac::ModuleOp module,
              });
   for (auto &process : processes)
     planned.placements.push_back(std::move(process));
+  for (auto [targetIndex, target] : llvm::enumerate(planned.placements)) {
+    if (target.kind != PlacementPlan::Kind::Process)
+      continue;
+    for (Value capture : target.process.getCaptures()) {
+      std::optional<unsigned> sourceIndex;
+      for (auto [candidateIndex, candidate] :
+           llvm::enumerate(planned.placements))
+        if (llvm::any_of(candidate.outputPorts,
+                         [&](const PortEndpointPlan &output) {
+                           return output.value == capture;
+                         })) {
+          sourceIndex = candidateIndex;
+          break;
+        }
+      if (!sourceIndex)
+        return lowerError(target.process, "ACLOWER-TYPE-MISMATCH",
+                          "process capture has no lowered typed producer");
+      planned.bindingEdges.push_back(
+          {*sourceIndex, static_cast<unsigned>(targetIndex)});
+    }
+  }
 
   if (!moduleReturn ||
       moduleReturn.getNumOperands() != signature.getNumResults())
@@ -1634,8 +1656,9 @@ std::string plannedValueKey(const ProcessPlannedValue &value) {
   return key;
 }
 
-void ACIRToACSimPass::emitProcessBody(OpBuilder &builder,
-                                      const PlacementPlan &placement) {
+void ACIRToACSimPass::emitProcessBody(
+    OpBuilder &builder, const PlacementPlan &placement,
+    const llvm::DenseMap<Value, Value> &moduleValues) {
   MLIRContext *context = builder.getContext();
   const ProcessStatePlan *plan =
       processPlans->lookupByDefinitionKey(placement.processDefinitionKey);
@@ -1654,9 +1677,17 @@ void ACIRToACSimPass::emitProcessBody(OpBuilder &builder,
         {builder.getNamedAttr("name", builder.getStringAttr(slot.name())),
          builder.getNamedAttr("type", TypeAttr::get(type))}));
   }
+  llvm::SmallVector<Value> captures;
+  llvm::SmallVector<Attribute> captureNames;
+  for (const ProcessCapturePlan &capture : plan->captures()) {
+    Value lowered = moduleValues.lookup(capture.operand());
+    assert(lowered && "validated process capture must be projected");
+    captures.push_back(lowered);
+    captureNames.push_back(builder.getStringAttr(capture.name()));
+  }
   auto process = acsim::ProcessOp::create(
-      builder, placement.process->getLoc(), ValueRange{}, placement.name,
-      builder.getArrayAttr({}), plan->pcs().front().name(),
+      builder, placement.process->getLoc(), captures, placement.name,
+      builder.getArrayAttr(captureNames), plan->pcs().front().name(),
       builder.getArrayAttr(pcs), builder.getArrayAttr(liveSlots),
       placement.fairnessCap, placement.specialization, plan->pcs().size());
 
@@ -1668,10 +1699,24 @@ void ACIRToACSimPass::emitProcessBody(OpBuilder &builder,
       state.push_back(block);
       blocks[id.value()] = block;
     }
+    Block *entry = blocks[pc.blocks().front().value()];
+    for (Value capture : captures)
+      entry->addArgument(capture.getType(), placement.process->getLoc());
   }
 
   OpBuilder::InsertionGuard guard(builder);
   llvm::SmallVector<llvm::StringMap<Value>> valuesByPc(plan->pcs().size());
+  for (const ProcessPcPlan &pc : plan->pcs()) {
+    Block *entry = blocks[pc.blocks().front().value()];
+    auto &values = valuesByPc[pc.id().value()];
+    for (auto [capture, argument] :
+         llvm::zip_equal(plan->captures(), entry->getArguments())) {
+      std::string key = std::to_string(static_cast<unsigned>(
+                            ProcessPlannedValueKind::Capture)) +
+                        ":" + std::to_string(capture.id().value());
+      values[key] = argument;
+    }
+  }
   for (const ProcessBlockPlan &blockPlan : plan->blocks()) {
     Block *block = blocks[blockPlan.id().value()];
     builder.setInsertionPointToStart(block);
@@ -2025,7 +2070,7 @@ void ACIRToACSimPass::emitModuleBody(OpBuilder &builder,
   // Rank 8: stateful processes.
   for (const PlacementPlan &placement : planned.placements)
     if (placement.kind == PlacementPlan::Kind::Process)
-      emitProcessBody(builder, placement);
+      emitProcessBody(builder, placement, emittedValues);
 
   acsim::ReturnOp::create(builder, planned.source->getLoc(), returned);
 }
