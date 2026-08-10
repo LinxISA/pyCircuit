@@ -28,7 +28,7 @@
       "acir_type": "!ac.static_type<ac.std.Decoder>",
       "required": true,
       "default": null,
-      "constraint": "ac.std.Packet",
+      "constraint": "gfsim::TraceDecoder<Decoder,Transaction>",
       "cpp_mapping": "template_argument"
     }
   ],
@@ -77,7 +77,7 @@
     ],
     "observable_effects": [
       "accepted_transactions",
-      "stalled_cycles"
+      "trace_position"
     ],
     "failure_behavior": "terminate_with_diagnostic"
   },
@@ -94,11 +94,12 @@
   "observation": {
     "probes": [],
     "counters": [
-      "accepted_transactions",
-      "stalled_cycles"
+      "accepted_transactions"
     ],
-    "gauges": [],
+    "gauges": [
+      "trace_position"
+    ],
     "histograms": []
   },
-  "schema_fingerprint": "sha256:4feb89d6d413dffe0e3aa9e75281dd756c6925d581b46db3d6cb16dd7446f870"
+  "schema_fingerprint": "sha256:4e80c2e6e35a638347397233cea96f25754feb8bf8aedd5c9bf6e5531dddaa2c"
 }

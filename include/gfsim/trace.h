@@ -239,7 +239,7 @@ public:
     proposedSequenceId_ = record.sequenceId;
   }
 
-  void doXfer(Epoch) override {
+  void doXfer(Epoch epoch) override {
     if (acceptProposal_) {
       issuedSequences_.insert(*committedSequenceId_);
       position_.lastCommittedSequenceId = committedSequenceId_;
@@ -249,6 +249,7 @@ public:
       committedOffer_.reset();
       committedSequenceId_.reset();
       acceptProposal_ = false;
+      lastUpdate_ = epoch;
     }
     if (offerProposal_) {
       committedOffer_ = std::move(offerProposal_);
@@ -309,10 +310,16 @@ public:
   }
 
   void collectStatistics(std::vector<StatSnapshot> &out) const override {
+    out.push_back({.name = "accepted_transactions",
+                   .objectPath = std::string(path()),
+                   .kind = StatisticKind::Counter,
+                   .value = position_.nextRecordIndex,
+                   .lastUpdate = lastUpdate_});
     out.push_back({.name = "trace_position",
                    .objectPath = std::string(path()),
                    .kind = StatisticKind::Gauge,
-                   .value = position_.nextRecordIndex});
+                   .value = position_.nextRecordIndex,
+                   .lastUpdate = lastUpdate_});
   }
 
   bool validate() const {
@@ -339,6 +346,7 @@ public:
     issuedSequences_.clear();
     completedSequences_.clear();
     clearRuntimeFailureCode();
+    lastUpdate_ = {};
   }
 
 private:
@@ -354,6 +362,7 @@ private:
   std::set<uint64_t> issuedSequences_;
   std::set<uint64_t> completedSequences_;
   SimSystem *system_ = nullptr;
+  Epoch lastUpdate_;
   static constexpr uint32_t kIssueEventKind = 0x54524345;
 };
 

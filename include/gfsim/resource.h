@@ -99,7 +99,7 @@ public:
 
   void doArbitrate(Epoch) override {
     acceptedProposals_.clear();
-    rejectedTransactions_.clear();
+    proposedRejectedTransactions_.clear();
     std::sort(proposals_.begin(), proposals_.end(), reservationLess);
     uint32_t remaining = availableCapacity();
     for (const Reservation &proposal : proposals_) {
@@ -107,14 +107,15 @@ public:
         acceptedProposals_.push_back(proposal);
         remaining -= proposal.amount;
       } else {
-        rejectedTransactions_.push_back(proposal.transactionId);
+        proposedRejectedTransactions_.push_back(proposal.transactionId);
       }
     }
   }
 
   void doXfer(Epoch epoch) override {
     bool changed = !acceptedProposals_.empty() || !releaseProposals_.empty() ||
-                   !cancellationProposals_.empty();
+                   !cancellationProposals_.empty() ||
+                   !proposedRejectedTransactions_.empty();
     for (const Reservation &reservation : acceptedProposals_) {
       reservations_.emplace(reservation.transactionId, reservation);
       activeCapacity_ += reservation.amount;
@@ -133,10 +134,13 @@ public:
     for (const ReleaseProposal &release : releaseProposals_)
       applyRelease(release);
 
+    rejectedTransactions_ = proposedRejectedTransactions_;
+
     proposals_.clear();
     acceptedProposals_.clear();
     releaseProposals_.clear();
     cancellationProposals_.clear();
+    proposedRejectedTransactions_.clear();
     if (activeCapacity_ > highWatermark_)
       highWatermark_ = activeCapacity_;
     if (changed)
@@ -145,7 +149,8 @@ public:
 
   bool hasPendingCommit() const override {
     return !acceptedProposals_.empty() || !releaseProposals_.empty() ||
-           !cancellationProposals_.empty();
+           !cancellationProposals_.empty() ||
+           !proposedRejectedTransactions_.empty();
   }
 
   RuntimeObjectState runtimeState(Epoch epoch) const override {
@@ -153,7 +158,8 @@ public:
     state.activeReservations = activeCapacity_;
     state.pendingOffers = proposals_.size() + acceptedProposals_.size() +
                           releaseProposals_.size() +
-                          cancellationProposals_.size();
+                          cancellationProposals_.size() +
+                          proposedRejectedTransactions_.size();
     state.quiescent = reservations_.empty() && state.pendingOffers == 0;
     if (!state.quiescent)
       state.reason = state.pendingOffers ? "resource_pending_proposal"
@@ -162,18 +168,18 @@ public:
   }
 
   void collectStatistics(std::vector<StatSnapshot> &out) const override {
-    auto append = [&](std::string name, uint64_t value) {
+    auto append = [&](std::string name, uint64_t value, StatisticKind kind) {
       out.push_back({.name = std::move(name),
                      .objectPath = std::string(path()),
-                     .kind = StatisticKind::Gauge,
+                     .kind = kind,
                      .value = value,
                      .lastUpdate = lastUpdate_});
     };
-    append("active_reservations", activeCapacity_);
-    append("high_watermark", highWatermark_);
-    append("total_reservations", totalReservations_);
-    append("total_releases", totalReleases_);
-    append("total_cancellations", totalCancellations_);
+    append("active_reservations", activeCapacity_, StatisticKind::Gauge);
+    append("reservation_peak", highWatermark_, StatisticKind::Gauge);
+    append("total_reservations", totalReservations_, StatisticKind::Counter);
+    append("total_releases", totalReleases_, StatisticKind::Counter);
+    append("total_cancellations", totalCancellations_, StatisticKind::Counter);
   }
 
   bool hasReservation(uint64_t transactionId) const {
@@ -223,6 +229,7 @@ public:
     proposals_.clear();
     acceptedProposals_.clear();
     rejectedTransactions_.clear();
+    proposedRejectedTransactions_.clear();
     releaseProposals_.clear();
     cancellationProposals_.clear();
     reservations_.clear();
@@ -289,6 +296,7 @@ private:
   std::vector<Reservation> proposals_;
   std::vector<Reservation> acceptedProposals_;
   std::vector<uint64_t> rejectedTransactions_;
+  std::vector<uint64_t> proposedRejectedTransactions_;
   std::vector<ReleaseProposal> releaseProposals_;
   std::vector<uint64_t> cancellationProposals_;
   std::map<uint64_t, Reservation> reservations_;

@@ -113,9 +113,7 @@
       "stalled_cycles"
     ],
     "gauges": [],
-    "histograms": [
-      "latency_cycles"
-    ]
+    "histograms": []
   },
-  "schema_fingerprint": "sha256:000e10a2486eea562ea635ea0ce1fcd45b5848bbe447509f3619e6e46bcf55ee"
+  "schema_fingerprint": "sha256:ecfcd58082792c3667c3b414dc3ba3f4256d4d31312546df7b1a01c770cf0b46"
 }

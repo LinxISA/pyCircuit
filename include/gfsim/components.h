@@ -69,10 +69,12 @@ public:
     }
   }
 
-  void doXfer(Epoch) override {
+  void doXfer(Epoch epoch) override {
     if (hasOutput_) {
       output_ = outputProposal_;
       hasOutput_ = false;
+      ++totalComputations_;
+      lastUpdate_ = epoch;
     }
     hasInput_ = false;
   }
@@ -82,12 +84,22 @@ public:
   const Output &output() const { return output_; }
   bool isRunnable(Epoch) const override { return hasInput_; }
 
+  void collectStatistics(std::vector<StatSnapshot> &out) const override {
+    out.push_back({.name = "completed_transactions",
+                   .objectPath = std::string(path()),
+                   .kind = StatisticKind::Counter,
+                   .value = totalComputations_,
+                   .lastUpdate = lastUpdate_});
+  }
+
   void reset() override {
     output_ = {};
     outputProposal_ = {};
     inputProposal_ = {};
     hasInput_ = false;
     hasOutput_ = false;
+    totalComputations_ = 0;
+    lastUpdate_ = {};
   }
 
 private:
@@ -97,6 +109,8 @@ private:
   Input inputProposal_{};
   bool hasInput_ = false;
   bool hasOutput_ = false;
+  uint64_t totalComputations_ = 0;
+  Epoch lastUpdate_;
 };
 
 // ── Sink ──────────────────────────────────────────────────────────────
@@ -112,12 +126,15 @@ public:
 
   void receive(T value) { receivedProposals_.push_back(std::move(value)); }
 
-  void doXfer(Epoch) override {
+  void doXfer(Epoch epoch) override {
+    bool changed = !receivedProposals_.empty();
     for (auto v : receivedProposals_) {
       received_.push_back(v);
       ++totalReceived_;
     }
     receivedProposals_.clear();
+    if (changed)
+      lastUpdate_ = epoch;
   }
 
   bool hasPendingCommit() const override { return !receivedProposals_.empty(); }
@@ -127,16 +144,26 @@ public:
 
   bool isRunnable(Epoch) const override { return false; }
 
+  void collectStatistics(std::vector<StatSnapshot> &out) const override {
+    out.push_back({.name = "accepted_transactions",
+                   .objectPath = std::string(path()),
+                   .kind = StatisticKind::Counter,
+                   .value = totalReceived_,
+                   .lastUpdate = lastUpdate_});
+  }
+
   void reset() override {
     received_.clear();
     receivedProposals_.clear();
     totalReceived_ = 0;
+    lastUpdate_ = {};
   }
 
 private:
   std::vector<T> received_;
   std::vector<T> receivedProposals_;
   uint64_t totalReceived_ = 0;
+  Epoch lastUpdate_;
 };
 
 // ── Link ──────────────────────────────────────────────────────────────
@@ -155,11 +182,13 @@ public:
     hasProposal_ = true;
   }
 
-  void doXfer(Epoch) override {
+  void doXfer(Epoch epoch) override {
     if (hasProposal_) {
       forwarded_ = forwardedProposal_;
       hasForwarded_ = true;
       hasProposal_ = false;
+      ++totalTransfers_;
+      lastUpdate_ = epoch;
     }
   }
 
@@ -170,11 +199,21 @@ public:
 
   bool isRunnable(Epoch) const override { return hasProposal_; }
 
+  void collectStatistics(std::vector<StatSnapshot> &out) const override {
+    out.push_back({.name = "completed_transactions",
+                   .objectPath = std::string(path()),
+                   .kind = StatisticKind::Counter,
+                   .value = totalTransfers_,
+                   .lastUpdate = lastUpdate_});
+  }
+
   void reset() override {
     forwarded_ = {};
     forwardedProposal_ = {};
     hasProposal_ = false;
     hasForwarded_ = false;
+    totalTransfers_ = 0;
+    lastUpdate_ = {};
   }
 
 private:
@@ -182,6 +221,8 @@ private:
   T forwardedProposal_{};
   bool hasProposal_ = false;
   bool hasForwarded_ = false;
+  uint64_t totalTransfers_ = 0;
+  Epoch lastUpdate_;
 };
 
 // ── Memory ────────────────────────────────────────────────────────────
@@ -211,22 +252,38 @@ public:
     return storage_[addr];
   }
 
-  void doXfer(Epoch) override {
+  void doXfer(Epoch epoch) override {
+    size_t committedWrites = writeProposals_.size();
     for (auto &[addr, value] : writeProposals_)
       storage_[addr] = value;
     writeProposals_.clear();
+    totalWrites_ += committedWrites;
+    if (committedWrites != 0)
+      lastUpdate_ = epoch;
   }
 
   bool hasPendingCommit() const override { return !writeProposals_.empty(); }
 
+  void collectStatistics(std::vector<StatSnapshot> &out) const override {
+    out.push_back({.name = "accepted_transactions",
+                   .objectPath = std::string(path()),
+                   .kind = StatisticKind::Counter,
+                   .value = totalWrites_,
+                   .lastUpdate = lastUpdate_});
+  }
+
   void reset() override {
     std::fill(storage_.begin(), storage_.end(), T{});
     writeProposals_.clear();
+    totalWrites_ = 0;
+    lastUpdate_ = {};
   }
 
 private:
   std::vector<T> storage_;
   std::map<size_t, T> writeProposals_;
+  uint64_t totalWrites_ = 0;
+  Epoch lastUpdate_;
 };
 
 // ── Scheduler ────────────────────────────────────────────────────────
@@ -324,17 +381,17 @@ public:
   }
 
   void collectStatistics(std::vector<StatSnapshot> &out) const override {
-    auto append = [&](std::string name, uint64_t value) {
+    auto append = [&](std::string name, uint64_t value, StatisticKind kind) {
       out.push_back({.name = std::move(name),
                      .objectPath = std::string(path()),
-                     .kind = StatisticKind::Gauge,
+                     .kind = kind,
                      .value = value,
                      .lastUpdate = lastUpdate_});
     };
-    append("occupancy", committed_.size());
-    append("high_watermark", highWatermark_);
-    append("total_scheduled", totalScheduled_);
-    append("total_pops", totalPops_);
+    append("queue_occupancy", committed_.size(), StatisticKind::Gauge);
+    append("queue_occupancy_peak", highWatermark_, StatisticKind::Gauge);
+    append("accepted_transactions", totalScheduled_, StatisticKind::Counter);
+    append("completed_transactions", totalPops_, StatisticKind::Counter);
   }
 
   bool isRunnable(Epoch) const override { return !proposals_.empty(); }
@@ -471,7 +528,7 @@ public:
   }
 
   void collectStatistics(std::vector<StatSnapshot> &out) const override {
-    out.push_back({.name = "transfers",
+    out.push_back({.name = "completed_transactions",
                    .objectPath = std::string(path()),
                    .kind = StatisticKind::Counter,
                    .value = transferCount_,
@@ -617,10 +674,15 @@ public:
   }
 
   void collectStatistics(std::vector<StatSnapshot> &out) const override {
-    out.push_back({.name = "completed",
+    out.push_back({.name = "completed_transactions",
                    .objectPath = std::string(path()),
                    .kind = StatisticKind::Counter,
                    .value = totalCompleted_,
+                   .lastUpdate = lastUpdate_});
+    out.push_back({.name = "active_correlations",
+                   .objectPath = std::string(path()),
+                   .kind = StatisticKind::Gauge,
+                   .value = active_.size(),
                    .lastUpdate = lastUpdate_});
   }
 

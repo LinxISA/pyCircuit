@@ -56,6 +56,9 @@ Every runtime object has:
 
 Object IDs and hierarchy paths MUST be unique within a generated model.
 Pointers and host allocation addresses are never observable identities.
+Before the first epoch, static preflight rejects an invalid ID or any distinct
+registry, hierarchy, or dispatch-table objects that claim the same stable ID or
+non-empty canonical path. Reparenting a module refreshes every descendant path.
 
 ### `Module`
 
@@ -175,7 +178,7 @@ For contract epoch `0.1`, the generated/runtime C++20 boundary is the following
 logical layout (the declarations in `gfsim/dispatch.h` are canonical):
 
 ```cpp
-enum class XferPhase : uint8_t { Arbitrate, Commit };
+enum class XferPhase : uint8_t { Arbitrate, Probe, Commit };
 
 struct DispatchRow {
   ObjectId id;
@@ -194,10 +197,13 @@ object specialization from `object`. Installation MUST reject a null pointer,
 missing thunk, non-dense ID, kind mismatch, ID mismatch, or failed object
 validation. For one immutable Work snapshot, the scheduler invokes all `work`
 thunks in ascending row order, then all `xfer(..., Arbitrate)` thunks in that
-order, then all `xfer(..., Commit)` thunks in that order. The arbitration call
-returns false. The commit call snapshots `hasPendingCommit()` before Xfer and
-returns that value, identifying exactly which activation sources committed.
-Reset uses the same ascending row order.
+order. For each scheduled row, `xfer(..., Probe)` reports whether Commit would
+publish state without mutating it. The runtime rejects a second stateful commit
+at the same integer tick before invoking `xfer(..., Commit)`. The arbitration
+call returns false, Probe returns the pending state, and Commit returns the same
+pending state after applying Xfer, identifying exactly which activation sources
+committed. A Probe/Commit mismatch is a contract failure. Reset uses the same
+ascending row order.
 
 Activation adjacency uses canonical compressed arrays
 `activation_offsets[object_count + 1]` and
@@ -265,6 +271,9 @@ a required validation invariant: the sum of active reservation amounts equals
 the active-capacity counter and never exceeds total capacity. Ready reservation
 queries use exact epoch equality and return the same stable order used by local
 arbitration.
+Accepted and rejected arbitration results remain private proposals until Xfer;
+the previously committed rejection result remains observable throughout
+arbitration and is replaced only at the commit barrier.
 
 ## Processes
 
@@ -445,6 +454,8 @@ maximum committed event count, maximum causal deltas per tick, trace record
 count, and validation traversal that it enables. Reaching a cap is not success;
 it produces an incomplete result unless the triggering condition is a contract
 violation, in which case it produces a failed result.
+The scheduler does not jump past a time cap to a later event. It terminates at
+the exact declared cap epoch and leaves the later event pending.
 
 When unfinished work remains and no object is runnable and no future event can
 wake it, the runtime reports no progress. The diagnostic includes blocked

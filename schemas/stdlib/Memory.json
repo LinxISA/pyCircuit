@@ -73,8 +73,7 @@
         "ac.std.Transaction"
       ],
       "statistics": [
-        "accepted_transactions",
-        "queue_occupancy"
+        "accepted_transactions"
       ]
     }
   ],
@@ -119,9 +118,7 @@
       "accepted transactions commit exactly once in stable order"
     ],
     "observable_effects": [
-      "accepted_transactions",
-      "stalled_cycles",
-      "queue_occupancy"
+      "accepted_transactions"
     ],
     "failure_behavior": "terminate_with_diagnostic"
   },
@@ -140,15 +137,10 @@
   "observation": {
     "probes": [],
     "counters": [
-      "accepted_transactions",
-      "stalled_cycles"
+      "accepted_transactions"
     ],
-    "gauges": [
-      "queue_occupancy"
-    ],
-    "histograms": [
-      "latency_cycles"
-    ]
+    "gauges": [],
+    "histograms": []
   },
-  "schema_fingerprint": "sha256:7008a242c110ff886c345041042dfbf8573d0078fb4ba6b4f5836a3f8cad23bf"
+  "schema_fingerprint": "sha256:285c66a9426b51102ae2979522bbba601af9b8d89964a4aab8b1eb74db17a9e0"
 }

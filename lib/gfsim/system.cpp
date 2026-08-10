@@ -21,6 +21,9 @@ struct SimSystem::Impl {
   NoProgressReport noProgress;
   size_t traceOwnerCount = 0;
   bool traceEof = true;
+  bool preflightValidated = false;
+  std::map<ObjectId, Tick> lastCommitTick;
+  std::optional<Tick> eventQueueLastCommitTick;
 };
 
 SimSystem::~SimSystem() = default;
@@ -63,6 +66,44 @@ std::vector<SimObject *> SimSystem::runtimeObjects() const {
   for (const auto &[id, object] : objects)
     result.push_back(object);
   return result;
+}
+
+bool SimSystem::validateRuntimeIdentities() {
+  std::map<ObjectId, const SimObject *> ids;
+  std::map<std::string, const SimObject *> paths;
+  std::string conflict;
+  auto record = [&](const SimObject *object) {
+    if (!object || !conflict.empty() || object == this)
+      return;
+    if (object->id() == kInvalidObjectId) {
+      conflict = "runtime object has the invalid object ID";
+      return;
+    }
+    if (auto [position, inserted] = ids.emplace(object->id(), object);
+        !inserted && position->second != object) {
+      conflict = "stable object ID " + std::to_string(object->id()) +
+                 " names more than one runtime object";
+      return;
+    }
+    if (object->path().empty())
+      return;
+    if (auto [position, inserted] =
+            paths.emplace(std::string(object->path()), object);
+        !inserted && position->second != object)
+      conflict = "canonical object path " + std::string(object->path()) +
+                 " names more than one runtime object";
+  };
+
+  for (const auto &[id, object] : impl_->objects)
+    record(object);
+  root_->walk([&](const SimObject &object) { record(&object); });
+  for (ObjectId id = 0; id < impl_->dispatch.size(); ++id)
+    if (const DispatchRow *row = impl_->dispatch.lookup(id))
+      record(static_cast<const SimObject *>(row->object));
+  if (!conflict.empty())
+    return fail("duplicate_object_identity", std::move(conflict));
+  impl_->preflightValidated = true;
+  return true;
 }
 
 void SimSystem::refreshRuntimeSummary() {
@@ -149,6 +190,7 @@ void SimSystem::registerObject(SimObject *obj) {
     return;
   }
   impl_->objects[obj->id()] = obj;
+  impl_->preflightValidated = false;
 }
 
 bool SimSystem::setDispatchTable(std::span<const DispatchRow> rows) {
@@ -158,6 +200,7 @@ bool SimSystem::setDispatchTable(std::span<const DispatchRow> rows) {
                 "dispatch rows must be complete and densely indexed");
   impl_->dispatch = candidate;
   impl_->activation = ActivationPlan{};
+  impl_->preflightValidated = false;
   return true;
 }
 
@@ -224,6 +267,8 @@ std::optional<Event> SimSystem::nextEvent() const {
 
 bool SimSystem::step() {
   if (terminated_)
+    return false;
+  if (!impl_->preflightValidated && !validateRuntimeIdentities())
     return false;
   if (stopAtTraceCap())
     return false;
@@ -296,21 +341,43 @@ bool SimSystem::step() {
 
   std::vector<ObjectId> committedSources;
   for (ObjectId id : currentWork) {
-    bool committed = false;
     SimObject *object = lookup(id);
-    if (const DispatchRow *row = impl_->dispatch.lookup(id))
+    const DispatchRow *row = impl_->dispatch.lookup(id);
+    bool willCommit = row ? row->xfer(row->object, epoch_, XferPhase::Probe)
+                          : object && object->hasPendingCommit();
+    if (willCommit) {
+      auto previousCommit = impl_->lastCommitTick.find(id);
+      if (previousCommit != impl_->lastCommitTick.end() &&
+          previousCommit->second == epoch_.time)
+        return fail("multiple_stateful_commits",
+                    "a stateful object cannot commit twice in one tick");
+    }
+
+    bool committed = false;
+    if (row)
       committed = row->xfer(row->object, epoch_, XferPhase::Commit);
     else if (object) {
-      committed = object->hasPendingCommit();
       object->doXfer(epoch_);
+      committed = willCommit;
     }
-    if (committed)
+    if (committed != willCommit)
+      return fail("xfer_probe_mismatch",
+                  "Xfer pending state changed between probe and commit");
+    if (committed) {
       committedSources.push_back(id);
+      impl_->lastCommitTick[id] = epoch_.time;
+    }
     if (terminated_)
       return false;
     if (object && !object->runtimeFailureCode().empty())
       return fail(std::string(object->runtimeFailureCode()),
                   "runtime object reported a committed failure");
+  }
+  if (impl_->eventQueue.hasPendingCommit()) {
+    if (impl_->eventQueueLastCommitTick == epoch_.time)
+      return fail("multiple_stateful_commits",
+                  "the event queue cannot commit twice in one tick");
+    impl_->eventQueueLastCommitTick = epoch_.time;
   }
   impl_->eventQueue.doXfer(epoch_);
 
@@ -363,6 +430,16 @@ bool SimSystem::step() {
   if (*nextEpoch <= epoch_)
     return fail("non_monotonic_epoch",
                 "scheduler failed to advance beyond the committed epoch");
+  if (nextEpoch->time >= maxTicks_) {
+    epoch_ = {maxTicks_, 0};
+    terminated_ = true;
+    result_.classification = TerminationClass::Incomplete;
+    result_.finalEpoch = epoch_;
+    result_.committedEventCount = impl_->committedEventCount;
+    result_.terminationCap = maxTicks_;
+    result_.diagnosticCode = "max_ticks_reached";
+    return false;
+  }
   epoch_ = *nextEpoch;
   return true;
 }
@@ -396,13 +473,18 @@ void SimSystem::reset() {
   impl_->noProgress = {};
   impl_->traceOwnerCount = 0;
   impl_->traceEof = true;
+  impl_->preflightValidated = false;
+  impl_->lastCommitTick.clear();
+  impl_->eventQueueLastCommitTick.reset();
   if (!impl_->dispatch.empty()) {
     for (ObjectId id = 0; id < impl_->dispatch.size(); ++id) {
       const DispatchRow *row = impl_->dispatch.lookup(id);
       row->reset(row->object);
     }
   } else {
-    root_->reset();
+    for (SimObject *object : runtimeObjects())
+      if (object->kind() != ObjectKind::Module)
+        object->reset();
   }
 }
 

@@ -216,6 +216,19 @@ TEST(GfsimObjectTest, ChildPathReflectsHierarchy) {
   EXPECT_NE(root.path(), root.children()[0]->path());
 }
 
+TEST(GfsimObjectTest, ReparentingRefreshesAllNestedCanonicalPaths) {
+  Module root("top", 1);
+  root.setPath("/top");
+  auto mid = std::make_unique<Module>("mid", 2);
+  mid->addChild(
+      std::make_unique<SimObject>(ObjectKind::Sink, "leaf", 3, nullptr));
+  root.addChild(std::move(mid));
+
+  ASSERT_EQ(root.children()[0]->children().size(), 1u);
+  EXPECT_EQ(root.children()[0]->path(), "/top/mid");
+  EXPECT_EQ(root.children()[0]->children()[0]->path(), "/top/mid/leaf");
+}
+
 // ═══════════════════════════════════════════════════════════════════════
 // Queue
 // ═══════════════════════════════════════════════════════════════════════
@@ -496,6 +509,18 @@ TEST(GfsimResourceTest, ContentionUsesStableKeysNotProposalOrder) {
     EXPECT_EQ(resource.rejectedTransactions(), (std::vector<uint64_t>{20}));
     EXPECT_TRUE(resource.validate());
   }
+}
+
+TEST(GfsimResourceTest, ArbitrationKeepsRejectedStatePrivateUntilXfer) {
+  Resource resource("resource", 1, nullptr, 1);
+  ASSERT_TRUE(resource.proposeReserve(1, 1, {0, 0}, 10));
+  ASSERT_TRUE(resource.proposeReserve(2, 1, {0, 0}, 20));
+
+  resource.doArbitrate({0, 0});
+  EXPECT_TRUE(resource.rejectedTransactions().empty());
+  EXPECT_TRUE(resource.hasPendingCommit());
+  resource.doXfer({0, 0});
+  EXPECT_EQ(resource.rejectedTransactions(), (std::vector<uint64_t>{20}));
 }
 
 TEST(GfsimResourceTest, ExplicitPriorityPrecedesStableTieBreakKeys) {
@@ -1219,6 +1244,29 @@ TEST(GfsimStatisticsTest, SystemSnapshotsAreStableByPathAndName) {
   EXPECT_EQ(snapshots[1].name, "zeta");
 }
 
+TEST(GfsimStatisticsTest, QueueSnapshotsUseFrozenNamesAndKinds) {
+  Queue<uint64_t> queue("queue", 1, nullptr, 2);
+  queue.setPath("/system/queue");
+  ASSERT_TRUE(queue.proposePush(7));
+  queue.doXfer({3, 0});
+  std::vector<StatSnapshot> snapshots;
+  queue.collectStatistics(snapshots);
+  ASSERT_EQ(snapshots.size(), 4u);
+
+  auto find = [&](std::string_view name) -> const StatSnapshot * {
+    auto position = std::ranges::find(snapshots, name, &StatSnapshot::name);
+    return position == snapshots.end() ? nullptr : &*position;
+  };
+  ASSERT_NE(find("queue_occupancy"), nullptr);
+  EXPECT_EQ(find("queue_occupancy")->kind, StatisticKind::Gauge);
+  ASSERT_NE(find("queue_occupancy_peak"), nullptr);
+  EXPECT_EQ(find("queue_occupancy_peak")->kind, StatisticKind::Gauge);
+  ASSERT_NE(find("accepted_transactions"), nullptr);
+  EXPECT_EQ(find("accepted_transactions")->kind, StatisticKind::Counter);
+  ASSERT_NE(find("completed_transactions"), nullptr);
+  EXPECT_EQ(find("completed_transactions")->kind, StatisticKind::Counter);
+}
+
 TEST(GfsimSystemTest, NonEmptyQueueWithoutWakeFailsWithNoProgressReport) {
   SimSystem system;
   Queue<uint64_t> queue("queue", 1, nullptr, 2);
@@ -1398,6 +1446,39 @@ private:
   bool pending_ = false;
 };
 
+class RepeatedCommitDispatchObject : public SimObject {
+public:
+  RepeatedCommitDispatchObject(ObjectId id, SimSystem &system)
+      : SimObject(ObjectKind::Memory, "repeated", id), system_(system) {}
+
+  void doWork(Epoch epoch) override {
+    pending_ = true;
+    system_.scheduleWork(id(), epoch);
+  }
+  void doXfer(Epoch) override { pending_ = false; }
+  bool hasPendingCommit() const override { return pending_; }
+  bool validate() const { return true; }
+
+private:
+  SimSystem &system_;
+  bool pending_ = false;
+};
+
+class SameTickEventChainObject : public SimObject {
+public:
+  SameTickEventChainObject(ObjectId id, SimSystem &system)
+      : SimObject(ObjectKind::Process, "event_chain", id), system_(system) {}
+
+  void doWork(Epoch epoch) override {
+    system_.scheduleEvent({epoch, id(), 1, eventCount++});
+  }
+  bool validate() const { return true; }
+
+private:
+  SimSystem &system_;
+  uint64_t eventCount = 0;
+};
+
 class SnapshotWriter : public SimObject {
 public:
   SnapshotWriter(ObjectId id, uint64_t &state)
@@ -1471,6 +1552,20 @@ TEST(GfsimSystemTest, StaticDispatchRejectsMismatchedObjectKind) {
   EXPECT_FALSE(system.setDispatchTable(rows));
   EXPECT_EQ(system.terminationResult().diagnosticCode,
             "invalid_dispatch_table");
+}
+
+TEST(GfsimSystemTest, RegistryAndDispatchCannotShadowOneStableObjectId) {
+  SimSystem system("test");
+  std::vector<std::string> log;
+  RecordingDispatchObject registered(0, log);
+  RecordingDispatchObject dispatched(0, log);
+  system.registerObject(&registered);
+  std::array rows = {makeDispatchRow(&dispatched)};
+  ASSERT_TRUE(system.setDispatchTable(rows));
+
+  TerminationResult result = system.run();
+  EXPECT_EQ(result.classification, TerminationClass::Failed);
+  EXPECT_EQ(result.diagnosticCode, "duplicate_object_identity");
 }
 
 TEST(GfsimSystemTest, StaticDispatchResetUsesDenseThunkOrder) {
@@ -1584,6 +1679,36 @@ TEST(GfsimSystemTest, DeltaCycleLimitFailsAtExactBoundary) {
   EXPECT_EQ(object.workCount, kMaxDeltasPerTick);
 }
 
+TEST(GfsimSystemTest, StatefulObjectCannotCommitTwiceInOneTick) {
+  SimSystem system("test");
+  RepeatedCommitDispatchObject object(0, system);
+  std::array rows = {makeDispatchRow(&object)};
+  ASSERT_TRUE(system.setDispatchTable(rows));
+  ASSERT_TRUE(system.scheduleWork(0, {0, 0}));
+
+  EXPECT_TRUE(system.step());
+  EXPECT_EQ(system.currentEpoch(), (Epoch{0, 1}));
+  EXPECT_FALSE(system.step());
+  EXPECT_EQ(system.terminationResult().classification,
+            TerminationClass::Failed);
+  EXPECT_EQ(system.terminationResult().diagnosticCode,
+            "multiple_stateful_commits");
+}
+
+TEST(GfsimSystemTest, EventQueueCannotCommitTwiceInOneTick) {
+  SimSystem system("test");
+  SameTickEventChainObject object(0, system);
+  std::array rows = {makeDispatchRow(&object)};
+  ASSERT_TRUE(system.setDispatchTable(rows));
+  ASSERT_TRUE(system.scheduleWork(0, {0, 0}));
+
+  EXPECT_TRUE(system.step());
+  EXPECT_EQ(system.currentEpoch(), (Epoch{0, 1}));
+  EXPECT_FALSE(system.step());
+  EXPECT_EQ(system.terminationResult().diagnosticCode,
+            "multiple_stateful_commits");
+}
+
 TEST(GfsimSystemTest, SchedulingOutOfRangeDeltaFailsImmediately) {
   SimSystem system("test");
   EXPECT_FALSE(
@@ -1616,6 +1741,19 @@ TEST(GfsimSystemTest, MaxTicksCapTriggersIncomplete) {
   auto result = sys.run();
   EXPECT_EQ(result.classification, TerminationClass::Incomplete);
   EXPECT_EQ(result.diagnosticCode, "max_ticks_reached");
+}
+
+TEST(GfsimSystemTest, MaxTicksCapDoesNotJumpToAFutureEvent) {
+  SimSystem system("test");
+  system.setMaxTicks(3);
+  ASSERT_TRUE(system.scheduleEvent({{100, 0}, kSystemObjectId, 0, 0}));
+
+  TerminationResult result = system.run();
+  EXPECT_EQ(result.classification, TerminationClass::Incomplete);
+  EXPECT_EQ(result.finalEpoch, (Epoch{3, 0}));
+  EXPECT_EQ(result.terminationCap, 3u);
+  ASSERT_TRUE(system.nextEvent());
+  EXPECT_EQ(system.nextEvent()->readyTime, (Epoch{100, 0}));
 }
 
 TEST(GfsimSystemTest, MaxEventsCapTriggersIncomplete) {
@@ -1678,6 +1816,18 @@ TEST(GfsimSystemTest, SystemCanBeReset) {
   EXPECT_FALSE(sys.isTerminated());
   EXPECT_EQ(sys.currentEpoch(), (Epoch{0, 0}));
   EXPECT_FALSE(sys.nextEvent());
+}
+
+TEST(GfsimSystemTest, ResetIncludesRegisteredObjectsOutsideTheRootTree) {
+  SimSystem system("test");
+  Statistic statistic("counter", 1, nullptr, StatisticKind::Counter);
+  ASSERT_TRUE(statistic.proposeAdd(4));
+  statistic.doXfer({0, 0});
+  system.registerObject(&statistic);
+  ASSERT_EQ(statistic.snapshot().value, 4u);
+
+  system.reset();
+  EXPECT_EQ(statistic.snapshot().value, 0u);
 }
 
 // ═══════════════════════════════════════════════════════════════════════

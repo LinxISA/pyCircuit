@@ -74,7 +74,9 @@
       ],
       "statistics": [
         "accepted_transactions",
-        "queue_occupancy"
+        "completed_transactions",
+        "queue_occupancy",
+        "queue_occupancy_peak"
       ]
     }
   ],
@@ -116,8 +118,9 @@
     ],
     "observable_effects": [
       "accepted_transactions",
-      "stalled_cycles",
-      "queue_occupancy"
+      "completed_transactions",
+      "queue_occupancy",
+      "queue_occupancy_peak"
     ],
     "failure_behavior": "terminate_with_diagnostic"
   },
@@ -137,14 +140,13 @@
     "probes": [],
     "counters": [
       "accepted_transactions",
-      "stalled_cycles"
+      "completed_transactions"
     ],
     "gauges": [
-      "queue_occupancy"
+      "queue_occupancy",
+      "queue_occupancy_peak"
     ],
-    "histograms": [
-      "latency_cycles"
-    ]
+    "histograms": []
   },
-  "schema_fingerprint": "sha256:4bfcead40435ab8ab51f51fb4ff1b916464a683871051523612aea941e9d6886"
+  "schema_fingerprint": "sha256:ee7ae59ef0c5305594e06cd2fa173e46c747853d5ccab4c48ac7f65ab7ab8a17"
 }

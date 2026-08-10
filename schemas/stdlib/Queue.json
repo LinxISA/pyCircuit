@@ -30,6 +30,14 @@
       "default": null,
       "constraint": "value >= 1",
       "cpp_mapping": "constructor_constant"
+    },
+    {
+      "name": "byteCapacity",
+      "acir_type": "index",
+      "required": false,
+      "default": "unbounded",
+      "constraint": "value >= 1 or value == unbounded",
+      "cpp_mapping": "constructor_constant"
     }
   ],
   "bindings": [
@@ -74,7 +82,9 @@
       ],
       "statistics": [
         "accepted_transactions",
-        "queue_occupancy"
+        "completed_transactions",
+        "queue_occupancy",
+        "queue_occupancy_peak"
       ]
     }
   ],
@@ -120,8 +130,9 @@
     ],
     "observable_effects": [
       "accepted_transactions",
-      "stalled_cycles",
-      "queue_occupancy"
+      "completed_transactions",
+      "queue_occupancy",
+      "queue_occupancy_peak"
     ],
     "failure_behavior": "terminate_with_diagnostic"
   },
@@ -141,14 +152,13 @@
     "probes": [],
     "counters": [
       "accepted_transactions",
-      "stalled_cycles"
+      "completed_transactions"
     ],
     "gauges": [
-      "queue_occupancy"
+      "queue_occupancy",
+      "queue_occupancy_peak"
     ],
-    "histograms": [
-      "latency_cycles"
-    ]
+    "histograms": []
   },
-  "schema_fingerprint": "sha256:262cf4fe3ddc05c1c3208af4e5abaf18b2c3ade4607643098f8cdf406a20eca3"
+  "schema_fingerprint": "sha256:768b2ef2642e5f933c680802413a3360c0ccaaf8d4b76a3a79f4c25bcafd8426"
 }

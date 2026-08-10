@@ -74,6 +74,7 @@
       ],
       "statistics": [
         "accepted_transactions",
+        "stalled_cycles",
         "queue_occupancy"
       ]
     }
@@ -142,9 +143,7 @@
     "gauges": [
       "queue_occupancy"
     ],
-    "histograms": [
-      "latency_cycles"
-    ]
+    "histograms": []
   },
-  "schema_fingerprint": "sha256:1b1ccbc219bf0b78cdb24697319d75b5c5089613bd67463915656340eac6e0c5"
+  "schema_fingerprint": "sha256:e16533524996f56679d2dbfd6374c95388e569fbfeb1257cbffd8ef92e2878b8"
 }

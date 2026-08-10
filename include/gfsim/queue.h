@@ -116,17 +116,17 @@ public:
   }
 
   void collectStatistics(std::vector<StatSnapshot> &out) const override {
-    auto append = [&](std::string suffix, uint64_t value) {
+    auto append = [&](std::string suffix, uint64_t value, StatisticKind kind) {
       out.push_back({.name = std::move(suffix),
                      .objectPath = std::string(path()),
-                     .kind = StatisticKind::Gauge,
+                     .kind = kind,
                      .value = value,
                      .lastUpdate = lastUpdate_});
     };
-    append("occupancy", committedSize());
-    append("high_watermark", highWatermark_);
-    append("total_pushes", totalPushes_);
-    append("total_pops", totalPops_);
+    append("queue_occupancy", committedSize(), StatisticKind::Gauge);
+    append("queue_occupancy_peak", highWatermark_, StatisticKind::Gauge);
+    append("accepted_transactions", totalPushes_, StatisticKind::Counter);
+    append("completed_transactions", totalPops_, StatisticKind::Counter);
   }
 
   // ── Statistics ──────────────────────────────────────────────────────

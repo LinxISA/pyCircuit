@@ -33,7 +33,7 @@ public:
   std::string_view runtimeFailureCode() const { return runtimeFailureCode_; }
 
   /// Set the canonical hierarchy path (called during construction).
-  void setPath(std::string path) { path_ = std::move(path); }
+  virtual void setPath(std::string path) { path_ = std::move(path); }
 
   /// Set the parent pointer (called during hierarchy construction).
   void setParent(SimObject *p) { parent_ = p; }
@@ -114,6 +114,13 @@ public:
   }
 
   std::vector<SimObject *> children() const override { return children_; }
+
+  void setPath(std::string path) override {
+    SimObject::setPath(std::move(path));
+    for (SimObject *child : children_)
+      child->setPath(std::string(this->path()) + "/" +
+                     std::string(child->name()));
+  }
 
   /// Find a child by name (linear scan, acceptable for small fan-out).
   SimObject *findChild(std::string_view name) const {
@@ -240,6 +247,7 @@ private:
   std::vector<SimObject *> runtimeObjects() const;
   void refreshRuntimeSummary();
   bool stopAtTraceCap();
+  bool validateRuntimeIdentities();
 };
 
 } // namespace gfsim

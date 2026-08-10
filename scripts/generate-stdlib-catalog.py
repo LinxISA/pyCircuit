@@ -123,7 +123,11 @@ def static_parameters_for(name, shape):
             "constraint": (
                 "ac.std.FunctionalPolicy"
                 if type_name == "FunctionalPolicy"
-                else "ac.std.Packet"
+                else (
+                    "gfsim::TraceDecoder<Decoder,Transaction>"
+                    if name == "TraceSource" and type_name == "Decoder"
+                    else "ac.std.Packet"
+                )
             ),
             "cpp_mapping": "template_argument",
         }
@@ -151,6 +155,17 @@ def static_parameters_for(name, shape):
                 "required": True,
                 "default": None,
                 "constraint": "value >= 1",
+                "cpp_mapping": "constructor_constant",
+            }
+        )
+    if name == "Queue":
+        parameters.append(
+            {
+                "name": "byteCapacity",
+                "acir_type": "index",
+                "required": False,
+                "default": "unbounded",
+                "constraint": "value >= 1 or value == unbounded",
                 "cpp_mapping": "constructor_constant",
             }
         )
@@ -232,13 +247,48 @@ def address_behavior(family):
     }
 
 
+def observations_for(name, has_resources):
+    available = {
+        "TraceSource": (["accepted_transactions"], ["trace_position"]),
+        "Queue": (
+            ["accepted_transactions", "completed_transactions"],
+            ["queue_occupancy", "queue_occupancy_peak"],
+        ),
+        "Scheduler": (
+            ["accepted_transactions", "completed_transactions"],
+            ["queue_occupancy", "queue_occupancy_peak"],
+        ),
+        "Compute": (["completed_transactions"], []),
+        "Link": (["completed_transactions"], []),
+        "Memory": (["accepted_transactions"], []),
+        "Sink": (["accepted_transactions"], []),
+        "ready_valid": (["completed_transactions"], []),
+        "request_response": (
+            ["completed_transactions"],
+            ["active_correlations"],
+        ),
+    }
+    if name in available:
+        counters, gauges = available[name]
+    else:
+        counters = ["accepted_transactions", "stalled_cycles"]
+        gauges = ["queue_occupancy"] if has_resources else []
+    return {
+        "probes": [],
+        "counters": counters,
+        "gauges": gauges,
+        "histograms": [],
+    }
+
+
 def component_record(name, family, shape, header):
     bindings = bindings_for(shape)
+    resources = resources_for(name, family)
+    observation = observations_for(name, bool(resources))
+    for resource in resources:
+        resource["statistics"] = observation["counters"] + observation["gauges"]
     sources = [f"{binding['name']}.transfer" for binding in bindings]
-    outputs = [binding["name"] for binding in bindings if binding["direction"] == "out"]
     inputs = [binding["name"] for binding in bindings if binding["direction"] == "in"]
-    counters = ["accepted_transactions", "stalled_cycles"]
-    gauges = ["queue_occupancy"] if resources_for(name, family) else []
     symbol_names = {
         "ready_valid": "ReadyValid",
         "request_response": "RequestResponse",
@@ -262,7 +312,7 @@ def component_record(name, family, shape, header):
         "static_parameters": static_parameters_for(name, shape),
         "bindings": bindings,
         "results": [],
-        "resources": resources_for(name, family),
+        "resources": resources,
         "address_behavior": address_behavior(family),
         "protocol_contracts": protocol_contracts_for(bindings),
         "effect": {
@@ -271,7 +321,7 @@ def component_record(name, family, shape, header):
             if inputs
             else ["trace or generated transactions are schema-valid"],
             "guarantees": ["accepted transactions commit exactly once in stable order"],
-            "observable_effects": counters + gauges,
+            "observable_effects": observation["counters"] + observation["gauges"],
             "failure_behavior": "terminate_with_diagnostic",
         },
         "activation": {
@@ -284,12 +334,7 @@ def component_record(name, family, shape, header):
                 else "source is exhausted and no output offer is pending"
             ),
         },
-        "observation": {
-            "probes": [],
-            "counters": counters,
-            "gauges": gauges,
-            "histograms": ["latency_cycles"] if outputs and inputs else [],
-        },
+        "observation": observation,
     }
     canonical = json.dumps(
         record, ensure_ascii=False, sort_keys=True, separators=(",", ":")

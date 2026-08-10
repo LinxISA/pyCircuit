@@ -405,7 +405,9 @@ The emitter sorts rows by the already assigned dense object ID and emits one
 `gfsim::makeDispatchRow(&typed_object)` initializer per row. Discovery order,
 pointer value, and container iteration order MUST NOT affect the emitted bytes.
 The runtime contract uses one Xfer thunk with the explicit phase
-`XferPhase::Arbitrate` or `XferPhase::Commit`; this preserves the global
+`XferPhase::Arbitrate`, `XferPhase::Probe`, or `XferPhase::Commit`; Probe is
+read-only and lets the runtime enforce one stateful commit per integer tick
+before mutation, while the other two phases preserve the global
 all-arbitration-before-all-commit barrier without adding a dynamically selected
 operation. The generated validation thunk checks the row ID and kind against the
 typed object before any hot execution begins.

@@ -315,6 +315,17 @@ class RepositoryContractsTest(unittest.TestCase):
             checked.append(path.name)
         self.assertEqual(10, len(checked), checked)
 
+    def test_trace_source_decoder_uses_the_runtime_decoder_concept(self):
+        record = json.loads((ROOT / "schemas/stdlib/TraceSource.json").read_text())
+        parameters = {
+            parameter["name"]: parameter for parameter in record["static_parameters"]
+        }
+
+        self.assertEqual(
+            "gfsim::TraceDecoder<Decoder,Transaction>",
+            parameters["Decoder"]["constraint"],
+        )
+
     def test_process_state_plan_schema_is_closed_and_accepts_exact_baseline(self):
         self.assertIsNotNone(importlib.util.find_spec("jsonschema"))
         from jsonschema import ValidationError

@@ -14,7 +14,7 @@ class SimObject;
 
 /// The two invocations of the generated Xfer thunk preserve the global
 /// arbitration/Xfer barrier without adding a second dispatch entry point.
-enum class XferPhase : uint8_t { Arbitrate, Commit };
+enum class XferPhase : uint8_t { Arbitrate, Probe, Commit };
 
 using WorkThunk = void (*)(void *, Epoch);
 using XferThunk = bool (*)(void *, Epoch, XferPhase);
@@ -64,6 +64,8 @@ template <DispatchObject T> DispatchRow makeDispatchRow(T *object) {
               return false;
             }
             bool committed = typed->T::hasPendingCommit();
+            if (phase == XferPhase::Probe)
+              return committed;
             typed->T::doXfer(epoch);
             return committed;
           },

@@ -105,8 +105,8 @@
       "accepted transactions commit exactly once in stable order"
     ],
     "observable_effects": [
-      "accepted_transactions",
-      "stalled_cycles"
+      "completed_transactions",
+      "active_correlations"
     ],
     "failure_behavior": "terminate_with_diagnostic"
   },
@@ -125,13 +125,12 @@
   "observation": {
     "probes": [],
     "counters": [
-      "accepted_transactions",
-      "stalled_cycles"
+      "completed_transactions"
     ],
-    "gauges": [],
-    "histograms": [
-      "latency_cycles"
-    ]
+    "gauges": [
+      "active_correlations"
+    ],
+    "histograms": []
   },
-  "schema_fingerprint": "sha256:6860c77753b208228d3bfe1bcb801b9df8ff9858a61ccd3cc12e1351c76fa087"
+  "schema_fingerprint": "sha256:6aa60e66f252fa38c66dfd55823c50217f6b91320247ff124ea009c3d152a9de"
 }
