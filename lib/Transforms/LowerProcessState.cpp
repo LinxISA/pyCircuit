@@ -1,6 +1,5 @@
 #include "acir/Transforms/Passes.h"
 
-#include "Analysis/ProcessStatePlanInternal.h"
 #include "acir/Analysis/ProcessStatePlan.h"
 
 #include "mlir/Pass/Pass.h"
@@ -19,7 +18,7 @@ struct LowerProcessStatePass
 
   void runOnOperation() final {
     ProcessStateLimits limits;
-    auto plans = detail::PlanSetBuilder::buildYieldOnly(getOperation());
+    auto plans = planProcessState(getOperation(), limits);
     if (failed(plans)) {
       signalPassFailure();
       return;

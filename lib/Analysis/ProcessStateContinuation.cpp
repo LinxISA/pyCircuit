@@ -129,6 +129,8 @@ PlanSetBuilder::planProcessContinuation(const ExpandedProcess &expanded,
     auto block = std::make_shared<ProcessBlockPlan::Impl>();
     block->id = ProcessBlockId(nextBlockId);
     block->pc = ProcessPcId(pcId);
+    block->originBlock = expanded.actions[start].operation->getBlock();
+    block->originRegion = block->originBlock->getParent();
     block->path =
         blockPath(expanded.definitionKey, plan->pcs[pcId]->name, nextBlockId);
     plan->pcs[pcId]->blocks.push_back(ProcessBlockId(nextBlockId));
@@ -140,8 +142,21 @@ PlanSetBuilder::planProcessContinuation(const ExpandedProcess &expanded,
       auto act = std::make_shared<ProcessActionPlan::Impl>();
       act->id = static_cast<uint32_t>(i - start);
       act->kind = expanded.actions[i].kind;
-      act->sourceOperation = expanded.actions[i].operation;
+      act->emission = ProcessEmissionClass::ForwardOnly;
+      if (act->kind == ProcessActionKind::ForCondition ||
+          act->kind == ProcessActionKind::ForIncrement)
+        act->emission = ProcessEmissionClass::CopyScalar;
+      act->occurrence = expanded.actions[i].occurrence;
+      act->sourceOperation = act->kind == ProcessActionKind::Constant
+                                 ? nullptr
+                                 : expanded.actions[i].operation;
       act->iterationVector = expanded.actions[i].iterationVector;
+      act->operands = expanded.actions[i].operands;
+      act->results = expanded.actions[i].results;
+      act->cost = act->emission == ProcessEmissionClass::ForwardOnly ? 0 : 1;
+      for (const ProcessPlannedValue &result : act->results)
+        act->resultTypes.push_back(result.type());
+      act->scalarOp = expanded.actions[i].scalarOperation;
       block->actions.push_back(ProcessActionPlan(act));
     }
 
@@ -197,12 +212,6 @@ PlanSetBuilder::planProcessContinuation(const ExpandedProcess &expanded,
   }
 
   return plan;
-}
-
-FailureOr<std::unique_ptr<PlanSetBuilder::ControlPlan>>
-PlanSetBuilder::planProcessWakes(std::unique_ptr<ControlPlan> control,
-                                 const ProcessStateLimits &limits) {
-  return control;
 }
 
 } // namespace acir::detail

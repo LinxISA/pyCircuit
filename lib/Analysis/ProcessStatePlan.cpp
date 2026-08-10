@@ -215,6 +215,251 @@ detail::PlanSetBuilder::buildEmpty(mlir::ModuleOp module) {
 }
 
 mlir::FailureOr<ProcessStatePlanSet>
+detail::PlanSetBuilder::buildProduction(mlir::ModuleOp module,
+                                        const ProcessStateLimits &limits) {
+  auto frozenEpoch = module->getAttrOfType<mlir::StringAttr>("ac.freeze_epoch");
+  if (!frozenEpoch || frozenEpoch.getValue() != "0.1") {
+    module.emitError("process-state planning requires a frozen v0.1 model");
+    return mlir::failure();
+  }
+
+  llvm::SmallVector<ac::ProcessOp> processes;
+  module.walk([&](ac::ProcessOp process) { processes.push_back(process); });
+  if (processes.empty()) {
+    module.emitError("process-state planning requires at least one ac.process");
+    return mlir::failure();
+  }
+  if (processes.size() > limits.maxProcesses) {
+    module.emitError("process-state plan capability maxProcesses exceeded");
+    return mlir::failure();
+  }
+  auto definitionKey = [](ac::ProcessOp process) {
+    ac::ModuleOp owner = process->getParentOfType<ac::ModuleOp>();
+    return ("@" + owner.getSymName() + "::@" + process.getSymName()).str();
+  };
+  llvm::sort(processes, [&](ac::ProcessOp lhs, ac::ProcessOp rhs) {
+    return definitionKey(lhs) < definitionKey(rhs);
+  });
+
+  struct PendingProcess {
+    ac::ProcessOp process;
+    std::string definitionKey;
+    std::unique_ptr<ControlPlan> control;
+  };
+  std::vector<PendingProcess> pending;
+  ac::RawModelStructureLimits rawLimits;
+  rawLimits.maxNodes = limits.maxPlannedOperations;
+  rawLimits.maxEdges = limits.maxTransitions;
+  rawLimits.maxNestedRegionDepth = limits.maxNestedRegionDepth;
+  for (ac::ProcessOp process : processes) {
+    auto expanded = expandProcess(process, rawLimits);
+    if (mlir::failed(expanded))
+      return mlir::failure();
+    auto control = planProcessContinuation(*expanded, limits);
+    if (mlir::failed(control))
+      return mlir::failure();
+    control = planProcessWakes(std::move(*control), limits);
+    if (mlir::failed(control) ||
+        mlir::failed(planProcessLiveness(**control, limits)) ||
+        mlir::failed(planProcessCost(**control, limits)))
+      return mlir::failure();
+    pending.push_back({process, expanded->definitionKey, std::move(*control)});
+  }
+
+  auto makeWakePayload = [](ProcessWakeKind kind) {
+    auto payload = std::make_shared<ProcessGeneratedCalleePayload::Impl>();
+    payload->role = static_cast<ProcessHelperRole>(
+        static_cast<unsigned>(ProcessHelperRole::WakeCondition) +
+        static_cast<unsigned>(kind));
+    switch (kind) {
+    case ProcessWakeKind::Condition: {
+      auto arm = std::make_shared<ProcessWakeConditionPayload::Impl>();
+      arm->wakeKind = kind;
+      arm->wakeType = wakeTypeKey(kind).str();
+      payload->wakeCondition = ProcessWakeConditionPayload(arm);
+      break;
+    }
+    case ProcessWakeKind::Resource: {
+      auto arm = std::make_shared<ProcessWakeResourcePayload::Impl>();
+      arm->wakeKind = kind;
+      arm->wakeType = wakeTypeKey(kind).str();
+      payload->wakeResource = ProcessWakeResourcePayload(arm);
+      break;
+    }
+    case ProcessWakeKind::EventQueue: {
+      auto arm = std::make_shared<ProcessWakeEventQueuePayload::Impl>();
+      arm->wakeKind = kind;
+      arm->wakeType = wakeTypeKey(kind).str();
+      payload->wakeEventQueue = ProcessWakeEventQueuePayload(arm);
+      break;
+    }
+    case ProcessWakeKind::NextDelta: {
+      auto arm = std::make_shared<ProcessWakeNextDeltaPayload::Impl>();
+      arm->wakeKind = kind;
+      arm->wakeType = wakeTypeKey(kind).str();
+      payload->wakeNextDelta = ProcessWakeNextDeltaPayload(arm);
+      break;
+    }
+    }
+    return ProcessGeneratedCalleePayload(payload);
+  };
+
+  llvm::SmallVector<bool, 4> usedWakeKinds(4, false);
+  for (const PendingProcess &item : pending)
+    for (const auto &wake : item.control->wakes)
+      usedWakeKinds[static_cast<unsigned>(wake->kind)] = true;
+  std::vector<std::shared_ptr<ProcessGeneratedCalleePlan::Impl>> callees;
+  for (unsigned kindIndex = 0; kindIndex < usedWakeKinds.size(); ++kindIndex) {
+    if (!usedWakeKinds[kindIndex])
+      continue;
+    ProcessWakeKind kind = static_cast<ProcessWakeKind>(kindIndex);
+    auto callee = std::make_shared<ProcessGeneratedCalleePlan::Impl>();
+    callee->effect = ProcessEffectKind::Stateful;
+    callee->role = static_cast<ProcessHelperRole>(
+        static_cast<unsigned>(ProcessHelperRole::WakeCondition) + kindIndex);
+    callee->payload = makeWakePayload(kind);
+    callee->resultTypeKeyStorage = {wakeTypeKey(kind).str()};
+    callee->resultTypeKeys = {callee->resultTypeKeyStorage.front()};
+    ProcessGeneratedCalleePlan value(callee);
+    auto canonical = canonicalGeneratedCalleeSpecialization(value);
+    if (!canonical) {
+      llvm::consumeError(canonical.takeError());
+      return mlir::failure();
+    }
+    callee->specializationBytes = std::move(*canonical);
+    callee->fingerprint =
+        bindings::sha256Fingerprint(callee->specializationBytes);
+    llvm::StringRef digest = llvm::StringRef(callee->fingerprint).drop_front(7);
+    callee->symbol =
+        ("@acir_impl_" + helperRoleSpelling(callee->role) + "_" + digest).str();
+    callee->cpp = ("acir::generated::impl_" + helperRoleSpelling(callee->role) +
+                   "_" + digest)
+                      .str();
+    callees.push_back(std::move(callee));
+  }
+  llvm::sort(callees, [](const auto &lhs, const auto &rhs) {
+    return lhs->specializationBytes < rhs->specializationBytes;
+  });
+  std::array<ProcessCalleeId, 4> wakeCalleeIds = {
+      ProcessCalleeId(0), ProcessCalleeId(0), ProcessCalleeId(0),
+      ProcessCalleeId(0)};
+  for (auto [index, callee] : llvm::enumerate(callees)) {
+    callee->id = ProcessCalleeId(index);
+    unsigned kindIndex =
+        static_cast<unsigned>(callee->role) -
+        static_cast<unsigned>(ProcessHelperRole::WakeCondition);
+    wakeCalleeIds[kindIndex] = ProcessCalleeId(index);
+  }
+
+  auto typeSpelling = [](mlir::Type type) {
+    std::string storage;
+    llvm::raw_string_ostream stream(storage);
+    stream << type;
+    return storage;
+  };
+  llvm::SmallVector<mlir::Type> liveTypes;
+  for (const PendingProcess &item : pending)
+    for (const auto &slot : item.control->liveSlots)
+      if (!llvm::is_contained(liveTypes, slot->type))
+        liveTypes.push_back(slot->type);
+  std::vector<std::shared_ptr<ProcessValueTypePlan::Impl>> valueTypes;
+  for (mlir::Type type : liveTypes) {
+    uint64_t width =
+        type.isIndex() ? 64 : mlir::cast<mlir::IntegerType>(type).getWidth();
+    std::string spelling = typeSpelling(type);
+    auto storage = std::make_shared<ProcessStorageValuePayload::Impl>();
+    storage->widthBits = width;
+    storage->encoding = spelling;
+    auto payload = std::make_shared<ProcessValueTypePayload::Impl>();
+    payload->kind = ProcessValueTypeKind::Value;
+    payload->value = ProcessStorageValuePayload(storage);
+    auto value = std::make_shared<ProcessValueTypePlan::Impl>();
+    value->id = ProcessValueTypeId(0);
+    value->kind = ProcessValueTypeKind::Value;
+    value->acirType = type;
+    value->payload = ProcessValueTypePayload(payload);
+    ProcessValueTypePlan plan(value);
+    auto canonical = canonicalValueTypeSpecialization(plan);
+    if (!canonical) {
+      llvm::consumeError(canonical.takeError());
+      return mlir::failure();
+    }
+    value->specializationBytes = std::move(*canonical);
+    value->fingerprint =
+        bindings::sha256Fingerprint(value->specializationBytes);
+    llvm::StringRef digest = llvm::StringRef(value->fingerprint).drop_front(7);
+    value->symbol = ("@acir_value_" + digest).str();
+    value->cpp = ("acir::generated::value_" + digest).str();
+    valueTypes.push_back(std::move(value));
+  }
+  llvm::sort(valueTypes, [](const auto &lhs, const auto &rhs) {
+    return lhs->specializationBytes < rhs->specializationBytes;
+  });
+  for (auto [index, type] : llvm::enumerate(valueTypes))
+    type->id = ProcessValueTypeId(index);
+
+  auto set = std::make_shared<ProcessStatePlanSet::Impl>();
+  for (auto &callee : callees)
+    set->callees.push_back(ProcessGeneratedCalleePlan(callee));
+  for (auto &type : valueTypes)
+    set->valueTypes.push_back(ProcessValueTypePlan(type));
+  for (PendingProcess &item : pending) {
+    auto process = std::make_shared<ProcessStatePlan::Impl>();
+    process->definitionKey = item.definitionKey;
+    process->process = item.process;
+    process->entryPc = ProcessPcId(0);
+    for (auto &pc : item.control->pcs)
+      process->pcs.push_back(ProcessPcPlan(pc));
+    for (auto &block : item.control->blocks)
+      process->blocks.push_back(ProcessBlockPlan(block));
+    for (auto &wake : item.control->wakes) {
+      wake->callee = wakeCalleeIds[static_cast<unsigned>(wake->kind)];
+      process->wakes.push_back(ProcessWakePlan(wake));
+    }
+    for (auto &transition : item.control->transitions)
+      process->transitions.push_back(ProcessTransitionPlan(transition));
+    for (auto &slot : item.control->liveSlots) {
+      auto found = llvm::find_if(valueTypes, [&](const auto &type) {
+        return type->acirType == slot->type;
+      });
+      if (found == valueTypes.end())
+        return mlir::failure();
+      slot->storageType = (*found)->id;
+      process->liveSlots.push_back(ProcessLiveSlotPlan(slot));
+    }
+    for (auto [index, operand] : llvm::enumerate(item.process->getOperands())) {
+      auto capture = std::make_shared<ProcessCapturePlan::Impl>();
+      capture->id = ProcessCaptureId(index);
+      capture->name = llvm::formatv("capture{0:D8}", index).str();
+      capture->operand = operand;
+      capture->entryArgument =
+          item.process.getBody().front().getArgument(index);
+      capture->type = operand.getType();
+      capture->operandPath =
+          item.definitionKey + "/capture/operand/" + std::to_string(index);
+      capture->argumentPath =
+          item.definitionKey + "/capture/argument/" + std::to_string(index);
+      process->captures.push_back(ProcessCapturePlan(capture));
+    }
+    process->pcBitWidth = 1;
+    for (uint32_t largest = static_cast<uint32_t>(process->pcs.size() - 1);
+         largest >>= 1;)
+      ++process->pcBitWidth;
+    process->fairnessWork = item.control->fairnessWork;
+    set->processes.push_back(ProcessStatePlan(process));
+  }
+  ProcessStatePlanSet result(set);
+  if (mlir::failed(verifyProcessStatePlan(result, limits)))
+    return mlir::failure();
+  return result;
+}
+
+mlir::FailureOr<ProcessStatePlanSet>
+planProcessState(mlir::ModuleOp module, const ProcessStateLimits &limits) {
+  return detail::PlanSetBuilder::buildProduction(module, limits);
+}
+
+mlir::FailureOr<ProcessStatePlanSet>
 detail::PlanSetBuilder::buildYieldOnly(mlir::ModuleOp module) {
   return buildFrozenFixture(module, /*requireYieldOnly=*/true);
 }

@@ -1,7 +1,8 @@
 // RUN: %acir_opt --verify-each=false --pass-pipeline='builtin.module(ac-freeze-topology,ac-lower-process-state)' %s | %FileCheck %s
 
-// A minimal yield-only model. The freeze pass produces a frozen model,
-// and the lower-process-state pass verifies it non-mutatingly.
+// A non-yield-only model. The freeze pass produces a frozen model,
+// and the lower-process-state pass routes it through the public planner and
+// verifies it non-mutatingly.
 // Both passes must succeed; the output must contain the frozen module unchanged.
 
 // CHECK: module attributes {
@@ -17,6 +18,8 @@ builtin.module attributes {ac.contract_epoch = "0.1"} {
       selected true
   ac.module @Top() parameters {} graph {
     ac.process @workload kind "workload" {
+      %ready = arith.constant true
+      ac.wait_until %ready
       ac.yield_sim
     }
     ac.return

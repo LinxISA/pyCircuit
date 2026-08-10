@@ -517,7 +517,11 @@ public:
     std::vector<std::shared_ptr<ProcessBlockPlan::Impl>> blocks;
     std::vector<std::shared_ptr<ProcessWakePlan::Impl>> wakes;
     std::vector<std::shared_ptr<ProcessTransitionPlan::Impl>> transitions;
+    std::vector<std::shared_ptr<ProcessLiveSlotPlan::Impl>> liveSlots;
+    uint64_t fairnessWork = 0;
   };
+  static mlir::FailureOr<ProcessStatePlanSet>
+  buildProduction(mlir::ModuleOp module, const ProcessStateLimits &limits);
   static mlir::FailureOr<std::unique_ptr<ControlPlan>>
   planProcessContinuation(const ExpandedProcess &expanded,
                           const ProcessStateLimits &limits);

@@ -50,8 +50,10 @@ PlanSetBuilder::planProcessCost(ControlPlan &control,
     // Edge cost
     if (block->edge.has_value() &&
         block->edge->kind() == ProcessControlEdgeKind::Suspend) {
-      // Count scalar_wrap actions (none for yield-only)
-      // Count store emissions (none for yield-only)
+      ProcessTransitionId transition = block->edge->transition();
+      if (transition.value() >= control.transitions.size())
+        return failure();
+      block->cost += control.transitions[transition.value()]->stores.size();
       // Wake invoke + acsim.suspend
       block->cost += 2;
     } else if (block->edge.has_value()) {
@@ -71,6 +73,10 @@ PlanSetBuilder::planProcessCost(ControlPlan &control,
                      ->originBlock->getParentOp()
                      ->emitOpError("process fairness must be non-zero")
                : failure();
+
+  if (fairness > limits.maxFairnessWork)
+    return failure();
+  control.fairnessWork = fairness;
 
   return success();
 }

@@ -50,5 +50,44 @@ TEST(ProcessStatePlanAtomicityTest, CloneWithDanglingSuspendFailsVerification) {
   EXPECT_TRUE(mlir::failed(result));
 }
 
+TEST(ProcessStatePlanAtomicityTest,
+     PublicFactoryCanonicalizesDeclarationPermutation) {
+  mlir::MLIRContext context;
+  mlir::DialectRegistry registry;
+  registerAllDialects(registry);
+  context.appendDialectRegistry(registry);
+  auto first = test::parseAndFreezeYieldPermutation(context, false);
+  auto second = test::parseAndFreezeYieldPermutation(context, true);
+  ASSERT_TRUE(first && second);
+  auto firstPlan = planProcessState(*first);
+  auto secondPlan = planProcessState(*second);
+  ASSERT_TRUE(mlir::succeeded(firstPlan));
+  ASSERT_TRUE(mlir::succeeded(secondPlan));
+  auto firstReport = serializeProcessStatePlan(*firstPlan);
+  auto secondReport = serializeProcessStatePlan(*secondPlan);
+  ASSERT_TRUE(static_cast<bool>(firstReport));
+  ASSERT_TRUE(static_cast<bool>(secondReport));
+  EXPECT_EQ(*firstReport, *secondReport);
+}
+
+TEST(ProcessStatePlanAtomicityTest,
+     PublicFactoryFailurePreservesFrozenModuleBytes) {
+  mlir::MLIRContext context;
+  mlir::DialectRegistry registry;
+  registerAllDialects(registry);
+  context.appendDialectRegistry(registry);
+  auto module = test::parseAndFreezeYieldPermutation(context, false);
+  ASSERT_TRUE(module);
+  std::string textBefore = test::moduleText(*module);
+  std::string bytesBefore = test::moduleBytecode(*module);
+  ProcessStateLimits limits;
+  limits.maxProcesses = 1;
+  mlir::ScopedDiagnosticHandler suppress(
+      &context, [](mlir::Diagnostic &) { return mlir::success(); });
+  EXPECT_TRUE(mlir::failed(planProcessState(*module, limits)));
+  EXPECT_EQ(test::moduleText(*module), textBefore);
+  EXPECT_EQ(test::moduleBytecode(*module), bytesBefore);
+}
+
 } // namespace
 } // namespace acir

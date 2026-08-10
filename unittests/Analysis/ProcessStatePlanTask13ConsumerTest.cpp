@@ -3,7 +3,9 @@
 // Proves an external consumer can read plan records, dense IDs, exact costs,
 // enum spellings, and closed unions without re-implementing any analysis.
 #include "acir/Analysis/ProcessStatePlan.h"
+#include "acir/InitAllDialects.h"
 
+#include "mlir/Parser/Parser.h"
 #include "gtest/gtest.h"
 
 #include <cstdint>
@@ -11,6 +13,45 @@
 
 namespace acir {
 namespace {
+
+TEST(ProcessStateTask13ConsumerTest, PublicFactoryPlansFrozenNonYieldProcess) {
+  mlir::MLIRContext context;
+  mlir::DialectRegistry registry;
+  registerAllDialects(registry);
+  context.appendDialectRegistry(registry);
+  auto module = mlir::parseSourceString<mlir::ModuleOp>(R"mlir(
+    builtin.module attributes {
+      ac.contract_epoch = "0.1",
+      ac.freeze_epoch = "0.1",
+      ac.topology_frozen = true
+    } {
+      ac.module @Top() parameters {} graph {
+        ac.process @workload kind "workload" {
+          %ready = arith.constant true
+          ac.wait_until %ready
+          ac.yield_sim
+        }
+        ac.return
+      }
+    }
+  )mlir",
+                                                        &context);
+  ASSERT_TRUE(module);
+
+  auto plans = planProcessState(*module);
+  ASSERT_TRUE(mlir::succeeded(plans));
+  ASSERT_EQ(plans->processes().size(), 1u);
+  const ProcessStatePlan &process = plans->processes().front();
+  EXPECT_GT(process.blocks().size(), 1u);
+  EXPECT_EQ(process.wakes().size(), 2u);
+  EXPECT_EQ(process.transitions().size(), 2u);
+  EXPECT_EQ(process.entryPc().value(), 0u);
+  EXPECT_EQ(process.blocks().front().actions().front().kind(),
+            ProcessActionKind::Original);
+  EXPECT_EQ(process.wakes().front().kind(), ProcessWakeKind::Condition);
+  EXPECT_EQ(process.transitions().front().sourcePc().value(), 0u);
+  EXPECT_EQ(process.transitions().front().targetPc().value(), 1u);
+}
 
 // Verify all public types are complete and accessible
 TEST(ProcessStateTask13ConsumerTest, AllPublicIdsAreComplete) {

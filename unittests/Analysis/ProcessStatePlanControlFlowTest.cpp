@@ -55,5 +55,58 @@ TEST(ProcessStatePlanControlFlowTest, WakeHasCorrectKindAndTypeKey) {
   EXPECT_EQ(process.wakes()[0].kind(), ProcessWakeKind::NextDelta);
 }
 
+TEST(ProcessStatePlanControlFlowTest,
+     PublicFactoryExpandsBoundedForDeterministically) {
+  mlir::MLIRContext context;
+  mlir::DialectRegistry registry;
+  registerAllDialects(registry);
+  context.appendDialectRegistry(registry);
+  auto module = test::parseAndFreezeLoopActions(context);
+  ASSERT_TRUE(module);
+  auto plans = planProcessState(*module);
+  ASSERT_TRUE(mlir::succeeded(plans));
+  ASSERT_EQ(plans->processes().size(), 1u);
+  size_t constantActions = 0;
+  for (const ProcessBlockPlan &block : plans->processes().front().blocks())
+    for (const ProcessActionPlan &action : block.actions())
+      if (action.kind() == ProcessActionKind::Constant)
+        ++constantActions;
+  EXPECT_EQ(constantActions, 8u);
+}
+
+TEST(ProcessStatePlanControlFlowTest,
+     PublicFactoryPlansIfSuspensionAndScalarLiveness) {
+  mlir::MLIRContext context;
+  mlir::DialectRegistry registry;
+  registerAllDialects(registry);
+  context.appendDialectRegistry(registry);
+  constexpr llvm::StringLiteral source = R"mlir(
+    builtin.module attributes {
+      ac.contract_epoch = "0.1",
+      ac.freeze_epoch = "0.1",
+      ac.topology_frozen = true
+    } {
+      ac.module @Top() parameters {} graph {
+        ac.process @workload kind "workload" {
+          %ready = arith.constant true
+          %value = arith.constant 7 : i32
+          scf.if %ready { ac.wait_until %ready }
+          %used = arith.addi %value, %value : i32
+          ac.yield_sim
+        }
+        ac.return
+      }
+    }
+  )mlir";
+  auto module = mlir::parseSourceString<mlir::ModuleOp>(source, &context);
+  ASSERT_TRUE(module);
+  auto plans = planProcessState(*module);
+  ASSERT_TRUE(mlir::succeeded(plans));
+  const ProcessStatePlan &process = plans->processes().front();
+  EXPECT_GT(process.blocks().size(), 1u);
+  EXPECT_EQ(process.liveSlots().size(), 1u);
+  EXPECT_EQ(process.transitions().front().stores().size(), 1u);
+}
+
 } // namespace
 } // namespace acir

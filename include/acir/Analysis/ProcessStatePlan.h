@@ -707,6 +707,9 @@ private:
 mlir::LogicalResult
 verifyProcessStatePlan(const ProcessStatePlanSet &plans,
                        const ProcessStateLimits &limits = ProcessStateLimits());
+mlir::FailureOr<ProcessStatePlanSet>
+planProcessState(mlir::ModuleOp module,
+                 const ProcessStateLimits &limits = ProcessStateLimits());
 llvm::Expected<std::string> serializeProcessStatePlan(
     const ProcessStatePlanSet &plans,
     const ProcessStateLimits &limits = ProcessStateLimits());
