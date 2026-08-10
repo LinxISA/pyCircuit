@@ -1,6 +1,7 @@
 add_acir_library(ACIRCodeGen SOURCES
   Manifest.cpp
   Emitter.cpp
+  Generator.cpp
   ModelPlan.cpp
   ModelPlanDetails.cpp
 )

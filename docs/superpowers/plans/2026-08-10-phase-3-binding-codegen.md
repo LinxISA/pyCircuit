@@ -521,7 +521,7 @@ git commit -m "feat(codegen): model hierarchy and process plans"
 - Consumes: complete validated `ModelPlan` from Task 4 and fingerprint API from Task 1.
 - Produces: `SourceBundle`, `generateModelSources`, and `validateSourceBundle`.
 
-- [ ] **Step 1: Add failing source-bundle tests**
+- [x] **Step 1: Add failing source-bundle tests**
 
 ```cpp
 TEST(GeneratorTest, EmitsExactOrderedFileSetAndTypedOwnership) {
@@ -546,13 +546,13 @@ TEST(GeneratorTest, RejectsExecutableCppInStructuredMetadata) {
 }
 ```
 
-- [ ] **Step 2: Run and confirm the pure generator API is missing**
+- [x] **Step 2: Run and confirm the pure generator API is missing**
 
 Run: `cmake --build --preset dev-llvm22 --target CodeGenTests`
 
 Expected: compilation fails because `Generator.h` is absent.
 
-- [ ] **Step 3: Define ordered source types**
+- [x] **Step 3: Define ordered source types**
 
 ```cpp
 struct GeneratedFile {
@@ -567,25 +567,25 @@ llvm::Error validateSourceBundle(const ModelPlan &plan,
                                  const SourceBundle &bundle);
 ```
 
-- [ ] **Step 4: Implement lexical safety and structured value spelling**
+- [x] **Step 4: Implement lexical safety and structured value spelling**
 
 Add private total functions for C++ identifiers, qualified names, include paths, type tokens, integer/boolean/null/string literals, arrays, and records. Each function returns `llvm::Expected<std::string>` and rejects control characters, comments, directives, semicolons, unmatched delimiters, and tokens outside the binding grammar. No emitter entry accepts a raw statement body from a binding record.
 
-- [ ] **Step 5: Generate every module specialization generically**
+- [x] **Step 5: Generate every module specialization generically**
 
 Emit final classes with by-value generated/external members, nested `std::array` for homogeneous shapes, fixed named members for heterogeneous collections, constructor initialization in plan order, `attachChild` checks, typed accessor/bind calls, pure-expression locals, exports, and process members. Remove the prototype `generateModuleSource` fabrication path and replace raw process-body APIs in public headers with plan-driven internals.
 
-- [ ] **Step 6: Validate exact paths and reproducibility**
+- [x] **Step 6: Validate exact paths and reproducibility**
 
 `validateSourceBundle` requires the fixed common files plus one header/source pair for every module and process specialization, unique normalized relative paths, strict path order, exact content hashes, no carriage returns, and absence of nondeterministic host tokens supplied by the test fixture.
 
-- [ ] **Step 7: Run generator and complete CodeGen tests**
+- [x] **Step 7: Run generator and complete CodeGen tests**
 
 Run: `cmake --build --preset dev-llvm22 --target CodeGenTests && build/dev-llvm22/bin/CodeGenTests --gtest_filter='GeneratorTest.*' && ctest --test-dir build/dev-llvm22 -R '^CodeGenTests$' --output-on-failure`
 
 Expected: repeated generation produces byte-identical files and fingerprints; malformed tokens fail before output exists.
 
-- [ ] **Step 8: Commit structured module generation**
+- [x] **Step 8: Commit structured module generation**
 
 ```bash
 git add include/acir/CodeGen/Generator.h lib/CodeGen/Generator.cpp unittests/CodeGen/GeneratorTest.cpp include/acir/CodeGen/Emitter.h lib/CodeGen/Emitter.cpp lib/CodeGen/CMakeLists.txt unittests/CodeGen/CMakeLists.txt

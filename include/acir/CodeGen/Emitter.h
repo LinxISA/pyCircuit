@@ -4,7 +4,6 @@
 #include "acir/CodeGen/Manifest.h"
 
 #include <cstdint>
-#include <functional>
 #include <ostream>
 #include <string>
 #include <vector>
@@ -104,32 +103,6 @@ private:
 };
 
 // ── Deterministic code generation ─────────────────────────────────────
-
-/// Generate a deterministic C++ header for a process state machine.
-/// Takes a process state plan and emits the state machine class.
-SourceFile generateProcessHeader(const std::string &moduleName,
-                                 const std::string &processName,
-                                 const std::vector<std::string> &pcNames,
-                                 const std::vector<std::string> &liveSlotTypes,
-                                 const std::vector<std::string> &liveSlotNames,
-                                 uint64_t fairnessWork = 1);
-
-/// Generate a deterministic C++ source for a process state machine.
-SourceFile generateProcessSource(const std::string &moduleName,
-                                 const std::string &processName,
-                                 const std::vector<std::string> &pcNames,
-                                 const std::vector<std::string> &liveSlotTypes,
-                                 const std::vector<std::string> &liveSlotNames,
-                                 const std::vector<std::string> &pcStepBodies,
-                                 uint64_t fairnessWork = 1);
-
-/// Generate a deterministic C++ header for a hierarchical module.
-SourceFile generateModuleHeader(const std::string &moduleName,
-                                const std::vector<std::string> &childNames);
-
-/// Generate a deterministic C++ source for a hierarchical module.
-SourceFile generateModuleSource(const std::string &moduleName,
-                                const std::vector<std::string> &childNames);
 
 /// One generated static-dispatch row. Object expressions are C++ lvalues
 /// rooted at the model parameter, for example `model.compute`.

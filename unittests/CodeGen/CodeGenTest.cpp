@@ -217,61 +217,6 @@ TEST(CodeGenEmitterTest, EmitsSwitch) {
 
 // ── Deterministic code generation ─────────────────────────────────────
 
-TEST(CodeGenGenTest, GenerateProcessHeader) {
-  auto sf = generateProcessHeader("Top", "workload", {"entry", "pc00000001"},
-                                  {"uint32_t"}, {"counter_"}, 17);
-  EXPECT_FALSE(sf.content.empty());
-  EXPECT_FALSE(sf.fingerprint.empty());
-  EXPECT_EQ(sf.fingerprint.size(), 71u);
-  EXPECT_NE(sf.content.find("Top_workload"), std::string::npos);
-  EXPECT_NE(sf.content.find("class Top_workload final"), std::string::npos);
-  EXPECT_NE(sf.content.find("ProcessRuntime<Top_workload>"), std::string::npos);
-  EXPECT_NE(sf.content.find("executeProcessStep"), std::string::npos);
-  EXPECT_NE(sf.content.find("kFairnessWork = 17"), std::string::npos);
-  EXPECT_NE(sf.content.find("Pc"), std::string::npos);
-  EXPECT_NE(sf.content.find("entry"), std::string::npos);
-}
-
-TEST(CodeGenGenTest, GenerateProcessHeaderIsDeterministic) {
-  auto sf1 = generateProcessHeader("Top", "workload", {"entry"}, {}, {});
-  auto sf2 = generateProcessHeader("Top", "workload", {"entry"}, {}, {});
-  EXPECT_EQ(sf1.content, sf2.content);
-  EXPECT_EQ(sf1.fingerprint, sf2.fingerprint);
-}
-
-TEST(CodeGenGenTest, GenerateProcessSource) {
-  auto sf = generateProcessSource("Top", "workload", {"entry", "pc00000001"},
-                                  {"uint32_t"}, {"counter_"},
-                                  {"return gfsim::ProcessStep::continueAt(1);",
-                                   "return gfsim::ProcessStep::terminate();"});
-  EXPECT_FALSE(sf.content.empty());
-  EXPECT_NE(sf.content.find("Top_workload::executeProcessStep"),
-            std::string::npos);
-  EXPECT_NE(sf.content.find("switch (static_cast<Pc>(pc))"), std::string::npos);
-  EXPECT_NE(sf.content.find("Pc::entry"), std::string::npos);
-  EXPECT_NE(sf.content.find("ProcessStep::continueAt(1)"), std::string::npos);
-}
-
-TEST(CodeGenGenTest, GenerateProcessSourceRequiresOneBodyPerPc) {
-  EXPECT_THROW(generateProcessSource("Top", "workload", {"entry"}, {}, {}, {}),
-               std::invalid_argument);
-}
-
-TEST(CodeGenGenTest, GenerateModuleHeader) {
-  auto sf = generateModuleHeader("Top", {"alu", "mem", "ctrl"});
-  EXPECT_FALSE(sf.content.empty());
-  EXPECT_NE(sf.content.find("TopModule"), std::string::npos);
-  EXPECT_NE(sf.content.find("alu_"), std::string::npos);
-  EXPECT_NE(sf.content.find("mem_"), std::string::npos);
-}
-
-TEST(CodeGenGenTest, GenerateModuleSource) {
-  auto sf = generateModuleSource("Top", {"alu"});
-  EXPECT_FALSE(sf.content.empty());
-  EXPECT_NE(sf.content.find("TopModule::build"), std::string::npos);
-  EXPECT_NE(sf.content.find("addChild"), std::string::npos);
-}
-
 TEST(CodeGenGenTest, GenerateDispatchHeaderIsDenseAndDeterministic) {
   std::vector<DispatchEntry> entries = {
       {1, "model.consumer"},
