@@ -1084,7 +1084,7 @@ git commit -m "test(codegen): enforce phase 3 conformance"
 - Consumes: every preceding task and the normative Phase 3 roadmap/specification.
 - Produces: evidence-backed audit, completed checklist, clean merge into `main`, and pushed `origin/main`.
 
-- [ ] **Step 1: Run the targeted Phase 3 verification matrix**
+- [x] **Step 1: Run the targeted Phase 3 verification matrix**
 
 ```bash
 cmake --preset dev-llvm22 -DACIR_ENABLE_ASSERTIONS=ON
@@ -1097,7 +1097,7 @@ lit -v build/dev-llvm22/test/ACSim
 
 Record command, exit status, and relevant test counts in the audit.
 
-- [ ] **Step 2: Run the repository-wide gates**
+- [x] **Step 2: Run the repository-wide gates**
 
 ```bash
 cmake --build --preset dev-llvm22
@@ -1118,17 +1118,17 @@ ctest --test-dir build/release-llvm22 --output-on-failure
 
 Also run the CI static-analysis and install-consumer commands copied verbatim from `.github/workflows/ci.yml`.
 
-- [ ] **Step 3: Audit normative coverage and generated output**
+- [x] **Step 3: Audit normative coverage and generated output**
 
 Map provider discovery/binding lock, canonical ACSim input, hierarchical ownership, arrays, typed bindings, pure expressions, enum-PC processes, dispatch/activation, concepts, manifests, fingerprints, same-toolchain preflight, staging/cache/publication, internal stages, extension, determinism, forbidden dependencies, and sparsity to specific tests and commits. Scan generated outputs and generic emitters for every forbidden mechanism in the Global Constraints.
 
-- [ ] **Step 4: Check repository and commit hygiene**
+- [x] **Step 4: Check repository and commit hygiene**
 
 Run: `git status --short --branch && git log --oneline --decorate main..HEAD && git diff --check main...HEAD && git diff --stat main...HEAD`
 
 Expected: only the preserved user file is untracked; no whitespace errors; each task is a distinct reviewed commit.
 
-- [ ] **Step 5: Write and commit the audit**
+- [x] **Step 5: Write and commit the audit**
 
 Document environment/toolchain, all commands and results, acceptance-criterion mapping, generated-artifact sample hashes, failure-atomicity evidence, and any residual non-blocking risk. Mark every completed plan checkbox only after its corresponding evidence exists.
 
@@ -1137,7 +1137,7 @@ git add docs/implementation/phase-3-audit.md docs/superpowers/plans/2026-08-10-p
 git commit -m "docs(audit): complete phase 3 verification"
 ```
 
-- [ ] **Step 6: Review the complete phase diff before integration**
+- [x] **Step 6: Review the complete phase diff before integration**
 
 Run: `git diff --check main...HEAD && git status --short --branch && git log --oneline --reverse main..HEAD`
 
