@@ -134,7 +134,8 @@ int runDriver(int argc, char **argv) {
   registry.addExtension(
       +[](mlir::MLIRContext *context, acir::ac::ACIRDialect *) {
         auto &providers = acir::ac::getStructuralProviderRegistry(context);
-        for (llvm::StringRef name : {"A", "B", "Empty", "Ext", "Leaf", "Top"})
+        for (llvm::StringRef name :
+             {"A", "B", "Consumer", "Empty", "Ext", "Leaf", "Producer", "Top"})
           providers.registerExternal(name);
         providers.registerGenerator("Gen");
       });

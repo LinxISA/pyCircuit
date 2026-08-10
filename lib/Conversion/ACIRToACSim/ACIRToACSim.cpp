@@ -405,6 +405,11 @@ mlir::Attribute convertBindingRecord(OpBuilder &builder,
 // Module and placement plans
 // ---------------------------------------------------------------------------
 
+struct PortEndpointPlan {
+  Value value;
+  bindings::PortBinding metadata;
+};
+
 struct PlacementPlan {
   enum class Kind { Instance, Array, Process };
   Kind kind = Kind::Instance;
@@ -422,10 +427,17 @@ struct PlacementPlan {
   std::string xfer;
   std::string reset;
   std::string validate;
+  llvm::SmallVector<PortEndpointPlan, 2> inputPorts;
+  llvm::SmallVector<PortEndpointPlan, 2> outputPorts;
   // Process realization.
   ac::ProcessOp process;
   std::string processDefinitionKey;
   uint64_t fairnessCap = 1;
+};
+
+struct BindingEdgePlan {
+  unsigned sourcePlacement = 0;
+  unsigned targetPlacement = 0;
 };
 
 struct PureCallPlan {
@@ -450,6 +462,7 @@ struct ModulePlan {
   llvm::SmallVector<PlacementPlan, 0> placements;
   llvm::SmallVector<PureCallPlan, 0> pureCalls;
   llvm::SmallVector<ModuleResultPlan, 0> results;
+  llvm::SmallVector<BindingEdgePlan, 0> bindingEdges;
 };
 
 // ---------------------------------------------------------------------------
@@ -490,6 +503,8 @@ private:
                                          llvm::StringRef definition,
                                          DictionaryAttr staticArgs,
                                          PlacementPlan &planned);
+  mlir::LogicalResult planInstancePorts(ac::InstanceOp instance,
+                                        PlacementPlan &planned);
   mlir::LogicalResult planProcesses(mlir::ModuleOp input);
   mlir::LogicalResult expand(mlir::ModuleOp input);
 
@@ -528,6 +543,7 @@ private:
   struct RuntimeRow {
     unsigned moduleIndex;
     unsigned placementIndex;
+    std::string contextPath;
     std::string path;
     llvm::SmallVector<int64_t, 2> indices;
   };
@@ -821,6 +837,91 @@ mlir::LogicalResult ACIRToACSimPass::planInstanceTarget(
   return mlir::success();
 }
 
+mlir::LogicalResult ACIRToACSimPass::planInstancePorts(ac::InstanceOp instance,
+                                                       PlacementPlan &planned) {
+  if (!planned.targetIsBinding || planned.targetIsPure)
+    return mlir::success();
+  std::string key = ("@" + instance.getDefinition()).str();
+  const bindings::ResolvedBinding *selection =
+      resolution->selectionForResolutionKey(key);
+  assert(selection && "validated external target must have a binding");
+  const bindings::BindingRecord &record = selection->record();
+  llvm::SmallVector<bool> used(record.ports().size(), false);
+
+  auto planEndpoint = [&](Value value, llvm::StringRef direction,
+                          llvm::SmallVectorImpl<PortEndpointPlan> &endpoints)
+      -> mlir::LogicalResult {
+    auto endpoint = dyn_cast<ac::EndpointType>(value.getType());
+    if (!endpoint) {
+      if (direction == "input" || !value.use_empty())
+        return lowerError(instance, "ACLOWER-TYPE-MISMATCH",
+                          "stateful binding scalar values cannot cross the "
+                          "construction graph; use a typed endpoint/resource "
+                          "or a pure binding result");
+      return mlir::success();
+    }
+    llvm::StringRef expectedRole = endpoint.getRole().getValue();
+    if (direction == "input") {
+      ac::InterfaceOp interface;
+      for (ac::InterfaceOp candidate :
+           instance->getParentOfType<mlir::ModuleOp>()
+               .getOps<ac::InterfaceOp>())
+        if (candidate.getSymName() == endpoint.getInterface().getValue()) {
+          interface = candidate;
+          break;
+        }
+      ac::RoleOp role;
+      if (interface)
+        for (ac::RoleOp candidate : interface.getOps<ac::RoleOp>())
+          if (candidate.getSymName() == endpoint.getRole().getValue()) {
+            role = candidate;
+            break;
+          }
+      if (!role)
+        return lowerError(instance, "ACLOWER-TYPE-MISMATCH",
+                          "endpoint role cannot be resolved for input port "
+                          "lowering");
+      expectedRole = role.getDual();
+    }
+    std::optional<unsigned> match;
+    for (auto [index, port] : llvm::enumerate(record.ports())) {
+      if (!used[index] && port.direction == direction &&
+          port.interface == endpoint.getInterface().getValue() &&
+          port.role == expectedRole) {
+        if (match)
+          return lowerError(instance, "ACLOWER-BINDING-AMBIGUOUS",
+                            "binding '" + record.binding() +
+                                "' has multiple ports matching endpoint " +
+                                endpoint.getInterface().getValue() +
+                                "::" + expectedRole);
+        match = index;
+      }
+    }
+    if (!match)
+      return lowerError(instance, "ACLOWER-TYPE-MISMATCH",
+                        "binding '" + record.binding() + "' has no exact " +
+                            direction + " port for " +
+                            endpoint.getInterface().getValue() +
+                            "::" + expectedRole);
+    used[*match] = true;
+    endpoints.push_back({value, record.ports()[*match]});
+    return mlir::success();
+  };
+
+  for (Value input : instance.getInputs())
+    if (failed(planEndpoint(input, "input", planned.inputPorts)))
+      return mlir::failure();
+  for (Value output : instance.getOutputs())
+    if (failed(planEndpoint(output, "output", planned.outputPorts)))
+      return mlir::failure();
+  if (llvm::any_of(used, [](bool value) { return !value; }))
+    return lowerError(instance, "ACLOWER-TYPE-MISMATCH",
+                      "binding '" + record.binding() +
+                          "' exposes a port that is absent from the external "
+                          "module signature");
+  return mlir::success();
+}
+
 mlir::LogicalResult ACIRToACSimPass::planModule(ac::ModuleOp module,
                                                 ModulePlan &planned) {
   FunctionType signature = module.getFunctionType();
@@ -865,6 +966,8 @@ mlir::LogicalResult ACIRToACSimPass::planModule(ac::ModuleOp module,
              placement.targetSymbol, placement.resultCppType});
         continue;
       }
+      if (failed(planInstancePorts(instance, placement)))
+        return mlir::failure();
       planned.placements.push_back(std::move(placement));
       continue;
     }
@@ -944,6 +1047,26 @@ mlir::LogicalResult ACIRToACSimPass::planModule(ac::ModuleOp module,
              [](const PlacementPlan &left, const PlacementPlan &right) {
                return left.name < right.name;
              });
+  for (auto [targetIndex, target] : llvm::enumerate(planned.placements)) {
+    for (const PortEndpointPlan &input : target.inputPorts) {
+      std::optional<unsigned> sourceIndex;
+      for (auto [candidateIndex, candidate] :
+           llvm::enumerate(planned.placements))
+        if (llvm::any_of(candidate.outputPorts,
+                         [&](const PortEndpointPlan &output) {
+                           return output.value == input.value;
+                         })) {
+          sourceIndex = candidateIndex;
+          break;
+        }
+      if (!sourceIndex)
+        return lowerError(target.inputPorts.front().value.getDefiningOp(),
+                          "ACLOWER-TYPE-MISMATCH",
+                          "typed endpoint input has no lowered producer");
+      planned.bindingEdges.push_back(
+          {*sourceIndex, static_cast<unsigned>(targetIndex)});
+    }
+  }
   llvm::sort(processes,
              [](const PlacementPlan &left, const PlacementPlan &right) {
                return left.name < right.name;
@@ -1379,6 +1502,7 @@ void ACIRToACSimPass::expandModule(unsigned moduleIndex, std::string pathPrefix,
         RuntimeRow row;
         row.moduleIndex = moduleIndex;
         row.placementIndex = placementIndex;
+        row.contextPath = pathPrefix;
         row.path = path;
         row.indices.assign(indices.begin(), indices.end());
         runtimeRows.push_back(std::move(row));
@@ -1745,17 +1869,23 @@ void ACIRToACSimPass::emitModuleBody(OpBuilder &builder,
   OpBuilder::InsertionGuard guard(builder);
   builder.setInsertionPointToStart(body);
   llvm::DenseMap<Value, Value> emittedValues;
+  llvm::SmallVector<Value> owners(planned.placements.size());
+  llvm::SmallVector<llvm::SmallVector<Value, 2>> inputProjections(
+      planned.placements.size());
 
   // Rank 0: owned placements.
-  for (const PlacementPlan &placement : planned.placements) {
+  for (auto [placementIndex, placement] : llvm::enumerate(planned.placements)) {
     switch (placement.kind) {
     case PlacementPlan::Kind::Instance: {
       auto target = SymbolRefAttr::get(context, placement.targetSymbol);
       auto ownerType = acsim::OwnerType::get(context, target);
-      acsim::InstanceOp::create(
-          builder, planned.source->getLoc(), ownerType,
-          builder.getStringAttr(placement.name), target, placement.staticArgs,
-          builder.getStringAttr(placement.specialization));
+      owners[placementIndex] =
+          acsim::InstanceOp::create(
+              builder, planned.source->getLoc(), ownerType,
+              builder.getStringAttr(placement.name), target,
+              placement.staticArgs,
+              builder.getStringAttr(placement.specialization))
+              .getResult();
       break;
     }
     case PlacementPlan::Kind::Array: {
@@ -1763,16 +1893,56 @@ void ACIRToACSimPass::emitModuleBody(OpBuilder &builder,
       auto ownerType = acsim::OwnerType::get(context, target);
       auto shape = builder.getDenseI64ArrayAttr(placement.shape);
       auto arrayType = acsim::ArrayType::get(context, shape, ownerType);
-      acsim::ArrayOp::create(
-          builder, planned.source->getLoc(), arrayType,
-          builder.getStringAttr(placement.name), target, placement.staticArgs,
-          builder.getStringAttr(placement.specialization), shape);
+      owners[placementIndex] =
+          acsim::ArrayOp::create(
+              builder, planned.source->getLoc(), arrayType,
+              builder.getStringAttr(placement.name), target,
+              placement.staticArgs,
+              builder.getStringAttr(placement.specialization), shape)
+              .getResult();
       break;
     }
     case PlacementPlan::Kind::Process:
       break;
     }
   }
+
+  auto emitPort = [&](Value base, const PortEndpointPlan &endpoint) {
+    const bindings::PortBinding &port = endpoint.metadata;
+    auto type = acsim::PortType::get(
+        context,
+        FlatSymbolRefAttr::get(context, typeSymbols.symbolFor(port.interface)),
+        FlatSymbolRefAttr::get(context, typeSymbols.symbolFor(port.role)),
+        FlatSymbolRefAttr::get(context, typeSymbols.symbolFor(port.payload)),
+        FlatSymbolRefAttr::get(context, typeSymbols.symbolFor(port.protocol)));
+    return acsim::PortOp::create(
+               builder, planned.source->getLoc(), type, base,
+               FlatSymbolRefAttr::get(context,
+                                      typeSymbols.symbolFor(port.accessor)))
+        .getResult();
+  };
+
+  // Rank 2: exact typed endpoint projections.
+  for (auto [placementIndex, placement] : llvm::enumerate(planned.placements)) {
+    if (!owners[placementIndex])
+      continue;
+    for (const PortEndpointPlan &endpoint : placement.outputPorts)
+      emittedValues[endpoint.value] =
+          emitPort(owners[placementIndex], endpoint);
+    for (const PortEndpointPlan &endpoint : placement.inputPorts)
+      inputProjections[placementIndex].push_back(
+          emitPort(owners[placementIndex], endpoint));
+  }
+
+  // Rank 3: ACIR SSA endpoint uses become exact construction-time binds.
+  for (auto [placementIndex, placement] : llvm::enumerate(planned.placements))
+    for (auto [inputIndex, endpoint] : llvm::enumerate(placement.inputPorts)) {
+      Value source = emittedValues.lookup(endpoint.value);
+      assert(source && "validated endpoint producer must be projected");
+      acsim::BindOp::create(builder, planned.source->getLoc(), source,
+                            inputProjections[placementIndex][inputIndex],
+                            builder.getStringAttr("port"));
+    }
 
   // Rank 4: pure binding calls. Static constructor arguments specialize the
   // binding and therefore do not become dynamic acsim.inline operands.
@@ -1912,14 +2082,28 @@ ACIRToACSimPass::emit(mlir::ModuleOp input) {
         builder.getStringAttr(reset), builder.getStringAttr(validate)));
   }
 
-  // Rank 4: static activation adjacency. With no typed binds or captures in
-  // this stage, the exact edge set is the self edge of every runtime row,
-  // sorted by (source, target) -- which dense IDs already satisfy.
-  for (auto [id, dispatch] : llvm::enumerate(dispatches)) {
-    (void)id;
-    acsim::ActivateOp::create(builder, input.getLoc(), dispatch.getActivation(),
-                              dispatch.getObject());
-  }
+  // Rank 4: static activation adjacency. Every runtime object has its self
+  // wake, and each typed construction bind adds source-object -> target-object
+  // within the same expanded module context.
+  std::set<std::pair<unsigned, unsigned>> activationEdges;
+  for (unsigned id = 0; id < dispatches.size(); ++id)
+    activationEdges.emplace(id, id);
+  for (auto [moduleIndex, module] : llvm::enumerate(modules))
+    for (const BindingEdgePlan &edge : module.bindingEdges)
+      for (auto [sourceId, source] : llvm::enumerate(runtimeRows)) {
+        if (source.moduleIndex != moduleIndex ||
+            source.placementIndex != edge.sourcePlacement)
+          continue;
+        for (auto [targetId, target] : llvm::enumerate(runtimeRows))
+          if (target.moduleIndex == moduleIndex &&
+              target.placementIndex == edge.targetPlacement &&
+              target.contextPath == source.contextPath)
+            activationEdges.emplace(sourceId, targetId);
+      }
+  for (auto [source, target] : activationEdges)
+    acsim::ActivateOp::create(builder, input.getLoc(),
+                              dispatches[source].getActivation(),
+                              dispatches[target].getObject());
 
   if (failed(mlir::verify(*staged)) ||
       failed(acsim::verifyCanonicalACSimFile(*staged)))
