@@ -198,7 +198,7 @@ git commit -m "feat(codegen): enforce exact build manifest"
 - Consumes: existing `gfsim::Module::addChild` ownership and canonical path refresh.
 - Produces: `bool gfsim::Module::attachChild(SimObject &child)` with one shared child-order/traversal index.
 
-- [ ] **Step 1: Add failing hierarchy tests**
+- [x] **Step 1: Add failing hierarchy tests**
 
 ```cpp
 TEST(ModuleHierarchyTest, AttachedByValueChildParticipatesInWalkAndPaths) {
@@ -222,13 +222,13 @@ TEST(ModuleHierarchyTest, DuplicateOrCrossParentAttachmentIsRejected) {
 }
 ```
 
-- [ ] **Step 2: Run and observe the missing API**
+- [x] **Step 2: Run and observe the missing API**
 
 Run: `cmake --build --preset dev-llvm22 --target GfsimTests && build/dev-llvm22/bin/GfsimTests --gtest_filter='ModuleHierarchyTest.*'`
 
 Expected: compilation fails because `attachChild` is absent.
 
-- [ ] **Step 3: Implement one ownership store and one ordered view**
+- [x] **Step 3: Implement one ownership store and one ordered view**
 
 ```cpp
 bool attachChild(SimObject &child) {
@@ -253,13 +253,13 @@ T &addChild(Args &&...args) {
 
 Keep `ownedChildren_` for destruction and `children_` as the only traversal/order view. Add only the narrow private setters/friendship required for parent and recursive path refresh.
 
-- [ ] **Step 4: Run hierarchy and full gfsim tests**
+- [x] **Step 4: Run hierarchy and full gfsim tests**
 
 Run: `cmake --build --preset dev-llvm22 --target GfsimTests && build/dev-llvm22/bin/GfsimTests --gtest_filter='ModuleHierarchyTest.*' && ctest --test-dir build/dev-llvm22 -R '^GfsimTests$' --output-on-failure`
 
 Expected: attached and owned children have identical walk/reset/path behavior; duplicate attachment is rejected.
 
-- [ ] **Step 5: Commit the hierarchy API**
+- [x] **Step 5: Commit the hierarchy API**
 
 ```bash
 git add include/gfsim/object.h unittests/gfsim/core_test.cpp
