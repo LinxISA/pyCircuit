@@ -198,15 +198,20 @@ TEST(CodeGenGenTest, GenerateDispatchHeaderIsDenseAndDeterministic) {
       {1, "model.consumer"},
       {0, "model.producer"},
   };
-  auto first = generateDispatchHeader("generated::soc", "SocModel", entries);
+  std::vector<ActivationEdge> edges = {{1, 1}, {0, 1}, {0, 0}, {0, 1}};
+  auto first =
+      generateDispatchHeader("generated::soc", "SocModel", entries, edges);
   std::reverse(entries.begin(), entries.end());
-  auto second = generateDispatchHeader("generated::soc", "SocModel", entries);
+  std::reverse(edges.begin(), edges.end());
+  auto second =
+      generateDispatchHeader("generated::soc", "SocModel", entries, edges);
 
   constexpr std::string_view expected = R"(#pragma once
 
 #include "gfsim/dispatch.h"
 
 #include <array>
+#include <cstdint>
 
 namespace generated::soc {
 
@@ -217,6 +222,9 @@ makeDispatchTable(SocModel &model) {
       gfsim::makeDispatchRow(&model.consumer),
   };
 }
+
+inline constexpr std::array<uint32_t, 3> kActivationOffsets = {0, 2, 3};
+inline constexpr std::array<gfsim::ObjectId, 3> kActivationTargets = {0, 1, 1};
 
 } // namespace generated::soc
 )";
@@ -239,6 +247,12 @@ makeDispatchTable(SocModel &model) {
 TEST(CodeGenGenTest, GenerateDispatchHeaderRejectsNonDenseIds) {
   EXPECT_THROW(generateDispatchHeader("generated::soc", "SocModel",
                                       {{1, "model.consumer"}}),
+               std::invalid_argument);
+}
+
+TEST(CodeGenGenTest, GenerateDispatchHeaderRejectsInvalidActivationEdge) {
+  EXPECT_THROW(generateDispatchHeader("generated::soc", "SocModel",
+                                      {{0, "model.producer"}}, {{0, 1}}),
                std::invalid_argument);
 }
 

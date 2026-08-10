@@ -80,6 +80,10 @@ public:
       highWatermark_ = activeReservations_;
   }
 
+  bool hasPendingCommit() const override {
+    return !acceptedProposals_.empty() || !releaseProposals_.empty();
+  }
+
   uint32_t highWatermark() const { return highWatermark_; }
   uint64_t totalReservations() const { return totalReservations_; }
   uint64_t totalReleases() const { return totalReleases_; }

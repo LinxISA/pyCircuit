@@ -182,7 +182,7 @@ struct DispatchRow {
   ObjectKind kind;
   void *object;
   void (*work)(void *, Epoch);
-  void (*xfer)(void *, Epoch, XferPhase);
+  bool (*xfer)(void *, Epoch, XferPhase);
   void (*reset)(void *);
   bool (*validate)(const void *, ObjectId, ObjectKind);
 };
@@ -194,8 +194,21 @@ object specialization from `object`. Installation MUST reject a null pointer,
 missing thunk, non-dense ID, kind mismatch, ID mismatch, or failed object
 validation. For one immutable Work snapshot, the scheduler invokes all `work`
 thunks in ascending row order, then all `xfer(..., Arbitrate)` thunks in that
-order, then all `xfer(..., Commit)` thunks in that order. Reset uses the same
-ascending row order.
+order, then all `xfer(..., Commit)` thunks in that order. The arbitration call
+returns false. The commit call snapshots `hasPendingCommit()` before Xfer and
+returns that value, identifying exactly which activation sources committed.
+Reset uses the same ascending row order.
+
+Activation adjacency uses canonical compressed arrays
+`activation_offsets[object_count + 1]` and
+`activation_targets[edge_count]`. Offsets MUST begin at zero, be monotonic, and
+end at `edge_count`. Each source range MUST contain strictly increasing dense
+target IDs. Installation rejects malformed, duplicate, or out-of-range edges.
+After the complete Xfer barrier, each source whose Xfer thunk returned true
+wakes only its adjacent targets. Because runtime rows are stateful, those wakes
+are scheduled at `(time + 1, 0)`; no stateful result is exposed in a same-tick
+causal delta. Multiple edges and wake causes for one target are deduplicated by
+the scheduler.
 
 Virtual functions MAY be used outside the hot path as an implementation detail,
 but they are not part of the contract and cannot alter deterministic ordering.

@@ -1,9 +1,11 @@
 #include "acir/CodeGen/Emitter.h"
 
 #include <algorithm>
+#include <limits>
 #include <sstream>
 #include <stdexcept>
 #include <string_view>
+#include <tuple>
 
 namespace acir::codegen {
 
@@ -471,10 +473,13 @@ SourceFile generateModuleSource(const std::string &moduleName,
 
 SourceFile generateDispatchHeader(const std::string &namespaceName,
                                   const std::string &modelType,
-                                  std::vector<DispatchEntry> entries) {
+                                  std::vector<DispatchEntry> entries,
+                                  std::vector<ActivationEdge> activationEdges) {
   if (namespaceName.empty() || modelType.empty())
     throw std::invalid_argument(
         "dispatch namespace and model type must be non-empty");
+  if (entries.size() > std::numeric_limits<uint32_t>::max())
+    throw std::invalid_argument("dispatch table exceeds the uint32_t ID space");
 
   std::sort(entries.begin(), entries.end(),
             [](const DispatchEntry &left, const DispatchEntry &right) {
@@ -487,10 +492,39 @@ SourceFile generateDispatchHeader(const std::string &namespaceName,
           "dispatch object IDs must be dense and expressions non-empty");
   }
 
+  std::sort(activationEdges.begin(), activationEdges.end(),
+            [](const ActivationEdge &left, const ActivationEdge &right) {
+              return std::tie(left.sourceId, left.targetId) <
+                     std::tie(right.sourceId, right.targetId);
+            });
+  activationEdges.erase(
+      std::unique(activationEdges.begin(), activationEdges.end(),
+                  [](const ActivationEdge &left, const ActivationEdge &right) {
+                    return left.sourceId == right.sourceId &&
+                           left.targetId == right.targetId;
+                  }),
+      activationEdges.end());
+  if (activationEdges.size() > std::numeric_limits<uint32_t>::max())
+    throw std::invalid_argument(
+        "activation adjacency exceeds the uint32_t offset space");
+  std::vector<uint32_t> activationOffsets(entries.size() + 1, 0);
+  std::vector<uint32_t> activationTargets;
+  activationTargets.reserve(activationEdges.size());
+  for (const ActivationEdge &edge : activationEdges) {
+    if (edge.sourceId >= entries.size() || edge.targetId >= entries.size())
+      throw std::invalid_argument(
+          "activation edge endpoint is outside the dense dispatch table");
+    ++activationOffsets[edge.sourceId + 1];
+    activationTargets.push_back(edge.targetId);
+  }
+  for (size_t index = 1; index < activationOffsets.size(); ++index)
+    activationOffsets[index] += activationOffsets[index - 1];
+
   std::ostringstream os;
   os << "#pragma once\n\n"
         "#include \"gfsim/dispatch.h\"\n\n"
-        "#include <array>\n\n"
+        "#include <array>\n"
+        "#include <cstdint>\n\n"
      << "namespace " << namespaceName << " {\n\n"
      << "inline std::array<gfsim::DispatchRow, " << entries.size() << ">\n"
      << "makeDispatchTable(" << modelType << " &model) {\n"
@@ -498,7 +532,23 @@ SourceFile generateDispatchHeader(const std::string &namespaceName,
   for (const DispatchEntry &entry : entries)
     os << "      gfsim::makeDispatchRow(&" << entry.objectExpression << "),\n";
   os << "  };\n"
-        "}\n\n"
+        "}\n\n";
+  os << "inline constexpr std::array<uint32_t, " << activationOffsets.size()
+     << "> kActivationOffsets = {";
+  for (size_t index = 0; index < activationOffsets.size(); ++index) {
+    if (index != 0)
+      os << ", ";
+    os << activationOffsets[index];
+  }
+  os << "};\n";
+  os << "inline constexpr std::array<gfsim::ObjectId, "
+     << activationTargets.size() << "> kActivationTargets = {";
+  for (size_t index = 0; index < activationTargets.size(); ++index) {
+    if (index != 0)
+      os << ", ";
+    os << activationTargets[index];
+  }
+  os << "};\n\n"
      << "} // namespace " << namespaceName << "\n";
 
   std::string pathNamespace = namespaceName;

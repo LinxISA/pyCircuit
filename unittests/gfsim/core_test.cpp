@@ -236,6 +236,15 @@ TEST(GfsimQueueTest, PeekFromEmptyReturnsNull) {
   EXPECT_EQ(q.peek(), nullptr);
 }
 
+TEST(GfsimQueueTest, PendingCommitTracksAcceptedProposals) {
+  SimQueue<int> queue("queue", 1, nullptr, 2);
+  EXPECT_FALSE(queue.hasPendingCommit());
+  ASSERT_TRUE(queue.proposePush(7));
+  EXPECT_TRUE(queue.hasPendingCommit());
+  queue.doXfer({0, 0});
+  EXPECT_FALSE(queue.hasPendingCommit());
+}
+
 // ═══════════════════════════════════════════════════════════════════════
 // EventQueue
 // ═══════════════════════════════════════════════════════════════════════
@@ -391,6 +400,16 @@ TEST(GfsimResourceTest, ResetClearsAllState) {
   EXPECT_EQ(r.totalReservations(), 0u);
 }
 
+TEST(GfsimResourceTest, PendingCommitBeginsAfterArbitration) {
+  Resource resource("resource", 1, nullptr, 1);
+  ASSERT_TRUE(resource.proposeReserve(2, 1, {0, 0}, 3));
+  EXPECT_FALSE(resource.hasPendingCommit());
+  resource.doArbitrate({0, 0});
+  EXPECT_TRUE(resource.hasPendingCommit());
+  resource.doXfer({0, 0});
+  EXPECT_FALSE(resource.hasPendingCommit());
+}
+
 // ═══════════════════════════════════════════════════════════════════════
 // Components
 // ═══════════════════════════════════════════════════════════════════════
@@ -518,6 +537,63 @@ private:
   SimSystem &system_;
 };
 
+class CommittingDispatchObject : public SimObject {
+public:
+  CommittingDispatchObject(ObjectId id, std::vector<ObjectId> &workLog,
+                           bool commitOnWork)
+      : SimObject(ObjectKind::Compute, "committing", id), workLog_(workLog),
+        commitOnWork_(commitOnWork) {}
+
+  void doWork(Epoch) override {
+    workLog_.push_back(id());
+    pending_ = commitOnWork_;
+  }
+  void doXfer(Epoch) override {
+    if (pending_)
+      ++commitCount;
+    pending_ = false;
+  }
+  bool hasPendingCommit() const override { return pending_; }
+  bool validate() const { return true; }
+
+  uint64_t commitCount = 0;
+
+private:
+  std::vector<ObjectId> &workLog_;
+  bool commitOnWork_ = false;
+  bool pending_ = false;
+};
+
+class SnapshotWriter : public SimObject {
+public:
+  SnapshotWriter(ObjectId id, uint64_t &state)
+      : SimObject(ObjectKind::Memory, "writer", id), state_(state) {}
+  void doWork(Epoch) override { pending_ = true; }
+  void doXfer(Epoch) override {
+    state_ = 1;
+    pending_ = false;
+  }
+  bool hasPendingCommit() const override { return pending_; }
+  bool validate() const { return true; }
+
+private:
+  uint64_t &state_;
+  bool pending_ = false;
+};
+
+class SnapshotReader : public SimObject {
+public:
+  SnapshotReader(ObjectId id, const uint64_t &state)
+      : SimObject(ObjectKind::Sink, "reader", id), state_(state) {}
+  void doWork(Epoch) override { observed.push_back(state_); }
+  bool validate() const { return true; }
+
+  std::vector<uint64_t> observed;
+
+private:
+  const uint64_t &state_;
+};
+
 TEST(GfsimSystemTest, StaticDispatchUsesDenseStableOrderAndBarrierPhases) {
   for (unsigned seed = 0; seed < 32; ++seed) {
     SimSystem system("test");
@@ -572,6 +648,59 @@ TEST(GfsimSystemTest, StaticDispatchResetUsesDenseThunkOrder) {
   ASSERT_TRUE(system.setDispatchTable(rows));
   system.reset();
   EXPECT_EQ(log, (std::vector<std::string>{"reset:0", "reset:1"}));
+}
+
+TEST(GfsimSystemTest, ActivationAdjacencyWakesOnlyDeclaredTargetsNextTick) {
+  SimSystem system("test");
+  std::vector<ObjectId> workLog;
+  CommittingDispatchObject source(0, workLog, true);
+  CommittingDispatchObject target(1, workLog, false);
+  CommittingDispatchObject inactive(2, workLog, false);
+  std::array rows = {makeDispatchRow(&source), makeDispatchRow(&target),
+                     makeDispatchRow(&inactive)};
+  constexpr std::array<uint32_t, 4> offsets = {0, 1, 1, 1};
+  constexpr std::array<ObjectId, 1> targets = {1};
+  ASSERT_TRUE(system.setDispatchTable(rows));
+  ASSERT_TRUE(system.setActivationPlan(offsets, targets));
+  ASSERT_TRUE(system.scheduleWork(0, {0, 0}));
+
+  EXPECT_TRUE(system.step());
+  EXPECT_EQ(system.currentEpoch(), (Epoch{1, 0}));
+  EXPECT_EQ(workLog, (std::vector<ObjectId>{0}));
+  EXPECT_EQ(source.commitCount, 1u);
+
+  EXPECT_FALSE(system.step());
+  EXPECT_EQ(workLog, (std::vector<ObjectId>{0, 1}));
+  EXPECT_EQ(std::count(workLog.begin(), workLog.end(), 2), 0);
+}
+
+TEST(GfsimSystemTest, ActivationPlanRejectsNonCanonicalTargets) {
+  SimSystem system("test");
+  std::vector<ObjectId> workLog;
+  CommittingDispatchObject first(0, workLog, false);
+  CommittingDispatchObject second(1, workLog, false);
+  std::array rows = {makeDispatchRow(&first), makeDispatchRow(&second)};
+  constexpr std::array<uint32_t, 3> offsets = {0, 2, 2};
+  constexpr std::array<ObjectId, 2> targets = {1, 1};
+  ASSERT_TRUE(system.setDispatchTable(rows));
+  EXPECT_FALSE(system.setActivationPlan(offsets, targets));
+  EXPECT_EQ(system.terminationResult().diagnosticCode,
+            "invalid_activation_plan");
+}
+
+TEST(GfsimSystemTest, WorkPhaseReadsOneImmutableCommittedSnapshot) {
+  SimSystem system("test");
+  uint64_t committedState = 0;
+  SnapshotWriter writer(0, committedState);
+  SnapshotReader reader(1, committedState);
+  std::array rows = {makeDispatchRow(&writer), makeDispatchRow(&reader)};
+  ASSERT_TRUE(system.setDispatchTable(rows));
+  ASSERT_TRUE(system.scheduleWork(0, {0, 0}));
+  ASSERT_TRUE(system.scheduleWork(1, {0, 0}));
+
+  system.step();
+  EXPECT_EQ(reader.observed, (std::vector<uint64_t>{0}));
+  EXPECT_EQ(committedState, 1u);
 }
 
 TEST(GfsimSystemTest, SameTimeFutureDeltaEventRemainsPending) {

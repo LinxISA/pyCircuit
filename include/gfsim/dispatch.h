@@ -5,6 +5,7 @@
 
 #include <concepts>
 #include <cstddef>
+#include <limits>
 #include <span>
 
 namespace gfsim {
@@ -16,7 +17,7 @@ class SimObject;
 enum class XferPhase : uint8_t { Arbitrate, Commit };
 
 using WorkThunk = void (*)(void *, Epoch);
-using XferThunk = void (*)(void *, Epoch, XferPhase);
+using XferThunk = bool (*)(void *, Epoch, XferPhase);
 using ResetThunk = void (*)(void *);
 using ValidateThunk = bool (*)(const void *, ObjectId, ObjectKind);
 
@@ -38,6 +39,7 @@ concept DispatchObject =
     requires(T &object, const T &constObject, Epoch epoch) {
       { constObject.id() } -> std::convertible_to<ObjectId>;
       { constObject.kind() } -> std::same_as<ObjectKind>;
+      { constObject.hasPendingCommit() } -> std::same_as<bool>;
       object.doWork(epoch);
       object.doArbitrate(epoch);
       object.doXfer(epoch);
@@ -57,10 +59,13 @@ template <DispatchObject T> DispatchRow makeDispatchRow(T *object) {
       .xfer =
           [](void *storage, Epoch epoch, XferPhase phase) {
             T *typed = static_cast<T *>(static_cast<SimObject *>(storage));
-            if (phase == XferPhase::Arbitrate)
+            if (phase == XferPhase::Arbitrate) {
               typed->T::doArbitrate(epoch);
-            else
-              typed->T::doXfer(epoch);
+              return false;
+            }
+            bool committed = typed->T::hasPendingCommit();
+            typed->T::doXfer(epoch);
+            return committed;
           },
       .reset =
           [](void *storage) {
@@ -110,6 +115,47 @@ public:
 
 private:
   std::span<const DispatchRow> rows_;
+};
+
+/// Canonical compressed adjacency indexed by activation-source/object ID.
+class ActivationPlan {
+public:
+  ActivationPlan() = default;
+  ActivationPlan(std::span<const uint32_t> offsets,
+                 std::span<const ObjectId> targets)
+      : offsets_(offsets), targets_(targets) {}
+
+  bool empty() const { return offsets_.empty(); }
+
+  bool validate(size_t objectCount) const {
+    if (offsets_.size() != objectCount + 1 || offsets_.empty() ||
+        targets_.size() > std::numeric_limits<uint32_t>::max() ||
+        offsets_.front() != 0 || offsets_.back() != targets_.size())
+      return false;
+    for (size_t source = 0; source < objectCount; ++source) {
+      uint32_t begin = offsets_[source];
+      uint32_t end = offsets_[source + 1];
+      if (begin > end || end > targets_.size())
+        return false;
+      for (uint32_t index = begin; index < end; ++index) {
+        if (targets_[index] >= objectCount ||
+            (index > begin && targets_[index - 1] >= targets_[index]))
+          return false;
+      }
+    }
+    return true;
+  }
+
+  std::span<const ObjectId> targetsFor(ObjectId source) const {
+    if (offsets_.empty() || source >= offsets_.size() - 1)
+      return {};
+    return targets_.subspan(offsets_[source],
+                            offsets_[source + 1] - offsets_[source]);
+  }
+
+private:
+  std::span<const uint32_t> offsets_;
+  std::span<const ObjectId> targets_;
 };
 
 } // namespace gfsim

@@ -38,7 +38,7 @@ The branch already carries a runtime foundation (commits `125a72a`, `d44406d`,
   `ProtocolState`; `NoProgressReport`.
 - `lib/gfsim/system.cpp` — `SimSystem`: object registry, work set, global
   event queue, termination classification.
-- `unittests/gfsim/core_test.cpp` — 68 unit tests after T1.
+- `unittests/gfsim/core_test.cpp` — 73 unit tests after T2.
 
 ## Gap analysis vs roadmap scope
 
@@ -47,8 +47,8 @@ The branch already carries a runtime foundation (commits `125a72a`, `d44406d`,
 | Exact global time | Done (`Epoch`, `kMaxDeltasPerTick`) | T1 added exact delta-overflow boundary coverage |
 | Event scheduler | T1 complete | T2 activation adjacency and full barrier integration |
 | Static dispatch tables | T1 complete | Generated dense row factory and runtime validation are frozen |
-| Snapshot/proposal/Xfer barrier | Partial (`Proposal`, resource proposals) | Full barrier semantics across all object kinds |
-| Activation adjacency | Missing | Adjacency tracking + suppression |
+| Snapshot/proposal/Xfer barrier | T2 complete | Immutable Work snapshot and typed pending-commit reporting |
+| Activation adjacency | T2 complete | Canonical compressed arrays, next-tick wakes, inactive suppression |
 | Queues / event queues | Done (`SimQueue`, `EventQueue`) | Invariant tests |
 | Resources / arbitration | Partial (`Resource` proposals) | Arbitration owner resolution, contention tests |
 | Protocol state | Partial (`ProtocolState`) | Phase-transition invariants |
@@ -68,9 +68,9 @@ The branch already carries a runtime foundation (commits `125a72a`, `d44406d`,
    dispatch table layout and codegen, exact event ordering and cap enforcement,
    delta-cycle overflow diagnostics. Concept tests + randomized work-order
    determinism tests.
-2. **T2 — Barrier semantics**: snapshot/proposal/Xfer barrier across modules,
-   queues, resources; activation adjacency and inactive-module suppression
-   tests.
+2. **T2 — Barrier semantics (complete)**: snapshot/proposal/Xfer barrier across
+   modules, queues, resources; generated activation adjacency, next-tick wake
+   semantics, and inactive-module suppression tests.
 3. **T3 — Resources and arbitration**: owner resolution, contention and
    arbitration invariant tests.
 4. **T4 — Processes**: process objects with wake/suspend, fairness caps,

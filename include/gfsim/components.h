@@ -10,6 +10,7 @@
 #include <functional>
 #include <map>
 #include <string>
+#include <utility>
 
 namespace gfsim {
 
@@ -20,6 +21,7 @@ template <typename T>
 concept Component = std::derived_from<T, SimObject> && requires(T &t, Epoch e) {
   { t.doWork(e) } -> std::same_as<void>;
   { t.doXfer(e) } -> std::same_as<void>;
+  { std::as_const(t).hasPendingCommit() } -> std::same_as<bool>;
 };
 
 // ── TraceSource ───────────────────────────────────────────────────────
@@ -84,6 +86,8 @@ public:
     hasInput_ = false;
   }
 
+  bool hasPendingCommit() const override { return hasOutput_; }
+
   uint64_t output() const { return output_; }
   bool isRunnable(Epoch) const override { return hasInput_; }
 
@@ -122,6 +126,8 @@ public:
     receivedProposals_.clear();
   }
 
+  bool hasPendingCommit() const override { return !receivedProposals_.empty(); }
+
   const std::vector<uint64_t> &received() const { return received_; }
   uint64_t totalReceived() const { return totalReceived_; }
 
@@ -158,6 +164,8 @@ public:
       hasProposal_ = false;
     }
   }
+
+  bool hasPendingCommit() const override { return hasProposal_; }
 
   uint64_t value() const { return forwarded_; }
   bool hasValue() const { return !hasProposal_ && forwarded_ != 0; }
@@ -206,6 +214,8 @@ public:
     writeProposals_.clear();
   }
 
+  bool hasPendingCommit() const override { return !writeProposals_.empty(); }
+
   void reset() override {
     std::fill(storage_.begin(), storage_.end(), 0);
     writeProposals_.clear();
@@ -223,10 +233,19 @@ public:
   ReadyValid(std::string name, ObjectId id, SimObject *parent)
       : SimObject(ObjectKind::Link, std::move(name), id, parent) {}
 
-  void setValid(bool v) { validProposal_ = v; }
-  void setData(T data) { dataProposal_ = data; }
+  void setValid(bool v) {
+    validProposal_ = v;
+    hasProposal_ = true;
+  }
+  void setData(T data) {
+    dataProposal_ = data;
+    hasProposal_ = true;
+  }
   bool isReady() const { return ready_; }
-  void setReady(bool r) { readyProposal_ = r; }
+  void setReady(bool r) {
+    readyProposal_ = r;
+    hasProposal_ = true;
+  }
   bool isValid() const { return valid_; }
   T data() const { return data_; }
 
@@ -238,7 +257,10 @@ public:
       lastTransferred_ = data_;
       ++transferCount_;
     }
+    hasProposal_ = false;
   }
+
+  bool hasPendingCommit() const override { return hasProposal_; }
 
   T lastTransferred() const { return lastTransferred_; }
   uint64_t transferCount() const { return transferCount_; }
@@ -250,10 +272,12 @@ public:
     validProposal_ = false;
     readyProposal_ = false;
     transferCount_ = 0;
+    hasProposal_ = false;
   }
 
 private:
   bool valid_ = false, ready_ = false;
+  bool hasProposal_ = false;
   bool validProposal_ = false, readyProposal_ = false;
   T data_{}, dataProposal_{}, lastTransferred_{};
   uint64_t transferCount_ = 0;
@@ -302,6 +326,10 @@ public:
       ++totalCompleted_;
     }
     respProposals_.clear();
+  }
+
+  bool hasPendingCommit() const override {
+    return !reqProposals_.empty() || !respProposals_.empty();
   }
 
   size_t inFlight() const { return inFlight_; }

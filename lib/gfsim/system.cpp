@@ -12,6 +12,7 @@ struct SimSystem::Impl {
   std::map<Epoch, std::set<ObjectId>> scheduledWork;
   EventQueue eventQueue{"events", kInvalidObjectId, nullptr};
   DispatchTable dispatch;
+  ActivationPlan activation;
   uint64_t committedEventCount = 0;
   bool executingEpoch = false;
 };
@@ -54,6 +55,17 @@ bool SimSystem::setDispatchTable(std::span<const DispatchRow> rows) {
     return fail("invalid_dispatch_table",
                 "dispatch rows must be complete and densely indexed");
   impl_->dispatch = candidate;
+  impl_->activation = ActivationPlan{};
+  return true;
+}
+
+bool SimSystem::setActivationPlan(std::span<const uint32_t> offsets,
+                                  std::span<const ObjectId> targets) {
+  ActivationPlan candidate(offsets, targets);
+  if (!candidate.validate(impl_->dispatch.size()))
+    return fail("invalid_activation_plan",
+                "activation offsets and targets must be canonical and dense");
+  impl_->activation = candidate;
   return true;
 }
 
@@ -176,15 +188,31 @@ bool SimSystem::step() {
       return false;
   }
 
+  std::vector<ObjectId> committedSources;
   for (ObjectId id : currentWork) {
+    bool committed = false;
     if (const DispatchRow *row = impl_->dispatch.lookup(id))
-      row->xfer(row->object, epoch_, XferPhase::Commit);
-    else if (SimObject *object = lookup(id))
+      committed = row->xfer(row->object, epoch_, XferPhase::Commit);
+    else if (SimObject *object = lookup(id)) {
+      committed = object->hasPendingCommit();
       object->doXfer(epoch_);
+    }
+    if (committed)
+      committedSources.push_back(id);
     if (terminated_)
       return false;
   }
   impl_->eventQueue.doXfer(epoch_);
+
+  if (!committedSources.empty() && !impl_->activation.empty()) {
+    if (epoch_.time == std::numeric_limits<Tick>::max())
+      return fail("tick_overflow", "activation would overflow simulation time");
+    Epoch activationEpoch{epoch_.time + 1, 0};
+    for (ObjectId source : committedSources)
+      for (ObjectId target : impl_->activation.targetsFor(source))
+        if (!scheduleWork(target, activationEpoch))
+          return false;
+  }
 
   // An event committed for the active epoch is a causal continuation. Its
   // target runs at the next delta, never inside the closed Work snapshot.

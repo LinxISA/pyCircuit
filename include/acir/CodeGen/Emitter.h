@@ -135,11 +135,18 @@ struct DispatchEntry {
   std::string objectExpression;
 };
 
+struct ActivationEdge {
+  uint32_t sourceId = 0;
+  uint32_t targetId = 0;
+};
+
 /// Generate the deterministic dense gfsim dispatch-table factory for a model.
 /// Entries may arrive in any order, but their IDs must be exactly [0, N).
-SourceFile generateDispatchHeader(const std::string &namespaceName,
-                                  const std::string &modelType,
-                                  std::vector<DispatchEntry> entries);
+SourceFile
+generateDispatchHeader(const std::string &namespaceName,
+                       const std::string &modelType,
+                       std::vector<DispatchEntry> entries,
+                       std::vector<ActivationEdge> activationEdges = {});
 
 } // namespace acir::codegen
 

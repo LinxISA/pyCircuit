@@ -84,6 +84,10 @@ public:
       highWatermark_ = committedSize();
   }
 
+  bool hasPendingCommit() const override {
+    return !pushProposals_.empty() || popProposalCount_ != 0;
+  }
+
   // ── Statistics ──────────────────────────────────────────────────────
 
   size_t highWatermark() const { return highWatermark_; }
@@ -145,6 +149,8 @@ public:
       committed_.insert(event);
     pushProposals_.clear();
   }
+
+  bool hasPendingCommit() const override { return !pushProposals_.empty(); }
 
   // ── Query ───────────────────────────────────────────────────────────
 

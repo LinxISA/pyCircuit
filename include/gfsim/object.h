@@ -55,6 +55,9 @@ public:
   /// Arbitration: select the winning proposal among candidates.
   virtual void doArbitrate(Epoch epoch) {}
 
+  /// True when the next Xfer call will publish a committed state change.
+  virtual bool hasPendingCommit() const { return false; }
+
   // ── Wake conditions ─────────────────────────────────────────────────
 
   /// Returns true if this object has work to do at the given epoch.
@@ -160,6 +163,10 @@ public:
 
   /// Install the generated dense static dispatch table.
   bool setDispatchTable(std::span<const DispatchRow> rows);
+
+  /// Install canonical compressed activation adjacency.
+  bool setActivationPlan(std::span<const uint32_t> offsets,
+                         std::span<const ObjectId> targets);
 
   /// Get the next pending event (earliest ready time).
   std::optional<Event> nextEvent() const;
