@@ -454,6 +454,12 @@ struct ModuleResultPlan {
   std::string cppType;
 };
 
+struct ModulePortPlan {
+  Value source;
+  std::string name;
+  bindings::PortBinding metadata;
+};
+
 struct ModulePlan {
   ac::ModuleOp source;
   std::string name;
@@ -461,6 +467,7 @@ struct ModulePlan {
   std::string specialization;
   llvm::SmallVector<PlacementPlan, 0> placements;
   llvm::SmallVector<PureCallPlan, 0> pureCalls;
+  llvm::SmallVector<ModulePortPlan, 0> ports;
   llvm::SmallVector<ModuleResultPlan, 0> results;
   llvm::SmallVector<BindingEdgePlan, 0> bindingEdges;
 };
@@ -1084,6 +1091,19 @@ mlir::LogicalResult ACIRToACSimPass::planModule(ac::ModuleOp module,
                       "module return arity must match the declared result "
                       "interface");
   for (auto [index, operand] : llvm::enumerate(moduleReturn.getOperands())) {
+    const PortEndpointPlan *exportedPort = nullptr;
+    for (const PlacementPlan &placement : planned.placements)
+      for (const PortEndpointPlan &port : placement.outputPorts)
+        if (port.value == operand) {
+          exportedPort = &port;
+          break;
+        }
+    if (exportedPort) {
+      planned.ports.push_back({operand,
+                               llvm::formatv("port_{0:08}", index).str(),
+                               exportedPort->metadata});
+      continue;
+    }
     const PureCallPlan *producer = nullptr;
     for (const PureCallPlan &call : planned.pureCalls)
       if (call.result == operand) {
@@ -1094,7 +1114,8 @@ mlir::LogicalResult ACIRToACSimPass::planModule(ac::ModuleOp module,
       return lowerError(
           moduleReturn, "ACLOWER-UNSUPPORTED-CONSTRUCT",
           "module result " + llvm::Twine(index) +
-              " must be produced by an exact pure external binding");
+              " must be a typed endpoint export or be produced by an exact "
+              "pure external binding");
     ModuleResultPlan result;
     result.source = operand;
     result.name = llvm::formatv("result_{0:08}", index).str();
@@ -1845,8 +1866,32 @@ void ACIRToACSimPass::emitProcessBody(OpBuilder &builder,
 void ACIRToACSimPass::emitModuleBody(OpBuilder &builder,
                                      const ModulePlan &planned) {
   MLIRContext *context = builder.getContext();
+  llvm::SmallVector<Attribute> portRecords;
   llvm::SmallVector<Attribute> resultRecords;
   llvm::SmallVector<Attribute> exports;
+  auto reference = [&](llvm::StringRef identity) {
+    return FlatSymbolRefAttr::get(context, typeSymbols.symbolFor(identity));
+  };
+  for (const ModulePortPlan &port : planned.ports) {
+    const bindings::PortBinding &metadata = port.metadata;
+    portRecords.push_back(builder.getDictionaryAttr(
+        {builder.getNamedAttr("accessor", reference(metadata.accessor)),
+         builder.getNamedAttr("cardinality",
+                              builder.getStringAttr(metadata.cardinality)),
+         builder.getNamedAttr("delegation",
+                              builder.getStringAttr(metadata.delegation)),
+         builder.getNamedAttr("direction",
+                              builder.getStringAttr(metadata.direction)),
+         builder.getNamedAttr("interface", reference(metadata.interface)),
+         builder.getNamedAttr("name", builder.getStringAttr(port.name)),
+         builder.getNamedAttr("ownership",
+                              builder.getStringAttr(metadata.ownership)),
+         builder.getNamedAttr("payload", reference(metadata.payload)),
+         builder.getNamedAttr("protocol", reference(metadata.protocol)),
+         builder.getNamedAttr("role", reference(metadata.role)),
+         builder.getNamedAttr("time_domain", reference(metadata.timeDomain))}));
+    exports.push_back(FlatSymbolRefAttr::get(context, port.name));
+  }
   for (const ModuleResultPlan &result : planned.results) {
     resultRecords.push_back(builder.getDictionaryAttr(
         {builder.getNamedAttr(
@@ -1856,7 +1901,7 @@ void ACIRToACSimPass::emitModuleBody(OpBuilder &builder,
     exports.push_back(FlatSymbolRefAttr::get(context, result.name));
   }
   DictionaryAttr interface = builder.getDictionaryAttr(
-      {builder.getNamedAttr("ports", builder.getArrayAttr({})),
+      {builder.getNamedAttr("ports", builder.getArrayAttr(portRecords)),
        builder.getNamedAttr("resources", builder.getArrayAttr({})),
        builder.getNamedAttr("results", builder.getArrayAttr(resultRecords))});
   auto module = acsim::ModuleOp::create(
@@ -1956,8 +2001,16 @@ void ACIRToACSimPass::emitModuleBody(OpBuilder &builder,
     emittedValues[call.result] = inlineOp.getResult();
   }
 
-  // Rank 6: ordered scalar exports.
+  // Rank 6: ordered endpoint and scalar exports.
   llvm::SmallVector<Value> returned;
+  for (const ModulePortPlan &port : planned.ports) {
+    Value value = emittedValues.lookup(port.source);
+    assert(value && "validated module port producer must be emitted");
+    auto exportOp = acsim::ExportOp::create(
+        builder, planned.source->getLoc(), value.getType(), value,
+        builder.getStringAttr(port.name), reference(port.metadata.role));
+    returned.push_back(exportOp.getResult());
+  }
   llvm::StringRef resultRole = typeSymbols.symbolFor(kResultRoleIdentity);
   for (const ModuleResultPlan &result : planned.results) {
     Value value = emittedValues.lookup(result.source);
