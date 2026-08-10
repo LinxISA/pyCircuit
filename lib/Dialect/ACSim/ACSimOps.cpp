@@ -1239,12 +1239,9 @@ std::string expandedPath(StringRef parent, StringRef name,
   if (!path.empty())
     path.push_back('.');
   path.append(name);
-  if (!indices.empty()) {
-    path.push_back('[');
-    llvm::raw_string_ostream os(path);
-    llvm::interleaveComma(indices, os);
-    os << ']';
-  }
+  llvm::raw_string_ostream os(path);
+  for (int64_t index : indices)
+    os << '[' << index << ']';
   return path;
 }
 
@@ -1276,11 +1273,22 @@ LogicalResult expandSelectedRootOwners(ModelOp model, const ModelIndex &index,
   };
   SmallVector<Action> stack;
   ModuleOp rootModule = cast<ModuleOp>(*root);
+  std::string rootPath = rootModule.getSymName().str();
+  if (!model.getConstructionOrder().empty()) {
+    auto firstPath =
+        dyn_cast<StringAttr>(model.getConstructionOrder().getValue().front());
+    if (!firstPath)
+      return model.emitOpError(
+          "construction order paths must be canonical strings");
+    rootPath = firstPath.getValue().split('.').first.str();
+    if (rootPath.empty())
+      return model.emitOpError("construction order has an empty root path");
+  }
   stack.push_back({ActionKind::Enter,
                    rootModule,
                    nullptr,
                    0,
-                   rootModule.getSymName().str(),
+                   rootPath,
                    {},
                    moduleSpecializationKey(rootModule)});
   llvm::StringSet<> activeSpecializations;

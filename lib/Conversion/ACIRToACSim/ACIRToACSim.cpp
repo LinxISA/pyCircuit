@@ -34,6 +34,7 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/StringRef.h"
+#include "llvm/ADT/StringSet.h"
 #include "llvm/Support/Errc.h"
 #include "llvm/Support/JSON.h"
 #include "llvm/Support/raw_ostream.h"
@@ -461,7 +462,7 @@ private:
   mlir::LogicalResult planProcesses(mlir::ModuleOp input);
   mlir::LogicalResult expand(mlir::ModuleOp input);
 
-  void expandModule(unsigned moduleIndex, llvm::StringRef pathPrefix,
+  void expandModule(unsigned moduleIndex, std::string pathPrefix,
                     llvm::SmallSet<unsigned, 8> &active);
 
   /// Emission. Runs only after every check succeeded.
@@ -496,6 +497,7 @@ private:
   };
   llvm::SmallVector<std::string> constructionOrder;
   llvm::SmallVector<RuntimeRow> runtimeRows;
+  llvm::StringSet<> frozenOwnerPaths;
 
   // Fingerprints.
   std::string frozenAcirFingerprint;
@@ -828,6 +830,18 @@ mlir::LogicalResult ACIRToACSimPass::plan(mlir::ModuleOp input) {
     return lowerError(input, "ACLOWER-EPOCH-MISMATCH",
                       "ac-lower-to-acsim requires a topology-frozen v0.1 "
                       "model; run ac-freeze-topology first");
+  auto frozenOwners = input->getAttrOfType<ArrayAttr>("ac.frozen_owners");
+  if (!frozenOwners)
+    return lowerError(input, "ACLOWER-OWNERSHIP",
+                      "frozen model is missing its canonical owner manifest");
+  for (Attribute owner : frozenOwners) {
+    auto record = dyn_cast<DictionaryAttr>(owner);
+    auto path = record ? record.getAs<StringAttr>("path") : StringAttr();
+    if (!path || !frozenOwnerPaths.insert(path.getValue()).second)
+      return lowerError(input, "ACLOWER-OWNERSHIP",
+                        "frozen owner manifest has a missing or duplicate "
+                        "canonical path");
+  }
   if (options.profile.empty() || options.target.empty())
     return lowerError(input, "ACLOWER-PROFILE",
                       "ac-lower-to-acsim requires an exact static build "
@@ -1064,7 +1078,8 @@ mlir::LogicalResult ACIRToACSimPass::plan(mlir::ModuleOp input) {
 
   // Deterministic owner/runtime expansion over the planned structure.
   llvm::SmallSet<unsigned, 8> active;
-  expandModule(moduleIndexByName.lookup(rootName), rootName, active);
+  expandModule(moduleIndexByName.lookup(rootName),
+               selectedSystem.getRootName().str(), active);
   if (expansionCycle)
     return lowerError(input, "ACLOWER-OWNERSHIP",
                       "module instantiation cycle cannot produce canonical "
@@ -1075,35 +1090,40 @@ mlir::LogicalResult ACIRToACSimPass::plan(mlir::ModuleOp input) {
       runtimeRows.size() > maxExpandedRows)
     return lowerError(input, "ACLOWER-DISPATCH",
                       "expanded hierarchy exceeds the v0.1 capability bound");
+  if (llvm::any_of(constructionOrder,
+                   [&](const std::string &path) {
+                     return !frozenOwnerPaths.contains(path);
+                   }) ||
+      !frozenOwnerPaths.contains(selectedSystem.getRootName()))
+    return lowerError(input, "ACLOWER-OWNERSHIP",
+                      "planned ACSim hierarchy paths do not exactly match "
+                      "the frozen owner manifest");
   return mlir::success();
 }
 
-void ACIRToACSimPass::expandModule(unsigned moduleIndex,
-                                   llvm::StringRef pathPrefix,
+void ACIRToACSimPass::expandModule(unsigned moduleIndex, std::string pathPrefix,
                                    llvm::SmallSet<unsigned, 8> &active) {
   ModulePlan &module = modules[moduleIndex];
   active.insert(moduleIndex);
   for (auto [placementIndex, placement] : llvm::enumerate(module.placements)) {
     auto elementPath = [&](llvm::ArrayRef<int64_t> indices) {
-      std::string path = pathPrefix.str();
+      std::string path = pathPrefix;
       path.push_back('.');
       path.append(placement.name);
-      if (!indices.empty()) {
-        path.push_back('[');
-        llvm::raw_string_ostream stream(path);
-        llvm::interleaveComma(indices, stream);
-        stream << ']';
-      }
+      llvm::raw_string_ostream stream(path);
+      for (int64_t index : indices)
+        stream << '[' << index << ']';
       return path;
     };
     auto expandOne = [&](llvm::ArrayRef<int64_t> indices) {
-      constructionOrder.push_back(elementPath(indices));
+      std::string path = elementPath(indices);
+      constructionOrder.push_back(path);
       if (placement.kind == PlacementPlan::Kind::Process ||
           placement.targetIsBinding) {
         RuntimeRow row;
         row.moduleIndex = moduleIndex;
         row.placementIndex = placementIndex;
-        row.path = constructionOrder.back();
+        row.path = path;
         row.indices.assign(indices.begin(), indices.end());
         runtimeRows.push_back(std::move(row));
         return;
@@ -1115,7 +1135,7 @@ void ACIRToACSimPass::expandModule(unsigned moduleIndex,
         constructionOrder.pop_back();
         return;
       }
-      expandModule(targetIndex, constructionOrder.back(), active);
+      expandModule(targetIndex, std::move(path), active);
     };
 
     if (placement.kind == PlacementPlan::Kind::Array) {

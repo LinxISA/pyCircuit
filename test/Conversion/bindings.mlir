@@ -29,8 +29,8 @@ builtin.module attributes {ac.contract_epoch = "0.1"} {
 }
 
 // CHECK:      acsim.model @soc epoch "0.1" root @Top
-// CHECK-SAME:   construction ["Top.leaf", "Top.workload"]
-// CHECK-SAME:   destruction ["Top.workload", "Top.leaf"]
+// CHECK-SAME:   construction ["root.leaf", "root.workload"]
+// CHECK-SAME:   destruction ["root.workload", "root.leaf"]
 // CHECK:        acsim.type @ac_std_Leaf cpp "ac.std.Leaf" kind "schema" fingerprint "sha256:1111111111111111111111111111111111111111111111111111111111111111"
 // CHECK:        acsim.type @cpp_i32 cpp "cpp_i32" kind "value" fingerprint "sha256:{{[0-9a-f]+}}"
 // CHECK:        acsim.type @gfsim cpp "gfsim" kind "provider" fingerprint "sha256:{{[0-9a-f]+}}"
@@ -51,9 +51,9 @@ builtin.module attributes {ac.contract_epoch = "0.1"} {
 // CHECK:          acsim.process @workload
 // CHECK:          acsim.return
 // CHECK-NEXT:   }
-// CHECK-NEXT:   %{{.+}}, %{{.+}} = acsim.dispatch @Top::@leaf path "Top.leaf" indices [] object 0 activation 0
+// CHECK-NEXT:   %{{.+}}, %{{.+}} = acsim.dispatch @Top::@leaf path "root.leaf" indices [] object 0 activation 0
 // CHECK-SAME:     work "gfsim::leaf_work" xfer "gfsim::leaf_xfer" reset "gfsim::leaf_reset" validate "gfsim::leaf_validate"
-// CHECK:        %{{.+}}, %{{.+}} = acsim.dispatch @Top::@workload path "Top.workload" indices [] object 1 activation 1
+// CHECK:        %{{.+}}, %{{.+}} = acsim.dispatch @Top::@workload path "root.workload" indices [] object 1 activation 1
 // CHECK:        acsim.activate
 // CHECK-NEXT:   acsim.activate
 // CHECK-NEXT:   }

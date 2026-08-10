@@ -35,8 +35,8 @@ builtin.module attributes {ac.contract_epoch = "0.1"} {
 }
 
 // CHECK:      acsim.model @soc epoch "0.1" root @Top
-// CHECK-SAME:   construction ["Top.mid", "Top.mid.left", "Top.mid.right", "Top.solo", "Top.workload"]
-// CHECK-SAME:   destruction ["Top.workload", "Top.solo", "Top.mid.right", "Top.mid.left", "Top.mid"]
+// CHECK-SAME:   construction ["root.mid", "root.mid.left", "root.mid.right", "root.solo", "root.workload"]
+// CHECK-SAME:   destruction ["root.workload", "root.solo", "root.mid.right", "root.mid.left", "root.mid"]
 // CHECK:        acsim.module @Child interface {ports = [], resources = [], results = []} static [] specialization "[[CHILD_FP:sha256:[0-9a-f]+]]" exports [] {
 // CHECK-NEXT:     acsim.return
 // CHECK-NEXT:   }
@@ -51,7 +51,7 @@ builtin.module attributes {ac.contract_epoch = "0.1"} {
 // CHECK:          acsim.process @workload
 // CHECK:          acsim.return
 // CHECK-NEXT:   }
-// CHECK-NEXT:   %{{.+}}, %{{.+}} = acsim.dispatch @Top::@workload path "Top.workload" indices [] object 0 activation 0
+// CHECK-NEXT:   %{{.+}}, %{{.+}} = acsim.dispatch @Top::@workload path "root.workload" indices [] object 0 activation 0
 // CHECK-NOT:    acsim.dispatch
 // CHECK:        acsim.activate
 // CHECK-NOT:    acsim.activate

@@ -24,7 +24,7 @@ builtin.module attributes {ac.contract_epoch = "0.1"} {
 // CHECK:      acsim.process @workload captures() names [] entry @entry pcs [@entry] live [] fairness 2 specialization "sha256:[[PROC_FP:[0-9a-f]+]]" {
 // CHECK:        %[[WAKE:.+]] = acsim.invoke @acir_impl_wake_next_delta_[[IMPL_FP]]() : () -> !acsim.wake<@acir_wake_next_delta>
 // CHECK-NEXT:   acsim.suspend @entry on %[[WAKE]] : !acsim.wake<@acir_wake_next_delta>
-// CHECK:      acsim.dispatch @Top::@workload path "Top.workload" indices [] object 0 activation 0
+// CHECK:      acsim.dispatch @Top::@workload path "root.workload" indices [] object 0 activation 0
 // CHECK-SAME:   work "acsim_generated::Top::s{{[0-9a-f]+}}::workload::p[[PROC_FP]]::work"
 // CHECK-SAME:   xfer "acsim_generated::Top::s{{[0-9a-f]+}}::workload::p[[PROC_FP]]::xfer"
 // CHECK-SAME:   reset "acsim_generated::Top::s{{[0-9a-f]+}}::workload::p[[PROC_FP]]::reset"

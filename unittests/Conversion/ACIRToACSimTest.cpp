@@ -86,7 +86,17 @@ TEST_F(ACIRToACSimTest, DefaultBoundLowersTwoRowModel) {
   mlir::PassManager manager(&context);
   manager.addPass(createACIRToACSimPass(options));
   EXPECT_TRUE(mlir::succeeded(manager.run(module.get())));
-  EXPECT_TRUE(mlir::isa<acsim::ModelOp>(module->getBody()->front()));
+  auto model = mlir::dyn_cast<acsim::ModelOp>(module->getBody()->front());
+  ASSERT_TRUE(model);
+  ASSERT_EQ(model.getConstructionOrder().size(), 2u);
+  EXPECT_EQ(
+      mlir::cast<mlir::StringAttr>(model.getConstructionOrder()[0]).getValue(),
+      "root.child");
+  EXPECT_EQ(
+      mlir::cast<mlir::StringAttr>(model.getConstructionOrder()[1]).getValue(),
+      "root.workload");
+  for (acsim::DispatchOp dispatch : model.getOps<acsim::DispatchOp>())
+    EXPECT_TRUE(dispatch.getPath().starts_with("root."));
 }
 
 TEST_F(ACIRToACSimTest, CapabilityBoundOverflowIsAtomicDispatchFailure) {

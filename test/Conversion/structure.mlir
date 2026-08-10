@@ -25,8 +25,8 @@ builtin.module attributes {ac.contract_epoch = "0.1"} {
 
 // CHECK:      module attributes {ac.contract_epoch = "0.1"} {
 // CHECK-NEXT:   acsim.model @soc epoch "0.1" root @Top
-// CHECK-SAME:     construction ["Top.workload"]
-// CHECK-SAME:     destruction ["Top.workload"]
+// CHECK-SAME:     construction ["root.workload"]
+// CHECK-SAME:     destruction ["root.workload"]
 // CHECK-SAME:     fingerprints {binding_lock = "sha256:{{[0-9a-f]+}}", frozen_acir = "sha256:{{[0-9a-f]+}}", profile = "sha256:{{[0-9a-f]+}}", provider = "sha256:{{[0-9a-f]+}}", schema_set = "sha256:{{[0-9a-f]+}}", toolchain = "sha256:{{[0-9a-f]+}}"} {
 // CHECK-NEXT:     acsim.type @acir_impl_wake_next_delta_63cacba5c3eb82976464804b4aeaa17d43b445733efaddfad7c7bec1ab650269 cpp "acir::generated::impl_wake_next_delta_63cacba5c3eb82976464804b4aeaa17d43b445733efaddfad7c7bec1ab650269" kind "implementation" fingerprint "sha256:63cacba5c3eb82976464804b4aeaa17d43b445733efaddfad7c7bec1ab650269"
 // CHECK-NEXT:     acsim.type @acir_wake_next_delta cpp "acir::generated::wake_next_delta" kind "wake" fingerprint "sha256:8cf214054e3ad1f49ca7091e040092971fe7dec32ccfd59554fdef160e889c2a"
@@ -36,7 +36,7 @@ builtin.module attributes {ac.contract_epoch = "0.1"} {
 // CHECK-NEXT:         acsim.suspend @entry on %[[WAKE]] : !acsim.wake<@acir_wake_next_delta>
 // CHECK:            acsim.return
 // CHECK-NEXT:     }
-// CHECK-NEXT:     %[[OBJ:.+]], %[[ACT:.+]] = acsim.dispatch @Top::@workload path "Top.workload" indices [] object 0 activation 0
+// CHECK-NEXT:     %[[OBJ:.+]], %[[ACT:.+]] = acsim.dispatch @Top::@workload path "root.workload" indices [] object 0 activation 0
 // CHECK-SAME:       work "acsim_generated::Top::s{{[0-9a-f]+}}::workload::p{{[0-9a-f]+}}::work"
 // CHECK-SAME:       xfer "acsim_generated::Top::s{{[0-9a-f]+}}::workload::p{{[0-9a-f]+}}::xfer"
 // CHECK-SAME:       reset "acsim_generated::Top::s{{[0-9a-f]+}}::workload::p{{[0-9a-f]+}}::reset"

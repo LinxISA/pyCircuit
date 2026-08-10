@@ -29,8 +29,8 @@ builtin.module attributes {ac.contract_epoch = "0.1"} {
 }
 
 // CHECK:      acsim.model @soc epoch "0.1" root @Top
-// CHECK-SAME:   construction ["Top.cells[0]", "Top.cells[1]", "Top.grid[0, 0]", "Top.grid[0, 1]", "Top.grid[1, 0]", "Top.grid[1, 1]", "Top.workload"]
-// CHECK-SAME:   destruction ["Top.workload", "Top.grid[1, 1]", "Top.grid[1, 0]", "Top.grid[0, 1]", "Top.grid[0, 0]", "Top.cells[1]", "Top.cells[0]"]
+// CHECK-SAME:   construction ["root.cells[0]", "root.cells[1]", "root.grid[0][0]", "root.grid[0][1]", "root.grid[1][0]", "root.grid[1][1]", "root.workload"]
+// CHECK-SAME:   destruction ["root.workload", "root.grid[1][1]", "root.grid[1][0]", "root.grid[0][1]", "root.grid[0][0]", "root.cells[1]", "root.cells[0]"]
 // CHECK:        acsim.module @Cell interface {ports = [], resources = [], results = []} static [] specialization "[[CELL_FP:sha256:[0-9a-f]+]]" exports [] {
 // CHECK:        acsim.module @Top
 // CHECK-NEXT:     %{{.+}} = acsim.array @cells target @Cell args [] specialization "[[CELL_FP]]" shape [2] : !acsim.array<[2], !acsim.owner<@Cell>>
@@ -38,7 +38,7 @@ builtin.module attributes {ac.contract_epoch = "0.1"} {
 // CHECK:          acsim.process @workload
 // CHECK:          acsim.return
 // CHECK-NEXT:   }
-// CHECK-NEXT:   %{{.+}}, %{{.+}} = acsim.dispatch @Top::@workload path "Top.workload" indices [] object 0 activation 0
+// CHECK-NEXT:   %{{.+}}, %{{.+}} = acsim.dispatch @Top::@workload path "root.workload" indices [] object 0 activation 0
 // CHECK-NOT:    acsim.dispatch
 // CHECK:        acsim.activate
 // CHECK-NOT:    acsim.activate
