@@ -1143,7 +1143,7 @@ Run: `git diff --check main...HEAD && git status --short --branch && git log --o
 
 Read every changed production file and every test. Repair and re-run affected gates before proceeding if any acceptance criterion lacks direct evidence.
 
-- [ ] **Step 7: Merge and push only the verified phase**
+- [x] **Step 7: Merge and push only the verified phase**
 
 ```bash
 git switch main

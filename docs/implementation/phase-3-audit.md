@@ -116,5 +116,6 @@ dependency.
 
 ## Verdict
 
-The Phase 3 roadmap scope and exit gate pass. The branch is ready for a
-reviewed merge into `main` and upstream publication.
+The Phase 3 roadmap scope and exit gate pass. Merge commit
+`ce406c00a27ca1f3ea2082bcd8df18ba935ece60` was verified on `main` with a
+fresh complete development build, 10/10 CTest suites, and 80/80 lit tests.
