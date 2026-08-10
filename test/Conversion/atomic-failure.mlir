@@ -39,6 +39,6 @@ builtin.module attributes {ac.contract_epoch = "0.1"} {
 }
 
 // UNFROZEN: error: ACLOWER-EPOCH-MISMATCH: ac-lower-to-acsim requires a topology-frozen v0.1 model; run ac-freeze-topology first
-// RESULTS: error: ACLOWER-TYPE-MISMATCH: ac-lower-to-acsim v0.1 supports exactly '() -> ()' module signatures; module '@Top' has '() -> i32'
+// RESULTS: error: ACLOWER-UNSUPPORTED-CONSTRUCT: operation 'arith.constant' has no ACSim realization
 // OPTIONS: error: ACLOWER-BINDING-OPTIONS: --ac-lower-to-acsim requires --ac-binding-profile
 // ORPHAN: error: ACLOWER-BINDING-OPTIONS: binding options require --ac-resolve-gfsim-bindings or --ac-lower-to-acsim

@@ -34,12 +34,14 @@
 #include "mlir/IR/Diagnostics.h"
 #include "mlir/IR/Verifier.h"
 #include "mlir/Pass/Pass.h"
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/StringSet.h"
 #include "llvm/Support/Errc.h"
+#include "llvm/Support/FormatVariadic.h"
 #include "llvm/Support/JSON.h"
 #include "llvm/Support/raw_ostream.h"
 
@@ -58,6 +60,7 @@ namespace acir {
 namespace {
 
 constexpr llvm::StringLiteral kEpoch = "0.1";
+constexpr llvm::StringLiteral kResultRoleIdentity = "acsim.result.role";
 constexpr uint64_t kMaxExpandedRows = 1U << 20;
 
 InFlightDiagnostic lowerError(Operation *op, llvm::StringRef code,
@@ -409,6 +412,8 @@ struct PlacementPlan {
   // Instance/array realization.
   std::string targetSymbol;
   bool targetIsBinding = false;
+  bool targetIsPure = false;
+  std::string resultCppType;
   ArrayAttr staticArgs;
   std::string specialization;
   llvm::SmallVector<int64_t, 2> shape;
@@ -423,12 +428,28 @@ struct PlacementPlan {
   uint64_t fairnessCap = 1;
 };
 
+struct PureCallPlan {
+  ac::InstanceOp source;
+  Value result;
+  std::string name;
+  std::string binding;
+  std::string cppType;
+};
+
+struct ModuleResultPlan {
+  Value source;
+  std::string name;
+  std::string cppType;
+};
+
 struct ModulePlan {
   ac::ModuleOp source;
   std::string name;
   ArrayAttr staticParams;
   std::string specialization;
   llvm::SmallVector<PlacementPlan, 0> placements;
+  llvm::SmallVector<PureCallPlan, 0> pureCalls;
+  llvm::SmallVector<ModuleResultPlan, 0> results;
 };
 
 // ---------------------------------------------------------------------------
@@ -748,17 +769,25 @@ mlir::LogicalResult ACIRToACSimPass::planInstanceTarget(
                         "declaration '@" +
                             definition + "'");
     const bindings::BindingRecord &record = selection->record();
-    if (record.effect() != "stateful")
-      return lowerError(
-          placement, "ACLOWER-OWNERSHIP",
-          "ownership placement of external declaration '@" + definition +
-              "' requires a stateful binding, but binding '" +
-              record.binding() + "' has effect '" + record.effect() + "'");
-    // Registry validation has already proven that every stateful record
-    // carries its exact work/xfer/reset/validate entry points.
+    if (record.effect() != "stateful" && record.effect() != "pure")
+      return lowerError(placement, "ACLOWER-TYPE-MISMATCH",
+                        "external declaration '@" + definition +
+                            "' resolved to binding '" + record.binding() +
+                            "' with unknown effect '" + record.effect() + "'");
+    // Registry validation has already proven the effect-specific entry-point
+    // set and exact result metadata.
     const bindings::CppEntryPoints &entryPoints = record.cpp().entryPoints;
     planned.targetSymbol = record.binding().str();
     planned.targetIsBinding = true;
+    planned.targetIsPure = record.effect() == "pure";
+    if (planned.targetIsPure) {
+      if (record.results().size() != 1)
+        return lowerError(
+            placement, "ACLOWER-TYPE-MISMATCH",
+            "pure binding '" + record.binding() +
+                "' must have exactly one result for acsim.inline");
+      planned.resultCppType = record.results().front().cppType;
+    }
     OpBuilder builder(placement->getContext());
     llvm::SmallVector<Attribute> values;
     for (const bindings::ParameterBinding &parameter : record.parameters()) {
@@ -774,10 +803,12 @@ mlir::LogicalResult ACIRToACSimPass::planInstanceTarget(
     planned.staticArgs = builder.getArrayAttr(values);
     planned.specialization =
         bindingInstanceFingerprint(record, planned.staticArgs);
-    planned.work = entryPoints.work;
-    planned.xfer = entryPoints.xfer;
-    planned.reset = entryPoints.reset;
-    planned.validate = entryPoints.validate;
+    if (!planned.targetIsPure) {
+      planned.work = entryPoints.work;
+      planned.xfer = entryPoints.xfer;
+      planned.reset = entryPoints.reset;
+      planned.validate = entryPoints.validate;
+    }
     return mlir::success();
   }
 
@@ -793,13 +824,13 @@ mlir::LogicalResult ACIRToACSimPass::planInstanceTarget(
 mlir::LogicalResult ACIRToACSimPass::planModule(ac::ModuleOp module,
                                                 ModulePlan &planned) {
   FunctionType signature = module.getFunctionType();
-  if (signature.getNumInputs() != 0 || signature.getNumResults() != 0) {
+  if (signature.getNumInputs() != 0) {
     std::string printed;
     llvm::raw_string_ostream stream(printed);
     stream << signature;
     return lowerError(module, "ACLOWER-TYPE-MISMATCH",
-                      "ac-lower-to-acsim v0.1 supports exactly '() -> ()' "
-                      "module signatures; module '@" +
+                      "generated ACSim modules do not carry dynamic block "
+                      "arguments; module '@" +
                           module.getSymName() + "' has '" + stream.str() + "'");
   }
 
@@ -811,6 +842,7 @@ mlir::LogicalResult ACIRToACSimPass::planModule(ac::ModuleOp module,
   planned.specialization = moduleFingerprint(module);
 
   llvm::SmallVector<PlacementPlan, 0> processes;
+  ac::ReturnOp moduleReturn;
   for (Operation &operation : module.getBody().front()) {
     if (auto instance = dyn_cast<ac::InstanceOp>(operation)) {
       PlacementPlan placement;
@@ -819,6 +851,20 @@ mlir::LogicalResult ACIRToACSimPass::planModule(ac::ModuleOp module,
       if (failed(planInstanceTarget(instance, instance.getDefinition(),
                                     instance.getStaticArgs(), placement)))
         return mlir::failure();
+      if (placement.targetIsPure) {
+        if (instance.getNumResults() != 1)
+          return lowerError(instance, "ACLOWER-TYPE-MISMATCH",
+                            "pure external placement must produce exactly one "
+                            "SSA result");
+        if (!instance.getInputs().empty())
+          return lowerError(instance, "ACLOWER-UNSUPPORTED-CONSTRUCT",
+                            "pure external SSA operands require typed graph "
+                            "lowering");
+        planned.pureCalls.push_back(
+            {instance, instance.getResult(0), instance.getSymName().str(),
+             placement.targetSymbol, placement.resultCppType});
+        continue;
+      }
       planned.placements.push_back(std::move(placement));
       continue;
     }
@@ -846,6 +892,10 @@ mlir::LogicalResult ACIRToACSimPass::planModule(ac::ModuleOp module,
       if (failed(planInstanceTarget(array, array.getDefinition(), first,
                                     placement)))
         return mlir::failure();
+      if (placement.targetIsPure)
+        return lowerError(array, "ACLOWER-OWNERSHIP",
+                          "pure bindings lower to acsim.inline and cannot own "
+                          "an ac.array placement");
       planned.placements.push_back(std::move(placement));
       continue;
     }
@@ -862,6 +912,10 @@ mlir::LogicalResult ACIRToACSimPass::planModule(ac::ModuleOp module,
         if (failed(planInstanceTarget(collection, definition.getValue(),
                                       arguments, placement)))
           return mlir::failure();
+        if (placement.targetIsPure)
+          return lowerError(collection, "ACLOWER-OWNERSHIP",
+                            "pure bindings lower to acsim.inline and cannot "
+                            "own an ac.instances placement");
         planned.placements.push_back(std::move(placement));
       }
       continue;
@@ -875,10 +929,7 @@ mlir::LogicalResult ACIRToACSimPass::planModule(ac::ModuleOp module,
       continue;
     }
     if (auto returnOp = dyn_cast<ac::ReturnOp>(operation)) {
-      if (!returnOp.getOperands().empty())
-        return lowerError(returnOp, "ACLOWER-TYPE-MISMATCH",
-                          "module results are outside the v0.1 lowering "
-                          "stage");
+      moduleReturn = returnOp;
       continue;
     }
     return lowerError(&operation, "ACLOWER-UNSUPPORTED-CONSTRUCT",
@@ -897,8 +948,36 @@ mlir::LogicalResult ACIRToACSimPass::planModule(ac::ModuleOp module,
              [](const PlacementPlan &left, const PlacementPlan &right) {
                return left.name < right.name;
              });
+  llvm::sort(planned.pureCalls,
+             [](const PureCallPlan &left, const PureCallPlan &right) {
+               return left.name < right.name;
+             });
   for (auto &process : processes)
     planned.placements.push_back(std::move(process));
+
+  if (!moduleReturn ||
+      moduleReturn.getNumOperands() != signature.getNumResults())
+    return lowerError(module, "ACLOWER-TYPE-MISMATCH",
+                      "module return arity must match the declared result "
+                      "interface");
+  for (auto [index, operand] : llvm::enumerate(moduleReturn.getOperands())) {
+    const PureCallPlan *producer = nullptr;
+    for (const PureCallPlan &call : planned.pureCalls)
+      if (call.result == operand) {
+        producer = &call;
+        break;
+      }
+    if (!producer)
+      return lowerError(
+          moduleReturn, "ACLOWER-UNSUPPORTED-CONSTRUCT",
+          "module result " + llvm::Twine(index) +
+              " must be produced by an exact pure external binding");
+    ModuleResultPlan result;
+    result.source = operand;
+    result.name = llvm::formatv("result_{0:08}", index).str();
+    result.cppType = producer->cppType;
+    planned.results.push_back(std::move(result));
+  }
   return mlir::success();
 }
 
@@ -1200,6 +1279,12 @@ mlir::LogicalResult ACIRToACSimPass::plan(mlir::ModuleOp input) {
       if (failed(typeSymbols.intern(input, source.kind, "wake", source.kind)))
         return mlir::failure();
   }
+  if (llvm::any_of(
+          modules,
+          [](const ModulePlan &module) { return !module.results.empty(); }) &&
+      failed(typeSymbols.intern(input, kResultRoleIdentity, "role",
+                                "acsim::ResultRole")))
+    return mlir::failure();
   if (failed(typeSymbols.finalize(input)))
     return mlir::failure();
 
@@ -1636,18 +1721,32 @@ void ACIRToACSimPass::emitProcessBody(OpBuilder &builder,
 void ACIRToACSimPass::emitModuleBody(OpBuilder &builder,
                                      const ModulePlan &planned) {
   MLIRContext *context = builder.getContext();
+  llvm::SmallVector<Attribute> resultRecords;
+  llvm::SmallVector<Attribute> exports;
+  for (const ModuleResultPlan &result : planned.results) {
+    resultRecords.push_back(builder.getDictionaryAttr(
+        {builder.getNamedAttr(
+             "cpp_type", FlatSymbolRefAttr::get(
+                             context, typeSymbols.symbolFor(result.cppType))),
+         builder.getNamedAttr("name", builder.getStringAttr(result.name))}));
+    exports.push_back(FlatSymbolRefAttr::get(context, result.name));
+  }
   DictionaryAttr interface = builder.getDictionaryAttr(
       {builder.getNamedAttr("ports", builder.getArrayAttr({})),
        builder.getNamedAttr("resources", builder.getArrayAttr({})),
-       builder.getNamedAttr("results", builder.getArrayAttr({}))});
+       builder.getNamedAttr("results", builder.getArrayAttr(resultRecords))});
   auto module = acsim::ModuleOp::create(
       builder, planned.source->getLoc(), builder.getStringAttr(planned.name),
       interface, planned.staticParams,
-      builder.getStringAttr(planned.specialization), builder.getArrayAttr({}));
+      builder.getStringAttr(planned.specialization),
+      builder.getArrayAttr(exports));
   Block *body = new Block();
   module.getBody().push_back(body);
   OpBuilder::InsertionGuard guard(builder);
   builder.setInsertionPointToStart(body);
+  llvm::DenseMap<Value, Value> emittedValues;
+
+  // Rank 0: owned placements.
   for (const PlacementPlan &placement : planned.placements) {
     switch (placement.kind) {
     case PlacementPlan::Kind::Instance: {
@@ -1671,11 +1770,41 @@ void ACIRToACSimPass::emitModuleBody(OpBuilder &builder,
       break;
     }
     case PlacementPlan::Kind::Process:
-      emitProcessBody(builder, placement);
       break;
     }
   }
-  acsim::ReturnOp::create(builder, planned.source->getLoc(), ValueRange{});
+
+  // Rank 4: pure binding calls. Static constructor arguments specialize the
+  // binding and therefore do not become dynamic acsim.inline operands.
+  for (const PureCallPlan &call : planned.pureCalls) {
+    auto resultType = acsim::ExprType::get(
+        context,
+        FlatSymbolRefAttr::get(context, typeSymbols.symbolFor(call.cppType)));
+    auto inlineOp = acsim::InlineOp::create(
+        builder, call.source->getLoc(), resultType, ValueRange{},
+        FlatSymbolRefAttr::get(context, call.binding));
+    emittedValues[call.result] = inlineOp.getResult();
+  }
+
+  // Rank 6: ordered scalar exports.
+  llvm::SmallVector<Value> returned;
+  llvm::StringRef resultRole = typeSymbols.symbolFor(kResultRoleIdentity);
+  for (const ModuleResultPlan &result : planned.results) {
+    Value value = emittedValues.lookup(result.source);
+    assert(value && "validated module result producer must be emitted");
+    auto exportOp = acsim::ExportOp::create(
+        builder, planned.source->getLoc(), value.getType(), value,
+        builder.getStringAttr(result.name),
+        FlatSymbolRefAttr::get(context, resultRole));
+    returned.push_back(exportOp.getResult());
+  }
+
+  // Rank 8: stateful processes.
+  for (const PlacementPlan &placement : planned.placements)
+    if (placement.kind == PlacementPlan::Kind::Process)
+      emitProcessBody(builder, placement);
+
+  acsim::ReturnOp::create(builder, planned.source->getLoc(), returned);
 }
 
 mlir::FailureOr<mlir::OwningOpRef<mlir::ModuleOp>>

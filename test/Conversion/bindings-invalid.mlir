@@ -1,7 +1,6 @@
 // RUN: %split_file %s %t
 // RUN: %acir_opt --verify-each=false --pass-pipeline='builtin.module(ac-freeze-topology)' %t/extern.mlir -o %t/extern.frozen
-// RUN: %not %acir_opt --ac-lower-to-acsim --ac-binding-registry=%S/Inputs/pure-fast.json --ac-binding-profile=fast --ac-binding-target=arm64-apple-darwin %t/extern.frozen -o %t/pure.out 2>&1 | %FileCheck %s --check-prefix=PURE
-// RUN: test ! -s %t/pure.out
+// RUN: %acir_opt --ac-lower-to-acsim --ac-binding-registry=%S/Inputs/pure-fast.json --ac-binding-profile=fast --ac-binding-target=arm64-apple-darwin %t/extern.frozen | %FileCheck %s --check-prefix=PURE
 // RUN: %acir_opt --verify-each=false --pass-pipeline='builtin.module(ac-freeze-topology)' %t/sort-order.mlir -o %t/sort-order.frozen
 // RUN: %acir_opt --ac-lower-to-acsim --ac-binding-profile=fast --ac-binding-target=arm64-apple-darwin %t/sort-order.frozen | %FileCheck %s --check-prefix=SORT
 // RUN: %acir_opt --verify-each=false --pass-pipeline='builtin.module(ac-freeze-topology)' %t/heterogeneous-array.mlir -o %t/heterogeneous-array.frozen
@@ -13,9 +12,9 @@
 // RUN: %not %acir_opt --ac-lower-to-acsim --ac-binding-registry=%S/Inputs/bad-registry-structure.json --ac-binding-profile=fast --ac-binding-target=arm64-apple-darwin %t/extern.frozen 2>&1 | %FileCheck %s --check-prefix=REGISTRY
 // RUN: %not %acir_opt --ac-lower-to-acsim --ac-binding-registry=%S/Inputs/bad-metadata-empty-work.json --ac-binding-profile=fast --ac-binding-target=arm64-apple-darwin %t/extern.frozen 2>&1 | %FileCheck %s --check-prefix=METADATA
 
-// Negative lowering coverage: ownership, array-specialization,
-// stage-boundary, and registry contract rejections all fail atomically with
-// their exact ACLOWER-* codes.
+// Pure external calls lower without ownership. Array-specialization,
+// stage-boundary, and registry contract rejections fail atomically with their
+// exact ACLOWER-* codes.
 
 //--- extern.mlir
 builtin.module attributes {ac.contract_epoch = "0.1"} {
@@ -75,7 +74,8 @@ builtin.module attributes {ac.contract_epoch = "0.1"} {
   }
 }
 
-// PURE: error: ACLOWER-OWNERSHIP: ownership placement of external declaration '@Leaf' requires a stateful binding, but binding 'Leaf' has effect 'pure'
+// PURE: acsim.inline @Leaf() : () -> !acsim.expr<@cpp_i32>
+// PURE-NOT: acsim.dispatch @Top::@leaf
 // SORT: acsim.module @Zebra
 // SORT: acsim.module @Top
 // ARRAY: error: ACLOWER-ARRAY: differently specialized array elements are outside the v0.1 lowering stage; lower them as ordered named members instead
