@@ -606,7 +606,7 @@ git commit -m "feat(codegen): generate typed module sources"
 - Consumes: `ProcessPlan` and closed operation variants from Task 4.
 - Produces: process header/source pairs used by `generateModelSources`.
 
-- [ ] **Step 1: Add failing multi-suspension process golden test**
+- [x] **Step 1: Add failing multi-suspension process golden test**
 
 ```cpp
 TEST(GeneratorTest, EmitsClosedEnumPcProcessWithoutRawFrames) {
@@ -624,17 +624,17 @@ TEST(GeneratorTest, EmitsClosedEnumPcProcessWithoutRawFrames) {
 }
 ```
 
-- [ ] **Step 2: Run and observe that plan operations are not emitted**
+- [x] **Step 2: Run and observe that plan operations are not emitted**
 
 Run: `cmake --build --preset dev-llvm22 --target CodeGenTests && build/dev-llvm22/bin/CodeGenTests --gtest_filter='GeneratorTest.EmitsClosedEnumPcProcessWithoutRawFrames'`
 
 Expected: the test fails because the process files do not contain the structured state machine.
 
-- [ ] **Step 3: Emit the smallest sufficient PC and committed/proposed state**
+- [x] **Step 3: Emit the smallest sufficient PC and committed/proposed state**
 
 Choose `uint8_t`, `uint16_t`, or `uint32_t` from the maximum PC ordinal. Emit one committed and proposed field per typed live slot, reset code for entry PC and values, and an exhaustive switch. The default case returns an invalid-PC failure; it never falls through.
 
-- [ ] **Step 4: Emit each closed operation variant with a total visitor**
+- [x] **Step 4: Emit each closed operation variant with a total visitor**
 
 ```cpp
 return std::visit(Overloaded{
@@ -650,13 +650,13 @@ return std::visit(Overloaded{
 
 Emit `continue`, `suspend`, and `terminate` from their typed terminator variants. Validate operation result dominance, exact types, legal binding effect, wake source IDs, next-PC membership, and state termination before spelling C++.
 
-- [ ] **Step 5: Run positive and negative process tests**
+- [x] **Step 5: Run positive and negative process tests**
 
 Run: `cmake --build --preset dev-llvm22 --target CodeGenTests && build/dev-llvm22/bin/CodeGenTests --gtest_filter='GeneratorTest.*Process*'`
 
 Expected: multi-suspension state emits exact code; illegal cross-PC values, missing terminators, invalid wake IDs, and effect mismatches return stable errors.
 
-- [ ] **Step 6: Commit process generation**
+- [x] **Step 6: Commit process generation**
 
 ```bash
 git add lib/CodeGen/ProcessGenerator.cpp lib/CodeGen/Generator.cpp lib/CodeGen/CMakeLists.txt unittests/CodeGen/GeneratorTest.cpp

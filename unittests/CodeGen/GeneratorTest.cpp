@@ -123,5 +123,78 @@ TEST(GeneratorTest, RejectsExecutableThunkInStructuredMetadata) {
   EXPECT_TRUE(hasError(bundle.takeError()));
 }
 
+TEST(GeneratorTest, EmitsClosedEnumPcProcessWithoutRawFrames) {
+  mlir::MLIRContext context;
+  auto plan = fixturePlan(context);
+  ASSERT_TRUE(static_cast<bool>(plan));
+  auto bundle = generateModelSources(*plan);
+  if (!bundle) {
+    ADD_FAILURE() << llvm::toString(bundle.takeError());
+    return;
+  }
+
+  const GeneratedFile *header =
+      findFile(*bundle, "include/generated/processes/tick_s2300000000000000.h");
+  const GeneratedFile *source =
+      findFile(*bundle, "src/generated/processes/tick_s2300000000000000.cpp");
+  ASSERT_NE(header, nullptr);
+  ASSERT_NE(source, nullptr);
+  EXPECT_NE(header->content.find("enum class Pc : uint8_t"), std::string::npos);
+  EXPECT_NE(header->content.find("kFairnessWork = 8"), std::string::npos);
+  EXPECT_NE(header->content.find("committed_counter_"), std::string::npos);
+  EXPECT_NE(header->content.find("proposed_counter_"), std::string::npos);
+  EXPECT_NE(source->content.find("switch (static_cast<Pc>(pc))"),
+            std::string::npos);
+  EXPECT_NE(source->content.find("ProcessStep::continueAt"), std::string::npos);
+  EXPECT_NE(source->content.find("ProcessStep::suspendAt"), std::string::npos);
+  EXPECT_NE(source->content.find("ProcessStep::terminate"), std::string::npos);
+  EXPECT_NE(source->content.find("ProcessStep::fail(\"invalid_process_pc\")"),
+            std::string::npos);
+  EXPECT_EQ(source->content.find("std::function"), std::string::npos);
+  EXPECT_EQ(source->content.find("co_await"), std::string::npos);
+}
+
+TEST(GeneratorTest, RejectsProcessValueFromAnotherPc) {
+  mlir::MLIRContext context;
+  auto plan = fixturePlan(context);
+  ASSERT_TRUE(static_cast<bool>(plan));
+  auto &store = std::get<LiveStorePlan>(
+      plan->modules[0].processes[0].states[0].operations[1]);
+  store.sourceValue = "value_from_another_pc";
+
+  auto bundle = generateModelSources(*plan);
+  ASSERT_FALSE(bundle);
+  EXPECT_NE(llvm::toString(bundle.takeError()).find("ACLOWER-PROCESS-STATE"),
+            std::string::npos);
+}
+
+TEST(GeneratorTest, RejectsProcessEffectMismatch) {
+  mlir::MLIRContext context;
+  auto plan = fixturePlan(context);
+  ASSERT_TRUE(static_cast<bool>(plan));
+  auto &call = std::get<InlineCallPlan>(
+      plan->modules[0].processes[0].states[2].operations[0]);
+  call.callee = "stateful";
+
+  auto bundle = generateModelSources(*plan);
+  ASSERT_FALSE(bundle);
+  EXPECT_NE(llvm::toString(bundle.takeError()).find("ACLOWER-PROCESS-STATE"),
+            std::string::npos);
+}
+
+TEST(GeneratorTest, RejectsProcessSuspendWithoutExactWake) {
+  mlir::MLIRContext context;
+  auto plan = fixturePlan(context);
+  ASSERT_TRUE(static_cast<bool>(plan));
+  auto &suspend =
+      std::get<SuspendPlan>(plan->modules[0].processes[0].states[1].terminator);
+  suspend.wakeValue = "missing_wake";
+
+  auto bundle = generateModelSources(*plan);
+  ASSERT_FALSE(bundle);
+  EXPECT_NE(llvm::toString(bundle.takeError()).find("ACLOWER-PROCESS-STATE"),
+            std::string::npos);
+}
+
 } // namespace
 } // namespace acir::codegen

@@ -1,5 +1,7 @@
 #include "acir/CodeGen/Generator.h"
 
+#include "ProcessGenerator.h"
+
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/Twine.h"
 
@@ -172,23 +174,6 @@ GeneratedFile moduleSource(const ModulePlan &module) {
                   output.str());
 }
 
-GeneratedFile processHeader(const ProcessPlan &process) {
-  std::ostringstream output;
-  output << "#pragma once\n\n#include \"gfsim/process.h\"\n\n"
-         << "namespace acsim_generated {\n\nclass " << process.className
-         << " final : public gfsim::ProcessRuntime<" << process.className
-         << "> {\npublic:\n  static constexpr uint64_t kFairnessWork = "
-         << process.fairnessWork << ";\n};\n\n} // namespace acsim_generated\n";
-  return makeFile("include/generated/processes/" + process.className + ".h",
-                  output.str());
-}
-
-GeneratedFile processSource(const ProcessPlan &process) {
-  return makeFile("src/generated/processes/" + process.className + ".cpp",
-                  "#include \"generated/processes/" + process.className +
-                      ".h\"\n");
-}
-
 std::vector<std::string> expectedPaths(const ModelPlan &plan) {
   std::vector<std::string> paths = {
       "include/generated/dispatch.h", "include/generated/model.h",
@@ -249,8 +234,14 @@ llvm::Expected<SourceBundle> generateModelSources(const ModelPlan &plan) {
     bundle.files.push_back(std::move(*header));
     bundle.files.push_back(moduleSource(module));
     for (const ProcessPlan &process : module.processes) {
-      bundle.files.push_back(processHeader(process));
-      bundle.files.push_back(processSource(process));
+      auto header = detail::generateProcessHeader(plan, process);
+      if (!header)
+        return header.takeError();
+      auto source = detail::generateProcessSource(plan, process);
+      if (!source)
+        return source.takeError();
+      bundle.files.push_back(std::move(*header));
+      bundle.files.push_back(std::move(*source));
     }
   }
   std::sort(bundle.files.begin(), bundle.files.end(),
