@@ -5,6 +5,7 @@
 #include "gfsim/object.h"
 #include "gfsim/queue.h"
 #include "gfsim/resource.h"
+#include "gfsim/trace.h"
 
 #include <algorithm>
 #include <concepts>
@@ -30,38 +31,6 @@ concept Component = std::derived_from<T, SimObject> && requires(T &t, Epoch e) {
   { t.doWork(e) } -> std::same_as<void>;
   { t.doXfer(e) } -> std::same_as<void>;
   { std::as_const(t).hasPendingCommit() } -> std::same_as<bool>;
-};
-
-// ── TraceSource ───────────────────────────────────────────────────────
-
-/// Exactly one TraceSource owns the trace cursor.
-/// It produces decoded trace records and advances only on committed Xfer.
-template <typename Record = uint64_t> class TraceSource : public SimObject {
-public:
-  static constexpr std::string_view contractName = "ac.std.TraceSource";
-  static constexpr ObjectKind componentKind = ObjectKind::TraceSource;
-
-  TraceSource(std::string name, ObjectId id, SimObject *parent)
-      : SimObject(ObjectKind::TraceSource, std::move(name), id, parent) {}
-
-  /// Offer the current trace record (if any) to a downstream consumer.
-  /// Returns true if a record is available.
-  virtual bool hasRecord() const { return false; }
-
-  /// Peek at the current trace record without consuming it.
-  virtual Record peekRecord() const { return {}; }
-
-  /// Consume the current record (called at Xfer after commit).
-  virtual void advance() { ++cursor_; }
-
-  uint64_t cursor() const { return cursor_; }
-
-  bool isRunnable(Epoch) const override { return hasRecord(); }
-
-  void reset() override { cursor_ = 0; }
-
-private:
-  uint64_t cursor_ = 0;
 };
 
 // ── Compute ───────────────────────────────────────────────────────────

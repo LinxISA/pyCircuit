@@ -63,6 +63,11 @@ Metadata cannot override record semantics, timing semantics, dependency rules,
 identity rules, or runtime behavior. There is no metadata mechanism for
 declaring unknown mandatory or optional extensions.
 
+When `content_hash` is present, it is the lowercase `sha256:` fingerprint of
+the RFC 8785 canonical UTF-8 bytes of the `records` array alone. The metadata
+object and document envelope are excluded, preventing self-reference while
+making buffered and streamed validation compare the same content bytes.
+
 ## Root transaction identity
 
 Each record represents one root transaction and MUST contain a `sequence_id`.

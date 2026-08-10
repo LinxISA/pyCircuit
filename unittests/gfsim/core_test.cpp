@@ -6,6 +6,7 @@
 #include "gfsim/process.h"
 #include "gfsim/queue.h"
 #include "gfsim/resource.h"
+#include "gfsim/trace.h"
 
 #include "gtest/gtest.h"
 
@@ -667,8 +668,7 @@ TEST(GfsimComponentsTest, SinkResetClearsAll) {
   EXPECT_TRUE(s.received().empty());
 }
 
-static_assert(Component<TraceSource<uint64_t>>);
-static_assert(Component<TraceSource<std::string>>);
+static_assert(Component<TraceSource<>>);
 static_assert(Component<Queue<uint64_t>>);
 static_assert(Component<Scheduler<uint64_t>>);
 static_assert(Component<Compute<>>);
@@ -683,7 +683,7 @@ static_assert(Component<ReadyValid<uint64_t>>);
 static_assert(Component<RequestResponse<uint64_t, uint64_t>>);
 
 TEST(GfsimComponentsTest, BaselineTemplatesExposeCanonicalObjectKinds) {
-  TraceSource<uint64_t> trace("trace", 0, nullptr);
+  TraceSource<> trace("trace", 0, nullptr);
   Queue<uint64_t> queue("queue", 1, nullptr, 2);
   Scheduler<uint64_t> scheduler("scheduler", 2, nullptr, 2);
   Compute<> compute("compute", 3, nullptr);
@@ -698,7 +698,7 @@ TEST(GfsimComponentsTest, BaselineTemplatesExposeCanonicalObjectKinds) {
   EXPECT_EQ(link.kind(), ObjectKind::Link);
   EXPECT_EQ(memory.kind(), ObjectKind::Memory);
   EXPECT_EQ(sink.kind(), ObjectKind::Sink);
-  EXPECT_EQ(TraceSource<uint64_t>::contractName, "ac.std.TraceSource");
+  EXPECT_EQ(TraceSource<>::contractName, "ac.std.TraceSource");
   EXPECT_EQ(Queue<uint64_t>::contractName, "ac.std.Queue");
   EXPECT_EQ(Scheduler<uint64_t>::contractName, "ac.std.Scheduler");
   EXPECT_EQ(Compute<>::contractName, "ac.std.Compute");
@@ -961,6 +961,205 @@ TEST(GfsimProtocolTest, ProtocolStatePreservesCreditAndPhaseInvariants) {
   EXPECT_EQ(state.inFlight(), 0u);
   EXPECT_FALSE(state.completeResponse());
   EXPECT_TRUE(state.validate());
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// PTO trace streaming
+// ═══════════════════════════════════════════════════════════════════════
+
+constexpr std::string_view ValidPtoTrace = R"json({
+  "schema": "pto-trace",
+  "version": "0.1",
+  "contract_epoch": "0.1",
+  "metadata": {
+    "producer": "gfsim-test",
+    "address_spaces": ["global"],
+    "record_count": 2
+  },
+  "records": [
+    {
+      "sequence_id": 10,
+      "opcode": "pto.load",
+      "operands": [{"kind": "buffer", "id": "A"}],
+      "dependencies": [],
+      "attributes": {"width": 32},
+      "issue_time": 2
+    },
+    {
+      "sequence_id": 20,
+      "opcode": "pto.store",
+      "operands": [
+        {"kind": "address", "space": "global", "value": 64},
+        {"kind": "record_result", "sequence_id": 10, "result_index": 0}
+      ],
+      "dependencies": [10],
+      "attributes": {"ordered": true}
+    }
+  ]
+})json";
+
+TEST(GfsimTraceTest, ParsesClosedTypedPtoTraceDocument) {
+  TraceLoadResult result = parsePtoTrace(ValidPtoTrace);
+  ASSERT_TRUE(result.succeeded()) << result.primaryDiagnostic();
+  ASSERT_TRUE(result.document.has_value());
+  EXPECT_EQ(result.document->metadata.producer, "gfsim-test");
+  ASSERT_EQ(result.document->records.size(), 2u);
+  EXPECT_EQ(result.document->records[0].sequenceId, 10u);
+  EXPECT_EQ(result.document->records[0].opcode, "pto.load");
+  EXPECT_EQ(result.document->records[0].issueTime, 2u);
+  ASSERT_EQ(result.document->records[1].operands.size(), 2u);
+  EXPECT_EQ(result.document->records[1].operands[0].kind,
+            PtoOperandKind::Address);
+  EXPECT_EQ(result.document->records[1].dependencies,
+            (std::vector<uint64_t>{10}));
+}
+
+TEST(GfsimTraceTest, StreamingAndBufferedParsingProduceIdenticalDocument) {
+  TraceLoadResult buffered = parsePtoTrace(ValidPtoTrace);
+  ASSERT_TRUE(buffered.succeeded());
+
+  PtoTraceStream stream;
+  for (size_t offset = 0; offset < ValidPtoTrace.size(); offset += 17)
+    ASSERT_TRUE(stream.append(ValidPtoTrace.substr(
+        offset, std::min<size_t>(17, ValidPtoTrace.size() - offset))));
+  TraceLoadResult streamed = stream.finish();
+  ASSERT_TRUE(streamed.succeeded()) << streamed.primaryDiagnostic();
+  EXPECT_EQ(streamed.document, buffered.document);
+}
+
+TEST(GfsimTraceTest, RejectsForwardDependencyWithStableDiagnostic) {
+  constexpr std::string_view invalid = R"json({
+    "schema":"pto-trace","version":"0.1","contract_epoch":"0.1",
+    "metadata":{},"records":[
+      {"sequence_id":1,"opcode":"pto.a","operands":[],
+       "dependencies":[2],"attributes":{}},
+      {"sequence_id":2,"opcode":"pto.b","operands":[],
+       "dependencies":[],"attributes":{}}
+    ]})json";
+  TraceLoadResult result = parsePtoTrace(invalid);
+  ASSERT_FALSE(result.succeeded());
+  ASSERT_FALSE(result.diagnostics.empty());
+  EXPECT_EQ(result.diagnostics.front().code, "ACTRACE-DEPENDENCY");
+  EXPECT_EQ(result.diagnostics.front().jsonPointer,
+            "/records/0/dependencies/0");
+  EXPECT_EQ(result.diagnostics.front().sequenceId, 1u);
+}
+
+TEST(GfsimTraceTest, RejectsUnknownFieldsAndRepresentationCaps) {
+  constexpr std::string_view unknown = R"json({
+    "schema":"pto-trace","version":"0.1","contract_epoch":"0.1",
+    "metadata":{"extension":true},"records":[]})json";
+  TraceLoadResult closed = parsePtoTrace(unknown);
+  ASSERT_FALSE(closed.succeeded());
+  EXPECT_EQ(closed.diagnostics.front().code, "ACTRACE-SCHEMA");
+  EXPECT_EQ(closed.diagnostics.front().jsonPointer, "/metadata/extension");
+
+  TraceValidationLimits limits;
+  limits.maxDocumentBytes = 32;
+  TraceLoadResult capped = parsePtoTrace(ValidPtoTrace, limits);
+  ASSERT_FALSE(capped.succeeded());
+  EXPECT_EQ(capped.diagnostics.front().code, "ACTRACE-LIMIT");
+}
+
+TEST(GfsimTraceTest, ValidatesDuplicateKeysRecordCountAndContentHash) {
+  constexpr std::string_view validEmpty = R"json({
+    "schema":"pto-trace","version":"0.1","contract_epoch":"0.1",
+    "metadata":{
+      "record_count":0,
+      "content_hash":"sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+    },"records":[]})json";
+  EXPECT_TRUE(parsePtoTrace(validEmpty).succeeded());
+
+  constexpr std::string_view wrongCount = R"json({
+    "schema":"pto-trace","version":"0.1","contract_epoch":"0.1",
+    "metadata":{"record_count":1},"records":[]})json";
+  TraceLoadResult count = parsePtoTrace(wrongCount);
+  ASSERT_FALSE(count.succeeded());
+  EXPECT_EQ(count.diagnostics.front().code, "ACTRACE-METADATA");
+
+  constexpr std::string_view duplicateKey = R"json({
+    "schema":"pto-trace","schema":"pto-trace","version":"0.1",
+    "contract_epoch":"0.1","metadata":{},"records":[]})json";
+  TraceLoadResult duplicate = parsePtoTrace(duplicateKey);
+  ASSERT_FALSE(duplicate.succeeded());
+  EXPECT_EQ(duplicate.diagnostics.front().code, "ACTRACE-JSON");
+}
+
+struct DecodedTraceTransaction {
+  uint64_t sequenceId;
+  std::string opcode;
+  auto operator<=>(const DecodedTraceTransaction &) const = default;
+};
+
+struct CountingTraceDecoder {
+  size_t *decodeCount;
+  std::optional<DecodedTraceTransaction>
+  operator()(const PtoTraceRecord &record) const {
+    ++*decodeCount;
+    return DecodedTraceTransaction{record.sequenceId, record.opcode};
+  }
+};
+
+TEST(GfsimTraceTest, CursorAdvancesOnlyOnAcceptedXferAndHonorsDependencies) {
+  TraceLoadResult loaded = parsePtoTrace(ValidPtoTrace);
+  ASSERT_TRUE(loaded.succeeded());
+  size_t decodeCount = 0;
+  TraceSource<DecodedTraceTransaction, CountingTraceDecoder> source(
+      "trace", 1, nullptr, std::move(*loaded.document), {&decodeCount});
+
+  source.doWork({2, 0});
+  source.doXfer({2, 0});
+  ASSERT_NE(source.peekOffer(), nullptr);
+  EXPECT_EQ(source.peekOffer()->sequenceId, 10u);
+  EXPECT_EQ(source.position().nextRecordIndex, 0u);
+  EXPECT_FALSE(source.position().lastCommittedSequenceId.has_value());
+  EXPECT_EQ(decodeCount, 1u);
+
+  source.doWork({3, 0});
+  source.doWork({3, 1});
+  EXPECT_EQ(source.peekOffer()->sequenceId, 10u);
+  EXPECT_EQ(decodeCount, 1u);
+  ASSERT_TRUE(source.proposeAccept());
+  source.doXfer({3, 1});
+  EXPECT_EQ(source.position().nextRecordIndex, 1u);
+  EXPECT_EQ(source.position().lastCommittedSequenceId, 10u);
+  EXPECT_FALSE(source.eof());
+
+  source.doWork({4, 0});
+  source.doXfer({4, 0});
+  EXPECT_EQ(source.peekOffer(), nullptr);
+  EXPECT_EQ(decodeCount, 1u);
+  EXPECT_TRUE(source.markDependencyComplete(10));
+  source.doWork({4, 1});
+  source.doXfer({4, 1});
+  ASSERT_NE(source.peekOffer(), nullptr);
+  EXPECT_EQ(source.peekOffer()->sequenceId, 20u);
+  EXPECT_EQ(decodeCount, 2u);
+
+  ASSERT_TRUE(source.proposeAccept());
+  source.doXfer({5, 0});
+  EXPECT_TRUE(source.eof());
+  EXPECT_EQ(source.position().nextRecordIndex, 2u);
+  EXPECT_EQ(source.position().lastCommittedSequenceId, 20u);
+  EXPECT_TRUE(source.validate());
+}
+
+TEST(GfsimTraceTest, IssueTimeSchedulesAnExactWakeInsteadOfPolling) {
+  TraceLoadResult loaded = parsePtoTrace(ValidPtoTrace);
+  ASSERT_TRUE(loaded.succeeded());
+  SimSystem system;
+  auto source = std::make_unique<TraceSource<>>(
+      "trace", 0, nullptr, std::move(*loaded.document),
+      IdentityTraceDecoder<PtoTraceRecord>{}, &system);
+  TraceSource<> *sourcePtr = source.get();
+  system.registerObject(sourcePtr);
+  system.root().addChild(std::move(source));
+
+  TerminationResult result = system.run();
+  EXPECT_EQ(result.finalEpoch, (Epoch{2, 0}));
+  ASSERT_NE(sourcePtr->peekOffer(), nullptr);
+  EXPECT_EQ(sourcePtr->peekOffer()->sequenceId, 10u);
+  EXPECT_EQ(sourcePtr->position().nextRecordIndex, 0u);
 }
 
 // ═══════════════════════════════════════════════════════════════════════

@@ -388,6 +388,20 @@ The cursor advances only when that offer commits at Xfer. Decode, retries,
 Work reevaluation, and rejected proposals never advance it. Detailed identity
 and dependency rules are defined by the PTO Trace Schema v0.1 specification.
 
+The runtime `PtoTraceDocument` is move-only cursor input. `parsePtoTrace`
+validates the exact closed `pto-trace@0.1` envelope into typed metadata,
+records, operands, attributes, dependencies, issue time, and source location;
+all failures use stable `ACTRACE-*` diagnostics and JSON Pointers.
+`PtoTraceStream` accepts bounded chunks and applies the identical preflight and
+decode path at `finish`, so chunk boundaries cannot affect records or errors.
+
+`TraceSource<Transaction,Decoder>` owns the moved document and invokes its
+statically selected decoder at most once for the current root offer. It exposes
+the zero-based next-record index, last committed root sequence ID, and EOF
+state. Acceptance is a proposal; only its Xfer commit advances the position.
+Dependency-complete notifications accept only previously issued root IDs.
+Future issue-time constraints schedule one exact self event and never poll.
+
 ## Static preflight and build profiles
 
 The generated model selects exactly one static build profile. v0.1 defines:
