@@ -473,7 +473,7 @@ private:
   std::string moduleFingerprint(ac::ModuleOp module);
   std::string processFingerprint(const ModulePlan &module,
                                  const PlacementPlan &process);
-  std::string bindingInstanceFingerprint(llvm::StringRef binding,
+  std::string bindingInstanceFingerprint(const bindings::BindingRecord &record,
                                          ArrayAttr values);
 
   ACIRToACSimPassOptions options;
@@ -485,6 +485,7 @@ private:
   llvm::SmallVector<ModulePlan, 0> modules; // sorted by name
   std::optional<bindings::BindingResolutionResult> resolution;
   std::optional<ProcessStatePlanSet> processPlans;
+  std::string processPlanBytes;
   TypeSymbolTable typeSymbols;
   std::string wakeTypeSymbol;
   std::string wakeImplSymbol;
@@ -514,6 +515,50 @@ private:
 std::string ACIRToACSimPass::moduleFingerprint(ac::ModuleOp module) {
   llvm::json::Object descriptor;
   descriptor["module"] = module.getSymName();
+  auto typeSpelling = [](Type type) {
+    std::string storage;
+    llvm::raw_string_ostream stream(storage);
+    stream << type;
+    return storage;
+  };
+  auto staticDictionary = [&](DictionaryAttr dictionary) {
+    llvm::json::Object values;
+    if (!dictionary)
+      return values;
+    for (NamedAttribute named : dictionary) {
+      auto value = staticValueToJson(named.getValue());
+      if (!value) {
+        llvm::consumeError(value.takeError());
+        continue;
+      }
+      values[named.getName().getValue()] = std::move(*value);
+    }
+    return values;
+  };
+  auto targetFingerprint = [&](llvm::StringRef target) {
+    if (auto concrete = moduleIndexByName.find(target);
+        concrete != moduleIndexByName.end())
+      return modules[concrete->second].specialization;
+    if (resolution) {
+      std::string key = ("@" + target).str();
+      if (const bindings::ResolvedBinding *selection =
+              resolution->selectionForResolutionKey(key))
+        return selection->record().fingerprint().str();
+    }
+    return std::string();
+  };
+
+  llvm::json::Object interface;
+  llvm::json::Array inputs;
+  llvm::json::Array results;
+  for (Type type : module.getFunctionType().getInputs())
+    inputs.push_back(typeSpelling(type));
+  for (Type type : module.getFunctionType().getResults())
+    results.push_back(typeSpelling(type));
+  interface["inputs"] = std::move(inputs);
+  interface["results"] = std::move(results);
+  descriptor["interface"] = std::move(interface);
+
   llvm::json::Object parameters;
   for (NamedAttribute named : module.getStaticParams()) {
     auto value = staticValueToJson(named.getValue());
@@ -524,6 +569,94 @@ std::string ACIRToACSimPass::moduleFingerprint(ac::ModuleOp module) {
     parameters[named.getName().getValue()] = std::move(*value);
   }
   descriptor["static"] = std::move(parameters);
+
+  std::vector<std::pair<std::string, llvm::json::Object>> definitions;
+  auto appendPlacement = [&](llvm::StringRef key, llvm::StringRef kind,
+                             llvm::StringRef name, llvm::StringRef target,
+                             DictionaryAttr staticArgs) {
+    llvm::json::Object entry;
+    entry["kind"] = kind;
+    entry["name"] = name;
+    entry["static"] = staticDictionary(staticArgs);
+    entry["target"] = target;
+    entry["target_specialization"] = targetFingerprint(target);
+    definitions.emplace_back(key.str(), std::move(entry));
+  };
+  for (Operation &operation : module.getBody().front()) {
+    if (auto instance = dyn_cast<ac::InstanceOp>(operation)) {
+      appendPlacement(("instance:" + instance.getSymName()).str(), "instance",
+                      instance.getSymName(), instance.getDefinition(),
+                      instance.getStaticArgs());
+      continue;
+    }
+    if (auto array = dyn_cast<ac::ArrayOp>(operation)) {
+      llvm::json::Object entry;
+      entry["kind"] = "array";
+      entry["name"] = array.getSymName();
+      entry["target"] = array.getDefinition();
+      entry["target_specialization"] = targetFingerprint(array.getDefinition());
+      llvm::json::Array shape;
+      for (int64_t extent : array.getShape())
+        shape.push_back(extent);
+      entry["shape"] = std::move(shape);
+      llvm::json::Array staticElements;
+      for (Attribute arguments : array.getStaticArgs())
+        staticElements.push_back(
+            staticDictionary(cast<DictionaryAttr>(arguments)));
+      entry["static"] = std::move(staticElements);
+      definitions.emplace_back(("array:" + array.getSymName()).str(),
+                               std::move(entry));
+      continue;
+    }
+    if (auto collection = dyn_cast<ac::InstancesOp>(operation)) {
+      for (auto [index, nameAttribute] :
+           llvm::enumerate(collection.getNames())) {
+        llvm::StringRef name = cast<StringAttr>(nameAttribute).getValue();
+        llvm::StringRef target =
+            cast<FlatSymbolRefAttr>(collection.getDefinitions()[index])
+                .getValue();
+        appendPlacement(
+            ("instance:" + name).str(), "instance", name, target,
+            cast<DictionaryAttr>(collection.getStaticArgs()[index]));
+      }
+      continue;
+    }
+    if (auto process = dyn_cast<ac::ProcessOp>(operation)) {
+      llvm::json::Object entry;
+      entry["kind"] = "process";
+      entry["name"] = process.getSymName();
+      entry["process_kind"] = process.getKind();
+      llvm::json::Array captureTypes;
+      for (Value capture : process.getCaptures())
+        captureTypes.push_back(typeSpelling(capture.getType()));
+      entry["captures"] = std::move(captureTypes);
+      llvm::json::Array skeleton;
+      if (auto frozenSkeleton =
+              process->getAttrOfType<ArrayAttr>("ac.frozen_process_skeleton"))
+        for (Attribute line : frozenSkeleton)
+          skeleton.push_back(cast<StringAttr>(line).getValue());
+      entry["skeleton"] = std::move(skeleton);
+      definitions.emplace_back(("process:" + process.getSymName()).str(),
+                               std::move(entry));
+      continue;
+    }
+    if (auto returnOp = dyn_cast<ac::ReturnOp>(operation)) {
+      llvm::json::Object entry;
+      entry["kind"] = "return";
+      llvm::json::Array operandTypes;
+      for (Value operand : returnOp.getOperands())
+        operandTypes.push_back(typeSpelling(operand.getType()));
+      entry["operands"] = std::move(operandTypes);
+      definitions.emplace_back("~return", std::move(entry));
+    }
+  }
+  llvm::sort(definitions, [](const auto &left, const auto &right) {
+    return left.first < right.first;
+  });
+  llvm::json::Array body;
+  for (auto &definition : definitions)
+    body.push_back(std::move(definition.second));
+  descriptor["body"] = std::move(body);
   return fingerprintJson(llvm::json::Value(std::move(descriptor)));
 }
 
@@ -533,13 +666,20 @@ std::string ACIRToACSimPass::processFingerprint(const ModulePlan &module,
   descriptor["module"] = module.name;
   descriptor["module_specialization"] = module.specialization;
   descriptor["process"] = process.name;
+  descriptor["process_plan"] = processPlanBytes;
   return fingerprintJson(llvm::json::Value(std::move(descriptor)));
 }
 
-std::string ACIRToACSimPass::bindingInstanceFingerprint(llvm::StringRef binding,
-                                                        ArrayAttr values) {
+std::string ACIRToACSimPass::bindingInstanceFingerprint(
+    const bindings::BindingRecord &record, ArrayAttr values) {
   llvm::json::Object descriptor;
-  descriptor["binding"] = binding;
+  descriptor["binding"] = record.binding();
+  descriptor["binding_fingerprint"] = record.fingerprint();
+  descriptor["component_schema_fingerprint"] =
+      record.componentSchemaFingerprint();
+  descriptor["profile"] = options.profile;
+  descriptor["provider_implementation_fingerprint"] =
+      record.providerImplementationFingerprint();
   llvm::json::Array staticValues;
   for (Attribute value : values) {
     auto converted = staticValueToJson(value);
@@ -550,6 +690,7 @@ std::string ACIRToACSimPass::bindingInstanceFingerprint(llvm::StringRef binding,
     staticValues.push_back(std::move(*converted));
   }
   descriptor["static"] = std::move(staticValues);
+  descriptor["target"] = options.target;
   return fingerprintJson(llvm::json::Value(std::move(descriptor)));
 }
 
@@ -618,7 +759,7 @@ mlir::LogicalResult ACIRToACSimPass::planInstanceTarget(
     }
     planned.staticArgs = builder.getArrayAttr(values);
     planned.specialization =
-        bindingInstanceFingerprint(record.binding(), planned.staticArgs);
+        bindingInstanceFingerprint(record, planned.staticArgs);
     planned.work = entryPoints.work;
     planned.xfer = entryPoints.xfer;
     planned.reset = entryPoints.reset;
@@ -772,6 +913,13 @@ mlir::LogicalResult ACIRToACSimPass::planProcesses(mlir::ModuleOp input) {
   if (failed(verifyProcessStatePlan(*plans)))
     return mlir::failure();
   processPlans = std::move(*plans);
+  auto serializedPlans = serializeProcessStatePlan(*processPlans);
+  if (!serializedPlans) {
+    llvm::consumeError(serializedPlans.takeError());
+    return lowerError(input, "ACLOWER-FINGERPRINT",
+                      "failed to serialize the canonical process-state plan");
+  }
+  processPlanBytes = std::move(*serializedPlans);
 
   // The yield-only plan names one generated next-delta wake helper; adopt its
   // exact compiler-generated identities for the ACSim realization.

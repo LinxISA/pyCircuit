@@ -60,6 +60,18 @@ module attributes {ac.contract_epoch = "0.1"} {
 }
 )mlir";
 
+llvm::StringRef kAdversarialModuleOrderRenamedPlacement = R"mlir(
+module attributes {ac.contract_epoch = "0.1"} {
+  ac.system @soc root @A as "root" tick 0 "cycle" workload @A::@workload seed {kind = "fixed", value = 7 : i64} instrumentation [] results {format = "json", id = "default"} selected true
+  ac.module @A() parameters {} graph {
+    ac.instance @offspring of @Z() static {} id "offspring" path "offspring" : () -> ()
+    ac.process @workload kind "workload" { ac.yield_sim }
+    ac.return
+  }
+  ac.module @Z() parameters {} graph { ac.return }
+}
+)mlir";
+
 class ACIRToACSimTest : public ::testing::Test {
 protected:
   ACIRToACSimTest() {
@@ -165,6 +177,32 @@ TEST_F(ACIRToACSimTest, ModuleInstantiationCycleHasOwnershipDiagnostic) {
   manager.addPass(createACIRToACSimPass(options));
   EXPECT_TRUE(mlir::failed(manager.run(module.get())));
   EXPECT_NE(diagnostic.find("cycle"), std::string::npos) << diagnostic;
+}
+
+TEST_F(ACIRToACSimTest, ModuleFingerprintIncludesDefiningTopology) {
+  auto fingerprint = [&](llvm::StringRef source) {
+    auto module = mlir::parseSourceString<mlir::ModuleOp>(source, &context);
+    EXPECT_TRUE(module);
+    mlir::PassManager freezer(&context);
+    freezer.addPass(createFreezeTopologyPass());
+    EXPECT_TRUE(mlir::succeeded(freezer.run(module.get())));
+    ACIRToACSimPassOptions options;
+    options.profile = "fast";
+    options.target = "arm64-apple-darwin";
+    mlir::PassManager lowerer(&context);
+    lowerer.addPass(createACIRToACSimPass(options));
+    EXPECT_TRUE(mlir::succeeded(lowerer.run(module.get())));
+    auto model = mlir::cast<acsim::ModelOp>(module->getBody()->front());
+    for (acsim::ModuleOp realized : model.getOps<acsim::ModuleOp>())
+      if (realized.getSymName() == "A")
+        return realized.getSpecializationFingerprint().str();
+    return std::string();
+  };
+  std::string child = fingerprint(kAdversarialModuleOrder);
+  std::string offspring = fingerprint(kAdversarialModuleOrderRenamedPlacement);
+  ASSERT_FALSE(child.empty());
+  ASSERT_FALSE(offspring.empty());
+  EXPECT_NE(child, offspring);
 }
 
 } // namespace
