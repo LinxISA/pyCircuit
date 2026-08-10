@@ -965,7 +965,7 @@ git commit -m "feat(codegen): publish immutable generated builds"
 - Consumes: `buildModelPlan`, `generateModelSources`, source-contract validation, compile-plan construction, build/link, and publication APIs.
 - Produces: internal `acir-cxxgen` with exact `--stop-after` stages `model-plan`, `acsim-emit-cxx`, `acsim-check-cxx-contract`, `compile`, `link`, and `publish`.
 
-- [ ] **Step 1: Add failing lit tests for exact stage boundaries**
+- [x] **Step 1: Add failing lit tests for exact stage boundaries**
 
 ```mlir
 // RUN: acir-cxxgen %s --stop-after=model-plan --output-root=%t.plan | FileCheck %s --check-prefix=PLAN
@@ -976,27 +976,27 @@ git commit -m "feat(codegen): publish immutable generated builds"
 // BAD-STAGE: unknown --stop-after stage 'unknown'
 ```
 
-- [ ] **Step 2: Run lit and observe the missing tool**
+- [x] **Step 2: Run lit and observe the missing tool**
 
 Run: `cmake --build --preset dev-llvm22 --target acir-cxxgen check-acir`
 
 Expected: configuration/build fails because the target and tests are absent.
 
-- [ ] **Step 3: Implement explicit command-line input plumbing**
+- [x] **Step 3: Implement explicit command-line input plumbing**
 
 Require canonical ACSim input and explicit flags/files for frozen ACIR, binding lock, project, system, profile, instrumentation, compiler identity, target, include roots, provider inputs, link inputs, and output root at the first stage that needs each input. Do not read defaults from environment variables or current working directory.
 
-- [ ] **Step 4: Map exact stop stages to library boundaries**
+- [x] **Step 4: Map exact stop stages to library boundaries**
 
 `model-plan` prints a stable plan report; `acsim-emit-cxx` materializes the validated source bundle in a private inspection root; `acsim-check-cxx-contract` records source/concept reports; `compile` creates objects; `link` creates and checks the executable; `publish` performs immutable publication. Every failure prints its `ACLOWER-*` code, stage, stable identity, and bounded detail.
 
-- [ ] **Step 5: Run positive and negative driver tests**
+- [x] **Step 5: Run positive and negative driver tests**
 
 Run: `cmake --build --preset dev-llvm22 --target acir-cxxgen && lit -v build/dev-llvm22/test/CodeGen`
 
 Expected: all exact stage names work, unknown stages fail, and stopping before publication leaves `current.json` absent.
 
-- [ ] **Step 6: Commit the internal driver**
+- [x] **Step 6: Commit the internal driver**
 
 ```bash
 git add tools/acir-cxxgen tools/CMakeLists.txt test/CodeGen test/CMakeLists.txt
