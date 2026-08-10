@@ -72,6 +72,18 @@ module attributes {ac.contract_epoch = "0.1"} {
 }
 )mlir";
 
+llvm::StringRef kInvalidGeneratedModuleName = R"mlir(
+module attributes {ac.contract_epoch = "0.1"} {
+  ac.system @soc root @"bad-name" as "root" tick 0 "cycle"
+      workload @"bad-name"::@workload seed {kind = "fixed", value = 7 : i64}
+      instrumentation [] results {format = "json", id = "default"} selected true
+  ac.module @"bad-name"() parameters {} graph {
+    ac.process @workload kind "workload" { ac.yield_sim }
+    ac.return
+  }
+}
+)mlir";
+
 class ACIRToACSimTest : public ::testing::Test {
 protected:
   ACIRToACSimTest() {
@@ -137,6 +149,33 @@ TEST_F(ACIRToACSimTest, CapabilityBoundOverflowIsAtomicDispatchFailure) {
   // Atomicity: the frozen ACIR is untouched, no partial ACSim leaked out.
   EXPECT_TRUE(mlir::isa<ac::SystemOp>(module->getBody()->front()));
   EXPECT_TRUE(module->getBody()->getOps<acsim::ModelOp>().empty());
+}
+
+TEST_F(ACIRToACSimTest, CanonicalVerificationFailureDoesNotPublishACSim) {
+  auto module = mlir::parseSourceString<mlir::ModuleOp>(
+      kInvalidGeneratedModuleName, &context);
+  ASSERT_TRUE(module);
+  mlir::PassManager freezer(&context);
+  freezer.addPass(createFreezeTopologyPass());
+  ASSERT_TRUE(mlir::succeeded(freezer.run(module.get())));
+
+  ACIRToACSimPassOptions options;
+  options.profile = "fast";
+  options.target = "arm64-apple-darwin";
+  std::string diagnostic;
+  mlir::ScopedDiagnosticHandler handler(&context, [&](mlir::Diagnostic &diag) {
+    if (diag.getSeverity() == mlir::DiagnosticSeverity::Error)
+      diagnostic += diag.str();
+    return mlir::success();
+  });
+  mlir::PassManager lowerer(&context);
+  lowerer.addPass(createACIRToACSimPass(options));
+  EXPECT_TRUE(mlir::failed(lowerer.run(module.get())));
+  EXPECT_NE(diagnostic.find("canonical C++ identifier"), std::string::npos)
+      << diagnostic;
+  EXPECT_FALSE(module->getBody()->getOps<ac::SystemOp>().empty());
+  EXPECT_TRUE(module->getBody()->getOps<acsim::ModelOp>().empty());
+  EXPECT_TRUE(module->getOperation()->hasAttr("ac.topology_frozen"));
 }
 
 TEST_F(ACIRToACSimTest, ModuleReferencesDoNotDependOnSymbolOrder) {

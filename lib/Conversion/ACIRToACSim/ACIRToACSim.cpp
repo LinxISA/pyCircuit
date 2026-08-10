@@ -32,6 +32,7 @@
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/Diagnostics.h"
+#include "mlir/IR/Verifier.h"
 #include "mlir/Pass/Pass.h"
 #include "llvm/ADT/SmallSet.h"
 #include "llvm/ADT/SmallVector.h"
@@ -475,7 +476,8 @@ private:
                     llvm::SmallSet<unsigned, 8> &active);
 
   /// Emission. Runs only after every check succeeded.
-  void emit(mlir::ModuleOp input);
+  mlir::FailureOr<mlir::OwningOpRef<mlir::ModuleOp>> emit(mlir::ModuleOp input);
+  void publish(mlir::ModuleOp input, mlir::ModuleOp staged);
   void emitModuleBody(OpBuilder &builder, const ModulePlan &planned);
   void emitProcessBody(OpBuilder &builder, const PlacementPlan &placement);
 
@@ -1676,10 +1678,14 @@ void ACIRToACSimPass::emitModuleBody(OpBuilder &builder,
   acsim::ReturnOp::create(builder, planned.source->getLoc(), ValueRange{});
 }
 
-void ACIRToACSimPass::emit(mlir::ModuleOp input) {
+mlir::FailureOr<mlir::OwningOpRef<mlir::ModuleOp>>
+ACIRToACSimPass::emit(mlir::ModuleOp input) {
   MLIRContext *context = input.getContext();
+  mlir::OwningOpRef<mlir::ModuleOp> staged =
+      mlir::ModuleOp::create(input.getLoc());
+  (*staged)->setAttr("ac.contract_epoch", input->getAttr("ac.contract_epoch"));
   OpBuilder builder(context);
-  builder.setInsertionPointToEnd(input.getBody());
+  builder.setInsertionPointToEnd(staged->getBody());
 
   llvm::SmallVector<Attribute> construction;
   llvm::SmallVector<Attribute> destructionAttrs;
@@ -1786,13 +1792,22 @@ void ACIRToACSimPass::emit(mlir::ModuleOp input) {
                               dispatch.getObject());
   }
 
-  // Replace the frozen ACIR with the canonical ACSim file.
+  if (failed(mlir::verify(*staged)) ||
+      failed(acsim::verifyCanonicalACSimFile(*staged)))
+    return mlir::failure();
+  return staged;
+}
+
+void ACIRToACSimPass::publish(mlir::ModuleOp input, mlir::ModuleOp staged) {
+  Operation *model = &staged.getBody()->front();
+  model->remove();
+
   llvm::SmallVector<Operation *> obsolete;
   for (Operation &operation : *input.getBody())
-    if (&operation != model.getOperation())
-      obsolete.push_back(&operation);
+    obsolete.push_back(&operation);
   for (Operation *operation : obsolete)
     operation->erase();
+  input.getBody()->push_back(model);
 
   llvm::SmallVector<NamedAttribute> retained;
   for (NamedAttribute attribute : input->getAttrs())
@@ -1804,7 +1819,10 @@ void ACIRToACSimPass::emit(mlir::ModuleOp input) {
 mlir::LogicalResult ACIRToACSimPass::lower(mlir::ModuleOp input) {
   if (failed(plan(input)))
     return mlir::failure();
-  emit(input);
+  auto staged = emit(input);
+  if (failed(staged))
+    return mlir::failure();
+  publish(input, **staged);
   return mlir::success();
 }
 
