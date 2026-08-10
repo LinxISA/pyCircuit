@@ -1,6 +1,7 @@
 find_package(GTest CONFIG REQUIRED)
 get_filename_component(ACIR_TEST_LLVM_LIB_DIR "${LLVM_DIR}/../.." ABSOLUTE)
 add_executable(CodeGenTests
+  BuildTest.cpp
   CodeGenTest.cpp
   GeneratedModelCompileTest.cpp
   GeneratorTest.cpp

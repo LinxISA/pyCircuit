@@ -746,7 +746,7 @@ git commit -m "feat(codegen): emit static model harness"
 - Consumes: `SourceBundle`, `BuildManifest`, explicit compiler/link inputs, and LLVM process support.
 - Produces: `CompilePlan`, `ToolchainIdentity`, `BuildRequest`, `BuildResult`, `createCompilePlan`, and `buildGeneratedModel`.
 
-- [ ] **Step 1: Add failing canonical-plan and mismatch tests**
+- [x] **Step 1: Add failing canonical-plan and mismatch tests**
 
 ```cpp
 TEST(BuildTest, CompilePlanIsClosedCanonicalAndArgumentVectorBased) {
@@ -765,13 +765,13 @@ TEST(BuildTest, RejectsToolchainOrPrebuiltProvenanceMismatch) {
 }
 ```
 
-- [ ] **Step 2: Run and confirm the build API is absent**
+- [x] **Step 2: Run and confirm the build API is absent**
 
 Run: `cmake --build --preset dev-llvm22 --target CodeGenTests`
 
 Expected: compilation fails because `Build.h` and its APIs do not exist.
 
-- [ ] **Step 3: Define explicit build inputs and internal compile plan**
+- [x] **Step 3: Define explicit build inputs and internal compile plan**
 
 ```cpp
 struct ToolchainIdentity {
@@ -827,23 +827,23 @@ createCompilePlan(const BuildRequest &, const SourceBundle &);
 llvm::Expected<BuildResult> buildGeneratedModel(const BuildRequest &);
 ```
 
-- [ ] **Step 4: Implement exact toolchain and provenance checks**
+- [x] **Step 4: Implement exact toolchain and provenance checks**
 
 Canonicalize the supplied binding-lock bytes, fingerprint them, and require exact equality with the fingerprint embedded in ACSim. Hash the supplied frozen ACIR and canonical ACSim bytes and require exact equality with their declared/embedded identities. Validate the selected profile as exactly `fast`, `validated`, or `custom`, and require provider, profile, schema-set, and toolchain identities to match the verified plan before source emission.
 
 Require explicit non-empty toolchain fields, compiler `--version`/target output matching the declared build ID and target, C++20 contract flags, identical ABI/standard-library flags for every source/prebuilt input, and exact provenance fingerprints. If source recompilation is available, a mismatched prebuilt input is omitted and rebuilt; otherwise return `ACLOWER-FINGERPRINT`.
 
-- [ ] **Step 5: Canonicalize and fingerprint the compile plan**
+- [x] **Step 5: Canonicalize and fingerprint the compile plan**
 
 Sort set-like include roots/definitions/prebuilt inputs, retain source and linker order, normalize all staged relative paths, and fingerprint `{"domain":"acsim-compile-plan-0.1","plan":...}` through RFC 8785. Reject shell metacharacters only where the C++ token/path grammar forbids them; argument values remain discrete array elements.
 
-- [ ] **Step 6: Run focused Build tests**
+- [x] **Step 6: Run focused Build tests**
 
 Run: `cmake --build --preset dev-llvm22 --target CodeGenTests && build/dev-llvm22/bin/CodeGenTests --gtest_filter='BuildTest.*'`
 
 Expected: canonical plan bytes and fingerprints are stable; all provenance/toolchain mismatches fail in preflight.
 
-- [ ] **Step 7: Commit the build boundary**
+- [x] **Step 7: Commit the build boundary**
 
 ```bash
 git add include/acir/CodeGen/Build.h lib/CodeGen/CompilePlan.cpp lib/CodeGen/Build.cpp unittests/CodeGen/BuildTest.cpp lib/CodeGen/CMakeLists.txt unittests/CodeGen/CMakeLists.txt
