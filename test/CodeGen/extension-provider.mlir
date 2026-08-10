@@ -3,6 +3,7 @@
 // RUN: %acir_cxxgen %s --stop-after=publish --output-root=%t.out --frozen-acir=%S/Inputs/extension/frozen.acir --binding-lock=%S/Inputs/extension/extension.binding.json --project-name=project --project-identity=project.example --system-name=system --system-identity=system.example --profile=fast --compiler=%cxx --standard-library=libc++ --abi-mode=default --object-format=mach-o --contract-flag=-std=c++20 --include-root=%source_root/include --include-root=%S/Inputs/extension --provider-input=ac_test --link-input=%t.provider.o --link-input=%binary_root/lib/gfsim/libgfsim.a --link-input=%binary_root/lib/Bindings/libACIRBindings.a --linker-flag=-L%llvm_lib_dir --linker-flag=-lLLVM | %FileCheck %s --check-prefix=PUBLISH
 // RUN: %t.out/builds/*/bin/model --build-fingerprint | %FileCheck %s --check-prefix=FINGERPRINT
 // RUN: grep -F '"namespace":"ac_test"' %t.out/builds/*/build-manifest.json
+// RUN: grep -F '"canonical_name":"ac.test.Counter"' %t.out/builds/*/build-manifest.json
 // RUN: otool -L %t.out/builds/*/bin/model | %FileCheck %s --check-prefix=DYLIB --implicit-check-not=Python --implicit-check-not=pybind --implicit-check-not=dlopen
 // RUN: %not grep -F -- '-frtti' %t.out/builds/*/compile-plan.json
 // RUN: %not grep -R "ac.test.Counter" %source_root/lib/CodeGen

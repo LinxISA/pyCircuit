@@ -133,6 +133,7 @@ struct BindingPlan {
   std::string cppType;
   std::string implementation;
   std::string provider;
+  std::string componentSchema;
   Fingerprint recordFingerprint;
   Fingerprint componentSchemaFingerprint;
   Fingerprint providerImplementationFingerprint;
@@ -216,6 +217,25 @@ struct LiveStorePlan {
   std::string sourceValue;
   std::string slot;
 };
+struct ConstantPlan {
+  std::string resultValue;
+  std::string resultType;
+  llvm::json::Value canonicalValue;
+};
+struct ArithmeticPlan {
+  std::string operationName;
+  std::vector<std::string> arguments;
+  std::vector<std::string> results;
+  std::vector<std::string> resultTypes;
+  std::string predicate;
+};
+struct IndexPlan {
+  std::string operationName;
+  std::vector<std::string> arguments;
+  std::vector<std::string> results;
+  std::vector<std::string> resultTypes;
+  std::string predicate;
+};
 struct InlineCallPlan {
   std::string callee;
   std::vector<std::string> arguments;
@@ -228,16 +248,9 @@ struct InvokePlan {
   std::vector<std::string> results;
   std::vector<std::string> resultTypes;
 };
-struct GenericOperationPlan {
-  std::string operationName;
-  std::vector<std::string> arguments;
-  std::vector<std::string> results;
-  std::vector<std::string> resultTypes;
-  std::string attributes;
-};
 using ProcessOperationPlan =
-    std::variant<LiveLoadPlan, LiveStorePlan, InlineCallPlan, InvokePlan,
-                 GenericOperationPlan>;
+    std::variant<ConstantPlan, ArithmeticPlan, IndexPlan, LiveLoadPlan,
+                 LiveStorePlan, InlineCallPlan, InvokePlan>;
 
 struct ContinuePlan {
   std::string targetPc;

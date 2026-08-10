@@ -250,6 +250,16 @@ TEST(GfsimObjectTest, WalkUsesModuleCapabilityRatherThanKindTag) {
   EXPECT_EQ(visited, (std::vector<ObjectId>{1, 2}));
 }
 
+TEST(GfsimObjectTest, GeneratedModuleWrappersNeedPathsButNoRuntimeObjectIds) {
+  SimSystem system("system");
+  Module generated("generated", kInvalidObjectId);
+  ASSERT_TRUE(system.root().attachChild(generated));
+
+  const TerminationResult result = system.run();
+  EXPECT_EQ(result.classification, TerminationClass::Completed);
+  EXPECT_FALSE(generated.path().empty());
+}
+
 TEST(GfsimObjectTest, FindChildByName) {
   Module root("root", 1);
   root.addChild(std::make_unique<SimObject>(ObjectKind::Compute, "alu", 2));

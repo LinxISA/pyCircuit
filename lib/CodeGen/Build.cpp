@@ -62,7 +62,7 @@ publicationFingerprint(const BuildRequest &request, const SourceBundle &bundle,
     providers.push_back(provider);
   llvm::json::Object preimage{
       {"domain", "agentic-circuit-generated-build-0.1"},
-      {"source_bundle", bundle.buildFingerprint},
+      {"source_bundle", bundle.sourceFingerprint},
       {"compile_plan", compilePlan.fingerprint},
       {"project", llvm::json::Object{{"name", request.project.name},
                                      {"identity", request.project.identity}}},
@@ -179,9 +179,12 @@ llvm::Expected<BuildManifest> makeManifest(const BuildRequest &request,
   manifest.passPipeline = {"acsim-emit-cxx", "acsim-check-cxx-contract",
                            "compile", "link"};
   std::map<std::string, std::string> providerNamespaces;
+  std::map<std::string, std::string> typeIdentities;
   for (const TypePlan &type : model.types)
     if (type.kind == TypeKind::Provider)
       providerNamespaces.emplace(type.symbol, type.cppType);
+    else
+      typeIdentities.emplace(type.symbol, type.cppType);
   std::map<std::string, Fingerprint> providerImplementations;
   for (const BindingPlan &binding : model.bindings) {
     auto provider = providerNamespaces.find(binding.provider);
@@ -197,10 +200,37 @@ llvm::Expected<BuildManifest> makeManifest(const BuildRequest &request,
   for (const auto &[nameSpace, implementation] : providerImplementations)
     manifest.providers.push_back(
         {nameSpace, model.schemaSetFingerprint, implementation});
+  std::map<std::string, ComponentSpecialization> specializations;
   for (const ModulePlan &module : model.modules)
-    manifest.componentSpecializations.push_back(
-        {module.symbol, model.schemaSetFingerprint,
-         module.specializationFingerprint});
+    specializations.emplace(
+        module.symbol,
+        ComponentSpecialization{module.symbol, model.schemaSetFingerprint,
+                                module.specializationFingerprint});
+  for (const BindingPlan &binding : model.bindings) {
+    auto schema = typeIdentities.find(binding.componentSchema);
+    if (schema == typeIdentities.end())
+      return buildError("binding references an unknown component schema");
+    ComponentSpecialization specialization{schema->second,
+                                           binding.componentSchemaFingerprint,
+                                           binding.recordFingerprint};
+    auto [iterator, inserted] =
+        specializations.emplace(specialization.canonicalName, specialization);
+    if (!inserted && (iterator->second.schemaFingerprint !=
+                          specialization.schemaFingerprint ||
+                      iterator->second.specializationFingerprint !=
+                          specialization.specializationFingerprint))
+      return buildError(
+          "one component has conflicting specialization identities");
+    for (const ParameterPlan &parameter : binding.parameters)
+      manifest.specializationInputs.push_back(
+          {binding.symbol + "." + parameter.name, parameter.acirType,
+           parameter.canonicalValue});
+  }
+  for (const auto &[name, specialization] : specializations)
+    manifest.componentSpecializations.push_back(specialization);
+  for (const TypePlan &type : model.types)
+    if (type.kind == TypeKind::Protocol)
+      manifest.protocolIdentities.push_back({type.cppType, type.fingerprint});
   manifest.artifacts.assign(artifacts.begin(), artifacts.end());
   manifest.validationGates = {
       {"generated_source_contract", ValidationStatus::Passed, std::nullopt},

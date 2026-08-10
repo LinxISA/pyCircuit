@@ -2,8 +2,10 @@
 
 #include "ProcessGenerator.h"
 
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/Twine.h"
+#include "llvm/Support/FormatVariadic.h"
 
 #include <algorithm>
 #include <array>
@@ -80,39 +82,159 @@ const ModulePlan *findModule(const ModelPlan &plan, llvm::StringRef symbol) {
   return found == plan.modules.end() ? nullptr : &*found;
 }
 
+const TypePlan *findType(const ModelPlan &plan, llvm::StringRef symbol) {
+  auto found =
+      std::find_if(plan.types.begin(), plan.types.end(),
+                   [&](const TypePlan &type) { return type.symbol == symbol; });
+  return found == plan.types.end() ? nullptr : &*found;
+}
+
 const ModulePlan *rootModule(const ModelPlan &plan) {
   return findModule(plan, plan.rootSymbol);
 }
 
-Fingerprint generatedBuildFingerprint(const ModelPlan &plan) {
-  std::string preimage = "acir-generated-model@0.1\n";
-  preimage.append(plan.modelSymbol)
-      .append("\n")
-      .append(plan.rootSymbol)
-      .append("\n")
-      .append(plan.frozenAcirFingerprint)
-      .append("\n")
-      .append(plan.bindingLockFingerprint)
-      .append("\n")
-      .append(plan.providerFingerprint)
-      .append("\n")
-      .append(plan.profileFingerprint)
-      .append("\n")
-      .append(plan.toolchainFingerprint)
-      .append("\n")
-      .append(plan.schemaSetFingerprint)
-      .append("\n");
-  return computeFingerprint(preimage);
+llvm::Expected<std::string> cppLiteral(const llvm::json::Value &value) {
+  if (value.kind() == llvm::json::Value::Null)
+    return std::string("{}");
+  if (auto boolean = value.getAsBoolean())
+    return std::string(*boolean ? "true" : "false");
+  if (auto integer = value.getAsInteger())
+    return std::to_string(*integer);
+  if (auto number = value.getAsNumber())
+    return llvm::formatv("{0}", *number).str();
+  if (value.getAsString())
+    return llvm::formatv("{0}", value).str();
+  if (const llvm::json::Array *array = value.getAsArray()) {
+    std::string result = "{";
+    for (auto [index, element] : llvm::enumerate(*array)) {
+      auto literal = cppLiteral(element);
+      if (!literal)
+        return literal.takeError();
+      if (index != 0)
+        result.append(", ");
+      result.append(*literal);
+    }
+    return result.append("}");
+  }
+  if (const llvm::json::Object *object = value.getAsObject()) {
+    std::vector<std::pair<std::string, const llvm::json::Value *>> fields;
+    for (const auto &field : *object)
+      fields.emplace_back(field.first.str(), &field.second);
+    std::sort(fields.begin(), fields.end());
+    std::string result = "{";
+    for (auto [index, field] : llvm::enumerate(fields)) {
+      auto literal = cppLiteral(*field.second);
+      if (!literal)
+        return literal.takeError();
+      if (index != 0)
+        result.append(", ");
+      result.append(*literal);
+    }
+    return result.append("}");
+  }
+  return generatorError("ACLOWER-PARAM-PHASE",
+                        "static value cannot be represented in C++");
+}
+
+llvm::Expected<std::string> bindingType(const ModelPlan &plan,
+                                        const BindingPlan &binding) {
+  std::vector<const ParameterPlan *> templateArguments;
+  for (const ParameterPlan &parameter : binding.parameters)
+    if (parameter.mapping == ParameterMappingKind::TemplateArgument)
+      templateArguments.push_back(&parameter);
+  std::sort(templateArguments.begin(), templateArguments.end(),
+            [](const ParameterPlan *left, const ParameterPlan *right) {
+              return left->ordinal < right->ordinal;
+            });
+  if (templateArguments.empty())
+    return binding.cppSymbol;
+  std::string result = binding.cppSymbol + "<";
+  for (auto [index, parameter] : llvm::enumerate(templateArguments)) {
+    std::string argument;
+    if (auto identity = parameter->canonicalValue.getAsString()) {
+      const TypePlan *type = findType(plan, *identity);
+      if (!type)
+        type = findType(plan, parameter->cppType);
+      if (!type)
+        return generatorError(
+            "ACLOWER-TYPE-MISMATCH",
+            "template type identity has no concrete C++ realization");
+      argument = type->cppType;
+    } else {
+      auto literal = cppLiteral(parameter->canonicalValue);
+      if (!literal)
+        return literal.takeError();
+      argument = std::move(*literal);
+    }
+    if (index != 0)
+      result.append(", ");
+    result.append(argument);
+  }
+  return result.append(">");
+}
+
+llvm::Expected<std::string> constructorSuffix(const BindingPlan &binding) {
+  std::string result;
+  for (const llvm::json::Value &argument : binding.constructorArguments) {
+    auto literal = cppLiteral(argument);
+    if (!literal)
+      return literal.takeError();
+    result.append(", ").append(*literal);
+  }
+  return result;
+}
+
+constexpr llvm::StringLiteral kGeneratedFingerprintPlaceholder =
+    "sha256:0000000000000000000000000000000000000000000000000000000000000000";
+
+llvm::Expected<Fingerprint>
+sourceBundleFingerprint(const std::vector<GeneratedFile> &files) {
+  llvm::json::Array sources;
+  for (const GeneratedFile &file : files)
+    sources.push_back(llvm::json::Object{{"path", file.relativePath},
+                                         {"content", file.content}});
+  llvm::json::Object preimage{{"domain", "acsim-source-bundle-0.1"},
+                              {"sources", std::move(sources)}};
+  return fingerprintCanonicalJson(llvm::json::Value(std::move(preimage)));
+}
+
+llvm::Error embedSourceBundleFingerprint(SourceBundle &bundle) {
+  auto fingerprint = sourceBundleFingerprint(bundle.files);
+  if (!fingerprint)
+    return fingerprint.takeError();
+  size_t replacements = 0;
+  for (GeneratedFile &file : bundle.files) {
+    size_t position = file.content.find(kGeneratedFingerprintPlaceholder);
+    if (position == std::string::npos)
+      continue;
+    if (file.content.find(kGeneratedFingerprintPlaceholder,
+                          position + kGeneratedFingerprintPlaceholder.size()) !=
+        std::string::npos)
+      return generatorError("ACLOWER-FINGERPRINT",
+                            "generated fingerprint placeholder is repeated");
+    file.content.replace(position, kGeneratedFingerprintPlaceholder.size(),
+                         *fingerprint);
+    file.fingerprint = computeFingerprint(file.content);
+    ++replacements;
+  }
+  if (replacements != 1)
+    return generatorError("ACLOWER-FINGERPRINT",
+                          "generated fingerprint placeholder is incomplete");
+  bundle.buildFingerprint = std::move(*fingerprint);
+  bundle.sourceFingerprint = bundle.buildFingerprint;
+  return llvm::Error::success();
 }
 
 llvm::Expected<std::string> placementType(const ModelPlan &plan,
                                           const PlacementPlan &placement) {
   llvm::StringRef target = placement.target;
-  target = target.take_until([](char value) { return value == ':'; });
   std::string base;
-  if (const BindingPlan *binding = findBinding(plan, target))
-    base = binding->cppSymbol;
-  else if (const ModulePlan *module = findModule(plan, target))
+  if (const BindingPlan *binding = findBinding(plan, target)) {
+    auto type = bindingType(plan, *binding);
+    if (!type)
+      return type.takeError();
+    base = std::move(*type);
+  } else if (const ModulePlan *module = findModule(plan, target))
     base = module->className;
   else
     return generatorError("ACLOWER-TYPE-MISMATCH",
@@ -139,11 +261,30 @@ GeneratedFile makeFile(std::string path, std::string content) {
 llvm::Expected<GeneratedFile> moduleHeader(const ModelPlan &plan,
                                            const ModulePlan &module) {
   std::set<std::string> headers;
+  std::set<std::string> moduleHeaders;
+  std::set<std::pair<std::string, std::string>> conceptChecks;
   for (const PlacementPlan &placement : module.placements) {
     llvm::StringRef target = placement.target;
     target = target.take_until([](char value) { return value == ':'; });
-    if (const BindingPlan *binding = findBinding(plan, target))
+    if (const BindingPlan *binding = findBinding(plan, target)) {
       headers.insert(binding->header);
+      auto type = bindingType(plan, *binding);
+      if (!type)
+        return type.takeError();
+      conceptChecks.emplace(binding->conceptName, std::move(*type));
+    } else if (const ModulePlan *nested = findModule(plan, target)) {
+      moduleHeaders.insert("generated/modules/" + nested->className + ".h");
+    }
+  }
+  for (const ExpressionPlan &expression : module.expressions) {
+    const BindingPlan *binding = findBinding(plan, expression.callee);
+    if (!binding)
+      continue;
+    headers.insert(binding->header);
+    auto type = bindingType(plan, *binding);
+    if (!type)
+      return type.takeError();
+    conceptChecks.emplace(binding->conceptName, std::move(*type));
   }
 
   std::ostringstream output;
@@ -155,13 +296,24 @@ llvm::Expected<GeneratedFile> moduleHeader(const ModelPlan &plan,
     output << "#include <array>\n";
   for (const std::string &header : headers)
     output << "#include \"" << header << "\"\n";
+  for (const std::string &header : moduleHeaders)
+    output << "#include \"" << header << "\"\n";
   for (const ProcessPlan &process : module.processes)
     output << "#include \"generated/processes/" << process.className
            << ".h\"\n";
-  output << "\nnamespace acsim_generated {\n\nclass " << module.className
+  output << "\nnamespace acsim_generated {\n\n";
+  for (const auto &[conceptName, type] : conceptChecks)
+    output << "static_assert(" << conceptName << '<' << type << ">);\n";
+  if (!conceptChecks.empty())
+    output << '\n';
+  output << "class " << module.className
          << " final : public gfsim::Module {\npublic:\n  " << module.className
          << "(std::string name, gfsim::ObjectId id, gfsim::SimObject "
-            "*parent);\n\nprivate:\n  friend struct DispatchAccess;\n";
+            "*parent, gfsim::ObjectId &nextObjectId);\n";
+  for (const ExportPlan &exported : module.exports)
+    output << "  decltype(auto) " << exported.symbol << "();\n"
+           << "  decltype(auto) " << exported.symbol << "() const;\n";
+  output << "\nprivate:\n  friend struct DispatchAccess;\n";
   for (const PlacementPlan &placement : module.placements) {
     auto type = placementType(plan, placement);
     if (!type)
@@ -175,18 +327,8 @@ llvm::Expected<GeneratedFile> moduleHeader(const ModelPlan &plan,
                   output.str());
 }
 
-const RuntimeObjectPlan *
-findRuntimeObject(const ModelPlan &plan, llvm::StringRef target,
-                  const std::vector<uint64_t> &indices) {
-  auto found = std::find_if(
-      plan.runtimeObjects.begin(), plan.runtimeObjects.end(),
-      [&](const RuntimeObjectPlan &object) {
-        return object.targetSymbol == target && object.indices == indices;
-      });
-  return found == plan.runtimeObjects.end() ? nullptr : &*found;
-}
-
-llvm::Expected<std::string> moduleValueExpression(const ModulePlan &module,
+llvm::Expected<std::string> moduleValueExpression(const ModelPlan &plan,
+                                                  const ModulePlan &module,
                                                   llvm::StringRef value) {
   auto placement =
       std::find_if(module.placements.begin(), module.placements.end(),
@@ -201,23 +343,59 @@ llvm::Expected<std::string> moduleValueExpression(const ModulePlan &module,
                    [&](const ProjectionPlan &candidate) {
                      return candidate.resultValue == value;
                    });
-  if (projection == module.projections.end())
-    return generatorError("ACLOWER-OWNERSHIP",
-                          "process capture has no owned source");
-  auto base = moduleValueExpression(module, projection->baseValue);
-  if (!base)
-    return base.takeError();
-  for (uint64_t index : projection->indices)
-    base->append("[").append(std::to_string(index)).append("]");
-  if (projection->kind != ProjectionKind::Element)
-    base->append(".").append(projection->accessor).append("()");
-  return base;
+  if (projection != module.projections.end()) {
+    auto base = moduleValueExpression(plan, module, projection->baseValue);
+    if (!base)
+      return base.takeError();
+    for (uint64_t index : projection->indices)
+      base->append("[").append(std::to_string(index)).append("]");
+    if (projection->kind != ProjectionKind::Element) {
+      const TypePlan *accessor = findType(plan, projection->accessor);
+      if (!accessor || !isIdentifier(accessor->cppType))
+        return generatorError("ACLOWER-TYPE-MISMATCH",
+                              "projection accessor has no safe C++ name");
+      base->append(".").append(accessor->cppType).append("()");
+    }
+    return base;
+  }
+
+  auto expression =
+      std::find_if(module.expressions.begin(), module.expressions.end(),
+                   [&](const ExpressionPlan &candidate) {
+                     return candidate.resultValue == value;
+                   });
+  if (expression != module.expressions.end()) {
+    const BindingPlan *binding = findBinding(plan, expression->callee);
+    if (!binding || binding->effect != BindingEffect::Pure ||
+        binding->entryPoints.pure.empty())
+      return generatorError("ACLOWER-INLINE-EFFECT",
+                            "pure expression has no exact entry point");
+    std::string result = binding->entryPoints.pure + "(";
+    for (auto [index, argument] : llvm::enumerate(expression->arguments)) {
+      auto emitted = moduleValueExpression(plan, module, argument);
+      if (!emitted)
+        return emitted.takeError();
+      if (index != 0)
+        result.append(", ");
+      result.append(*emitted);
+    }
+    return result.append(")");
+  }
+
+  auto exported = std::find_if(module.exports.begin(), module.exports.end(),
+                               [&](const ExportPlan &candidate) {
+                                 return candidate.resultValue == value;
+                               });
+  if (exported != module.exports.end())
+    return moduleValueExpression(plan, module, exported->sourceValue);
+  return generatorError("ACLOWER-OWNERSHIP",
+                        "module value has no structured realization");
 }
 
-llvm::Expected<std::string>
-arrayInitializer(const ModelPlan &plan, const ModulePlan &module,
-                 const PlacementPlan &placement, const BindingPlan &binding,
-                 size_t dimension, std::vector<uint64_t> &indices) {
+llvm::Expected<std::string> arrayInitializer(const ModelPlan &plan,
+                                             const PlacementPlan &placement,
+                                             size_t dimension,
+                                             std::vector<uint64_t> &indices) {
   std::string result = "{";
   const uint64_t extent = placement.shape[dimension];
   for (uint64_t index = 0; index < extent; ++index) {
@@ -225,24 +403,32 @@ arrayInitializer(const ModelPlan &plan, const ModulePlan &module,
       result.append(", ");
     indices.push_back(index);
     if (dimension + 1 != placement.shape.size()) {
-      auto nested = arrayInitializer(plan, module, placement, binding,
-                                     dimension + 1, indices);
+      auto nested = arrayInitializer(plan, placement, dimension + 1, indices);
       if (!nested)
         return nested.takeError();
       result.append(*nested);
     } else {
-      const std::string target = module.symbol + "::" + placement.symbol;
-      const RuntimeObjectPlan *runtime =
-          findRuntimeObject(plan, target, indices);
-      if (!runtime)
-        return generatorError("ACLOWER-DISPATCH",
-                              "array element has no dense runtime row");
-      result.append(binding.cppSymbol).append("(\"").append(placement.symbol);
+      llvm::StringRef target = placement.target;
+      target = target.take_until([](char value) { return value == ':'; });
+      const BindingPlan *binding = findBinding(plan, target);
+      const ModulePlan *nestedModule = findModule(plan, target);
+      if (!binding && !nestedModule)
+        return generatorError("ACLOWER-TYPE-MISMATCH",
+                              "array target has no typed realization");
+      auto type = placementType(plan, PlacementPlan{.target = target.str()});
+      if (!type)
+        return type.takeError();
+      result.append(*type).append("(\"").append(placement.symbol);
       for (uint64_t element : indices)
         result.append("[").append(std::to_string(element)).append("]");
-      result.append("\", ")
-          .append(std::to_string(runtime->objectId))
-          .append(", this)");
+      if (binding) {
+        auto suffix = constructorSuffix(*binding);
+        if (!suffix)
+          return suffix.takeError();
+        result.append("\", nextObjectId++, this").append(*suffix).append(")");
+      } else {
+        result.append("\", gfsim::kInvalidObjectId, this, nextObjectId)");
+      }
     }
     indices.pop_back();
   }
@@ -255,44 +441,41 @@ llvm::Expected<GeneratedFile> moduleSource(const ModelPlan &plan,
   std::vector<std::string> initializers;
   for (const PlacementPlan &placement : module.placements) {
     if (placement.kind == PlacementKind::GeneratedModule) {
-      initializers.push_back(placement.memberName + "()");
+      initializers.push_back(placement.memberName + "(\"" + placement.symbol +
+                             "\", gfsim::kInvalidObjectId, this, "
+                             "nextObjectId)");
       continue;
     }
     llvm::StringRef target = placement.target;
     target = target.take_until([](char value) { return value == ':'; });
     const BindingPlan *binding = findBinding(plan, target);
-    if (!binding)
+    const ModulePlan *nestedModule = findModule(plan, target);
+    if (!binding && !nestedModule)
       return generatorError("ACLOWER-BINDING-MISSING",
                             "placement has no selected binding");
     if (placement.shape.empty()) {
-      const RuntimeObjectPlan *runtime =
-          findRuntimeObject(plan, module.symbol + "::" + placement.symbol, {});
-      if (!runtime)
-        return generatorError("ACLOWER-DISPATCH",
-                              "placement has no dense runtime row");
+      if (!binding)
+        return generatorError("ACLOWER-OWNERSHIP",
+                              "generated module placement kind is invalid");
+      auto suffix = constructorSuffix(*binding);
+      if (!suffix)
+        return suffix.takeError();
       initializers.push_back(placement.memberName + "(\"" + placement.symbol +
-                             "\", " + std::to_string(runtime->objectId) +
-                             ", this)");
+                             "\", nextObjectId++, this" + *suffix + ")");
     } else {
       std::vector<uint64_t> indices;
-      auto initializer =
-          arrayInitializer(plan, module, placement, *binding, 0, indices);
+      auto initializer = arrayInitializer(plan, placement, 0, indices);
       if (!initializer)
         return initializer.takeError();
       initializers.push_back(placement.memberName + *initializer);
     }
   }
   for (const ProcessPlan &process : module.processes) {
-    const RuntimeObjectPlan *runtime =
-        findRuntimeObject(plan, module.symbol + "::" + process.symbol, {});
-    if (!runtime)
-      return generatorError("ACLOWER-DISPATCH",
-                            "process has no dense runtime row");
-    std::string initializer = process.symbol + "_(\"" + process.symbol +
-                              "\", " + std::to_string(runtime->objectId) +
-                              ", this";
+    std::string initializer =
+        process.symbol + "_(\"" + process.symbol + "\", nextObjectId++, this";
     for (const CapturePlan &capture : process.captures) {
-      auto expression = moduleValueExpression(module, capture.sourceValue);
+      auto expression =
+          moduleValueExpression(plan, module, capture.sourceValue);
       if (!expression)
         return expression.takeError();
       initializer.append(", ").append(*expression);
@@ -303,9 +486,23 @@ llvm::Expected<GeneratedFile> moduleSource(const ModelPlan &plan,
 
   std::ostringstream output;
   output << "#include \"generated/modules/" << module.className
-         << ".h\"\n\n#include <stdexcept>\n\nnamespace acsim_generated {\n\n"
-         << module.className << "::" << module.className
-         << "(std::string name, gfsim::ObjectId id, gfsim::SimObject *parent)\n"
+         << ".h\"\n\n#include <stdexcept>\n\nnamespace acsim_generated {\n\n";
+  if (std::any_of(
+          module.binds.begin(), module.binds.end(),
+          [](const BindPlan &bind) { return bind.kind != "pure_view"; }))
+    output << "namespace {\ntemplate <typename Source, typename Target>\n"
+              "void bindStatic(Source &&source, Target &&target) {\n"
+              "  if constexpr (requires { source.bind(target); })\n"
+              "    source.bind(target);\n"
+              "  else if constexpr (requires { target.bind(source); })\n"
+              "    target.bind(source);\n"
+              "  else\n"
+              "    static_assert(sizeof(Source) == 0, "
+              "\"ACLOWER-TYPE-MISMATCH\");\n"
+              "}\n} // namespace\n\n";
+  output << module.className << "::" << module.className
+         << "(std::string name, gfsim::ObjectId id, gfsim::SimObject *parent, "
+            "gfsim::ObjectId &nextObjectId)\n"
             "    : gfsim::Module(std::move(name), id, parent)";
   for (const std::string &initializer : initializers)
     output << ",\n    " << initializer;
@@ -314,16 +511,48 @@ llvm::Expected<GeneratedFile> moduleSource(const ModelPlan &plan,
     if (placement.shape.empty()) {
       output << "  if (!attachChild(" << placement.memberName << "))\n"
              << "    throw std::logic_error(\"ACLOWER-OWNERSHIP\");\n";
-    } else if (placement.shape.size() == 1) {
-      output << "  for (auto &element : " << placement.memberName << ")\n"
-             << "    if (!attachChild(element))\n"
-             << "      throw std::logic_error(\"ACLOWER-OWNERSHIP\");\n";
+    } else {
+      std::string range = placement.memberName;
+      for (size_t dimension = 0; dimension < placement.shape.size();
+           ++dimension) {
+        output << std::string(2 + dimension * 2, ' ') << "for (auto &element"
+               << dimension << " : " << range << ") {\n";
+        range = "element" + std::to_string(dimension);
+      }
+      output << std::string(2 + placement.shape.size() * 2, ' ')
+             << "if (!attachChild(" << range << "))\n"
+             << std::string(4 + placement.shape.size() * 2, ' ')
+             << "throw std::logic_error(\"ACLOWER-OWNERSHIP\");\n";
+      for (size_t dimension = placement.shape.size(); dimension > 0;
+           --dimension)
+        output << std::string(2 + (dimension - 1) * 2, ' ') << "}\n";
     }
   }
   for (const ProcessPlan &process : module.processes)
     output << "  if (!attachChild(" << process.symbol << "_))\n"
            << "    throw std::logic_error(\"ACLOWER-OWNERSHIP\");\n";
-  output << "}\n\n} // namespace acsim_generated\n";
+  for (const BindPlan &bind : module.binds) {
+    if (bind.kind == "pure_view")
+      continue;
+    auto source = moduleValueExpression(plan, module, bind.sourceValue);
+    auto target = moduleValueExpression(plan, module, bind.targetValue);
+    if (!source)
+      return source.takeError();
+    if (!target)
+      return target.takeError();
+    output << "  bindStatic(" << *source << ", " << *target << ");\n";
+  }
+  output << "}\n";
+  for (const ExportPlan &exported : module.exports) {
+    auto expression = moduleValueExpression(plan, module, exported.sourceValue);
+    if (!expression)
+      return expression.takeError();
+    output << "\ndecltype(auto) " << module.className << "::" << exported.symbol
+           << "() { return " << *expression << "; }\n"
+           << "decltype(auto) " << module.className << "::" << exported.symbol
+           << "() const { return " << *expression << "; }\n";
+  }
+  output << "\n} // namespace acsim_generated\n";
   return makeFile("src/generated/modules/" + module.className + ".cpp",
                   output.str());
 }
@@ -331,38 +560,62 @@ llvm::Expected<GeneratedFile> moduleSource(const ModelPlan &plan,
 llvm::Expected<std::string>
 runtimeObjectExpression(const ModelPlan &plan,
                         const RuntimeObjectPlan &runtimeObject) {
-  llvm::StringRef target = runtimeObject.targetSymbol;
-  auto [moduleSymbol, memberSymbol] = target.split("::");
-  if (moduleSymbol != plan.rootSymbol || memberSymbol.empty() ||
-      memberSymbol.contains("::"))
-    return generatorError("ACLOWER-DISPATCH",
-                          "runtime target is not a direct root member");
   const ModulePlan *module = rootModule(plan);
   if (!module)
     return generatorError("ACLOWER-OWNERSHIP",
                           "root module has no generated specialization");
 
-  std::string expression = "model.top_.";
-  auto placement =
-      std::find_if(module->placements.begin(), module->placements.end(),
-                   [&](const PlacementPlan &candidate) {
-                     return candidate.symbol == memberSymbol;
-                   });
-  if (placement != module->placements.end()) {
-    expression.append(placement->memberName);
-  } else {
+  llvm::SmallVector<llvm::StringRef> segments;
+  llvm::StringRef(runtimeObject.hierarchyPath).split(segments, '.');
+  if (segments.size() < 2)
+    return generatorError("ACLOWER-DISPATCH",
+                          "runtime path has no hierarchy segments");
+  std::string expression = "model.top_";
+  for (size_t segmentIndex = 1; segmentIndex < segments.size();
+       ++segmentIndex) {
+    llvm::StringRef segment = segments[segmentIndex];
+    llvm::StringRef symbol =
+        segment.take_until([](char value) { return value == '['; });
+    auto placement =
+        std::find_if(module->placements.begin(), module->placements.end(),
+                     [&](const PlacementPlan &candidate) {
+                       return candidate.symbol == symbol;
+                     });
+    if (placement != module->placements.end()) {
+      expression.append(".").append(placement->memberName);
+      llvm::StringRef indices = segment.drop_front(symbol.size());
+      while (!indices.empty()) {
+        if (!indices.consume_front("["))
+          return generatorError("ACLOWER-ARRAY",
+                                "runtime path index is malformed");
+        if (!indices.contains(']'))
+          return generatorError("ACLOWER-ARRAY",
+                                "runtime path index is unterminated");
+        auto [index, rest] = indices.split(']');
+        expression.append("[").append(index.str()).append("]");
+        indices = rest;
+      }
+      if (segmentIndex + 1 != segments.size()) {
+        llvm::StringRef target = placement->target;
+        target = target.take_until([](char value) { return value == ':'; });
+        module = findModule(plan, target);
+        if (!module)
+          return generatorError("ACLOWER-DISPATCH",
+                                "runtime path crosses a non-module member");
+      }
+      continue;
+    }
     auto process =
         std::find_if(module->processes.begin(), module->processes.end(),
                      [&](const ProcessPlan &candidate) {
-                       return candidate.symbol == memberSymbol;
+                       return candidate.symbol == symbol;
                      });
-    if (process == module->processes.end())
+    if (process == module->processes.end() ||
+        segmentIndex + 1 != segments.size())
       return generatorError("ACLOWER-DISPATCH",
-                            "runtime target has no generated member");
-    expression.append(process->symbol).append("_");
+                            "runtime path has no generated member");
+    expression.append(".").append(process->symbol).append("_");
   }
-  for (uint64_t index : runtimeObject.indices)
-    expression.append("[").append(std::to_string(index)).append("]");
   return expression;
 }
 
@@ -429,7 +682,8 @@ llvm::Expected<GeneratedFile> modelHeader(const ModelPlan &plan,
       << "\";\n\nstruct DispatchAccess;\n\nclass Model final {\n"
          "public:\n  Model();\n  int run();\n\nprivate:\n  friend struct "
          "DispatchAccess;\n  "
-      << "gfsim::SimSystem system_;\n  " << root->className << " top_;\n"
+      << "gfsim::SimSystem system_;\n  gfsim::ObjectId nextObjectId_ = 0;\n  "
+      << root->className << " top_;\n"
       << "  std::array<gfsim::DispatchRow, " << plan.runtimeObjects.size()
       << "> dispatch_;\n};\n\n} // namespace acsim_generated\n";
   return makeFile("include/generated/model.h", output.str());
@@ -441,8 +695,9 @@ GeneratedFile modelSource() {
       << "#include \"generated/dispatch.h\"\n\n#include <stdexcept>\n\n"
          "namespace acsim_generated {\n\nModel::Model()\n"
          "    : system_(\"generated\"),\n"
+         "      nextObjectId_(0),\n"
          "      top_(\"root-model\", gfsim::kRootObjectId - 1, "
-         "&system_.root()),\n      "
+         "&system_.root(), nextObjectId_),\n      "
          "dispatch_(DispatchAccess::makeRows(*this)) {\n"
          "  if (!system_.root().attachChild(top_))\n"
          "    throw std::logic_error(\"ACLOWER-OWNERSHIP\");\n"
@@ -511,7 +766,7 @@ llvm::Expected<SourceBundle> generateModelSources(const ModelPlan &plan) {
   }
 
   SourceBundle bundle;
-  bundle.buildFingerprint = generatedBuildFingerprint(plan);
+  bundle.buildFingerprint = kGeneratedFingerprintPlaceholder.str();
   auto generatedDispatch = dispatchHeader(plan);
   if (!generatedDispatch)
     return generatedDispatch.takeError();
@@ -546,6 +801,8 @@ llvm::Expected<SourceBundle> generateModelSources(const ModelPlan &plan) {
             [](const GeneratedFile &left, const GeneratedFile &right) {
               return left.relativePath < right.relativePath;
             });
+  if (auto error = embedSourceBundleFingerprint(bundle))
+    return std::move(error);
   if (auto error = validateSourceBundle(plan, bundle))
     return std::move(error);
   return bundle;
@@ -553,8 +810,24 @@ llvm::Expected<SourceBundle> generateModelSources(const ModelPlan &plan) {
 
 llvm::Error validateSourceBundle(const ModelPlan &plan,
                                  const SourceBundle &bundle) {
+  static constexpr std::array<llvm::StringLiteral, 14> forbiddenTokens = {
+      "Python",
+      "pybind",
+      "dlopen",
+      "co_await",
+      "std::function",
+      "dynamic_cast",
+      "runtime_factory",
+      "descriptor_interpreter",
+      "schema_walker",
+      "schema_catalog",
+      "catalog_walker",
+      "catalog_lookup",
+      "topology_mutation",
+      "topology_builder"};
   const std::vector<std::string> required = expectedPaths(plan);
-  if (!isValidFingerprint(bundle.buildFingerprint))
+  if (!isValidFingerprint(bundle.sourceFingerprint) ||
+      !isValidFingerprint(bundle.buildFingerprint))
     return generatorError("ACLOWER-FINGERPRINT",
                           "source bundle build fingerprint is invalid");
   if (bundle.files.size() != required.size())
@@ -570,7 +843,30 @@ llvm::Error validateSourceBundle(const ModelPlan &plan,
         file.content.find('\r') != std::string::npos)
       return generatorError("ACLOWER-FINGERPRINT",
                             "source content fingerprint is invalid");
+    for (llvm::StringRef token : forbiddenTokens)
+      if (llvm::StringRef(file.content).contains(token))
+        return generatorError("ACLOWER-UNSUPPORTED-CONSTRUCT",
+                              "generated source contains forbidden token '" +
+                                  token + "'");
   }
+  std::vector<GeneratedFile> preimageFiles = bundle.files;
+  size_t embeddedIdentityCount = 0;
+  for (GeneratedFile &file : preimageFiles) {
+    size_t position = file.content.find(bundle.buildFingerprint);
+    while (position != std::string::npos) {
+      file.content.replace(position, bundle.buildFingerprint.size(),
+                           kGeneratedFingerprintPlaceholder);
+      ++embeddedIdentityCount;
+      position = file.content.find(bundle.buildFingerprint, position + 1);
+    }
+  }
+  if (embeddedIdentityCount != 1)
+    return generatorError("ACLOWER-FINGERPRINT",
+                          "source bundle embedded identity is incomplete");
+  auto expectedFingerprint = sourceBundleFingerprint(preimageFiles);
+  if (!expectedFingerprint || *expectedFingerprint != bundle.sourceFingerprint)
+    return generatorError("ACLOWER-FINGERPRINT",
+                          "source bundle identity does not match its content");
   return llvm::Error::success();
 }
 

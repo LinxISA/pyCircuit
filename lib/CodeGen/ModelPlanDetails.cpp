@@ -1,5 +1,7 @@
 #include "ModelPlanInternal.h"
 
+#include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/Index/IR/IndexOps.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/StringSwitch.h"
@@ -120,6 +122,7 @@ llvm::Expected<BindingPlan> extractBinding(acsim::BindingOp binding) {
   result.cppType = flatSymbol(record, "cpp_type");
   result.implementation = flatSymbol(record, "implementation");
   result.provider = flatSymbol(record, "provider");
+  result.componentSchema = flatSymbol(record, "component_schema");
   result.recordFingerprint = stringField(record, "fingerprint");
   result.componentSchemaFingerprint =
       stringField(record, "component_schema_fingerprint");
@@ -296,13 +299,54 @@ extractProcess(acsim::ProcessOp process,
         } else if (auto terminate =
                        mlir::dyn_cast<acsim::TerminateOp>(operation)) {
           state.terminator = TerminatePlan{terminate.getStatus().str()};
-        } else {
-          state.operations.push_back(GenericOperationPlan{
+        } else if (auto constant =
+                       mlir::dyn_cast<mlir::arith::ConstantOp>(operation)) {
+          auto value = staticValue(constant.getValue());
+          if (!value)
+            return value.takeError();
+          state.operations.push_back(ConstantPlan{
+              valueName(values, constant.getResult(), nextValue),
+              printType(constant.getResult().getType()), std::move(*value)});
+        } else if (auto constant =
+                       mlir::dyn_cast<mlir::index::ConstantOp>(operation)) {
+          if (!constant.getValue().isSignedIntN(64))
+            return detailError("ACLOWER-PROCESS-STATE",
+                               "index constant exceeds int64_t");
+          state.operations.push_back(ConstantPlan{
+              valueName(values, constant.getResult(), nextValue),
+              printType(constant.getResult().getType()),
+              llvm::json::Value(constant.getValue().getSExtValue())});
+        } else if (operation.getName().getStringRef().starts_with("arith.")) {
+          std::string predicate;
+          if (auto compare = mlir::dyn_cast<mlir::arith::CmpIOp>(operation))
+            predicate =
+                mlir::arith::stringifyCmpIPredicate(compare.getPredicate())
+                    .str();
+          else if (auto compare =
+                       mlir::dyn_cast<mlir::arith::CmpFOp>(operation))
+            predicate =
+                mlir::arith::stringifyCmpFPredicate(compare.getPredicate())
+                    .str();
+          state.operations.push_back(ArithmeticPlan{
               operation.getName().getStringRef().str(),
               valueNames(values, operation.getOperands(), nextValue),
               valueNames(values, operation.getResults(), nextValue),
-              resultTypeNames(operation.getResults()),
-              printAttribute(operation.getAttrDictionary())});
+              resultTypeNames(operation.getResults()), std::move(predicate)});
+        } else if (operation.getName().getStringRef().starts_with("index.")) {
+          std::string predicate;
+          if (auto compare = mlir::dyn_cast<mlir::index::CmpOp>(operation))
+            predicate =
+                mlir::index::stringifyIndexCmpPredicate(compare.getPred())
+                    .str();
+          state.operations.push_back(IndexPlan{
+              operation.getName().getStringRef().str(),
+              valueNames(values, operation.getOperands(), nextValue),
+              valueNames(values, operation.getResults(), nextValue),
+              resultTypeNames(operation.getResults()), std::move(predicate)});
+        } else {
+          return detailError("ACLOWER-PROCESS-STATE",
+                             "process operation is outside the closed C++ "
+                             "generation subset");
         }
       }
     }

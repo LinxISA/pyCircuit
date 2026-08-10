@@ -122,6 +122,11 @@ llvm::json::Object commandJson(const CompileCommand &command) {
                             {"output", command.output}};
 }
 
+llvm::json::Object linkInputJson(const LinkInputIdentity &input) {
+  return llvm::json::Object{{"path", input.path},
+                            {"fingerprint", input.fingerprint}};
+}
+
 llvm::json::Object planJson(const CompilePlan &plan,
                             llvm::StringRef fingerprint) {
   llvm::json::Array prebuilts;
@@ -130,6 +135,9 @@ llvm::json::Object planJson(const CompilePlan &plan,
   llvm::json::Array commands;
   for (const CompileCommand &command : plan.compileCommands)
     commands.push_back(commandJson(command));
+  llvm::json::Array linkInputs;
+  for (const LinkInputIdentity &input : plan.linkInputs)
+    linkInputs.push_back(linkInputJson(input));
   return llvm::json::Object{
       {"schema", plan.schema},
       {"source_units", stringsJson(plan.sourceUnits)},
@@ -138,10 +146,12 @@ llvm::json::Object planJson(const CompilePlan &plan,
       {"definitions", stringsJson(plan.definitions)},
       {"compiler_flags", stringsJson(plan.compilerFlags)},
       {"linker_flags", stringsJson(plan.linkerFlags)},
+      {"link_inputs", std::move(linkInputs)},
       {"prebuilt_inputs", std::move(prebuilts)},
       {"compile_commands", std::move(commands)},
       {"link_command", commandJson(plan.linkCommand)},
       {"executable_path", plan.executablePath},
+      {"source_fingerprint", plan.sourceFingerprint},
       {"toolchain_fingerprint", plan.toolchainFingerprint},
       {"fingerprint", fingerprint}};
 }
@@ -282,6 +292,9 @@ llvm::Error preflightBuildRequest(const BuildRequest &request) {
   }
 
   if (request.canonicalACSim) {
+    if (request.frozenAcirBytes.empty() || request.bindingLockBytes.empty())
+      return buildError("ACLOWER-FINGERPRINT",
+                        "frozen ACIR and binding lock bytes are required");
     auto model = buildModelPlan(request.canonicalACSim);
     if (!model)
       return model.takeError();
@@ -344,7 +357,8 @@ llvm::Error preflightBuildRequest(const BuildRequest &request) {
 llvm::Error CompilePlan::validate() const {
   if (schema != "acsim-compile-plan-0.1")
     return buildError("ACLOWER-FINGERPRINT", "compile plan schema is invalid");
-  if (!isValidFingerprint(toolchainFingerprint) ||
+  if (!isValidFingerprint(sourceFingerprint) ||
+      !isValidFingerprint(toolchainFingerprint) ||
       !isValidFingerprint(fingerprint) ||
       sourceUnits.size() != objectOutputs.size() ||
       sourceUnits.size() != compileCommands.size() || executablePath.empty())
@@ -365,6 +379,11 @@ llvm::Error CompilePlan::validate() const {
     if (!isNormalizedRelativePath(path))
       return buildError("ACLOWER-FINGERPRINT",
                         "compile plan contains a non-normalized object path");
+  for (const LinkInputIdentity &input : linkInputs)
+    if (!isCanonicalIncludeRoot(input.path) ||
+        !isValidFingerprint(input.fingerprint))
+      return buildError("ACLOWER-FINGERPRINT",
+                        "compile plan link input identity is invalid");
   if (!isNormalizedRelativePath(executablePath) ||
       linkCommand.arguments.empty() || linkCommand.output != executablePath)
     return buildError("ACLOWER-FINGERPRINT",
@@ -389,7 +408,8 @@ llvm::Expected<CompilePlan> createCompilePlan(const BuildRequest &request,
                                               const SourceBundle &bundle) {
   if (auto error = preflightBuildRequest(request))
     return std::move(error);
-  if (!isValidFingerprint(bundle.buildFingerprint))
+  if (!isValidFingerprint(bundle.sourceFingerprint) ||
+      !isValidFingerprint(bundle.buildFingerprint))
     return buildError("ACLOWER-FINGERPRINT",
                       "source bundle build identity is invalid");
   llvm::StringRef previousPath;
@@ -422,6 +442,7 @@ llvm::Expected<CompilePlan> createCompilePlan(const BuildRequest &request,
   plan.compilerFlags = request.compilerFlags;
   plan.linkerFlags = request.linkerFlags;
   plan.toolchainFingerprint = request.toolchain.fingerprint;
+  plan.sourceFingerprint = bundle.sourceFingerprint;
   plan.executablePath = "bin/model";
 
   plan.prebuiltInputs = request.prebuiltInputs;
@@ -433,6 +454,19 @@ llvm::Expected<CompilePlan> createCompilePlan(const BuildRequest &request,
             [](const PrebuiltInput &left, const PrebuiltInput &right) {
               return left.path < right.path;
             });
+
+  for (const std::string &path : request.linkInputs) {
+    if (!isCanonicalIncludeRoot(path))
+      return buildError("ACLOWER-FINGERPRINT",
+                        "link input path is not canonical");
+    auto buffer = llvm::MemoryBuffer::getFile(path);
+    if (!buffer)
+      return llvm::createStringError(
+          buffer.getError(), "cannot read link input '%s'", path.c_str());
+    plan.linkInputs.push_back(
+        {.path = path,
+         .fingerprint = computeFingerprint(buffer.get()->getBuffer())});
+  }
 
   for (const GeneratedFile &file : bundle.files) {
     if (!llvm::StringRef(file.relativePath).ends_with(".cpp"))

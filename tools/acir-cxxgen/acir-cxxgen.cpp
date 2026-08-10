@@ -5,6 +5,9 @@
 #include "acir/CodeGen/ModelPlan.h"
 #include "acir/Dialect/ACSim/ACSimDialect.h"
 
+#include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
+#include "mlir/Dialect/Index/IR/IndexDialect.h"
 #include "mlir/IR/MLIRContext.h"
 #include "mlir/Parser/Parser.h"
 #include "llvm/ADT/SmallString.h"
@@ -205,7 +208,9 @@ int runDriver() {
   }
 
   mlir::MLIRContext context;
-  context.loadDialect<acir::acsim::ACSimDialect>();
+  context
+      .loadDialect<acir::acsim::ACSimDialect, mlir::arith::ArithDialect,
+                   mlir::cf::ControlFlowDialect, mlir::index::IndexDialect>();
   auto module = mlir::parseSourceFile<mlir::ModuleOp>(inputFile, &context);
   if (!module)
     return fail(stopAfter, driverError("canonical ACSim parsing failed"));

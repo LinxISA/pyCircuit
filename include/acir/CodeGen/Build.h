@@ -47,6 +47,11 @@ struct CompileCommand {
   std::string output;
 };
 
+struct LinkInputIdentity {
+  std::string path;
+  Fingerprint fingerprint;
+};
+
 struct CompilePlan {
   std::string schema = "acsim-compile-plan-0.1";
   std::vector<std::string> sourceUnits;
@@ -55,10 +60,12 @@ struct CompilePlan {
   std::vector<std::string> definitions;
   std::vector<std::string> compilerFlags;
   std::vector<std::string> linkerFlags;
+  std::vector<LinkInputIdentity> linkInputs;
   std::vector<PrebuiltInput> prebuiltInputs;
   std::vector<CompileCommand> compileCommands;
   CompileCommand linkCommand;
   std::string executablePath;
+  Fingerprint sourceFingerprint;
   Fingerprint toolchainFingerprint;
   Fingerprint fingerprint;
 

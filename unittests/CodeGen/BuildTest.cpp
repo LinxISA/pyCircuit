@@ -8,6 +8,7 @@
 #include "llvm/ADT/SmallString.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/MemoryBuffer.h"
+#include "llvm/Support/raw_ostream.h"
 #include "gtest/gtest.h"
 
 #include <array>
@@ -29,6 +30,13 @@ bool hasError(llvm::Error error) {
 std::string readFile(llvm::StringRef path) {
   auto buffer = llvm::MemoryBuffer::getFile(path);
   return buffer ? buffer.get()->getBuffer().str() : std::string();
+}
+
+void writeFile(llvm::StringRef path, llvm::StringRef content) {
+  std::error_code error;
+  llvm::raw_fd_ostream output(path, error);
+  ASSERT_FALSE(error);
+  output << content;
 }
 
 class TempOutputRoot {
@@ -124,13 +132,13 @@ llvm::Expected<BuildRequest> makeBuildRequest() {
   request.definitions = {"ZETA=1", "ALPHA=1"};
   request.compilerFlags = {"-Wall"};
   request.linkerFlags = {"-pthread"};
-  request.linkInputs = {"lib/runtime.a"};
   request.outputRoot = "out";
   return request;
 }
 
 SourceBundle makeSourceBundle() {
   SourceBundle bundle;
+  bundle.sourceFingerprint = kFingerprint.str();
   bundle.buildFingerprint = kFingerprint.str();
   bundle.files = {
       {.relativePath = "include/generated/model.h",
@@ -167,6 +175,23 @@ TEST(BuildTest, CompilePlanIsClosedCanonicalAndArgumentVectorBased) {
   ASSERT_TRUE(static_cast<bool>(firstJson));
   ASSERT_TRUE(static_cast<bool>(secondJson));
   EXPECT_EQ(*firstJson, *secondJson);
+}
+
+TEST(BuildTest, LinkInputContentsParticipateInCompilePlanIdentity) {
+  TempOutputRoot output;
+  const std::string linkInput = output.path() + "/runtime.a";
+  writeFile(linkInput, "first link input\n");
+
+  auto request = makeBuildRequest();
+  ASSERT_TRUE(static_cast<bool>(request));
+  request->linkInputs = {linkInput};
+  auto first = createCompilePlan(*request, makeSourceBundle());
+  ASSERT_TRUE(static_cast<bool>(first));
+
+  writeFile(linkInput, "second link input\n");
+  auto second = createCompilePlan(*request, makeSourceBundle());
+  ASSERT_TRUE(static_cast<bool>(second));
+  EXPECT_NE(first->fingerprint, second->fingerprint);
 }
 
 TEST(BuildTest, RejectsToolchainOrPrebuiltProvenanceMismatch) {
@@ -206,6 +231,17 @@ TEST(BuildTest, RejectsProfileAndToolchainIdentityMismatch) {
   ASSERT_TRUE(static_cast<bool>(request));
   request->toolchain.targetTriple = "different-target";
   EXPECT_TRUE(hasError(preflightBuildRequest(*request)));
+}
+
+TEST(BuildTest, PublishedBuildRequiresFrozenAcirAndBindingLockBytes) {
+  TempOutputRoot output;
+  PublishFixture fixture(output.path());
+  fixture.request().frozenAcirBytes.clear();
+  EXPECT_TRUE(hasError(preflightBuildRequest(fixture.request())));
+
+  PublishFixture second(output.path());
+  second.request().bindingLockBytes.clear();
+  EXPECT_TRUE(hasError(preflightBuildRequest(second.request())));
 }
 
 TEST(BuildTest, RejectsNonCanonicalPathsAndSourceFingerprintMismatch) {

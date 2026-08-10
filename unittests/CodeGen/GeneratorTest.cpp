@@ -35,6 +35,15 @@ llvm::Expected<ModelPlan> fixturePlan(mlir::MLIRContext &context) {
   return buildModelPlan(*file);
 }
 
+llvm::Expected<ModelPlan> reusableModulePlan(mlir::MLIRContext &context) {
+  context.loadDialect<acsim::ACSimDialect>();
+  auto file = mlir::parseSourceFile<mlir::ModuleOp>(
+      ACIR_TEST_SOURCE_DIR "/test/ACSim/reusable-modules.mlir", &context);
+  if (!file)
+    return llvm::createStringError("failed to parse reusable module fixture");
+  return buildModelPlan(*file);
+}
+
 const GeneratedFile *findFile(const SourceBundle &bundle,
                               llvm::StringRef path) {
   auto found = std::find_if(
@@ -79,14 +88,84 @@ TEST(GeneratorTest, EmitsExactOrderedFileSetAndTypedOwnership) {
   EXPECT_NE(header->content.find("gfsim::Fifo fifo_;"), std::string::npos);
   EXPECT_NE(header->content.find("std::array<gfsim::Fifo, 2> lanes_;"),
             std::string::npos);
-  EXPECT_NE(source->content.find("fifo_(\"fifo\", 0, this)"),
+  EXPECT_NE(source->content.find("fifo_(\"fifo\", nextObjectId++, this)"),
             std::string::npos);
-  EXPECT_NE(source->content.find("gfsim::Fifo(\"lanes[0]\", 1, this)"),
-            std::string::npos);
-  EXPECT_NE(source->content.find("tick_(\"tick\", 3, this, lanes_[0])"),
-            std::string::npos);
+  EXPECT_NE(
+      source->content.find("gfsim::Fifo(\"lanes[0]\", nextObjectId++, this)"),
+      std::string::npos);
+  EXPECT_NE(
+      source->content.find("tick_(\"tick\", nextObjectId++, this, lanes_[0])"),
+      std::string::npos);
   EXPECT_NE(source->content.find("attachChild(fifo_)"), std::string::npos);
+  EXPECT_NE(header->content.find("static_assert(gfsim::StatefulModel<"),
+            std::string::npos);
+  EXPECT_NE(header->content.find("decltype(auto) out_port()"),
+            std::string::npos);
+  EXPECT_NE(header->content.find("decltype(auto) memory()"), std::string::npos);
+  EXPECT_NE(header->content.find("decltype(auto) out()"), std::string::npos);
+  EXPECT_NE(
+      source->content.find("bindStatic(lanes_[0].output(), lanes_[1].input())"),
+      std::string::npos);
+  EXPECT_NE(source->content.find(
+                "bindStatic(lanes_[0].initiator(), lanes_[1].target())"),
+            std::string::npos);
+  EXPECT_NE(source->content.find("return gfsim::is_ready(gfsim::is_ready())"),
+            std::string::npos);
   EXPECT_FALSE(hasError(validateSourceBundle(*plan, *bundle)));
+}
+
+TEST(GeneratorTest, EmitsReusableNestedModulesWithContextDenseIds) {
+  mlir::MLIRContext context;
+  auto plan = reusableModulePlan(context);
+  ASSERT_TRUE(static_cast<bool>(plan));
+
+  auto bundle = generateModelSources(*plan);
+  if (!bundle) {
+    ADD_FAILURE() << llvm::toString(bundle.takeError());
+    return;
+  }
+  const GeneratedFile *top =
+      findFile(*bundle, "src/generated/modules/Top_sa000000000000000.cpp");
+  const GeneratedFile *leaf =
+      findFile(*bundle, "src/generated/modules/Leaf_s8000000000000000.cpp");
+  const GeneratedFile *dispatch =
+      findFile(*bundle, "include/generated/dispatch.h");
+  ASSERT_NE(top, nullptr);
+  ASSERT_NE(leaf, nullptr);
+  ASSERT_NE(dispatch, nullptr);
+  EXPECT_NE(top->content.find("left_(\"left\", gfsim::kInvalidObjectId, this, "
+                              "nextObjectId)"),
+            std::string::npos);
+  EXPECT_NE(top->content.find("for (auto &element0 : right_)"),
+            std::string::npos);
+  EXPECT_NE(leaf->content.find("child_(\"child\", nextObjectId++, this)"),
+            std::string::npos);
+  EXPECT_NE(dispatch->content.find("model.top_.left_.child_"),
+            std::string::npos);
+  EXPECT_NE(dispatch->content.find("model.top_.right_[1].pulse_"),
+            std::string::npos);
+}
+
+TEST(GeneratorTest, RecursivelyAttachesMultidimensionalArrays) {
+  mlir::MLIRContext context;
+  context.loadDialect<acsim::ACSimDialect>();
+  auto file = mlir::parseSourceFile<mlir::ModuleOp>(
+      ACIR_TEST_SOURCE_DIR "/test/CodeGen/multidimensional-array.mlir",
+      &context);
+  ASSERT_TRUE(static_cast<bool>(file));
+  auto plan = buildModelPlan(*file);
+  ASSERT_TRUE(static_cast<bool>(plan));
+
+  auto bundle = generateModelSources(*plan);
+  ASSERT_TRUE(static_cast<bool>(bundle));
+  const GeneratedFile *source =
+      findFile(*bundle, "src/generated/modules/Top_s2000000000000000.cpp");
+  ASSERT_NE(source, nullptr);
+  EXPECT_NE(source->content.find("for (auto &element0 : counters_)"),
+            std::string::npos);
+  EXPECT_NE(source->content.find("for (auto &element1 : element0)"),
+            std::string::npos);
+  EXPECT_NE(source->content.find("attachChild(element1)"), std::string::npos);
 }
 
 TEST(GeneratorTest, RepeatedGenerationIsByteIdentical) {
@@ -106,6 +185,47 @@ TEST(GeneratorTest, RepeatedGenerationIsByteIdentical) {
     EXPECT_EQ(first->files[index].fingerprint,
               second->files[index].fingerprint);
   }
+}
+
+TEST(GeneratorTest, SourceIdentityChangesWithGeneratedTopology) {
+  mlir::MLIRContext context;
+  auto firstPlan = fixturePlan(context);
+  ASSERT_TRUE(static_cast<bool>(firstPlan));
+  ModelPlan secondPlan = *firstPlan;
+  ASSERT_FALSE(secondPlan.activationEdges.empty());
+  secondPlan.activationEdges.erase(secondPlan.activationEdges.begin());
+
+  auto first = generateModelSources(*firstPlan);
+  auto second = generateModelSources(secondPlan);
+  ASSERT_TRUE(static_cast<bool>(first));
+  ASSERT_TRUE(static_cast<bool>(second));
+  EXPECT_NE(first->buildFingerprint, second->buildFingerprint);
+}
+
+TEST(GeneratorTest, SourceContractRejectsRehashedMutationAndForbiddenTokens) {
+  mlir::MLIRContext context;
+  auto plan = fixturePlan(context);
+  ASSERT_TRUE(static_cast<bool>(plan));
+  auto bundle = generateModelSources(*plan);
+  ASSERT_TRUE(static_cast<bool>(bundle));
+
+  SourceBundle mutated = *bundle;
+  mutated.files.back().content.append("// harmless mutation\n");
+  mutated.files.back().fingerprint =
+      computeFingerprint(mutated.files.back().content);
+  EXPECT_TRUE(hasError(validateSourceBundle(*plan, mutated)));
+
+  SourceBundle forbidden = *bundle;
+  forbidden.files.back().content.append("// dynamic_cast\n");
+  forbidden.files.back().fingerprint =
+      computeFingerprint(forbidden.files.back().content);
+  auto error = validateSourceBundle(*plan, forbidden);
+  if (!error) {
+    ADD_FAILURE() << "forbidden generated token was accepted";
+    return;
+  }
+  EXPECT_NE(llvm::toString(std::move(error)).find("forbidden token"),
+            std::string::npos);
 }
 
 TEST(GeneratorTest, RejectsExecutableCppInStructuredMetadata) {
@@ -161,6 +281,59 @@ TEST(GeneratorTest, EmitsClosedEnumPcProcessWithoutRawFrames) {
   EXPECT_EQ(source->content.find("co_await"), std::string::npos);
 }
 
+TEST(GeneratorTest, EmitsTypedScalarOperationsWithoutRuntimeHelpers) {
+  mlir::MLIRContext context;
+  auto plan = fixturePlan(context);
+  ASSERT_TRUE(static_cast<bool>(plan));
+  auto &operations = plan->modules[0].processes[0].states[0].operations;
+  operations.insert(operations.begin(),
+                    ConstantPlan{"constant_value", "i32", 7});
+  operations.insert(operations.begin() + 1,
+                    ArithmeticPlan{"arith.addi",
+                                   {"constant_value", "constant_value"},
+                                   {"sum"},
+                                   {"i32"},
+                                   {}});
+
+  auto bundle = generateModelSources(*plan);
+  ASSERT_TRUE(static_cast<bool>(bundle));
+  const GeneratedFile *source =
+      findFile(*bundle, "src/generated/processes/tick_s2300000000000000.cpp");
+  ASSERT_NE(source, nullptr);
+  EXPECT_NE(source->content.find("std::int32_t constant_value = 7;"),
+            std::string::npos);
+  EXPECT_NE(
+      source->content.find("auto sum = (constant_value + constant_value);"),
+      std::string::npos);
+  EXPECT_EQ(source->content.find("acsim_generated::arith_addi"),
+            std::string::npos);
+}
+
+TEST(GeneratorTest, ResolvesStaticTypeTemplateArgumentsThroughTypePlan) {
+  mlir::MLIRContext context;
+  auto plan = fixturePlan(context);
+  ASSERT_TRUE(static_cast<bool>(plan));
+  auto &binding = plan->bindings[1];
+  binding.cppSymbol = "gfsim::FifoTemplate";
+  binding.parameters.push_back(
+      {.name = "T",
+       .acirType = "!ac.static_type<ac.std.T>",
+       .cppType = "cpp_bool",
+       .canonicalValue = "cpp_bool",
+       .ordinal = 0,
+       .mapping = ParameterMappingKind::TemplateArgument});
+
+  auto bundle = generateModelSources(*plan);
+  ASSERT_TRUE(static_cast<bool>(bundle));
+  const GeneratedFile *header =
+      findFile(*bundle, "include/generated/modules/Top_s2100000000000000.h");
+  ASSERT_NE(header, nullptr);
+  EXPECT_NE(header->content.find("gfsim::FifoTemplate<bool> fifo_"),
+            std::string::npos);
+  EXPECT_EQ(header->content.find("gfsim::FifoTemplate<\"cpp_bool\">"),
+            std::string::npos);
+}
+
 TEST(GeneratorTest, RejectsProcessValueFromAnotherPc) {
   mlir::MLIRContext context;
   auto plan = fixturePlan(context);
@@ -179,8 +352,12 @@ TEST(GeneratorTest, RejectsProcessEffectMismatch) {
   mlir::MLIRContext context;
   auto plan = fixturePlan(context);
   ASSERT_TRUE(static_cast<bool>(plan));
-  auto &call = std::get<InlineCallPlan>(
-      plan->modules[0].processes[0].states[2].operations[0]);
+  auto &operations = plan->modules[0].processes[0].states[2].operations;
+  auto found = std::find_if(operations.begin(), operations.end(), [](auto &op) {
+    return std::holds_alternative<InlineCallPlan>(op);
+  });
+  ASSERT_NE(found, operations.end());
+  auto &call = std::get<InlineCallPlan>(*found);
   call.callee = "stateful";
 
   auto bundle = generateModelSources(*plan);

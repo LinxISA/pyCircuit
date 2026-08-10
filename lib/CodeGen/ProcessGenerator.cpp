@@ -1,7 +1,9 @@
 #include "ProcessGenerator.h"
 
 #include "llvm/ADT/StringRef.h"
+#include "llvm/ADT/StringSwitch.h"
 #include "llvm/ADT/Twine.h"
+#include "llvm/Support/FormatVariadic.h"
 
 #include <algorithm>
 #include <cctype>
@@ -39,10 +41,17 @@ bool isIdentifier(llvm::StringRef value) {
 }
 
 const BindingPlan *findBinding(const ModelPlan &plan, llvm::StringRef symbol) {
+  auto found = std::find_if(
+      plan.bindings.begin(), plan.bindings.end(),
+      [&](const BindingPlan &binding) { return binding.symbol == symbol; });
+  return found == plan.bindings.end() ? nullptr : &*found;
+}
+
+const BindingPlan *findImplementationBinding(const ModelPlan &plan,
+                                             llvm::StringRef symbol) {
   auto found = std::find_if(plan.bindings.begin(), plan.bindings.end(),
                             [&](const BindingPlan &binding) {
-                              return binding.symbol == symbol ||
-                                     binding.implementation == symbol;
+                              return binding.implementation == symbol;
                             });
   return found == plan.bindings.end() ? nullptr : &*found;
 }
@@ -120,6 +129,77 @@ GeneratedFile makeFile(std::string path, std::string content) {
   return file;
 }
 
+llvm::Expected<std::string> scalarLiteral(const llvm::json::Value &value,
+                                          llvm::StringRef resultType) {
+  if (auto boolean = value.getAsBoolean())
+    return std::string(*boolean ? "true" : "false");
+  if (auto integer = value.getAsInteger())
+    return std::to_string(*integer);
+  if (auto number = value.getAsNumber()) {
+    std::string literal = llvm::formatv("{0}", *number).str();
+    if (resultType == "f32")
+      literal.push_back('f');
+    return literal;
+  }
+  return processError("scalar constant has no closed C++ literal");
+}
+
+bool isArithmeticOperation(llvm::StringRef name) {
+  return llvm::StringSwitch<bool>(name)
+      .Cases({"arith.cmpi", "arith.cmpf", "arith.addi", "arith.subi"}, true)
+      .Cases({"arith.muli", "arith.divui", "arith.divsi", "arith.remui"}, true)
+      .Cases({"arith.remsi", "arith.andi", "arith.ori", "arith.xori"}, true)
+      .Cases({"arith.shli", "arith.shrui", "arith.shrsi", "arith.select"}, true)
+      .Cases({"arith.index_cast", "arith.extui", "arith.extsi", "arith.trunci"},
+             true)
+      .Cases({"arith.addf", "arith.subf", "arith.mulf", "arith.divf"}, true)
+      .Case("arith.negf", true)
+      .Default(false);
+}
+
+bool isIndexOperation(llvm::StringRef name) {
+  return llvm::StringSwitch<bool>(name)
+      .Cases({"index.add", "index.sub", "index.mul", "index.divs"}, true)
+      .Cases({"index.divu", "index.rems", "index.remu", "index.cmp"}, true)
+      .Cases({"index.casts", "index.castu"}, true)
+      .Default(false);
+}
+
+size_t scalarArity(llvm::StringRef name) {
+  if (name == "arith.negf" || name == "arith.index_cast" ||
+      name == "arith.extui" || name == "arith.extsi" ||
+      name == "arith.trunci" || name == "index.casts" || name == "index.castu")
+    return 1;
+  if (name == "arith.select")
+    return 3;
+  return 2;
+}
+
+llvm::Error validateScalarOperation(
+    const ModelPlan &plan, const std::map<std::string, std::string> &values,
+    llvm::StringRef operationName, const std::vector<std::string> &arguments,
+    const std::vector<std::string> &results,
+    const std::vector<std::string> &resultTypes, llvm::StringRef predicate,
+    bool arithmetic) {
+  if ((arithmetic ? !isArithmeticOperation(operationName)
+                  : !isIndexOperation(operationName)) ||
+      arguments.size() != scalarArity(operationName) || results.size() != 1 ||
+      resultTypes.size() != 1)
+    return processError("scalar operation shape is outside the closed subset");
+  for (const std::string &argument : arguments)
+    if (!values.contains(argument))
+      return processError("operation uses a value outside its PC");
+  auto resultType = cppType(plan, resultTypes.front());
+  if (!resultType)
+    return resultType.takeError();
+  const bool isComparison = operationName == "arith.cmpi" ||
+                            operationName == "arith.cmpf" ||
+                            operationName == "index.cmp";
+  if (isComparison != !predicate.empty())
+    return processError("scalar comparison predicate is invalid");
+  return llvm::Error::success();
+}
+
 llvm::Error validateProcess(const ModelPlan &plan, const ProcessPlan &process) {
   if (!isIdentifier(process.className) || !isIdentifier(process.symbol) ||
       process.states.empty() || process.fairnessWork == 0)
@@ -138,8 +218,9 @@ llvm::Error validateProcess(const ModelPlan &plan, const ProcessPlan &process) {
   for (const LiveSlotPlan &slot : process.liveSlots) {
     if (!isIdentifier(slot.name) || !slots.insert(slot.name).second)
       return processError("live slots are not unique identifiers");
-    if (!cppType(plan, slot.type))
-      return processError("live slot has no exact C++ type");
+    auto type = cppType(plan, slot.type);
+    if (!type)
+      return type.takeError();
   }
 
   for (const PcStatePlan &state : process.states) {
@@ -160,8 +241,9 @@ llvm::Error validateProcess(const ModelPlan &plan, const ProcessPlan &process) {
       for (auto [result, type] : llvm::zip_equal(results, types)) {
         if (!isIdentifier(result) || values.contains(result))
           return processError("operation result is not a fresh identifier");
-        if (!cppType(plan, type))
-          return processError("operation result has no exact C++ type");
+        auto realization = cppType(plan, type);
+        if (!realization)
+          return realization.takeError();
         values.emplace(result, type);
       }
       return llvm::Error::success();
@@ -170,6 +252,36 @@ llvm::Error validateProcess(const ModelPlan &plan, const ProcessPlan &process) {
     for (const ProcessOperationPlan &operation : state.operations) {
       llvm::Error error = std::visit(
           Overloaded{
+              [&](const ConstantPlan &constant) -> llvm::Error {
+                if (!isIdentifier(constant.resultValue) ||
+                    values.contains(constant.resultValue))
+                  return processError("scalar constant is invalid");
+                auto type = cppType(plan, constant.resultType);
+                if (!type)
+                  return type.takeError();
+                auto literal =
+                    scalarLiteral(constant.canonicalValue, constant.resultType);
+                if (!literal)
+                  return literal.takeError();
+                values.emplace(constant.resultValue, constant.resultType);
+                return llvm::Error::success();
+              },
+              [&](const ArithmeticPlan &scalar) -> llvm::Error {
+                if (auto error = validateScalarOperation(
+                        plan, values, scalar.operationName, scalar.arguments,
+                        scalar.results, scalar.resultTypes, scalar.predicate,
+                        true))
+                  return error;
+                return addResults(scalar.results, scalar.resultTypes);
+              },
+              [&](const IndexPlan &scalar) -> llvm::Error {
+                if (auto error = validateScalarOperation(
+                        plan, values, scalar.operationName, scalar.arguments,
+                        scalar.results, scalar.resultTypes, scalar.predicate,
+                        false))
+                  return error;
+                return addResults(scalar.results, scalar.resultTypes);
+              },
               [&](const LiveLoadPlan &load) -> llvm::Error {
                 const LiveSlotPlan *slot = findSlot(process, load.slot);
                 if (!slot || slot->type != load.type)
@@ -186,7 +298,10 @@ llvm::Error validateProcess(const ModelPlan &plan, const ProcessPlan &process) {
               },
               [&](const InlineCallPlan &call) -> llvm::Error {
                 const BindingPlan *binding = findBinding(plan, call.callee);
-                if (!binding || binding->effect != BindingEffect::Pure)
+                const TypePlan *implementation = findType(plan, call.callee);
+                if ((!binding || binding->effect != BindingEffect::Pure) &&
+                    (!implementation ||
+                     implementation->kind != TypeKind::Implementation))
                   return processError("inline callee is not a pure binding");
                 for (const std::string &argument : call.arguments)
                   if (auto error = requireValue(argument))
@@ -195,29 +310,16 @@ llvm::Error validateProcess(const ModelPlan &plan, const ProcessPlan &process) {
               },
               [&](const InvokePlan &call) -> llvm::Error {
                 const BindingPlan *binding = findBinding(plan, call.callee);
-                if (!binding || binding->effect != BindingEffect::Stateful)
+                const TypePlan *implementation = findType(plan, call.callee);
+                if ((!binding || binding->effect != BindingEffect::Stateful) &&
+                    (!implementation ||
+                     implementation->kind != TypeKind::Implementation))
                   return processError(
                       "invoke callee is not a stateful binding");
                 for (const std::string &argument : call.arguments)
                   if (auto error = requireValue(argument))
                     return error;
                 return addResults(call.results, call.resultTypes);
-              },
-              [&](const GenericOperationPlan &operation) -> llvm::Error {
-                for (const std::string &argument : operation.arguments)
-                  if (auto error = requireValue(argument))
-                    return error;
-                if (!(llvm::StringRef(operation.operationName)
-                          .starts_with("arith.") ||
-                      llvm::StringRef(operation.operationName)
-                          .starts_with("index.") ||
-                      llvm::StringRef(operation.operationName)
-                          .starts_with("cf.") ||
-                      llvm::StringRef(operation.operationName)
-                          .starts_with("builtin.")))
-                  return processError(
-                      "generic operation is outside the closed subset");
-                return addResults(operation.results, operation.resultTypes);
               }},
           operation);
       if (error)
@@ -275,50 +377,214 @@ void emitResultAssignment(std::ostringstream &output,
   output << "] = ";
 }
 
+std::string unsignedValue(llvm::StringRef value, llvm::StringRef cppTypeName) {
+  return "static_cast<std::make_unsigned_t<" + cppTypeName.str() + ">>(" +
+         value.str() + ")";
+}
+
+std::string signedValue(llvm::StringRef value, llvm::StringRef cppTypeName) {
+  return "static_cast<std::make_signed_t<" + cppTypeName.str() + ">>(" +
+         value.str() + ")";
+}
+
+llvm::Expected<std::string>
+comparisonExpression(llvm::StringRef operationName, llvm::StringRef predicate,
+                     const std::vector<std::string> &arguments,
+                     llvm::StringRef operandCppType) {
+  std::string left = arguments[0];
+  std::string right = arguments[1];
+  if (predicate.starts_with("u") && operationName != "arith.cmpf") {
+    left = unsignedValue(left, operandCppType);
+    right = unsignedValue(right, operandCppType);
+  } else if (operationName == "index.cmp" && predicate.starts_with("s")) {
+    left = signedValue(left, operandCppType);
+    right = signedValue(right, operandCppType);
+  }
+
+  auto relation = llvm::StringSwitch<llvm::StringRef>(predicate)
+                      .Cases({"eq", "oeq", "ueq"}, "==")
+                      .Cases({"ne", "one", "une"}, "!=")
+                      .Cases({"slt", "ult", "olt"}, "<")
+                      .Cases({"sle", "ule", "ole"}, "<=")
+                      .Cases({"sgt", "ugt", "ogt"}, ">")
+                      .Cases({"sge", "uge", "oge"}, ">=")
+                      .Default({});
+  const std::string unordered =
+      "(std::isnan(" + left + ") || std::isnan(" + right + "))";
+  const std::string ordered =
+      "(!std::isnan(" + left + ") && !std::isnan(" + right + "))";
+  if (operationName == "arith.cmpf") {
+    if (predicate == "false")
+      return std::string("false");
+    if (predicate == "true")
+      return std::string("true");
+    if (predicate == "ord")
+      return ordered;
+    if (predicate == "uno")
+      return unordered;
+    if (relation.empty())
+      return processError("floating comparison predicate is unsupported");
+    const std::string comparison =
+        "(" + left + " " + relation.str() + " " + right + ")";
+    return predicate.starts_with("u")
+               ? "(" + comparison + " || " + unordered + ")"
+               : "(" + comparison + " && " + ordered + ")";
+  }
+  if (relation.empty())
+    return processError("integer comparison predicate is unsupported");
+  return "(" + left + " " + relation.str() + " " + right + ")";
+}
+
+llvm::Expected<std::string>
+scalarExpression(const ModelPlan &plan, llvm::StringRef operationName,
+                 const std::vector<std::string> &arguments,
+                 const std::vector<std::string> &resultTypes,
+                 llvm::StringRef predicate) {
+  auto resultCppType = cppType(plan, resultTypes.front());
+  if (!resultCppType)
+    return resultCppType.takeError();
+
+  if (operationName == "arith.cmpi" || operationName == "arith.cmpf" ||
+      operationName == "index.cmp") {
+    // Integer comparison results are i1, so use the operand's declared C++
+    // expression type instead of the result type for signedness conversions.
+    const std::string inferredOperandType =
+        operationName == "index.cmp"
+            ? "std::size_t"
+            : "std::remove_cvref_t<decltype(" + arguments.front() + ")>";
+    return comparisonExpression(operationName, predicate, arguments,
+                                inferredOperandType);
+  }
+
+  if (operationName == "arith.select")
+    return "(" + arguments[0] + " ? " + arguments[1] + " : " + arguments[2] +
+           ")";
+  if (operationName == "arith.negf")
+    return "(-" + arguments[0] + ")";
+  if (operationName == "arith.index_cast" || operationName == "arith.extui" ||
+      operationName == "arith.extsi" || operationName == "arith.trunci" ||
+      operationName == "index.casts" || operationName == "index.castu")
+    return "static_cast<" + *resultCppType + ">(" + arguments[0] + ")";
+
+  llvm::StringRef binaryOperator =
+      llvm::StringSwitch<llvm::StringRef>(operationName)
+          .Cases({"arith.addi", "arith.addf", "index.add"}, "+")
+          .Cases({"arith.subi", "arith.subf", "index.sub"}, "-")
+          .Cases({"arith.muli", "arith.mulf", "index.mul"}, "*")
+          .Cases({"arith.divsi", "arith.divf", "index.divs"}, "/")
+          .Cases({"arith.remsi", "index.rems"}, "%")
+          .Case("arith.andi", "&")
+          .Case("arith.ori", "|")
+          .Case("arith.xori", "^")
+          .Case("arith.shli", "<<")
+          .Case("arith.shrsi", ">>")
+          .Default({});
+  if (!binaryOperator.empty())
+    return "(" + arguments[0] + " " + binaryOperator.str() + " " +
+           arguments[1] + ")";
+
+  binaryOperator = llvm::StringSwitch<llvm::StringRef>(operationName)
+                       .Cases({"arith.divui", "index.divu"}, "/")
+                       .Cases({"arith.remui", "index.remu"}, "%")
+                       .Case("arith.shrui", ">>")
+                       .Default({});
+  if (!binaryOperator.empty())
+    return "static_cast<" + *resultCppType + ">(" +
+           unsignedValue(arguments[0], *resultCppType) + " " +
+           binaryOperator.str() + " " +
+           unsignedValue(arguments[1], *resultCppType) + ")";
+  return processError("scalar operation has no C++ emission");
+}
+
 llvm::Error emitOperation(const ModelPlan &plan, const ProcessPlan &process,
                           std::ostringstream &output,
                           const ProcessOperationPlan &operation) {
   return std::visit(
-      Overloaded{[&](const LiveLoadPlan &load) -> llvm::Error {
-                   auto type = cppType(plan, load.type);
-                   if (!type)
-                     return type.takeError();
-                   output << "    const " << *type << " &" << load.resultValue
-                          << " = committed_" << load.slot << "_;\n";
-                   return llvm::Error::success();
-                 },
-                 [&](const LiveStorePlan &store) -> llvm::Error {
-                   output << "    proposed_" << store.slot
-                          << "_ = " << store.sourceValue << ";\n";
-                   return llvm::Error::success();
-                 },
-                 [&](const InlineCallPlan &call) -> llvm::Error {
-                   const BindingPlan *binding = findBinding(plan, call.callee);
-                   emitResultAssignment(output, call.results);
-                   output << binding->entryPoints.pure << '(';
-                   emitArguments(output, call.arguments);
-                   output << ");\n";
-                   return llvm::Error::success();
-                 },
-                 [&](const InvokePlan &call) -> llvm::Error {
-                   emitResultAssignment(output, call.results);
-                   if (!process.captures.empty())
-                     output << "arg0.invoke(";
-                   else
-                     output << "invoke_" << call.callee << '(';
-                   emitArguments(output, call.arguments);
-                   output << ");\n";
-                   return llvm::Error::success();
-                 },
-                 [&](const GenericOperationPlan &generic) -> llvm::Error {
-                   emitResultAssignment(output, generic.results);
-                   std::string function = generic.operationName;
-                   std::replace(function.begin(), function.end(), '.', '_');
-                   output << "acsim_generated::" << function << '(';
-                   emitArguments(output, generic.arguments);
-                   output << ");\n";
-                   return llvm::Error::success();
-                 }},
+      Overloaded{
+          [&](const ConstantPlan &constant) -> llvm::Error {
+            auto type = cppType(plan, constant.resultType);
+            if (!type)
+              return type.takeError();
+            auto literal =
+                scalarLiteral(constant.canonicalValue, constant.resultType);
+            if (!literal)
+              return literal.takeError();
+            output << "    " << *type << ' ' << constant.resultValue << " = "
+                   << *literal << ";\n";
+            return llvm::Error::success();
+          },
+          [&](const ArithmeticPlan &scalar) -> llvm::Error {
+            auto expression =
+                scalarExpression(plan, scalar.operationName, scalar.arguments,
+                                 scalar.resultTypes, scalar.predicate);
+            if (!expression)
+              return expression.takeError();
+            emitResultAssignment(output, scalar.results);
+            output << *expression << ";\n";
+            return llvm::Error::success();
+          },
+          [&](const IndexPlan &scalar) -> llvm::Error {
+            auto expression =
+                scalarExpression(plan, scalar.operationName, scalar.arguments,
+                                 scalar.resultTypes, scalar.predicate);
+            if (!expression)
+              return expression.takeError();
+            emitResultAssignment(output, scalar.results);
+            output << *expression << ";\n";
+            return llvm::Error::success();
+          },
+          [&](const LiveLoadPlan &load) -> llvm::Error {
+            auto type = cppType(plan, load.type);
+            if (!type)
+              return type.takeError();
+            output << "    const " << *type << " &" << load.resultValue
+                   << " = committed_" << load.slot << "_;\n";
+            return llvm::Error::success();
+          },
+          [&](const LiveStorePlan &store) -> llvm::Error {
+            output << "    proposed_" << store.slot
+                   << "_ = " << store.sourceValue << ";\n";
+            return llvm::Error::success();
+          },
+          [&](const InlineCallPlan &call) -> llvm::Error {
+            const BindingPlan *binding = findBinding(plan, call.callee);
+            emitResultAssignment(output, call.results);
+            if (binding)
+              output << binding->entryPoints.pure;
+            else if (const BindingPlan *implementationBinding =
+                         findImplementationBinding(plan, call.callee))
+              output << implementationBinding->entryPoints.pure;
+            else
+              output << findType(plan, call.callee)->cppType;
+            output << '(';
+            emitArguments(output, call.arguments);
+            output << ");\n";
+            return llvm::Error::success();
+          },
+          [&](const InvokePlan &call) -> llvm::Error {
+            emitResultAssignment(output, call.results);
+            const BindingPlan *binding = findBinding(plan, call.callee);
+            if (!binding)
+              binding = findImplementationBinding(plan, call.callee);
+            if (binding) {
+              auto capture =
+                  std::find_if(process.captures.begin(), process.captures.end(),
+                               [&](const CapturePlan &candidate) {
+                                 return llvm::StringRef(candidate.type)
+                                     .contains("@" + binding->symbol + ">");
+                               });
+              if (capture == process.captures.end())
+                return processError("stateful invoke has no matching capture");
+              output << "arg"
+                     << std::distance(process.captures.begin(), capture)
+                     << ".invoke(";
+            } else {
+              output << findType(plan, call.callee)->cppType << '(';
+            }
+            emitArguments(output, call.arguments);
+            output << ");\n";
+            return llvm::Error::success();
+          }},
       operation);
 }
 
@@ -341,12 +607,33 @@ generateProcessHeader(const ModelPlan &plan, const ProcessPlan &process) {
               plan, llvm::StringRef(capture.type).slice(start + 1, end)))
         headers.insert(binding->header);
   }
+  for (const PcStatePlan &state : process.states)
+    for (const ProcessOperationPlan &operation : state.operations)
+      std::visit(
+          Overloaded{
+              [&](const InlineCallPlan &call) {
+                if (const BindingPlan *binding = findBinding(plan, call.callee))
+                  headers.insert(binding->header);
+                else if (const BindingPlan *binding =
+                             findImplementationBinding(plan, call.callee))
+                  headers.insert(binding->header);
+              },
+              [&](const InvokePlan &call) {
+                if (const BindingPlan *binding = findBinding(plan, call.callee))
+                  headers.insert(binding->header);
+                else if (const BindingPlan *binding =
+                             findImplementationBinding(plan, call.callee))
+                  headers.insert(binding->header);
+              },
+              [&](const auto &) {}},
+          operation);
 
   std::ostringstream output;
   output << "#pragma once\n\n#include \"gfsim/process.h\"\n";
   for (const std::string &header : headers)
     output << "#include \"" << header << "\"\n";
-  output << "\n#include <cstdint>\n#include <string>\n\n"
+  output << "\n#include <cmath>\n#include <cstdint>\n#include <string>\n"
+            "#include <type_traits>\n\n"
          << "namespace acsim_generated {\n\nclass " << process.className
          << " final : public gfsim::ProcessRuntime<" << process.className
          << "> {\npublic:\n  enum class Pc : " << *underlyingType << " {\n";

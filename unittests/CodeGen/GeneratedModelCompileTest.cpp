@@ -32,9 +32,34 @@ ModelPlan makeMinimalRunnablePlan() {
   plan.profileFingerprint = kFingerprint.str();
   plan.toolchainFingerprint = kFingerprint.str();
   plan.schemaSetFingerprint = kFingerprint.str();
-  plan.modules.push_back({.symbol = "Top",
-                          .className = "Top_s0000000000000000",
-                          .specializationFingerprint = kFingerprint.str()});
+  ModulePlan module{.symbol = "Top",
+                    .className = "Top_s0000000000000000",
+                    .specializationFingerprint = kFingerprint.str()};
+  ProcessPlan process{.symbol = "scalar",
+                      .className = "scalar_s0000000000000000",
+                      .specializationFingerprint = kFingerprint.str(),
+                      .entryPc = "entry",
+                      .fairnessWork = 4};
+  PcStatePlan state{.ordinal = 0, .name = "entry"};
+  state.operations.push_back(ConstantPlan{"left", "i32", 7});
+  state.operations.push_back(ConstantPlan{"right", "i32", 5});
+  state.operations.push_back(
+      ArithmeticPlan{"arith.addi", {"left", "right"}, {"sum"}, {"i32"}, {}});
+  state.terminator = TerminatePlan{"success"};
+  process.states.push_back(std::move(state));
+  module.processes.push_back(std::move(process));
+  plan.modules.push_back(std::move(module));
+  plan.constructionOrder = {"Top.scalar"};
+  plan.destructionOrder = {"Top.scalar"};
+  plan.runtimeObjects.push_back({.objectId = 0,
+                                 .activationId = 0,
+                                 .targetSymbol = "Top::scalar",
+                                 .hierarchyPath = "Top.scalar",
+                                 .objectKind = RuntimeObjectKind::Process,
+                                 .workThunk = "scalar_work",
+                                 .xferThunk = "scalar_xfer",
+                                 .resetThunk = "scalar_reset",
+                                 .validateThunk = "scalar_validate"});
   return plan;
 }
 

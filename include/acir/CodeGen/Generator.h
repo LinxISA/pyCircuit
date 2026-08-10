@@ -17,6 +17,7 @@ struct GeneratedFile {
 };
 
 struct SourceBundle {
+  Fingerprint sourceFingerprint;
   Fingerprint buildFingerprint;
   std::vector<GeneratedFile> files;
 };

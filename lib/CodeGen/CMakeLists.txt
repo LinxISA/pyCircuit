@@ -13,6 +13,8 @@ target_link_libraries(ACIRCodeGen PUBLIC
   ACIRBindings
   ACIRDialect
   ACSimDialect
+  MLIRArithDialect
+  MLIRIndexDialect
   LLVMSupport
 )
 target_include_directories(ACIRCodeGen PUBLIC
