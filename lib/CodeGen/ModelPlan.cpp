@@ -1,5 +1,7 @@
 #include "acir/CodeGen/ModelPlan.h"
 
+#include "ModelPlanInternal.h"
+
 #include "acir/Dialect/ACSim/ACSimOps.h"
 
 #include "mlir/IR/BuiltinAttributes.h"
@@ -158,7 +160,7 @@ llvm::Error validateModelPlan(const ModelPlan &plan) {
                        "activation edges are not sorted and unique");
     previousEdge = edge;
   }
-  return llvm::Error::success();
+  return detail::validateModelDetails(plan);
 }
 
 llvm::Expected<ModelPlan> buildModelPlan(mlir::ModuleOp canonicalACSim) {
@@ -281,6 +283,8 @@ llvm::Expected<ModelPlan> buildModelPlan(mlir::ModuleOp canonicalACSim) {
             });
   std::sort(plan.activationEdges.begin(), plan.activationEdges.end());
 
+  if (auto error = detail::populateModelDetails(model, plan))
+    return std::move(error);
   if (auto error = validateModelPlan(plan))
     return std::move(error);
   return plan;

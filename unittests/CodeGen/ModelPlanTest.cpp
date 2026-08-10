@@ -10,6 +10,7 @@
 #include "llvm/Support/Error.h"
 #include "gtest/gtest.h"
 
+#include <sstream>
 #include <string>
 #include <utility>
 #include <vector>
@@ -28,6 +29,37 @@ bool hasError(llvm::Error error) {
     return false;
   llvm::consumeError(std::move(error));
   return true;
+}
+
+std::string stablePlanSummary(const ModelPlan &plan) {
+  std::ostringstream output;
+  output << plan.modelSymbol << '|' << plan.rootSymbol << '|'
+         << plan.frozenAcirFingerprint << '\n';
+  for (const TypePlan &type : plan.types)
+    output << type.symbol << '|' << static_cast<unsigned>(type.kind) << '|'
+           << type.cppType << '|' << type.fingerprint << '\n';
+  for (const BindingPlan &binding : plan.bindings)
+    output << binding.symbol << '|' << binding.cppSymbol << '|'
+           << binding.recordFingerprint << '\n';
+  for (const ModulePlan &module : plan.modules) {
+    output << module.symbol << '|' << module.className << '|'
+           << module.placements.size() << '|' << module.projections.size()
+           << '\n';
+    for (const ProcessPlan &process : module.processes) {
+      output << process.symbol << '|' << process.entryPc << '|'
+             << process.fairnessWork << '\n';
+      for (const PcStatePlan &state : process.states)
+        output << state.ordinal << '|' << state.name << '|'
+               << state.operations.size() << '|' << state.terminator.index()
+               << '\n';
+    }
+  }
+  for (const RuntimeObjectPlan &object : plan.runtimeObjects)
+    output << object.objectId << '|' << object.targetSymbol << '|'
+           << object.hierarchyPath << '\n';
+  for (const ActivationEdgePlan &edge : plan.activationEdges)
+    output << edge.sourceId << "->" << edge.targetId << '\n';
+  return output.str();
 }
 
 TEST(ModelPlanTest, ExtractsClosedIdentitiesTypesAndDenseRuntimePlan) {
@@ -116,6 +148,111 @@ TEST(ModelPlanTest, ValidationRejectsDestructionThatIsNotReverseConstruction) {
 
   std::swap(plan->destructionOrder[0], plan->destructionOrder[1]);
   EXPECT_TRUE(hasError(validateModelPlan(*plan)));
+}
+
+TEST(ModelPlanTest, ExtractsHierarchyBindingsExpressionsAndProcesses) {
+  mlir::MLIRContext context;
+  loadACSimDialects(context);
+  auto file =
+      mlir::parseSourceFile<mlir::ModuleOp>(ACSIM_VALID_TEST_FILE, &context);
+  ASSERT_TRUE(file);
+  auto plan = buildModelPlan(*file);
+  if (!plan) {
+    ADD_FAILURE() << llvm::toString(plan.takeError());
+    return;
+  }
+
+  ASSERT_EQ(plan->bindings.size(), 2u);
+  EXPECT_EQ(plan->bindings[0].symbol, "pure");
+  EXPECT_EQ(plan->bindings[0].effect, BindingEffect::Pure);
+  EXPECT_EQ(plan->bindings[0].header, "gfsim/pure.hpp");
+  EXPECT_EQ(plan->bindings[1].symbol, "stateful");
+  EXPECT_EQ(plan->bindings[1].effect, BindingEffect::Stateful);
+  EXPECT_EQ(plan->bindings[1].cppSymbol, "gfsim::Fifo");
+  EXPECT_EQ(plan->bindings[1].entryPoints.work, "fifo_work");
+  EXPECT_EQ(plan->bindings[1].ports.size(), 2u);
+  EXPECT_EQ(plan->bindings[1].resources.size(), 2u);
+  EXPECT_EQ(plan->bindings[1].activationSources.size(), 1u);
+
+  ASSERT_EQ(plan->modules.size(), 1u);
+  const ModulePlan &module = plan->modules.front();
+  EXPECT_EQ(module.symbol, "Top");
+  EXPECT_FALSE(module.className.empty());
+  ASSERT_EQ(module.placements.size(), 2u);
+  EXPECT_EQ(module.placements[0].symbol, "fifo");
+  EXPECT_EQ(module.placements[0].kind, PlacementKind::ExternalStateful);
+  EXPECT_EQ(module.placements[1].symbol, "lanes");
+  EXPECT_EQ(module.placements[1].kind, PlacementKind::HomogeneousArray);
+  EXPECT_EQ(module.placements[1].shape, (std::vector<uint64_t>{2}));
+  EXPECT_EQ(module.projections.size(), 6u);
+  EXPECT_EQ(module.binds.size(), 3u);
+  EXPECT_EQ(module.expressions.size(), 3u);
+  EXPECT_EQ(module.exports.size(), 3u);
+  EXPECT_EQ(module.returnValues.size(), 3u);
+
+  ASSERT_EQ(module.processes.size(), 1u);
+  const ProcessPlan &process = module.processes.front();
+  EXPECT_EQ(process.symbol, "tick");
+  EXPECT_EQ(process.entryPc, "entry");
+  EXPECT_EQ(process.fairnessWork, 8u);
+  ASSERT_EQ(process.liveSlots.size(), 1u);
+  EXPECT_EQ(process.liveSlots[0].name, "counter");
+  EXPECT_EQ(process.liveSlots[0].type, "!acsim.value<@cpp_bool>");
+  ASSERT_EQ(process.states.size(), 3u);
+  EXPECT_EQ(process.states[0].name, "entry");
+  EXPECT_EQ(process.states[0].ordinal, 0u);
+  EXPECT_EQ(process.states[0].operations.size(), 3u);
+  EXPECT_TRUE(
+      std::holds_alternative<ContinuePlan>(process.states[0].terminator));
+  EXPECT_EQ(process.states[1].name, "wait");
+  EXPECT_TRUE(
+      std::holds_alternative<SuspendPlan>(process.states[1].terminator));
+  EXPECT_EQ(process.states[2].name, "done");
+  EXPECT_TRUE(
+      std::holds_alternative<TerminatePlan>(process.states[2].terminator));
+  EXPECT_FALSE(hasError(validateModelPlan(*plan)));
+}
+
+TEST(ModelPlanTest, ValidationRejectsTransitionOutsideClosedPcSet) {
+  mlir::MLIRContext context;
+  loadACSimDialects(context);
+  auto file =
+      mlir::parseSourceFile<mlir::ModuleOp>(ACSIM_VALID_TEST_FILE, &context);
+  ASSERT_TRUE(file);
+  auto plan = buildModelPlan(*file);
+  if (!plan) {
+    ADD_FAILURE() << llvm::toString(plan.takeError());
+    return;
+  }
+  auto &transition = std::get<ContinuePlan>(
+      plan->modules[0].processes[0].states[0].terminator);
+  transition.targetPc = "outside";
+
+  EXPECT_TRUE(hasError(validateModelPlan(*plan)));
+}
+
+TEST(ModelPlanTest, IndependentCanonicalParsesProduceIdenticalOwnedPlans) {
+  mlir::MLIRContext firstContext;
+  mlir::MLIRContext secondContext;
+  loadACSimDialects(firstContext);
+  loadACSimDialects(secondContext);
+  auto firstFile = mlir::parseSourceFile<mlir::ModuleOp>(ACSIM_VALID_TEST_FILE,
+                                                         &firstContext);
+  auto secondFile = mlir::parseSourceFile<mlir::ModuleOp>(ACSIM_VALID_TEST_FILE,
+                                                          &secondContext);
+  ASSERT_TRUE(firstFile);
+  ASSERT_TRUE(secondFile);
+  auto first = buildModelPlan(*firstFile);
+  auto second = buildModelPlan(*secondFile);
+  if (!first || !second) {
+    if (!first)
+      ADD_FAILURE() << llvm::toString(first.takeError());
+    if (!second)
+      ADD_FAILURE() << llvm::toString(second.takeError());
+    return;
+  }
+
+  EXPECT_EQ(stablePlanSummary(*first), stablePlanSummary(*second));
 }
 
 } // namespace

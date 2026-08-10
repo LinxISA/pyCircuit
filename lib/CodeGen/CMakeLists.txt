@@ -2,6 +2,7 @@ add_acir_library(ACIRCodeGen SOURCES
   Manifest.cpp
   Emitter.cpp
   ModelPlan.cpp
+  ModelPlanDetails.cpp
 )
 target_link_libraries(ACIRCodeGen PUBLIC
   ACIRBindings

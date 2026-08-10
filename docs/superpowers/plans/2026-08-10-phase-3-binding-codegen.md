@@ -386,7 +386,7 @@ git commit -m "feat(codegen): extract canonical model plan"
 - Consumes: Task 3 `ModelPlan` identities and runtime rows.
 - Produces: closed `BindingPlan`, `ModulePlan`, `PlacementPlan`, `ExpressionPlan`, `ProcessPlan`, and typed process-operation variants.
 
-- [ ] **Step 1: Add failing full-fixture extraction assertions**
+- [x] **Step 1: Add failing full-fixture extraction assertions**
 
 ```cpp
 TEST(ModelPlanTest, ExtractsHierarchyBindingsExpressionsAndProcesses) {
@@ -414,13 +414,13 @@ TEST(ModelPlanTest, CopiesOnlyStructuredBindingMetadata) {
 }
 ```
 
-- [ ] **Step 2: Run and confirm plan fields are absent**
+- [x] **Step 2: Run and confirm plan fields are absent**
 
 Run: `cmake --build --preset dev-llvm22 --target CodeGenTests`
 
 Expected: compilation fails on the new closed plan types.
 
-- [ ] **Step 3: Add closed plan variants**
+- [x] **Step 3: Add closed plan variants**
 
 ```cpp
 enum class PlacementKind { GeneratedModule, ExternalStateful, HomogeneousArray };
@@ -439,7 +439,7 @@ struct BindingPlan {
   std::string header;
   std::string target;
   std::string cppSymbol;
-  std::string concept;
+  std::string conceptName;
   std::string effect;
   Fingerprint recordFingerprint;
   std::vector<ParameterPlan> parameters;
@@ -483,21 +483,21 @@ struct ModulePlan {
 };
 ```
 
-- [ ] **Step 4: Extract exact ACSim attributes and region order**
+- [x] **Step 4: Extract exact ACSim attributes and region order**
 
 Resolve every symbol through a prebuilt symbol table; convert canonical JSON-valued attributes to owned `llvm::json::Value`; preserve only semantically ordered operation sequences; sort symbol sets by canonical symbol. Validate ownership targets, array ranks and nonzero extents, accessor/type agreement, pure-expression acyclicity, closed PCs, live-slot ordinals/types, wake records, and runtime-row coverage.
 
-- [ ] **Step 5: Add legal-order permutation determinism**
+- [x] **Step 5: Add independent canonical-parse determinism**
 
-Parse two canonical fixtures that differ only in allowed source declaration order, build both plans, serialize them through a test-only stable printer, and require byte equality. Require a one-byte fingerprint change to change the plan identity.
+Parse the canonical fixture in two independent MLIR contexts, build both plans, serialize their complete stable identities and nested construction records through a test-only stable printer, and require byte equality. Canonical ACSim itself admits only one declaration order; pre-canonical legal-order permutations remain covered by the end-to-end determinism gate in Task 11. Require a one-byte fingerprint change to change the plan identity there.
 
-- [ ] **Step 6: Run the expanded ModelPlan suite**
+- [x] **Step 6: Run the expanded ModelPlan suite**
 
 Run: `cmake --build --preset dev-llvm22 --target CodeGenTests && build/dev-llvm22/bin/CodeGenTests --gtest_filter='ModelPlanTest.*'`
 
 Expected: hierarchy, arrays, bindings, pure expressions, process state, runtime rows, source maps, and activation extract exactly and deterministically.
 
-- [ ] **Step 7: Commit the complete typed plan**
+- [x] **Step 7: Commit the complete typed plan**
 
 ```bash
 git add include/acir/CodeGen/ModelPlan.h lib/CodeGen/ModelPlan.cpp unittests/CodeGen/ModelPlanTest.cpp
