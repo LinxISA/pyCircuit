@@ -4,7 +4,7 @@
 # not part of the repo gate.
 set -uo pipefail
 cd "$(dirname "$0")/.."
-OPT=build/dev-llvm22/bin/acir-opt-internal
+OPT=${OPT:-build/dev-llvm22/bin/acir-opt-internal}
 CANON='builtin.module(ac-canonicalize-model)'
 FREEZE='builtin.module(ac-canonicalize-model,ac-freeze-topology)'
 TMP=$(mktemp -d)

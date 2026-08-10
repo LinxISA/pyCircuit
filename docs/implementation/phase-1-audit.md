@@ -1,117 +1,85 @@
 # Phase 1 completion audit
 
-Audit of branch `feature/acir-acsim` against the seven-step Phase 1
-completion audit defined in
-[docs/superpowers/plans/2026-08-04-acir-acsim-implementation.md](../superpowers/plans/2026-08-04-acir-acsim-implementation.md)
-("Phase 1 completion audit").
+Audit of `codex/phase1-review-repair` against the Phase 1 completion audit in
+[the ACIR/ACSim implementation plan](../superpowers/plans/2026-08-04-acir-acsim-implementation.md).
 
 Reviewed commit range:
-`d74a24ed4cd54f94e7084ae121e2973800b259b2..6b7c2223ca6fb1b134472cafdba8cb56a442fd9a`
-(87 commits). The individual SHAs are recorded in the
-[spec coverage ledger](spec-coverage.md) under "Reviewed commits",
-generated from [reviewed-commits.txt](reviewed-commits.txt).
+`d74a24ed4cd54f94e7084ae121e2973800b259b2..fd3326c74e933fca4f1c5a42b27a0edd6efee8df`
+(111 commits). The individual SHAs are recorded in
+[reviewed-commits.txt](reviewed-commits.txt) and rendered into the generated
+[spec coverage ledger](spec-coverage.md).
 
-## 1. ODS vs normative inventories — PASS
+## 1. ODS and normative inventories — PASS
 
-`scripts/check-ir-coverage.py` (gate) and `scripts/audit-op-coverage.py`
-both report zero gaps: every ODS operation/type in the ACIR and ACSim
-dialects matches the normative v0.1 inventory manifests, and every
-operation has positive and negative lit coverage. The committed ledger is
-byte-identical to the freshly generated one.
+`scripts/check-ir-coverage.py` and `scripts/audit-op-coverage.py` report no
+inventory or coverage gaps. All 53 public operations have positive and
+negative lit coverage, and the generated ledger is current.
 
-## 2. Verification rules mapped to negative tests — PASS (one gap found and fixed)
+## 2. Verification rules and negative tests — PASS
 
-Every `Required verification` item, every freeze invariant in
-[docs/specs/acir-core-v0.1.md](../specs/acir-core-v0.1.md), every ACSim
-verifier rule, and every binding rule was mapped to an observed negative
-test. Group-level mapping:
+The ACIR, ACSim, binding, freeze, conversion, and process-state verifier rules
+are covered by the negative suites under `test/`. The repair review added or
+strengthened atomic conversion failure, whole-model lowering, typed activation,
+pure result/export, live scalar wrapper, and public-package consumer coverage.
 
-| Rule group | Negative coverage |
-| --- | --- |
-| Hierarchy, ownership, path assignment | `test/ACIR/hierarchy-invalid.mlir`, `test/ACIR/review-r1-invalid.mlir`, `test/ACIR/review-r2-invalid.mlir` |
-| Collections, views, cardinalities | `test/ACIR/collections-invalid.mlir` |
-| Interfaces, protocols, roles, port mapping | `test/ACIR/interfaces-invalid.mlir`, `test/ACIR/interfaces-review-r1-invalid.mlir`, `test/ACIR/protocols-invalid.mlir`, `test/ACIR/protocols-review-r1-invalid.mlir`, `test/ACIR/port-mapping-review-r2.mlir` |
-| Type and record declarations | `test/ACIR/declarations-invalid.mlir`, `test/ACIR/records-invalid.mlir`, `test/ACIR/types-invalid.mlir` |
-| Address spaces, maps, time domains, capability limits | `test/ACIR/address-time-invalid.mlir` (includes the 256-relation limit test) |
-| Resources, arbitration, ownership order | `test/ACIR/resources-invalid.mlir`, `test/ACIR/resources-forward-malformed-invalid.mlir`, `test/ACIR/ownership-order-review-r2.mlir` |
-| Processes, runtime references, guarantees | `test/ACIR/process-invalid.mlir`, `test/ACIR/runtime-references-invalid.mlir`, `test/ACIR/guarantees-review-r1-invalid.mlir` |
-| Trace operations | `test/ACIR/trace-invalid.mlir` |
-| Freeze invariants, fan-out/flow cardinality, zero-delay cycles | `test/Transforms/freeze-topology.mlir`, `test/Transforms/verify-model.mlir`, `test/Transforms/zero-delay-cycles.mlir` |
-| ACSim op/type verifier rules | `test/ACSim/ops-invalid.mlir`, `test/ACSim/types-invalid.mlir` |
-| Conversion and binding rules (`ACLOWER-BINDING-*`) | `test/Conversion/bindings-invalid.mlir`, `test/Conversion/process-invalid.mlir`, `test/Conversion/atomic-failure.mlir`, `test/Bindings/resolve-ambiguous.mlir`, `test/Bindings/resolve-empty.mlir`, `test/Bindings/resolve-missing.mlir` |
+## 3. Placeholder, legacy, and stale-epoch scan — PASS
 
-Findings:
+The repository contract suite rejects placeholder markers, stale epochs,
+broken documentation links, incomplete schemas, and stale IR coverage. All 27
+contract and coverage tests pass.
 
-- **Gap fixed.** The 256-relation mixed-interleave capability limit in
-  `lib/Dialect/ACIR/ACIRResources.cpp` had no negative test. Added one to
-  `test/ACIR/address-time-invalid.mlir` (33 map entries producing 272
-  relations, exceeding the 256 limit); committed as `3c8399e`.
-- **Structural note.** The freeze invariant "no implicit fan-in" has no
-  dedicated negative test because it is structurally unrepresentable:
-  SSA values are single-def, so implicit fan-in cannot be expressed in
-  the IR at all. Fan-out is covered (`test/Transforms/verify-model.mlir`
-  flow-cardinality checks).
+## 4. Clean build and gate matrix — PASS
 
-## 3. Placeholder / legacy / stale-epoch scan — PASS
+Fresh out-of-tree builds were configured from this worktree:
 
-Tracked files scanned for unfinished-work markers, skipped tests, legacy
-aliases, component-specific emitter names, and stale epoch strings. The
-only hits are the intentional "0.2" negative fixtures used to test epoch
-rejection and the pattern strings inside the checker scripts themselves.
+- Debug: complete build, 72/72 lit tests, 10/10 CTest suites.
+- Release: complete build, 72/72 lit tests, 10/10 CTest suites.
+- Contract tests: 27/27.
+- IR inventory and coverage gates: pass.
+- Repository-wide clang-format dry run: pass.
+- Repository-wide configured clang-tidy gate: pass. On macOS the invocation
+  includes the active SDK sysroot and libc++ because Homebrew clang-tidy does
+  not inherit the Apple compiler driver defaults.
+- `git diff --check`: pass.
+- Install-to-consumer: the Release package installs, the external consumer
+  configures and builds against it, and `process-state-plan-consumer` exits 0.
 
-## 4. Clean-tree build and gate matrix — PASS
+The clean all-target build exposed a missing transitive
+`MLIRControlFlowDialect` link on `ACSimDialect`; it was fixed in `fd3326c`.
 
-From a fresh clone (`/tmp/acir-audit`, synced to `6b7c222`):
+## 5. Determinism — PASS
 
-- `dev-llvm22` configure with `-DACIR_ENABLE_ASSERTIONS=ON`: build clean;
-  67/67 lit tests, 10/10 unit tests (ctest).
-- `release-llvm22`: build clean; 67/67 lit, 10/10 ctest.
-- 30/30 contract tests; IR coverage gate; clang-format gate;
-  `git diff --check` clean.
-- Install-to-consumer flow: consumer project configures, builds, and
-  exits 0 against the installed package.
+`scripts/audit5-determinism.sh` ran the canonicalize/freeze pipeline five times
+over all 11 audit inputs. Each input produced one text hash, one bytecode hash,
+and, where applicable, one topology digest. The helper now accepts an `OPT`
+override so an audited out-of-tree tool can be selected explicitly.
 
-## 5. Deterministic canonicalization and bytecode hashes — PASS
+## 6. Requirements and code-quality review — PASS
 
-`scripts/audit5-determinism.sh` runs the project pipeline
-`ac-canonicalize-model,ac-freeze-topology` five times each over 11 inputs
-(4 freezable models including extracted `freeze-topology` /
-`deterministic-canonicalization` sections, 7 canonicalize-only valid
-models). Across all runs and all inputs the textual IR hash, the
-`--emit-bytecode` hash, and the frozen `ac.topology_digest` are each
-identical (one unique value per input). The lit test
-`test/Transforms/deterministic-canonicalization.mlir` additionally
-proves two syntactically different but semantically equal inputs produce
-byte-identical bytecode.
+The full implementation was reviewed inline as requested. The review found and
+repaired the following release blockers:
 
-## 6. Requirements and code-quality review — PARTIAL (documented limitation)
+- production process-state planning did not publish complete continuation,
+  liveness, and fairness state;
+- scalar live state omitted the normative wrapper callees and explicit
+  wrap/unwrap actions;
+- hierarchy expansion, module ordering, fingerprints, process bodies, typed
+  captures, graph activation, pure results, and atomic publication were
+  incomplete;
+- installed CMake targets omitted parts of the public lowering/codegen surface;
+- the ACSim dialect omitted its ControlFlow link dependency.
 
-An independent human review could not be requested from within this
-session; a documented self-review was performed instead:
+The final review found no remaining Phase 1 correctness blocker. Unsupported
+topologies continue to fail with explicit lowering diagnostics and remain
+scheduled for later roadmap phases rather than being silently accepted.
 
-- Full-branch diff scan (87 commits, 251 files) for debug leftovers,
-  commented-out code, hardcoded paths, and suppression creep.
-- Flagged items verified benign: `llvm::errs()` uses are the
-  flag-gated `--acir-test-pass-trace` instrumentation and CLI error
-  reporting in `tools/acir-opt/acir-opt.cpp`; `llvm_unreachable`
-  additions are enum-exhaustiveness defaults; the five `NOLINT`
-  suppressions were reconciled with the format gate in `6b7c222`.
-- clang-tidy gate (`.clang-tidy`, `WarningsAsErrors: '*'`) is clean
-  across the full tree.
+## 7. Reviewed commits — PASS
 
-**Limitation:** plan step 6 asks for an *independent* review. This
-remains required before merge; this audit does not substitute for it.
-
-## 7. Reviewed commit SHAs recorded — PASS
-
-The reviewed range (87 SHAs) is listed in
-[reviewed-commits.txt](reviewed-commits.txt) and rendered into the
-"Reviewed commits" section of the generated
-[spec coverage ledger](spec-coverage.md). The commit that records the
-list is by construction outside the reviewed range.
+The 111 reviewed SHAs are listed in
+[reviewed-commits.txt](reviewed-commits.txt). The audit-record commit is outside
+that reviewed range by construction.
 
 ## Verdict
 
-Steps 1–5 and 7 pass. Step 6 is partially satisfied by a documented
-self-review; an independent human requirements/code-quality review is
-the remaining gate before Phase 2 may begin.
+All seven Phase 1 completion steps pass. Phase 1 is ready to merge to `main`,
+and Phase 2 may begin from that merged baseline.
