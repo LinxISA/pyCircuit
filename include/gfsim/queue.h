@@ -112,8 +112,8 @@ private:
 
 // ── EventQueue ────────────────────────────────────────────────────────
 
-/// Time-ordered event queue. Events are ordered by exact epoch
-/// followed by model-defined stable keys.
+/// Time-ordered event queue. Events are ordered by exact epoch, target object
+/// ID, event kind, and payload.
 class EventQueue : public SimObject {
 public:
   EventQueue(std::string name, ObjectId id, SimObject *parent,

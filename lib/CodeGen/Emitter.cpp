@@ -2,6 +2,8 @@
 
 #include <algorithm>
 #include <sstream>
+#include <stdexcept>
+#include <string_view>
 
 namespace acir::codegen {
 
@@ -462,6 +464,54 @@ SourceFile generateModuleSource(const std::string &moduleName,
   std::string path = "src/generated/" + cls + ".cpp";
   SourceFile sf;
   sf.relativePath = path;
+  sf.content = os.str();
+  sf.fingerprint = computeFingerprint(sf.content);
+  return sf;
+}
+
+SourceFile generateDispatchHeader(const std::string &namespaceName,
+                                  const std::string &modelType,
+                                  std::vector<DispatchEntry> entries) {
+  if (namespaceName.empty() || modelType.empty())
+    throw std::invalid_argument(
+        "dispatch namespace and model type must be non-empty");
+
+  std::sort(entries.begin(), entries.end(),
+            [](const DispatchEntry &left, const DispatchEntry &right) {
+              return left.objectId < right.objectId;
+            });
+  for (size_t index = 0; index < entries.size(); ++index) {
+    if (entries[index].objectId != index ||
+        entries[index].objectExpression.empty())
+      throw std::invalid_argument(
+          "dispatch object IDs must be dense and expressions non-empty");
+  }
+
+  std::ostringstream os;
+  os << "#pragma once\n\n"
+        "#include \"gfsim/dispatch.h\"\n\n"
+        "#include <array>\n\n"
+     << "namespace " << namespaceName << " {\n\n"
+     << "inline std::array<gfsim::DispatchRow, " << entries.size() << ">\n"
+     << "makeDispatchTable(" << modelType << " &model) {\n"
+     << "  return {\n";
+  for (const DispatchEntry &entry : entries)
+    os << "      gfsim::makeDispatchRow(&" << entry.objectExpression << "),\n";
+  os << "  };\n"
+        "}\n\n"
+     << "} // namespace " << namespaceName << "\n";
+
+  std::string pathNamespace = namespaceName;
+  constexpr std::string_view generatedPrefix = "generated::";
+  if (pathNamespace.starts_with(generatedPrefix))
+    pathNamespace.erase(0, generatedPrefix.size());
+  for (size_t separator = pathNamespace.find("::");
+       separator != std::string::npos;
+       separator = pathNamespace.find("::", separator + 1))
+    pathNamespace.replace(separator, 2, "/");
+
+  SourceFile sf;
+  sf.relativePath = "include/generated/" + pathNamespace + "/dispatch.h";
   sf.content = os.str();
   sf.fingerprint = computeFingerprint(sf.content);
   return sf;

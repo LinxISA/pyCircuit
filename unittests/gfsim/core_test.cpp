@@ -1,12 +1,16 @@
 #include "gfsim/components.h"
 #include "gfsim/core.h"
+#include "gfsim/dispatch.h"
 #include "gfsim/object.h"
 #include "gfsim/queue.h"
 #include "gfsim/resource.h"
 
 #include "gtest/gtest.h"
 
+#include <algorithm>
+#include <array>
 #include <memory>
+#include <random>
 
 namespace gfsim {
 namespace {
@@ -57,6 +61,12 @@ TEST(GfsimCoreTest, EventSameTimeOrderedByKindThenPayload) {
   EXPECT_LT(e1, e2);
   EXPECT_LT(e2, e3);
   EXPECT_LT(e1, e3);
+}
+
+TEST(GfsimCoreTest, EventTieBreaksByStableTargetId) {
+  Event first{{0, 0}, 3, 1, 9};
+  Event second{{0, 0}, 7, 1, 9};
+  EXPECT_LT(first, second);
 }
 
 TEST(GfsimCoreTest, TerminationResultDefaults) {
@@ -470,6 +480,164 @@ TEST(GfsimComponentsTest, SinkResetClearsAll) {
 // SimSystem
 // ═══════════════════════════════════════════════════════════════════════
 
+class RecordingDispatchObject : public SimObject {
+public:
+  RecordingDispatchObject(ObjectId id, std::vector<std::string> &log)
+      : SimObject(ObjectKind::Compute, "object", id), log_(log) {}
+
+  void doWork(Epoch) override {
+    log_.push_back("work:" + std::to_string(id()));
+  }
+  void doArbitrate(Epoch) override {
+    log_.push_back("arbitrate:" + std::to_string(id()));
+  }
+  void doXfer(Epoch) override {
+    log_.push_back("xfer:" + std::to_string(id()));
+  }
+  void reset() override { log_.push_back("reset:" + std::to_string(id())); }
+  bool validate() const { return true; }
+
+private:
+  std::vector<std::string> &log_;
+};
+
+class SelfWakingDispatchObject : public SimObject {
+public:
+  SelfWakingDispatchObject(ObjectId id, SimSystem &system)
+      : SimObject(ObjectKind::Process, "self", id), system_(system) {}
+
+  void doWork(Epoch epoch) override {
+    ++workCount;
+    system_.scheduleWork(id(), epoch);
+  }
+  bool validate() const { return true; }
+
+  uint64_t workCount = 0;
+
+private:
+  SimSystem &system_;
+};
+
+TEST(GfsimSystemTest, StaticDispatchUsesDenseStableOrderAndBarrierPhases) {
+  for (unsigned seed = 0; seed < 32; ++seed) {
+    SimSystem system("test");
+    std::vector<std::string> log;
+    RecordingDispatchObject first(0, log);
+    RecordingDispatchObject second(1, log);
+    std::array rows = {makeDispatchRow(&first), makeDispatchRow(&second)};
+    ASSERT_TRUE(system.setDispatchTable(rows));
+
+    std::array<ObjectId, 2> insertionOrder = {0, 1};
+    std::mt19937 random(seed);
+    std::shuffle(insertionOrder.begin(), insertionOrder.end(), random);
+    for (ObjectId id : insertionOrder)
+      EXPECT_TRUE(system.scheduleWork(id, {0, 0}));
+
+    system.step();
+    EXPECT_EQ(log,
+              (std::vector<std::string>{"work:0", "work:1", "arbitrate:0",
+                                        "arbitrate:1", "xfer:0", "xfer:1"}));
+  }
+}
+
+TEST(GfsimSystemTest, StaticDispatchRejectsNonDenseRows) {
+  SimSystem system("test");
+  std::vector<std::string> log;
+  RecordingDispatchObject object(1, log);
+  std::array rows = {makeDispatchRow(&object)};
+  EXPECT_FALSE(system.setDispatchTable(rows));
+  EXPECT_EQ(system.terminationResult().classification,
+            TerminationClass::Failed);
+  EXPECT_EQ(system.terminationResult().diagnosticCode,
+            "invalid_dispatch_table");
+}
+
+TEST(GfsimSystemTest, StaticDispatchRejectsMismatchedObjectKind) {
+  SimSystem system("test");
+  std::vector<std::string> log;
+  RecordingDispatchObject object(0, log);
+  std::array rows = {makeDispatchRow(&object)};
+  rows.front().kind = ObjectKind::Sink;
+  EXPECT_FALSE(system.setDispatchTable(rows));
+  EXPECT_EQ(system.terminationResult().diagnosticCode,
+            "invalid_dispatch_table");
+}
+
+TEST(GfsimSystemTest, StaticDispatchResetUsesDenseThunkOrder) {
+  SimSystem system("test");
+  std::vector<std::string> log;
+  RecordingDispatchObject first(0, log);
+  RecordingDispatchObject second(1, log);
+  std::array rows = {makeDispatchRow(&first), makeDispatchRow(&second)};
+  ASSERT_TRUE(system.setDispatchTable(rows));
+  system.reset();
+  EXPECT_EQ(log, (std::vector<std::string>{"reset:0", "reset:1"}));
+}
+
+TEST(GfsimSystemTest, SameTimeFutureDeltaEventRemainsPending) {
+  SimSystem system("test");
+  std::vector<std::string> log;
+  RecordingDispatchObject object(0, log);
+  std::array rows = {makeDispatchRow(&object)};
+  ASSERT_TRUE(system.setDispatchTable(rows));
+  ASSERT_TRUE(system.scheduleEvent({{0, 2}, 0, 0, 0}));
+
+  EXPECT_TRUE(system.step());
+  EXPECT_EQ(system.currentEpoch(), (Epoch{0, 2}));
+  ASSERT_TRUE(system.nextEvent());
+  EXPECT_EQ(system.nextEvent()->readyTime, (Epoch{0, 2}));
+
+  system.step();
+  EXPECT_EQ(log.front(), "work:0");
+  EXPECT_FALSE(system.nextEvent());
+}
+
+TEST(GfsimSystemTest, SchedulingBeforeCommittedEpochFails) {
+  SimSystem system("test");
+  ASSERT_TRUE(system.scheduleEvent({{1, 0}, kSystemObjectId, 0, 0}));
+  ASSERT_TRUE(system.step());
+  ASSERT_EQ(system.currentEpoch(), (Epoch{1, 0}));
+  EXPECT_FALSE(system.scheduleEvent({{0, 0}, kSystemObjectId, 0, 0}));
+  EXPECT_TRUE(system.isTerminated());
+  EXPECT_EQ(system.terminationResult().classification,
+            TerminationClass::Failed);
+  EXPECT_EQ(system.terminationResult().diagnosticCode,
+            "event_before_current_epoch");
+}
+
+TEST(GfsimSystemTest, DeltaCycleLimitFailsAtExactBoundary) {
+  SimSystem system("test");
+  SelfWakingDispatchObject object(0, system);
+  std::array rows = {makeDispatchRow(&object)};
+  ASSERT_TRUE(system.setDispatchTable(rows));
+  ASSERT_TRUE(system.scheduleWork(0, {0, 0}));
+
+  while (system.step()) {
+  }
+  EXPECT_EQ(system.terminationResult().classification,
+            TerminationClass::Failed);
+  EXPECT_EQ(system.terminationResult().diagnosticCode, "max_deltas_exceeded");
+  EXPECT_EQ(system.currentEpoch().delta, kMaxDeltasPerTick - 1);
+  EXPECT_EQ(object.workCount, kMaxDeltasPerTick);
+}
+
+TEST(GfsimSystemTest, SchedulingOutOfRangeDeltaFailsImmediately) {
+  SimSystem system("test");
+  EXPECT_FALSE(
+      system.scheduleEvent({{1, kMaxDeltasPerTick}, kSystemObjectId, 0, 0}));
+  EXPECT_EQ(system.terminationResult().classification,
+            TerminationClass::Failed);
+  EXPECT_EQ(system.terminationResult().diagnosticCode, "max_deltas_exceeded");
+}
+
+TEST(GfsimSystemTest, SchedulingUnknownEventTargetFailsImmediately) {
+  SimSystem system("test");
+  EXPECT_FALSE(system.scheduleEvent({{1, 0}, 999, 0, 0}));
+  EXPECT_EQ(system.terminationResult().classification,
+            TerminationClass::Failed);
+  EXPECT_EQ(system.terminationResult().diagnosticCode, "unknown_event_target");
+}
+
 TEST(GfsimSystemTest, EmptySystemCompletesImmediately) {
   SimSystem sys("test");
   auto result = sys.run();
@@ -481,7 +649,7 @@ TEST(GfsimSystemTest, EmptySystemCompletesImmediately) {
 TEST(GfsimSystemTest, MaxTicksCapTriggersIncomplete) {
   SimSystem sys("test");
   sys.setMaxTicks(3);
-  sys.scheduleEvent({{100, 0}, 1, 0, 0});
+  sys.scheduleEvent({{100, 0}, kSystemObjectId, 0, 0});
   auto result = sys.run();
   EXPECT_EQ(result.classification, TerminationClass::Incomplete);
   EXPECT_EQ(result.diagnosticCode, "max_ticks_reached");
@@ -492,6 +660,24 @@ TEST(GfsimSystemTest, MaxEventsCapTriggersIncomplete) {
   sys.setMaxEvents(0);
   auto result = sys.run();
   EXPECT_EQ(result.classification, TerminationClass::Incomplete);
+}
+
+TEST(GfsimSystemTest, MaxEventsCapCannotBeExceededWithinOneEpoch) {
+  SimSystem system("test");
+  std::vector<std::string> log;
+  RecordingDispatchObject object(0, log);
+  std::array rows = {makeDispatchRow(&object)};
+  ASSERT_TRUE(system.setDispatchTable(rows));
+  ASSERT_TRUE(system.scheduleEvent({{0, 0}, 0, 0, 0}));
+  ASSERT_TRUE(system.scheduleEvent({{0, 0}, 0, 0, 1}));
+  system.setMaxEvents(1);
+
+  EXPECT_FALSE(system.step());
+  EXPECT_EQ(system.terminationResult().classification,
+            TerminationClass::Incomplete);
+  EXPECT_EQ(system.terminationResult().diagnosticCode, "max_events_reached");
+  EXPECT_EQ(system.terminationResult().committedEventCount, 1u);
+  EXPECT_TRUE(system.nextEvent());
 }
 
 TEST(GfsimSystemTest, ObjectRegistryLookup) {
@@ -522,11 +708,13 @@ TEST(GfsimSystemTest, ScheduleEventAndCommitThenQuery) {
 
 TEST(GfsimSystemTest, SystemCanBeReset) {
   SimSystem sys("test");
-  sys.scheduleEvent({{5, 0}, 1, 0, 0});
+  sys.scheduleEvent({{5, 0}, kSystemObjectId, 0, 0});
   sys.run();
   EXPECT_TRUE(sys.isTerminated());
-  // Reset and verify clean state
   sys.reset();
+  EXPECT_FALSE(sys.isTerminated());
+  EXPECT_EQ(sys.currentEpoch(), (Epoch{0, 0}));
+  EXPECT_FALSE(sys.nextEvent());
 }
 
 // ═══════════════════════════════════════════════════════════════════════

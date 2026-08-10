@@ -3,6 +3,7 @@
 
 #include <compare>
 #include <cstdint>
+#include <limits>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -38,8 +39,10 @@ inline constexpr CausalDelta kMaxDeltasPerTick = 1024;
 /// Compile-time-assigned stable object ID.
 using ObjectId = uint32_t;
 
-inline constexpr ObjectId kInvalidObjectId = 0;
-inline constexpr ObjectId kSystemObjectId = 1;
+inline constexpr ObjectId kInvalidObjectId =
+    std::numeric_limits<ObjectId>::max();
+inline constexpr ObjectId kSystemObjectId = kInvalidObjectId - 1;
+inline constexpr ObjectId kRootObjectId = kInvalidObjectId - 2;
 
 /// Statically known runtime kind for every SimObject.
 enum class ObjectKind : uint8_t {
@@ -111,9 +114,11 @@ struct Event {
   uint32_t eventKind = 0;
   uint64_t payload = 0;
 
-  // Stable ordering: epoch first, then event kind, then payload
+  // Stable ordering: epoch first, then target, event kind, and payload.
   auto operator<=>(const Event &other) const {
     if (auto cmp = readyTime <=> other.readyTime; cmp != 0)
+      return cmp;
+    if (auto cmp = targetId <=> other.targetId; cmp != 0)
       return cmp;
     if (auto cmp = eventKind <=> other.eventKind; cmp != 0)
       return cmp;

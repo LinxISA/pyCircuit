@@ -2,6 +2,7 @@
 #define GFSIM_OBJECT_H
 
 #include "gfsim/core.h"
+#include "gfsim/dispatch.h"
 
 #include <cassert>
 #include <memory>
@@ -152,10 +153,13 @@ public:
   // ── Scheduling ──────────────────────────────────────────────────────
 
   /// Schedule an object for Work at the given epoch.
-  void scheduleWork(ObjectId id, Epoch epoch);
+  bool scheduleWork(ObjectId id, Epoch epoch);
 
   /// Schedule an event for a future epoch.
-  void scheduleEvent(Event event);
+  bool scheduleEvent(Event event);
+
+  /// Install the generated dense static dispatch table.
+  bool setDispatchTable(std::span<const DispatchRow> rows);
 
   /// Get the next pending event (earliest ready time).
   std::optional<Event> nextEvent() const;
@@ -181,6 +185,8 @@ public:
   /// Look up an object by its stable ID.
   SimObject *lookup(ObjectId id) const;
 
+  void reset() override;
+
   // ── Caps ────────────────────────────────────────────────────────────
 
   void setMaxTicks(Tick max) { maxTicks_ = max; }
@@ -199,6 +205,8 @@ private:
 
   struct Impl;
   std::unique_ptr<Impl> impl_;
+
+  bool fail(std::string code, std::string message);
 };
 
 } // namespace gfsim

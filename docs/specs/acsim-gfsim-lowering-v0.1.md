@@ -396,6 +396,15 @@ contains a typed object pointer plus exact Work, Xfer, reset, and validation
 thunks and a static object kind. A thunk may erase storage to `void *`, but it
 recovers exactly one compile-time specialization using `static_cast`.
 
+The emitter sorts rows by the already assigned dense object ID and emits one
+`gfsim::makeDispatchRow(&typed_object)` initializer per row. Discovery order,
+pointer value, and container iteration order MUST NOT affect the emitted bytes.
+The runtime contract uses one Xfer thunk with the explicit phase
+`XferPhase::Arbitrate` or `XferPhase::Commit`; this preserves the global
+all-arbitration-before-all-commit barrier without adding a dynamically selected
+operation. The generated validation thunk checks the row ID and kind against the
+typed object before any hot execution begins.
+
 Activation adjacency is emitted as canonical compressed arrays equivalent to
 `activation_offsets[source_count + 1]` and
 `activation_targets[edge_count]`. A committed source activates only adjacent

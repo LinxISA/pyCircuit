@@ -3,6 +3,7 @@
 
 #include "acir/CodeGen/Manifest.h"
 
+#include <cstdint>
 #include <functional>
 #include <ostream>
 #include <string>
@@ -126,6 +127,19 @@ SourceFile generateModuleHeader(const std::string &moduleName,
 /// Generate a deterministic C++ source for a hierarchical module.
 SourceFile generateModuleSource(const std::string &moduleName,
                                 const std::vector<std::string> &childNames);
+
+/// One generated static-dispatch row. Object expressions are C++ lvalues
+/// rooted at the model parameter, for example `model.compute`.
+struct DispatchEntry {
+  uint32_t objectId = 0;
+  std::string objectExpression;
+};
+
+/// Generate the deterministic dense gfsim dispatch-table factory for a model.
+/// Entries may arrive in any order, but their IDs must be exactly [0, N).
+SourceFile generateDispatchHeader(const std::string &namespaceName,
+                                  const std::string &modelType,
+                                  std::vector<DispatchEntry> entries);
 
 } // namespace acir::codegen
 

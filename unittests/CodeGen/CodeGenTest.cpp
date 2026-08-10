@@ -3,7 +3,10 @@
 
 #include "gtest/gtest.h"
 
+#include <algorithm>
 #include <sstream>
+#include <stdexcept>
+#include <string_view>
 
 namespace acir::codegen {
 namespace {
@@ -188,6 +191,55 @@ TEST(CodeGenGenTest, GenerateModuleSource) {
   EXPECT_FALSE(sf.content.empty());
   EXPECT_NE(sf.content.find("TopModule::build"), std::string::npos);
   EXPECT_NE(sf.content.find("addChild"), std::string::npos);
+}
+
+TEST(CodeGenGenTest, GenerateDispatchHeaderIsDenseAndDeterministic) {
+  std::vector<DispatchEntry> entries = {
+      {1, "model.consumer"},
+      {0, "model.producer"},
+  };
+  auto first = generateDispatchHeader("generated::soc", "SocModel", entries);
+  std::reverse(entries.begin(), entries.end());
+  auto second = generateDispatchHeader("generated::soc", "SocModel", entries);
+
+  constexpr std::string_view expected = R"(#pragma once
+
+#include "gfsim/dispatch.h"
+
+#include <array>
+
+namespace generated::soc {
+
+inline std::array<gfsim::DispatchRow, 2>
+makeDispatchTable(SocModel &model) {
+  return {
+      gfsim::makeDispatchRow(&model.producer),
+      gfsim::makeDispatchRow(&model.consumer),
+  };
+}
+
+} // namespace generated::soc
+)";
+  EXPECT_EQ(first.content, expected);
+  EXPECT_EQ(first.content, second.content);
+  EXPECT_EQ(first.fingerprint, second.fingerprint);
+  EXPECT_NE(first.content.find("gfsim/dispatch.h"), std::string::npos);
+  EXPECT_NE(first.content.find("std::array<gfsim::DispatchRow, 2>"),
+            std::string::npos);
+  EXPECT_NE(first.content.find("makeDispatchTable(SocModel &model)"),
+            std::string::npos);
+  EXPECT_EQ(first.relativePath, "include/generated/soc/dispatch.h");
+  size_t producer = first.content.find("model.producer");
+  size_t consumer = first.content.find("model.consumer");
+  ASSERT_NE(producer, std::string::npos);
+  ASSERT_NE(consumer, std::string::npos);
+  EXPECT_LT(producer, consumer);
+}
+
+TEST(CodeGenGenTest, GenerateDispatchHeaderRejectsNonDenseIds) {
+  EXPECT_THROW(generateDispatchHeader("generated::soc", "SocModel",
+                                      {{1, "model.consumer"}}),
+               std::invalid_argument);
 }
 
 } // namespace

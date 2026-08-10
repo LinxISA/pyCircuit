@@ -1,8 +1,7 @@
-# Phase 2 implementation plan — C++20 gfsim runtime and standard library (DRAFT)
+# Phase 2 implementation plan — C++20 gfsim runtime and standard library
 
-Status: **draft, blocked on Phase 1 merge** (see
-[phase-1-audit.md](../../implementation/phase-1-audit.md); the roadmap permits
-Phase 2 only after the Phase 1 branch merges).
+Status: **active**. Phase 1 passed its completion audit and was merged to
+`main` at `65aabec` before this phase branch was created.
 
 Roadmap scope (verbatim from
 [2026-08-04-agentic-circuit-roadmap.md](2026-08-04-agentic-circuit-roadmap.md),
@@ -39,15 +38,15 @@ The branch already carries a runtime foundation (commits `125a72a`, `d44406d`,
   `ProtocolState`; `NoProgressReport`.
 - `lib/gfsim/system.cpp` — `SimSystem`: object registry, work set, global
   event queue, termination classification.
-- `unittests/gfsim/core_test.cpp` — 57 unit tests.
+- `unittests/gfsim/core_test.cpp` — 68 unit tests after T1.
 
 ## Gap analysis vs roadmap scope
 
 | Roadmap item | State | Remaining work |
 | --- | --- | --- |
-| Exact global time | Done (`Epoch`, `kMaxDeltasPerTick`) | Invariant tests for delta overflow |
-| Event scheduler | Partial (work set + event queue in `SimSystem`) | Deterministic commit order, static dispatch tables |
-| Static dispatch tables | Missing | Table layout + codegen contract with `lib/CodeGen` |
+| Exact global time | Done (`Epoch`, `kMaxDeltasPerTick`) | T1 added exact delta-overflow boundary coverage |
+| Event scheduler | T1 complete | T2 activation adjacency and full barrier integration |
+| Static dispatch tables | T1 complete | Generated dense row factory and runtime validation are frozen |
 | Snapshot/proposal/Xfer barrier | Partial (`Proposal`, resource proposals) | Full barrier semantics across all object kinds |
 | Activation adjacency | Missing | Adjacency tracking + suppression |
 | Queues / event queues | Done (`SimQueue`, `EventQueue`) | Invariant tests |
@@ -65,9 +64,10 @@ The branch already carries a runtime foundation (commits `125a72a`, `d44406d`,
 
 ## Proposed task breakdown
 
-1. **T1 — Scheduler core**: deterministic commit order, static dispatch table
-   layout, delta-cycle overflow diagnostics. Concept tests + randomized
-   work-order determinism tests.
+1. **T1 — Scheduler core (complete)**: deterministic commit order, static
+   dispatch table layout and codegen, exact event ordering and cap enforcement,
+   delta-cycle overflow diagnostics. Concept tests + randomized work-order
+   determinism tests.
 2. **T2 — Barrier semantics**: snapshot/proposal/Xfer barrier across modules,
    queues, resources; activation adjacency and inactive-module suppression
    tests.
@@ -86,14 +86,13 @@ The branch already carries a runtime foundation (commits `125a72a`, `d44406d`,
 10. **T10 — Sanitizer CI legs**: ASAN and UBSAN job legs reusing the existing
     presets.
 
-## Open design questions (need owner input before T1)
+## Resolved design decisions
 
-1. Does the runtime dispatch-table layout get frozen as a schema (like the
-   process-state plan schema), or is it an internal contract between codegen
-   and runtime only?
-2. Should Phase 2 land on `main` incrementally after the Phase 1 merge, or as
-   another long-running phase branch with its own completion audit?
-3. Are the existing `components.h` templates the final baseline set, or do the
-   catalog schemas (T9) drive renames/reshaping first?
-4. PTO trace format: is there an authoritative sample corpus for the streaming
-   tests (T7), or do we generate fixtures from the ACIR trace ops?
+1. The dispatch row and activation arrays are a frozen C++20 codegen/runtime
+   contract, not a separately versioned public JSON schema.
+2. Phase 2 develops on `codex/phase2-gfsim-runtime` and receives its own
+   completion audit before merging.
+3. The existing baseline component names remain canonical; catalog schemas
+   conform to them rather than renaming the C++ surface first.
+4. The repository contains no external PTO sample corpus. T7 fixtures will be
+   generated from the normative trace schema and ACIR trace operations.

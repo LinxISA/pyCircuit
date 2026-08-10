@@ -95,6 +95,10 @@ effect may schedule a later delta at the same time only when the dependency is
 zero-delay, pure, stateless, and effect-free. Independent same-time effects MAY
 be reordered only when independence is proven from static ownership and access
 information. A traversal-order assumption is not proof of independence.
+The runtime declares a finite maximum causal-delta count per tick and MUST
+reject a work item or event whose delta is at or beyond that bound before it is
+inserted. Reaching the bound is a failed contract result with diagnostic code
+`max_deltas_exceeded`.
 
 ## Event-driven activation
 
@@ -167,6 +171,32 @@ Entries contain typed or type-erased thunks with statically verified signatures
 for the operations an object supports. The hot path does not require virtual
 dispatch, dynamic type discovery, string lookup, or plugin indirection.
 
+For contract epoch `0.1`, the generated/runtime C++20 boundary is the following
+logical layout (the declarations in `gfsim/dispatch.h` are canonical):
+
+```cpp
+enum class XferPhase : uint8_t { Arbitrate, Commit };
+
+struct DispatchRow {
+  ObjectId id;
+  ObjectKind kind;
+  void *object;
+  void (*work)(void *, Epoch);
+  void (*xfer)(void *, Epoch, XferPhase);
+  void (*reset)(void *);
+  bool (*validate)(const void *, ObjectId, ObjectKind);
+};
+```
+
+Rows MUST be emitted in ascending dense object-ID order, with `row.id` equal to
+the row index. The typed row factory MUST recover exactly the statically known
+object specialization from `object`. Installation MUST reject a null pointer,
+missing thunk, non-dense ID, kind mismatch, ID mismatch, or failed object
+validation. For one immutable Work snapshot, the scheduler invokes all `work`
+thunks in ascending row order, then all `xfer(..., Arbitrate)` thunks in that
+order, then all `xfer(..., Commit)` thunks in that order. Reset uses the same
+ascending row order.
+
 Virtual functions MAY be used outside the hot path as an implementation detail,
 but they are not part of the contract and cannot alter deterministic ordering.
 
@@ -187,8 +217,9 @@ and time-ordered event queues are distinct types.
 An event contains `ready_time`, target object ID, event kind, payload, and stable
 ordering keys. `ready_time` is an exact integer tick; a same-time event also has
 a causal delta assigned by the runtime. Scheduling before the committed epoch
-is an error. The event queue orders by exact epoch followed by model-defined
-stable keys.
+or addressing an object absent from the static dispatch table is an error. The
+event queue orders by exact epoch, target object ID, event kind, and payload, in
+that order.
 
 ## Resources
 
