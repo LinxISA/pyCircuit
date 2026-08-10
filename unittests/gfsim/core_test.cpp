@@ -147,6 +147,71 @@ TEST(GfsimCoreTest, MaxDeltasPerTickIsFinite) {
 // Object hierarchy
 // ═══════════════════════════════════════════════════════════════════════
 
+class ResetTrackingObject final : public SimObject {
+public:
+  ResetTrackingObject(std::string name, ObjectId id)
+      : SimObject(ObjectKind::Compute, std::move(name), id) {}
+
+  void reset() override { ++resetCount; }
+
+  unsigned resetCount = 0;
+};
+
+TEST(GfsimObjectTest, AttachedByValueChildSharesWalkPathAndResetBehavior) {
+  Module root("top", 1);
+  root.setPath("/top");
+  ResetTrackingObject child("worker", 2);
+
+  ASSERT_TRUE(root.attachChild(child));
+  EXPECT_EQ(child.parent(), &root);
+  EXPECT_EQ(child.path(), "/top/worker");
+
+  std::vector<ObjectId> visited;
+  root.walk([&](SimObject &object) { visited.push_back(object.id()); });
+  EXPECT_EQ(visited, (std::vector<ObjectId>{1, 2}));
+
+  root.reset();
+  EXPECT_EQ(child.resetCount, 1u);
+}
+
+TEST(GfsimObjectTest, DuplicateAndCrossParentAttachmentAreRejected) {
+  Module first("first", 1);
+  Module second("second", 2);
+  ResetTrackingObject child("worker", 3);
+
+  ASSERT_TRUE(first.attachChild(child));
+  EXPECT_FALSE(first.attachChild(child));
+  EXPECT_FALSE(second.attachChild(child));
+  EXPECT_EQ(child.parent(), &first);
+  EXPECT_EQ(first.children(), (std::vector<SimObject *>{&child}));
+  EXPECT_TRUE(second.children().empty());
+}
+
+TEST(GfsimObjectTest, ReparentingAttachedModuleRefreshesNestedPaths) {
+  Module root("top", 1);
+  root.setPath("/top");
+  Module nested("nested", 2);
+  ResetTrackingObject leaf("leaf", 3);
+
+  ASSERT_TRUE(nested.attachChild(leaf));
+  ASSERT_TRUE(root.attachChild(nested));
+  EXPECT_EQ(nested.path(), "/top/nested");
+  EXPECT_EQ(leaf.path(), "/top/nested/leaf");
+}
+
+TEST(GfsimObjectTest, OwnedAndAttachedChildrenShareInsertionOrder) {
+  Module root("top", 1);
+  root.addChild(
+      std::make_unique<SimObject>(ObjectKind::Compute, "owned_first", 2));
+  ResetTrackingObject attached("attached", 3);
+  ASSERT_TRUE(root.attachChild(attached));
+  root.addChild(std::make_unique<SimObject>(ObjectKind::Sink, "owned_last", 4));
+
+  std::vector<ObjectId> visited;
+  root.walk([&](SimObject &object) { visited.push_back(object.id()); });
+  EXPECT_EQ(visited, (std::vector<ObjectId>{1, 2, 3, 4}));
+}
+
 TEST(GfsimObjectTest, ModuleAddsChildWithPath) {
   Module root("root", 1);
   auto child = std::make_unique<SimObject>(ObjectKind::Compute, "comp", 2);
@@ -174,6 +239,25 @@ TEST(GfsimObjectTest, NestedModuleWalkVisitsAllLevels) {
   int count = 0;
   root.walk([&](SimObject &) { ++count; });
   EXPECT_EQ(count, 3);
+}
+
+TEST(GfsimObjectTest, WalkUsesModuleCapabilityRatherThanKindTag) {
+  Module root("root", 1);
+  root.addChild(std::make_unique<SimObject>(ObjectKind::Module, "tagged", 2));
+
+  std::vector<ObjectId> visited;
+  root.walk([&](SimObject &object) { visited.push_back(object.id()); });
+  EXPECT_EQ(visited, (std::vector<ObjectId>{1, 2}));
+}
+
+TEST(GfsimObjectTest, GeneratedModuleWrappersNeedPathsButNoRuntimeObjectIds) {
+  SimSystem system("system");
+  Module generated("generated", kInvalidObjectId);
+  ASSERT_TRUE(system.root().attachChild(generated));
+
+  const TerminationResult result = system.run();
+  EXPECT_EQ(result.classification, TerminationClass::Completed);
+  EXPECT_FALSE(generated.path().empty());
 }
 
 TEST(GfsimObjectTest, FindChildByName) {

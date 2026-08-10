@@ -1,111 +1,123 @@
 #ifndef ACIR_CODEGEN_MANIFEST_H
 #define ACIR_CODEGEN_MANIFEST_H
 
-#include <cstdint>
-#include <map>
+#include "llvm/ADT/StringRef.h"
+#include "llvm/Support/Error.h"
+#include "llvm/Support/JSON.h"
+
+#include <optional>
 #include <string>
 #include <vector>
 
 namespace acir::codegen {
 
-// ── Fingerprint ───────────────────────────────────────────────────────
-
-/// A SHA-256 content fingerprint as 64 lowercase hex characters.
+/// A normative SHA-256 fingerprint: `sha256:` followed by 64 lowercase hex
+/// digits.
 using Fingerprint = std::string;
 
-/// Compute the SHA-256 fingerprint of raw bytes.
-Fingerprint computeFingerprint(const std::string &content);
+bool isValidFingerprint(llvm::StringRef value);
+Fingerprint computeFingerprint(llvm::StringRef content);
+llvm::Expected<Fingerprint>
+fingerprintCanonicalJson(const llvm::json::Value &value);
 
-/// Compute the deterministic fingerprint from a list of inputs.
-Fingerprint compositeFingerprint(const std::vector<Fingerprint> &inputs);
-
-// ── Source file ───────────────────────────────────────────────────────
-
+/// Transitional source record used by the low-level emitter. Structured source
+/// bundles replace it at the ModelPlan boundary.
 struct SourceFile {
-  std::string relativePath; // e.g. "src/modules/Top_workload.cpp"
+  std::string relativePath;
   std::string content;
   Fingerprint fingerprint;
 };
 
-// ── Build manifest ─────────────────────────────────────────────────────
+struct Identity {
+  std::string name;
+  std::string identity;
+};
 
-/// Immutable record of a generated build: what went in, what came out,
-/// and how to verify it hasn't been tampered with.
+struct FileHash {
+  std::string path;
+  Fingerprint sha256;
+};
+
+struct CompilerIdentity {
+  std::string name;
+  std::string buildId;
+  std::string toolchainTarget;
+};
+
+struct ProviderIdentity {
+  std::string nameSpace;
+  Fingerprint schemaFingerprint;
+  Fingerprint implementationFingerprint;
+};
+
+struct ComponentSpecialization {
+  std::string canonicalName;
+  Fingerprint schemaFingerprint;
+  Fingerprint specializationFingerprint;
+};
+
+struct NamedFingerprint {
+  std::string name;
+  Fingerprint fingerprint;
+};
+
+enum class ArtifactKind {
+  Acpy,
+  Acir,
+  Acsim,
+  CppSource,
+  CppHeader,
+  Executable,
+  Report,
+};
+
+struct Artifact {
+  std::string path;
+  ArtifactKind kind;
+  Fingerprint sha256;
+};
+
+enum class ValidationStatus { Passed, Failed };
+
+struct ValidationGate {
+  std::string name;
+  ValidationStatus status;
+  std::optional<Fingerprint> reportSha256;
+};
+
+struct SpecializationInput {
+  std::string name;
+  std::string acirType;
+  llvm::json::Value canonicalValue = nullptr;
+};
+
+/// Typed representation of schemas/build-manifest.schema.json.
 struct BuildManifest {
-  /// Contract epoch for the generation tool.
+  std::string schema = "agentic-circuit-build-manifest";
+  std::string version = "0.1";
   std::string contractEpoch = "0.1";
+  Identity project;
+  Identity system;
+  std::vector<FileHash> sourceFiles;
+  Fingerprint normalizedAcirSha256;
+  CompilerIdentity compiler;
+  std::vector<std::string> passPipeline;
+  std::vector<ProviderIdentity> providers;
+  std::vector<ComponentSpecialization> componentSpecializations;
+  std::vector<NamedFingerprint> protocolIdentities;
+  std::vector<Artifact> artifacts;
+  std::vector<ValidationGate> validationGates;
+  std::string buildProfile;
+  std::vector<std::string> instrumentationLayers;
+  std::vector<SpecializationInput> specializationInputs;
+  Fingerprint buildFingerprint;
 
-  /// Schema identifier for the manifest itself.
-  std::string schema = "acir-build-manifest-0.1";
+  llvm::Error validate() const;
+  llvm::Expected<std::string> canonicalJson() const;
 
-  /// Fingerprint of the input ACSim model before generation.
-  Fingerprint inputFingerprint;
-
-  /// Fingerprint of the toolchain configuration.
-  Fingerprint toolchainFingerprint;
-
-  /// Fingerprint of the selected build profile.
-  Fingerprint profileFingerprint;
-
-  /// Fingerprint of the binding resolution result.
-  Fingerprint bindingFingerprint;
-
-  /// All generated source files with their fingerprints.
-  std::vector<SourceFile> sources;
-
-  /// Composite fingerprint of all outputs.
-  Fingerprint outputFingerprint;
-
-  /// Mapping of component catalog entries to their fingerprints.
-  std::map<std::string, Fingerprint> componentFingerprints;
-
-  /// Compute the composite fingerprint from all inputs.
-  void finalize();
-};
-
-// ── Cache key ─────────────────────────────────────────────────────────
-
-/// A cache key identifies a build configuration for fingerprint-based
-/// caching. Two builds with identical cache keys produce identical output.
-struct CacheKey {
-  Fingerprint inputFingerprint;
-  Fingerprint toolchainFingerprint;
-  Fingerprint profileFingerprint;
-  Fingerprint bindingFingerprint;
-
-  /// Deterministic string representation for file/directory naming.
-  std::string toString() const;
-};
-
-/// Compute a cache key from a build manifest.
-CacheKey cacheKeyFromManifest(const BuildManifest &manifest);
-
-// ── Staged output ─────────────────────────────────────────────────────
-
-/// Directory layout for staged code generation.
-/// Files are written atomically and verified before being committed.
-struct StagedOutput {
-  /// Root output directory.
-  std::string outputDir;
-
-  /// Subdirectory for generated source files.
-  std::string sourceSubdir = "src";
-
-  /// Subdirectory for generated header files.
-  std::string includeSubdir = "include";
-
-  /// Subdirectory for build artifacts.
-  std::string buildSubdir = "build";
-
-  /// Manifest file name.
-  std::string manifestFile = "build-manifest.json";
-
-  /// Write a source file to the staged output directory.
-  /// Returns the full path written.
-  std::string writeSource(const SourceFile &file);
-
-  /// Write the build manifest.
-  std::string writeManifest(const BuildManifest &manifest);
+  /// Fingerprint the closed versioned build preimage and store the result in
+  /// buildFingerprint.
+  llvm::Error finalizeBuildFingerprint();
 };
 
 } // namespace acir::codegen

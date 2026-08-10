@@ -4,13 +4,17 @@
 #include "gfsim/core.h"
 #include "gfsim/dispatch.h"
 
+#include <algorithm>
 #include <cassert>
 #include <memory>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <vector>
 
 namespace gfsim {
+
+class Module;
 
 // ── SimObject ─────────────────────────────────────────────────────────
 
@@ -82,6 +86,10 @@ public:
 
   virtual void reset() {}
 
+  /// Return this object as a hierarchy module without requiring RTTI.
+  virtual Module *asModule() { return nullptr; }
+  virtual const Module *asModule() const { return nullptr; }
+
 protected:
   void setRuntimeFailureCode(std::string_view code) {
     runtimeFailureCode_ = code;
@@ -105,15 +113,32 @@ public:
   Module(std::string name, ObjectId id, SimObject *parent = nullptr)
       : SimObject(ObjectKind::Module, std::move(name), id, parent) {}
 
+  /// Attach a non-owned child to the same deterministic hierarchy index used
+  /// by owned children. An object can be attached to exactly one module.
+  bool attachChild(SimObject &child) {
+    if (&child == this ||
+        (child.parent() != nullptr && child.parent() != this) ||
+        std::find(children_.begin(), children_.end(), &child) !=
+            children_.end())
+      return false;
+
+    children_.push_back(&child);
+    child.setParent(this);
+    child.setPath(std::string(path()) + "/" + std::string(child.name()));
+    return true;
+  }
+
   /// Add a child object owned by this module.
   void addChild(std::unique_ptr<SimObject> child) {
-    child->setParent(this);
-    child->setPath(std::string(path()) + "/" + std::string(child->name()));
-    children_.push_back(child.get());
+    if (!child || !attachChild(*child))
+      throw std::invalid_argument("child is null or already attached");
     owned_.push_back(std::move(child));
   }
 
   std::vector<SimObject *> children() const override { return children_; }
+
+  Module *asModule() override { return this; }
+  const Module *asModule() const override { return this; }
 
   void setPath(std::string path) override {
     SimObject::setPath(std::move(path));
@@ -134,8 +159,8 @@ public:
   template <typename F> void walk(F &&fn) {
     fn(*this);
     for (auto *c : children_) {
-      if (auto *m = dynamic_cast<Module *>(c))
-        m->walk(fn);
+      if (Module *module = c->asModule())
+        module->walk(fn);
       else
         // NOLINTNEXTLINE(clang-analyzer-core.NonNullParamChecker)
         fn(*c); // the children_ invariant guarantees non-null entries
@@ -146,8 +171,8 @@ public:
   template <typename F> void walk(F &&fn) const {
     fn(*this);
     for (auto *c : children_) {
-      if (auto *m = dynamic_cast<const Module *>(c))
-        m->walk(std::forward<F>(fn));
+      if (const Module *module = c->asModule())
+        module->walk(std::forward<F>(fn));
       else
         fn(*c);
     }

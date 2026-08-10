@@ -5,4 +5,5 @@ if(NOT LLVM_ENABLE_RTTI)
   add_compile_options($<$<COMPILE_LANGUAGE:CXX>:-fno-rtti>)
 endif()
 
+add_subdirectory(acir-cxxgen)
 add_subdirectory(acir-opt)

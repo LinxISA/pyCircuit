@@ -1,72 +1,132 @@
 #include "acir/CodeGen/Emitter.h"
 #include "acir/CodeGen/Manifest.h"
 
+#include "llvm/Support/Error.h"
+#include "llvm/Support/JSON.h"
 #include "gtest/gtest.h"
 
 #include <algorithm>
+#include <optional>
 #include <sstream>
 #include <stdexcept>
+#include <string>
 #include <string_view>
+#include <utility>
 
 namespace acir::codegen {
 namespace {
 
 // ── Fingerprint ───────────────────────────────────────────────────────
 
-TEST(CodeGenManifestTest, ComputeFingerprintDeterministic) {
-  auto fp1 = computeFingerprint("hello");
-  auto fp2 = computeFingerprint("hello");
-  EXPECT_EQ(fp1, fp2);
-  EXPECT_EQ(fp1.size(), 64u); // SHA-256 = 64 hex chars
+static Fingerprint repeatedFingerprint(char digit) {
+  return "sha256:" + std::string(64, digit);
 }
 
-TEST(CodeGenManifestTest, DifferentContentDifferentFingerprint) {
-  auto fp1 = computeFingerprint("hello");
-  auto fp2 = computeFingerprint("world");
-  EXPECT_NE(fp1, fp2);
+static bool hasError(llvm::Error error) {
+  if (!error)
+    return false;
+  llvm::consumeError(std::move(error));
+  return true;
 }
 
-TEST(CodeGenManifestTest, CompositeFingerprintIsDeterministic) {
-  auto fp1 = compositeFingerprint({"aaa", "bbb"});
-  auto fp2 = compositeFingerprint({"aaa", "bbb"});
-  EXPECT_EQ(fp1, fp2);
+static BuildManifest makeCompleteManifestFixture() {
+  BuildManifest manifest;
+  manifest.project = {"demo", "project:demo"};
+  manifest.system = {"top", "system:top"};
+  manifest.sourceFiles = {
+      {"src/generated/model.cpp", repeatedFingerprint('1')}};
+  manifest.normalizedAcirSha256 = repeatedFingerprint('2');
+  manifest.compiler = {"clang++", "clang-22.1.8", "arm64-apple-darwin"};
+  manifest.passPipeline = {"acsim-verify", "acsim-emit-cxx"};
+  manifest.providers = {
+      {"ac.std", repeatedFingerprint('3'), repeatedFingerprint('4')}};
+  manifest.componentSpecializations = {
+      {"ac.std.Queue", repeatedFingerprint('5'), repeatedFingerprint('6')}};
+  manifest.protocolIdentities = {{"ready_valid", repeatedFingerprint('7')}};
+  manifest.artifacts = {
+      {"bin/model", ArtifactKind::Executable, repeatedFingerprint('8')}};
+  manifest.validationGates = {
+      {"compile", ValidationStatus::Passed, std::nullopt}};
+  manifest.buildProfile = "validated";
+  manifest.instrumentationLayers = {"trace"};
+  manifest.specializationInputs.push_back(
+      {"depth", "ui32", llvm::json::Value(int64_t{4})});
+  manifest.buildFingerprint = repeatedFingerprint('f');
+  return manifest;
 }
 
-TEST(CodeGenManifestTest, CompositeReordersChangeFingerprint) {
-  auto fp1 = compositeFingerprint({"aaa", "bbb"});
-  auto fp2 = compositeFingerprint({"bbb", "aaa"});
-  EXPECT_NE(fp1, fp2);
+TEST(CodeGenManifestTest, FingerprintsUseNormativeSpelling) {
+  EXPECT_EQ(computeFingerprint("hello"),
+            "sha256:"
+            "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824");
+  EXPECT_TRUE(isValidFingerprint(computeFingerprint("hello")));
+  EXPECT_FALSE(isValidFingerprint(std::string(64, '0')));
+  EXPECT_FALSE(isValidFingerprint("sha256:" + std::string(63, '0')));
+  EXPECT_FALSE(isValidFingerprint("sha256:" + std::string(64, 'A')));
 }
 
-TEST(CodeGenManifestTest, BuildManifestFinalize) {
-  BuildManifest m;
-  m.inputFingerprint = computeFingerprint("input");
-  m.toolchainFingerprint = computeFingerprint("clang-20");
-  SourceFile sf;
-  sf.relativePath = "test.cpp";
-  sf.content = "int main() {}";
-  sf.fingerprint = computeFingerprint(sf.content);
-  m.sources.push_back(sf);
-  m.finalize();
-  EXPECT_FALSE(m.outputFingerprint.empty());
+TEST(CodeGenManifestTest, CanonicalManifestMatchesClosedSchemaShape) {
+  auto manifest = makeCompleteManifestFixture();
+  EXPECT_FALSE(hasError(manifest.validate()));
+
+  auto canonical = manifest.canonicalJson();
+  if (!canonical) {
+    ADD_FAILURE() << llvm::toString(canonical.takeError());
+    return;
+  }
+
+  constexpr std::string_view expected =
+      R"json({"artifacts":[{"kind":"executable","path":"bin/model","sha256":"sha256:8888888888888888888888888888888888888888888888888888888888888888"}],"build_fingerprint":"sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff","build_profile":"validated","compiler":{"build_id":"clang-22.1.8","name":"clang++","toolchain_target":"arm64-apple-darwin"},"component_specializations":[{"canonical_name":"ac.std.Queue","schema_fingerprint":"sha256:5555555555555555555555555555555555555555555555555555555555555555","specialization_fingerprint":"sha256:6666666666666666666666666666666666666666666666666666666666666666"}],"contract_epoch":"0.1","instrumentation_layers":["trace"],"normalized_acir_sha256":"sha256:2222222222222222222222222222222222222222222222222222222222222222","pass_pipeline":["acsim-verify","acsim-emit-cxx"],"project":{"identity":"project:demo","name":"demo"},"protocol_identities":[{"fingerprint":"sha256:7777777777777777777777777777777777777777777777777777777777777777","name":"ready_valid"}],"providers":[{"implementation_fingerprint":"sha256:4444444444444444444444444444444444444444444444444444444444444444","namespace":"ac.std","schema_fingerprint":"sha256:3333333333333333333333333333333333333333333333333333333333333333"}],"schema":"agentic-circuit-build-manifest","source_files":[{"path":"src/generated/model.cpp","sha256":"sha256:1111111111111111111111111111111111111111111111111111111111111111"}],"specialization_inputs":[{"acir_type":"ui32","canonical_value":4,"name":"depth"}],"system":{"identity":"system:top","name":"top"},"validation_gates":[{"name":"compile","report_sha256":null,"status":"passed"}],"version":"0.1"})json";
+  EXPECT_EQ(*canonical, expected);
 }
 
-TEST(CodeGenManifestTest, CacheKeyToString) {
-  CacheKey key{"aaaa", "bbbb", "cccc", "dddd"};
-  auto str = key.toString();
-  EXPECT_FALSE(str.empty());
-  EXPECT_NE(str.find("aaaa"), std::string::npos);
+TEST(CodeGenManifestTest, ManifestRejectsMissingIdentityAndEscapingPath) {
+  auto missingIdentity = makeCompleteManifestFixture();
+  missingIdentity.project.name.clear();
+  EXPECT_TRUE(hasError(missingIdentity.validate()));
+
+  auto escapingPath = makeCompleteManifestFixture();
+  escapingPath.sourceFiles.front().path = "../escape.cpp";
+  EXPECT_TRUE(hasError(escapingPath.validate()));
 }
 
-TEST(CodeGenManifestTest, CacheKeyFromManifest) {
-  BuildManifest m;
-  m.inputFingerprint = computeFingerprint("in");
-  m.toolchainFingerprint = computeFingerprint("tc");
-  m.profileFingerprint = computeFingerprint("pf");
-  m.bindingFingerprint = computeFingerprint("bd");
-  auto key = cacheKeyFromManifest(m);
-  EXPECT_EQ(key.inputFingerprint, m.inputFingerprint);
-  EXPECT_EQ(key.toolchainFingerprint, m.toolchainFingerprint);
+TEST(CodeGenManifestTest, ManifestCanonicalizesSetLikeCollections) {
+  auto first = makeCompleteManifestFixture();
+  first.instrumentationLayers = {"trace", "statistics"};
+  first.providers.push_back(
+      {"ac.extra", repeatedFingerprint('9'), repeatedFingerprint('a')});
+
+  auto second = makeCompleteManifestFixture();
+  second.instrumentationLayers = {"statistics", "trace"};
+  second.providers = {
+      {"ac.extra", repeatedFingerprint('9'), repeatedFingerprint('a')},
+      {"ac.std", repeatedFingerprint('3'), repeatedFingerprint('4')}};
+
+  auto firstJson = first.canonicalJson();
+  auto secondJson = second.canonicalJson();
+  if (!firstJson || !secondJson) {
+    if (!firstJson)
+      ADD_FAILURE() << llvm::toString(firstJson.takeError());
+    if (!secondJson)
+      ADD_FAILURE() << llvm::toString(secondJson.takeError());
+    return;
+  }
+  EXPECT_EQ(*firstJson, *secondJson);
+}
+
+TEST(CodeGenManifestTest, BuildFingerprintUsesClosedVersionedPreimage) {
+  auto first = makeCompleteManifestFixture();
+  auto second = makeCompleteManifestFixture();
+  first.buildFingerprint.clear();
+  second.buildFingerprint.clear();
+  EXPECT_FALSE(hasError(first.finalizeBuildFingerprint()));
+  EXPECT_FALSE(hasError(second.finalizeBuildFingerprint()));
+  EXPECT_TRUE(isValidFingerprint(first.buildFingerprint));
+  EXPECT_EQ(first.buildFingerprint, second.buildFingerprint);
+
+  second.compiler.buildId = "clang-22.1.9";
+  EXPECT_FALSE(hasError(second.finalizeBuildFingerprint()));
+  EXPECT_NE(first.buildFingerprint, second.buildFingerprint);
 }
 
 // ── CppEmitter ────────────────────────────────────────────────────────
@@ -156,61 +216,6 @@ TEST(CodeGenEmitterTest, EmitsSwitch) {
 }
 
 // ── Deterministic code generation ─────────────────────────────────────
-
-TEST(CodeGenGenTest, GenerateProcessHeader) {
-  auto sf = generateProcessHeader("Top", "workload", {"entry", "pc00000001"},
-                                  {"uint32_t"}, {"counter_"}, 17);
-  EXPECT_FALSE(sf.content.empty());
-  EXPECT_FALSE(sf.fingerprint.empty());
-  EXPECT_EQ(sf.fingerprint.size(), 64u);
-  EXPECT_NE(sf.content.find("Top_workload"), std::string::npos);
-  EXPECT_NE(sf.content.find("class Top_workload final"), std::string::npos);
-  EXPECT_NE(sf.content.find("ProcessRuntime<Top_workload>"), std::string::npos);
-  EXPECT_NE(sf.content.find("executeProcessStep"), std::string::npos);
-  EXPECT_NE(sf.content.find("kFairnessWork = 17"), std::string::npos);
-  EXPECT_NE(sf.content.find("Pc"), std::string::npos);
-  EXPECT_NE(sf.content.find("entry"), std::string::npos);
-}
-
-TEST(CodeGenGenTest, GenerateProcessHeaderIsDeterministic) {
-  auto sf1 = generateProcessHeader("Top", "workload", {"entry"}, {}, {});
-  auto sf2 = generateProcessHeader("Top", "workload", {"entry"}, {}, {});
-  EXPECT_EQ(sf1.content, sf2.content);
-  EXPECT_EQ(sf1.fingerprint, sf2.fingerprint);
-}
-
-TEST(CodeGenGenTest, GenerateProcessSource) {
-  auto sf = generateProcessSource("Top", "workload", {"entry", "pc00000001"},
-                                  {"uint32_t"}, {"counter_"},
-                                  {"return gfsim::ProcessStep::continueAt(1);",
-                                   "return gfsim::ProcessStep::terminate();"});
-  EXPECT_FALSE(sf.content.empty());
-  EXPECT_NE(sf.content.find("Top_workload::executeProcessStep"),
-            std::string::npos);
-  EXPECT_NE(sf.content.find("switch (static_cast<Pc>(pc))"), std::string::npos);
-  EXPECT_NE(sf.content.find("Pc::entry"), std::string::npos);
-  EXPECT_NE(sf.content.find("ProcessStep::continueAt(1)"), std::string::npos);
-}
-
-TEST(CodeGenGenTest, GenerateProcessSourceRequiresOneBodyPerPc) {
-  EXPECT_THROW(generateProcessSource("Top", "workload", {"entry"}, {}, {}, {}),
-               std::invalid_argument);
-}
-
-TEST(CodeGenGenTest, GenerateModuleHeader) {
-  auto sf = generateModuleHeader("Top", {"alu", "mem", "ctrl"});
-  EXPECT_FALSE(sf.content.empty());
-  EXPECT_NE(sf.content.find("TopModule"), std::string::npos);
-  EXPECT_NE(sf.content.find("alu_"), std::string::npos);
-  EXPECT_NE(sf.content.find("mem_"), std::string::npos);
-}
-
-TEST(CodeGenGenTest, GenerateModuleSource) {
-  auto sf = generateModuleSource("Top", {"alu"});
-  EXPECT_FALSE(sf.content.empty());
-  EXPECT_NE(sf.content.find("TopModule::build"), std::string::npos);
-  EXPECT_NE(sf.content.find("addChild"), std::string::npos);
-}
 
 TEST(CodeGenGenTest, GenerateDispatchHeaderIsDenseAndDeterministic) {
   std::vector<DispatchEntry> entries = {

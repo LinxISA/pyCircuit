@@ -75,15 +75,17 @@ bool SimSystem::validateRuntimeIdentities() {
   auto record = [&](const SimObject *object) {
     if (!object || !conflict.empty() || object == this)
       return;
-    if (object->id() == kInvalidObjectId) {
+    if (object->id() == kInvalidObjectId && object->asModule() == nullptr) {
       conflict = "runtime object has the invalid object ID";
       return;
     }
-    if (auto [position, inserted] = ids.emplace(object->id(), object);
-        !inserted && position->second != object) {
-      conflict = "stable object ID " + std::to_string(object->id()) +
-                 " names more than one runtime object";
-      return;
+    if (object->id() != kInvalidObjectId) {
+      if (auto [position, inserted] = ids.emplace(object->id(), object);
+          !inserted && position->second != object) {
+        conflict = "stable object ID " + std::to_string(object->id()) +
+                   " names more than one runtime object";
+        return;
+      }
     }
     if (object->path().empty())
       return;

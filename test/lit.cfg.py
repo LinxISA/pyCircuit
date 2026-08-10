@@ -26,8 +26,14 @@ config.test_exec_root = configured_paths["ACIR_TEST_EXEC_ROOT"]
 tools_dir = configured_paths["ACIR_TOOLS_DIR"]
 llvm_tools_dir = configured_paths["LLVM_TOOLS_DIR"]
 
+config.substitutions.append(("%binary_root", config.acir_binary_root))
+config.substitutions.append(("%cxx", config.acir_cxx))
+config.substitutions.append(("%llvm_lib_dir", config.acir_llvm_lib_dir))
+config.substitutions.append(("%source_root", config.acir_source_root))
+
 config.substitutions.append(("%acir_opt_public", os.path.join(tools_dir, "acir-opt")))
 config.substitutions.append(("%acir_opt", os.path.join(tools_dir, "acir-opt-internal")))
+config.substitutions.append(("%acir_cxxgen", os.path.join(tools_dir, "acir-cxxgen")))
 config.substitutions.append(("%FileCheck", os.path.join(llvm_tools_dir, "FileCheck")))
 config.substitutions.append(("%split_file", os.path.join(llvm_tools_dir, "split-file")))
 config.substitutions.append(("%not", os.path.join(llvm_tools_dir, "not")))
