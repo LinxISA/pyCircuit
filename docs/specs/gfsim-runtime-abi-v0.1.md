@@ -227,6 +227,15 @@ but they are not part of the contract and cannot alter deterministic ordering.
 An enqueue succeeds only if all declared capacities permit it. FIFO data queues
 and time-ordered event queues are distinct types.
 
+The standard-library `Queue<T>` is the public finite FIFO component contract
+over the `SimQueue<T>` primitive. The standard-library `Scheduler<T>` is a
+finite ordered component. It admits candidates by unique `(owner_id,
+transaction_id)` identity, selects capacity winners at arbitration, and orders
+committed candidates by priority, exact issue epoch, port index, instance
+index, owner object ID, and transaction ID. Lower numeric priority wins. The
+issue epoch preserves FIFO order across commit barriers, and proposal insertion
+order never affects arbitration.
+
 An event contains `ready_time`, target object ID, event kind, payload, and stable
 ordering keys. `ready_time` is an exact integer tick; a same-time event also has
 a causal delta assigned by the runtime. Scheduling before the committed epoch
@@ -321,6 +330,11 @@ interface. The concrete implementation provides, as applicable:
 `FunctionalPolicy` is an optional static template policy for functional
 behavior. When omitted, the component's declared default policy applies. It is
 never loaded, replaced, or configured at runtime.
+
+Every executable baseline template exposes `contractName` and `componentKind`
+as compile-time constants and satisfies the `gfsim::Component` concept. The
+exact v0.1 identities are the matching `ac.std.*` catalog names; protocol
+templates use `ac.std.ready_valid` and `ac.std.request_response`.
 
 The generated build MUST fail compilation or static preflight if an exact
 component contract, packet schema, protocol, policy, or generated layout does

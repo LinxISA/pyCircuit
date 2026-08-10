@@ -21,7 +21,7 @@ Exit gate: runtime and component concept tests, sanitizer builds, randomized
 work-order determinism tests, inactive-module suppression tests, protocol and
 resource invariant tests, and PTO trace streaming tests all pass.
 
-## Current state (as of `42b155d` on `feature/acir-acsim`)
+## Current state (after T5 on `codex/phase2-gfsim-runtime`)
 
 The branch already carries a runtime foundation (commits `125a72a`, `d44406d`,
 `8ce3f99`, `4efa785`):
@@ -31,14 +31,15 @@ The branch already carries a runtime foundation (commits `125a72a`, `d44406d`,
   `StatSnapshot`.
 - `include/gfsim/object.h` — `SimObject` ownership tree with `walk`
   (uses `dynamic_cast`; requires RTTI — the build keeps RTTI on for gfsim).
-- `include/gfsim/queue.h` — `SimQueue<T>`, `EventQueue`.
+- `include/gfsim/queue.h` — `SimQueue<T>`, public `Queue<T>`, `EventQueue`.
 - `include/gfsim/resource.h` — `Resource` with reservation/release proposals.
-- `include/gfsim/components.h` — `TraceSource<T>`, `Compute`, `Sink`, `Link`,
-  `Memory`, `ReadyValid<T>`, `RequestResponse<Req,Resp>` templates;
+- `include/gfsim/components.h` — `TraceSource<T>`, `Scheduler<T>`,
+  `Compute<Input,Output,FunctionalPolicy>`, `Sink<T>`, `Link<T>`, `Memory<T>`,
+  `ReadyValid<T>`, and `RequestResponse<Req,Resp>` templates;
   `ProtocolState`; `NoProgressReport`.
 - `lib/gfsim/system.cpp` — `SimSystem`: object registry, work set, global
   event queue, termination classification.
-- `unittests/gfsim/core_test.cpp` — 83 unit tests after T4.
+- `unittests/gfsim/core_test.cpp` — 91 unit tests after T5.
 
 ## Gap analysis vs roadmap scope
 
@@ -49,7 +50,7 @@ The branch already carries a runtime foundation (commits `125a72a`, `d44406d`,
 | Static dispatch tables | T1 complete | Generated dense row factory and runtime validation are frozen |
 | Snapshot/proposal/Xfer barrier | T2 complete | Immutable Work snapshot and typed pending-commit reporting |
 | Activation adjacency | T2 complete | Canonical compressed arrays, next-tick wakes, inactive suppression |
-| Queues / event queues | Done (`SimQueue`, `EventQueue`) | Invariant tests |
+| Queues / event queues | T5 complete | Finite public `Queue<T>`, commit and statistic invariants |
 | Resources / arbitration | T3 complete | Stable-key contention, identity, owner scope, cancellation, conservation |
 | Protocol state | Partial (`ProtocolState`) | Phase-transition invariants |
 | Packets | Partial (`PacketTraits`) | Serialize/deserialize round trips per ACIR packet ops |
@@ -58,7 +59,7 @@ The branch already carries a runtime foundation (commits `125a72a`, `d44406d`,
 | Trace cursor | Missing (`TraceSource` emits; no cursor) | Cursor API + PTO trace streaming |
 | No-progress handling | Partial (`NoProgressReport`) | Detection loop + reporting tests |
 | Termination results | Done (`TerminationResult` + classification) | End-to-end termination tests |
-| `Queue`, `Scheduler` components | Missing (primitives exist) | Component templates wrapping `SimQueue`/scheduler |
+| Baseline component templates | T5 complete | Exact compile-time identities, concepts, finite Queue/Scheduler behavior |
 | Frozen catalog schemas | Missing | JSON schemas per catalog entry, wired into the schema gate |
 | Sanitizer builds in CI | Presets exist locally (`asan-llvm22`, `ubsan-llvm22`) | CI job legs |
 
@@ -77,8 +78,9 @@ The branch already carries a runtime foundation (commits `125a72a`, `d44406d`,
 4. **T4 — Processes (complete)**: final CRTP process objects with committed
    wake/suspend state, exact continuation identity, compiler-supplied fairness
    caps, reset behavior, and system failure propagation.
-5. **T5 — Components `Queue`/`Scheduler`**: complete the seven baseline
-   component templates; per-component concept tests.
+5. **T5 — Components `Queue`/`Scheduler` (complete)**: all seven baseline
+   names are reusable C++20 templates with exact compile-time catalog identity;
+   finite Queue/Scheduler behavior and per-component concept tests pass.
 6. **T6 — Protocol and packet runtime**: phase invariants, packet round trips.
 7. **T7 — Trace cursor**: cursor API, PTO trace streaming tests.
 8. **T8 — Statistics and diagnostics**: full `StatSnapshot` surface,

@@ -6,11 +6,16 @@
 #include "gfsim/queue.h"
 #include "gfsim/resource.h"
 
+#include <algorithm>
 #include <concepts>
 #include <functional>
+#include <iterator>
 #include <map>
+#include <optional>
 #include <string>
+#include <tuple>
 #include <utility>
+#include <vector>
 
 namespace gfsim {
 
@@ -19,6 +24,8 @@ namespace gfsim {
 /// A component that can be registered in the SimSystem.
 template <typename T>
 concept Component = std::derived_from<T, SimObject> && requires(T &t, Epoch e) {
+  { T::contractName } -> std::convertible_to<std::string_view>;
+  { T::componentKind } -> std::convertible_to<ObjectKind>;
   { t.doWork(e) } -> std::same_as<void>;
   { t.doXfer(e) } -> std::same_as<void>;
   { std::as_const(t).hasPendingCommit() } -> std::same_as<bool>;
@@ -28,8 +35,11 @@ concept Component = std::derived_from<T, SimObject> && requires(T &t, Epoch e) {
 
 /// Exactly one TraceSource owns the trace cursor.
 /// It produces decoded trace records and advances only on committed Xfer.
-class TraceSource : public SimObject {
+template <typename Record = uint64_t> class TraceSource : public SimObject {
 public:
+  static constexpr std::string_view contractName = "ac.std.TraceSource";
+  static constexpr ObjectKind componentKind = ObjectKind::TraceSource;
+
   TraceSource(std::string name, ObjectId id, SimObject *parent)
       : SimObject(ObjectKind::TraceSource, std::move(name), id, parent) {}
 
@@ -38,7 +48,7 @@ public:
   virtual bool hasRecord() const { return false; }
 
   /// Peek at the current trace record without consuming it.
-  virtual uint64_t peekRecord() const { return 0; }
+  virtual Record peekRecord() const { return {}; }
 
   /// Consume the current record (called at Xfer after commit).
   virtual void advance() { ++cursor_; }
@@ -57,23 +67,34 @@ private:
 
 /// A stateless compute component that transforms inputs to outputs.
 /// Pure, zero-delay, effect-free.
+template <typename T> struct IdentityComputePolicy {
+  T operator()(const T &input) const { return input; }
+};
+
+template <typename Input = uint64_t, typename Output = Input,
+          typename FunctionalPolicy = IdentityComputePolicy<Input>>
+  requires std::invocable<const FunctionalPolicy &, const Input &> &&
+           std::convertible_to<
+               std::invoke_result_t<const FunctionalPolicy &, const Input &>,
+               Output>
 class Compute : public SimObject {
 public:
-  Compute(std::string name, ObjectId id, SimObject *parent)
-      : SimObject(ObjectKind::Compute, std::move(name), id, parent) {}
+  static constexpr std::string_view contractName = "ac.std.Compute";
+  static constexpr ObjectKind componentKind = ObjectKind::Compute;
 
-  using ComputeFn = std::function<uint64_t(uint64_t)>;
+  Compute(std::string name, ObjectId id, SimObject *parent,
+          FunctionalPolicy policy = {})
+      : SimObject(ObjectKind::Compute, std::move(name), id, parent),
+        policy_(std::move(policy)) {}
 
-  void setFunction(ComputeFn fn) { fn_ = std::move(fn); }
-
-  void setInput(uint64_t value) {
-    inputProposal_ = value;
+  void setInput(Input value) {
+    inputProposal_ = std::move(value);
     hasInput_ = true;
   }
 
   void doWork(Epoch) override {
-    if (hasInput_ && fn_) {
-      outputProposal_ = fn_(inputProposal_);
+    if (hasInput_) {
+      outputProposal_ = std::invoke(std::as_const(policy_), inputProposal_);
       hasOutput_ = true;
     }
   }
@@ -88,22 +109,22 @@ public:
 
   bool hasPendingCommit() const override { return hasOutput_; }
 
-  uint64_t output() const { return output_; }
+  const Output &output() const { return output_; }
   bool isRunnable(Epoch) const override { return hasInput_; }
 
   void reset() override {
-    output_ = 0;
-    outputProposal_ = 0;
-    inputProposal_ = 0;
+    output_ = {};
+    outputProposal_ = {};
+    inputProposal_ = {};
     hasInput_ = false;
     hasOutput_ = false;
   }
 
 private:
-  ComputeFn fn_;
-  uint64_t output_ = 0;
-  uint64_t outputProposal_ = 0;
-  uint64_t inputProposal_ = 0;
+  [[no_unique_address]] FunctionalPolicy policy_;
+  Output output_{};
+  Output outputProposal_{};
+  Input inputProposal_{};
   bool hasInput_ = false;
   bool hasOutput_ = false;
 };
@@ -111,12 +132,15 @@ private:
 // ── Sink ──────────────────────────────────────────────────────────────
 
 /// A terminal component that consumes data and produces statistics.
-class Sink : public SimObject {
+template <typename T = uint64_t> class Sink : public SimObject {
 public:
+  static constexpr std::string_view contractName = "ac.std.Sink";
+  static constexpr ObjectKind componentKind = ObjectKind::Sink;
+
   Sink(std::string name, ObjectId id, SimObject *parent)
       : SimObject(ObjectKind::Sink, std::move(name), id, parent) {}
 
-  void receive(uint64_t value) { receivedProposals_.push_back(value); }
+  void receive(T value) { receivedProposals_.push_back(std::move(value)); }
 
   void doXfer(Epoch) override {
     for (auto v : receivedProposals_) {
@@ -128,7 +152,7 @@ public:
 
   bool hasPendingCommit() const override { return !receivedProposals_.empty(); }
 
-  const std::vector<uint64_t> &received() const { return received_; }
+  const std::vector<T> &received() const { return received_; }
   uint64_t totalReceived() const { return totalReceived_; }
 
   bool isRunnable(Epoch) const override { return false; }
@@ -140,71 +164,80 @@ public:
   }
 
 private:
-  std::vector<uint64_t> received_;
-  std::vector<uint64_t> receivedProposals_;
+  std::vector<T> received_;
+  std::vector<T> receivedProposals_;
   uint64_t totalReceived_ = 0;
 };
 
 // ── Link ──────────────────────────────────────────────────────────────
 
 /// A connector that forwards data between components.
-class Link : public SimObject {
+template <typename T = uint64_t> class Link : public SimObject {
 public:
+  static constexpr std::string_view contractName = "ac.std.Link";
+  static constexpr ObjectKind componentKind = ObjectKind::Link;
+
   Link(std::string name, ObjectId id, SimObject *parent)
       : SimObject(ObjectKind::Link, std::move(name), id, parent) {}
 
-  void forward(uint64_t value) {
-    forwardedProposal_ = value;
+  void forward(T value) {
+    forwardedProposal_ = std::move(value);
     hasProposal_ = true;
   }
 
   void doXfer(Epoch) override {
     if (hasProposal_) {
       forwarded_ = forwardedProposal_;
+      hasForwarded_ = true;
       hasProposal_ = false;
     }
   }
 
   bool hasPendingCommit() const override { return hasProposal_; }
 
-  uint64_t value() const { return forwarded_; }
-  bool hasValue() const { return !hasProposal_ && forwarded_ != 0; }
+  const T &value() const { return forwarded_; }
+  bool hasValue() const { return hasForwarded_; }
 
   bool isRunnable(Epoch) const override { return hasProposal_; }
 
   void reset() override {
-    forwarded_ = 0;
-    forwardedProposal_ = 0;
+    forwarded_ = {};
+    forwardedProposal_ = {};
     hasProposal_ = false;
+    hasForwarded_ = false;
   }
 
 private:
-  uint64_t forwarded_ = 0;
-  uint64_t forwardedProposal_ = 0;
+  T forwarded_{};
+  T forwardedProposal_{};
   bool hasProposal_ = false;
+  bool hasForwarded_ = false;
 };
 
 // ── Memory ────────────────────────────────────────────────────────────
 
 /// A storage component with read/write proposals and capacity.
-class Memory : public SimObject {
+template <typename T = uint64_t> class Memory : public SimObject {
 public:
+  static constexpr std::string_view contractName = "ac.std.Memory";
+  static constexpr ObjectKind componentKind = ObjectKind::Memory;
+
   Memory(std::string name, ObjectId id, SimObject *parent, size_t capacity)
       : SimObject(ObjectKind::Memory, std::move(name), id, parent),
-        storage_(capacity, 0) {}
+        storage_(capacity) {}
 
   size_t capacity() const { return storage_.size(); }
 
-  bool proposeWrite(size_t addr, uint64_t value) {
+  bool proposeWrite(size_t addr, T value) {
     if (addr >= storage_.size())
       return false;
-    writeProposals_[addr] = value;
+    writeProposals_[addr] = std::move(value);
     return true;
   }
 
-  uint64_t read(size_t addr) const {
+  T read(size_t addr) const {
     if (addr >= storage_.size())
-      return 0;
+      return {};
     return storage_[addr];
   }
 
@@ -217,19 +250,177 @@ public:
   bool hasPendingCommit() const override { return !writeProposals_.empty(); }
 
   void reset() override {
-    std::fill(storage_.begin(), storage_.end(), 0);
+    std::fill(storage_.begin(), storage_.end(), T{});
     writeProposals_.clear();
   }
 
 private:
-  std::vector<uint64_t> storage_;
-  std::map<size_t, uint64_t> writeProposals_;
+  std::vector<T> storage_;
+  std::map<size_t, T> writeProposals_;
+};
+
+// ── Scheduler ────────────────────────────────────────────────────────
+
+/// A finite deterministic scheduler. Proposal admission checks identity;
+/// arbitration selects by stable keys and never by insertion order.
+template <typename T> class Scheduler final : public SimObject {
+public:
+  static constexpr std::string_view contractName = "ac.std.Scheduler";
+  static constexpr ObjectKind componentKind = ObjectKind::Scheduler;
+
+  Scheduler(std::string name, ObjectId id, SimObject *parent, size_t capacity)
+      : SimObject(ObjectKind::Scheduler, std::move(name), id, parent),
+        capacity_(capacity) {}
+
+  bool proposeSchedule(T value, uint32_t priority, uint32_t portIndex,
+                       uint32_t instanceIndex, ObjectId ownerId,
+                       uint64_t transactionId) {
+    if (ownerId == kInvalidObjectId || containsIdentity(ownerId, transactionId))
+      return false;
+    proposals_.push_back({std::move(value),
+                          priority,
+                          {},
+                          portIndex,
+                          instanceIndex,
+                          ownerId,
+                          transactionId});
+    return true;
+  }
+
+  std::optional<T> proposePop() {
+    if (popProposalCount_ >= committed_.size())
+      return std::nullopt;
+    return committed_[popProposalCount_++].value;
+  }
+
+  const T *peek() const {
+    return committed_.empty() ? nullptr : &committed_.front().value;
+  }
+
+  void doArbitrate(Epoch epoch) override {
+    for (Entry &entry : proposals_)
+      entry.issueEpoch = epoch;
+    std::sort(proposals_.begin(), proposals_.end(), stableLess);
+    size_t occupied = committed_.size() + accepted_.size();
+    size_t available = capacity_ > occupied ? capacity_ - occupied : 0;
+    size_t acceptedCount = std::min(available, proposals_.size());
+    accepted_.insert(
+        accepted_.end(), std::make_move_iterator(proposals_.begin()),
+        std::make_move_iterator(proposals_.begin() + acceptedCount));
+    rejected_.insert(
+        rejected_.end(),
+        std::make_move_iterator(proposals_.begin() + acceptedCount),
+        std::make_move_iterator(proposals_.end()));
+    proposals_.clear();
+  }
+
+  void doXfer(Epoch) override {
+    size_t popped = std::min(popProposalCount_, committed_.size());
+    committed_.erase(committed_.begin(), committed_.begin() + popped);
+    totalPops_ += popped;
+    popProposalCount_ = 0;
+
+    totalScheduled_ += accepted_.size();
+    committed_.insert(committed_.end(),
+                      std::make_move_iterator(accepted_.begin()),
+                      std::make_move_iterator(accepted_.end()));
+    accepted_.clear();
+    std::sort(committed_.begin(), committed_.end(), stableLess);
+
+    for (const Entry &entry : rejected_)
+      rejectedTransactions_.push_back(entry.transactionId);
+    rejected_.clear();
+    highWatermark_ = std::max(highWatermark_, committed_.size());
+  }
+
+  bool hasPendingCommit() const override {
+    return !proposals_.empty() || !accepted_.empty() || !rejected_.empty() ||
+           popProposalCount_ != 0;
+  }
+
+  bool isRunnable(Epoch) const override { return !proposals_.empty(); }
+  size_t capacity() const { return capacity_; }
+  size_t size() const { return committed_.size(); }
+  bool empty() const { return committed_.empty(); }
+  size_t highWatermark() const { return highWatermark_; }
+  uint64_t totalScheduled() const { return totalScheduled_; }
+  uint64_t totalPops() const { return totalPops_; }
+  const std::vector<uint64_t> &rejectedTransactions() const {
+    return rejectedTransactions_;
+  }
+
+  bool validate() const {
+    if (committed_.size() > capacity_)
+      return false;
+    for (size_t left = 0; left < committed_.size(); ++left)
+      for (size_t right = left + 1; right < committed_.size(); ++right)
+        if (sameIdentity(committed_[left], committed_[right]))
+          return false;
+    return true;
+  }
+
+  void reset() override {
+    proposals_.clear();
+    accepted_.clear();
+    rejected_.clear();
+    committed_.clear();
+    rejectedTransactions_.clear();
+    popProposalCount_ = 0;
+    highWatermark_ = 0;
+    totalScheduled_ = 0;
+    totalPops_ = 0;
+  }
+
+private:
+  struct Entry {
+    T value;
+    uint32_t priority;
+    Epoch issueEpoch;
+    uint32_t portIndex;
+    uint32_t instanceIndex;
+    ObjectId ownerId;
+    uint64_t transactionId;
+  };
+
+  static auto stableKey(const Entry &entry) {
+    return std::tie(entry.priority, entry.issueEpoch, entry.portIndex,
+                    entry.instanceIndex, entry.ownerId, entry.transactionId);
+  }
+  static bool stableLess(const Entry &left, const Entry &right) {
+    return stableKey(left) < stableKey(right);
+  }
+  static bool sameIdentity(const Entry &left, const Entry &right) {
+    return left.ownerId == right.ownerId &&
+           left.transactionId == right.transactionId;
+  }
+  bool containsIdentity(ObjectId ownerId, uint64_t transactionId) const {
+    auto matches = [&](const Entry &entry) {
+      return entry.ownerId == ownerId && entry.transactionId == transactionId;
+    };
+    return std::any_of(proposals_.begin(), proposals_.end(), matches) ||
+           std::any_of(accepted_.begin(), accepted_.end(), matches) ||
+           std::any_of(committed_.begin(), committed_.end(), matches);
+  }
+
+  size_t capacity_;
+  std::vector<Entry> proposals_;
+  std::vector<Entry> accepted_;
+  std::vector<Entry> rejected_;
+  std::vector<Entry> committed_;
+  std::vector<uint64_t> rejectedTransactions_;
+  size_t popProposalCount_ = 0;
+  size_t highWatermark_ = 0;
+  uint64_t totalScheduled_ = 0;
+  uint64_t totalPops_ = 0;
 };
 
 // ── ReadyValid ────────────────────────────────────────────────────────
 
 template <typename T> class ReadyValid : public SimObject {
 public:
+  static constexpr std::string_view contractName = "ac.std.ready_valid";
+  static constexpr ObjectKind componentKind = ObjectKind::Link;
+
   ReadyValid(std::string name, ObjectId id, SimObject *parent)
       : SimObject(ObjectKind::Link, std::move(name), id, parent) {}
 
@@ -288,6 +479,9 @@ private:
 template <typename Req, typename Resp>
 class RequestResponse : public SimObject {
 public:
+  static constexpr std::string_view contractName = "ac.std.request_response";
+  static constexpr ObjectKind componentKind = ObjectKind::Link;
+
   RequestResponse(std::string name, ObjectId id, SimObject *parent,
                   size_t maxInFlight = 16)
       : SimObject(ObjectKind::Link, std::move(name), id, parent),
@@ -354,15 +548,6 @@ private:
   uint64_t totalCompleted_ = 0;
   std::vector<ReqEntry> reqProposals_, committedReqs_;
   std::vector<Resp> respProposals_, committedResps_;
-};
-
-// ── PacketTraits ─────────────────────────────────────────────────────
-
-template <typename T> struct PacketTraits {
-  static constexpr const char *schema = nullptr;
-  static constexpr size_t serializedSize = 0;
-  static constexpr size_t alignment = alignof(T);
-  static constexpr bool littleEndian = true;
 };
 
 template <typename T>

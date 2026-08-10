@@ -513,9 +513,24 @@ TEST(GfsimResourceTest, ReadyReservationsUseExactEpochAndStableOrder) {
 // Components
 // ═══════════════════════════════════════════════════════════════════════
 
+struct DoublePolicy {
+  uint64_t operator()(uint64_t value) const { return value * 2; }
+};
+
+struct IncrementPolicy {
+  uint64_t operator()(uint64_t value) const { return value + 1; }
+};
+
+struct AddThreePolicy {
+  uint64_t operator()(uint64_t value) const { return value + 3; }
+};
+
+struct StringSizePolicy {
+  size_t operator()(const std::string &value) const { return value.size(); }
+};
+
 TEST(GfsimComponentsTest, ComputeTransformsInput) {
-  Compute c("c", 1, nullptr);
-  c.setFunction([](uint64_t x) { return x * 2; });
+  Compute<uint64_t, uint64_t, DoublePolicy> c("c", 1, nullptr);
   c.setInput(21);
   c.doWork({0, 0});
   c.doXfer({0, 0});
@@ -523,7 +538,7 @@ TEST(GfsimComponentsTest, ComputeTransformsInput) {
 }
 
 TEST(GfsimComponentsTest, SinkAccumulatesValues) {
-  Sink s("s", 1, nullptr);
+  Sink<> s("s", 1, nullptr);
   s.receive(10);
   s.receive(20);
   s.doXfer({0, 0});
@@ -534,7 +549,7 @@ TEST(GfsimComponentsTest, SinkAccumulatesValues) {
 }
 
 TEST(GfsimComponentsTest, MemoryReadWrite) {
-  Memory m("m", 1, nullptr, 4);
+  Memory<> m("m", 1, nullptr, 4);
   EXPECT_TRUE(m.proposeWrite(0, 42));
   EXPECT_TRUE(m.proposeWrite(2, 99));
   m.doXfer({0, 0});
@@ -544,19 +559,19 @@ TEST(GfsimComponentsTest, MemoryReadWrite) {
 }
 
 TEST(GfsimComponentsTest, MemoryRejectsOutOfBoundsWrite) {
-  Memory m("m", 1, nullptr, 2);
+  Memory<> m("m", 1, nullptr, 2);
   EXPECT_TRUE(m.proposeWrite(0, 42));
   EXPECT_TRUE(m.proposeWrite(1, 43));
   EXPECT_FALSE(m.proposeWrite(2, 44));
 }
 
 TEST(GfsimComponentsTest, MemoryReadOutOfBoundsReturnsZero) {
-  Memory m("m", 1, nullptr, 4);
+  Memory<> m("m", 1, nullptr, 4);
   EXPECT_EQ(m.read(100), 0u);
 }
 
 TEST(GfsimComponentsTest, LinkForwardsValue) {
-  Link l("l", 1, nullptr);
+  Link<> l("l", 1, nullptr);
   l.forward(123);
   l.doXfer({0, 0});
   EXPECT_EQ(l.value(), 123u);
@@ -564,7 +579,7 @@ TEST(GfsimComponentsTest, LinkForwardsValue) {
 }
 
 TEST(GfsimComponentsTest, LinkResetClearsValue) {
-  Link l("l", 1, nullptr);
+  Link<> l("l", 1, nullptr);
   l.forward(99);
   l.doXfer({0, 0});
   l.reset();
@@ -573,8 +588,7 @@ TEST(GfsimComponentsTest, LinkResetClearsValue) {
 }
 
 TEST(GfsimComponentsTest, ComputeResetClearsOutput) {
-  Compute c("c", 1, nullptr);
-  c.setFunction([](uint64_t x) { return x + 1; });
+  Compute<uint64_t, uint64_t, IncrementPolicy> c("c", 1, nullptr);
   c.setInput(5);
   c.doWork({0, 0});
   c.doXfer({0, 0});
@@ -584,7 +598,7 @@ TEST(GfsimComponentsTest, ComputeResetClearsOutput) {
 }
 
 TEST(GfsimComponentsTest, SinkResetClearsAll) {
-  Sink s("s", 1, nullptr);
+  Sink<> s("s", 1, nullptr);
   s.receive(1);
   s.receive(2);
   s.doXfer({0, 0});
@@ -592,6 +606,177 @@ TEST(GfsimComponentsTest, SinkResetClearsAll) {
   s.reset();
   EXPECT_EQ(s.totalReceived(), 0u);
   EXPECT_TRUE(s.received().empty());
+}
+
+static_assert(Component<TraceSource<uint64_t>>);
+static_assert(Component<TraceSource<std::string>>);
+static_assert(Component<Queue<uint64_t>>);
+static_assert(Component<Scheduler<uint64_t>>);
+static_assert(Component<Compute<>>);
+static_assert(Component<Compute<std::string, size_t, StringSizePolicy>>);
+static_assert(Component<Link<>>);
+static_assert(Component<Link<std::string>>);
+static_assert(Component<Memory<>>);
+static_assert(Component<Memory<std::string>>);
+static_assert(Component<Sink<>>);
+static_assert(Component<Sink<std::string>>);
+static_assert(Component<ReadyValid<uint64_t>>);
+static_assert(Component<RequestResponse<uint64_t, uint64_t>>);
+
+TEST(GfsimComponentsTest, BaselineTemplatesExposeCanonicalObjectKinds) {
+  TraceSource<uint64_t> trace("trace", 0, nullptr);
+  Queue<uint64_t> queue("queue", 1, nullptr, 2);
+  Scheduler<uint64_t> scheduler("scheduler", 2, nullptr, 2);
+  Compute<> compute("compute", 3, nullptr);
+  Link<> link("link", 4, nullptr);
+  Memory<> memory("memory", 5, nullptr, 2);
+  Sink<> sink("sink", 6, nullptr);
+
+  EXPECT_EQ(trace.kind(), ObjectKind::TraceSource);
+  EXPECT_EQ(queue.kind(), ObjectKind::Queue);
+  EXPECT_EQ(scheduler.kind(), ObjectKind::Scheduler);
+  EXPECT_EQ(compute.kind(), ObjectKind::Compute);
+  EXPECT_EQ(link.kind(), ObjectKind::Link);
+  EXPECT_EQ(memory.kind(), ObjectKind::Memory);
+  EXPECT_EQ(sink.kind(), ObjectKind::Sink);
+  EXPECT_EQ(TraceSource<uint64_t>::contractName, "ac.std.TraceSource");
+  EXPECT_EQ(Queue<uint64_t>::contractName, "ac.std.Queue");
+  EXPECT_EQ(Scheduler<uint64_t>::contractName, "ac.std.Scheduler");
+  EXPECT_EQ(Compute<>::contractName, "ac.std.Compute");
+  EXPECT_EQ(Link<>::contractName, "ac.std.Link");
+  EXPECT_EQ(Memory<>::contractName, "ac.std.Memory");
+  EXPECT_EQ(Sink<>::contractName, "ac.std.Sink");
+  EXPECT_EQ(ReadyValid<uint64_t>::contractName, "ac.std.ready_valid");
+  EXPECT_EQ((RequestResponse<uint64_t, uint64_t>::contractName),
+            "ac.std.request_response");
+}
+
+TEST(GfsimComponentsTest, QueueCommitsThroughBarrierAndTracksStatistics) {
+  Queue<int> queue("queue", 1, nullptr, 2);
+  EXPECT_TRUE(queue.proposePush(10));
+  EXPECT_TRUE(queue.proposePush(20));
+  EXPECT_FALSE(queue.proposePush(30));
+  EXPECT_TRUE(queue.hasPendingCommit());
+
+  queue.doArbitrate({0, 0});
+  queue.doXfer({0, 0});
+  EXPECT_EQ(queue.committedSize(), 2u);
+  EXPECT_EQ(queue.totalPushes(), 2u);
+  EXPECT_EQ(queue.highWatermark(), 2u);
+
+  EXPECT_EQ(queue.proposePop(), 10);
+  queue.doArbitrate({1, 0});
+  queue.doXfer({1, 0});
+  EXPECT_EQ(queue.totalPops(), 1u);
+  ASSERT_NE(queue.peek(), nullptr);
+  EXPECT_EQ(*queue.peek(), 20);
+}
+
+TEST(GfsimComponentsTest, QueueEnforcesStaticPacketByteCapacity) {
+  Queue<uint32_t> queue("queue", 1, nullptr, 4, 2 * sizeof(uint32_t));
+  EXPECT_TRUE(queue.proposePush(10));
+  EXPECT_TRUE(queue.proposePush(20));
+  EXPECT_FALSE(queue.proposePush(30));
+  queue.doXfer({0, 0});
+
+  EXPECT_EQ(queue.committedSize(), 2u);
+  EXPECT_EQ(queue.committedBytes(), 2 * sizeof(uint32_t));
+  EXPECT_TRUE(queue.isFull());
+}
+
+TEST(GfsimComponentsTest, LinkTreatsZeroAsACommittedValue) {
+  Link<> link("link", 1, nullptr);
+  link.forward(0);
+  link.doXfer({0, 0});
+  EXPECT_TRUE(link.hasValue());
+  EXPECT_EQ(link.value(), 0u);
+}
+
+struct ScheduledValue {
+  uint64_t value = 0;
+  auto operator<=>(const ScheduledValue &) const = default;
+};
+
+TEST(GfsimComponentsTest, SchedulerOrderIsIndependentOfProposalInsertion) {
+  struct Candidate {
+    ScheduledValue value;
+    uint32_t priority;
+    uint32_t port;
+    uint32_t instance;
+    ObjectId owner;
+    uint64_t transaction;
+  };
+  const std::array<Candidate, 4> candidates{{
+      {{10}, 1, 0, 0, 3, 10},
+      {{20}, 0, 1, 0, 2, 20},
+      {{30}, 0, 0, 1, 4, 30},
+      {{40}, 0, 0, 0, 5, 40},
+  }};
+
+  auto schedule = [&](std::array<size_t, 4> order) {
+    Scheduler<ScheduledValue> scheduler("scheduler", 1, nullptr, 4);
+    for (size_t index : order) {
+      const Candidate &candidate = candidates[index];
+      EXPECT_TRUE(scheduler.proposeSchedule(
+          candidate.value, candidate.priority, candidate.port,
+          candidate.instance, candidate.owner, candidate.transaction));
+    }
+    scheduler.doArbitrate({0, 0});
+    scheduler.doXfer({0, 0});
+
+    std::vector<uint64_t> result;
+    while (auto value = scheduler.proposePop())
+      result.push_back(value->value);
+    scheduler.doXfer({1, 0});
+    return result;
+  };
+
+  EXPECT_EQ(schedule({0, 1, 2, 3}), (std::vector<uint64_t>{40, 30, 20, 10}));
+  EXPECT_EQ(schedule({2, 0, 3, 1}), (std::vector<uint64_t>{40, 30, 20, 10}));
+}
+
+TEST(GfsimComponentsTest, SchedulerAppliesFiniteCapacityAfterArbitration) {
+  Scheduler<uint64_t> scheduler("scheduler", 1, nullptr, 2);
+  EXPECT_TRUE(scheduler.proposeSchedule(30, 2, 0, 0, 3, 30));
+  EXPECT_TRUE(scheduler.proposeSchedule(10, 0, 0, 0, 1, 10));
+  EXPECT_TRUE(scheduler.proposeSchedule(20, 1, 0, 0, 2, 20));
+  scheduler.doArbitrate({0, 0});
+  EXPECT_TRUE(scheduler.hasPendingCommit());
+  scheduler.doXfer({0, 0});
+
+  EXPECT_EQ(scheduler.size(), 2u);
+  EXPECT_EQ(scheduler.rejectedTransactions(), (std::vector<uint64_t>{30}));
+  EXPECT_EQ(scheduler.proposePop(), 10u);
+  EXPECT_EQ(scheduler.proposePop(), 20u);
+  EXPECT_EQ(scheduler.proposePop(), std::nullopt);
+}
+
+TEST(GfsimComponentsTest, SchedulerPreservesFifoAcrossCommittedEpochs) {
+  Scheduler<uint64_t> scheduler("scheduler", 1, nullptr, 2);
+  EXPECT_TRUE(scheduler.proposeSchedule(90, 0, 0, 0, 9, 90));
+  scheduler.doArbitrate({0, 0});
+  scheduler.doXfer({0, 0});
+
+  EXPECT_TRUE(scheduler.proposeSchedule(10, 0, 0, 0, 1, 10));
+  scheduler.doArbitrate({1, 0});
+  scheduler.doXfer({1, 0});
+
+  EXPECT_EQ(scheduler.proposePop(), 90u);
+  EXPECT_EQ(scheduler.proposePop(), 10u);
+}
+
+TEST(GfsimComponentsTest, SchedulerRejectsDuplicateIdentityAndResets) {
+  Scheduler<uint64_t> scheduler("scheduler", 1, nullptr, 2);
+  EXPECT_TRUE(scheduler.proposeSchedule(10, 0, 0, 0, 7, 99));
+  EXPECT_FALSE(scheduler.proposeSchedule(20, 0, 0, 0, 7, 99));
+  scheduler.doArbitrate({0, 0});
+  scheduler.doXfer({0, 0});
+  EXPECT_EQ(scheduler.size(), 1u);
+
+  scheduler.reset();
+  EXPECT_EQ(scheduler.size(), 0u);
+  EXPECT_TRUE(scheduler.rejectedTransactions().empty());
+  EXPECT_TRUE(scheduler.proposeSchedule(20, 0, 0, 0, 7, 99));
 }
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -1064,11 +1249,11 @@ TEST(GfsimProcessTest, ProcessFailureTerminatesTheSystem) {
 // ═══════════════════════════════════════════════════════════════════════
 
 TEST(GfsimIntegrationTest, ComputeToSinkPipeline) {
-  auto comp = std::make_unique<Compute>("adder", 10, nullptr);
+  auto comp = std::make_unique<Compute<uint64_t, uint64_t, DoublePolicy>>(
+      "adder", 10, nullptr);
   auto *cptr = comp.get();
-  cptr->setFunction([](uint64_t x) { return x * 2; });
 
-  auto snk = std::make_unique<Sink>("sink", 11, nullptr);
+  auto snk = std::make_unique<Sink<>>("sink", 11, nullptr);
   auto *sptr = snk.get();
 
   cptr->setInput(21);
@@ -1117,15 +1302,14 @@ TEST(GfsimIntegrationTest, ResourceProducerConsumer) {
 }
 
 TEST(GfsimIntegrationTest, MemoryToComputeToSinkChain) {
-  Memory mem("mem", 1, nullptr, 4);
-  Compute comp("comp", 2, nullptr);
-  Sink snk("snk", 3, nullptr);
+  Memory<> mem("mem", 1, nullptr, 4);
+  Compute<uint64_t, uint64_t, AddThreePolicy> comp("comp", 2, nullptr);
+  Sink<> snk("snk", 3, nullptr);
 
   mem.proposeWrite(0, 5);
   mem.proposeWrite(1, 7);
   mem.doXfer({0, 0});
 
-  comp.setFunction([](uint64_t x) { return x + 3; });
   comp.setInput(mem.read(0));
   comp.doWork({0, 0});
   comp.doXfer({0, 0});

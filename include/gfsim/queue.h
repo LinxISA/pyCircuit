@@ -12,6 +12,15 @@
 
 namespace gfsim {
 
+/// Static packet layout information used by bounded runtime containers.
+/// Public packet schemas specialize this primary template.
+template <typename T> struct PacketTraits {
+  static constexpr const char *schema = nullptr;
+  static constexpr size_t serializedSize = sizeof(T);
+  static constexpr size_t alignment = alignof(T);
+  static constexpr bool littleEndian = true;
+};
+
 // ── SimQueue<T> ───────────────────────────────────────────────────────
 
 /// FIFO data queue with entry capacity, optional byte capacity,
@@ -30,14 +39,23 @@ public:
   size_t byteCapacity() const { return byteCapacity_; }
 
   size_t committedSize() const { return committed_.size(); }
-  bool isFull() const { return committedSize() >= entryCapacity_; }
+  size_t committedBytes() const {
+    if constexpr (PacketTraits<T>::serializedSize == 0)
+      return 0;
+    return committed_.size() * PacketTraits<T>::serializedSize;
+  }
+  bool isFull() const {
+    return committedSize() >= entryCapacity_ ||
+           exceedsByteCapacity(committedSize() + 1);
+  }
   bool isEmpty() const { return committed_.empty(); }
 
   // ── Proposal interface ──────────────────────────────────────────────
 
   /// Propose to enqueue an element. Returns false if capacity exceeded.
   bool proposePush(T element) {
-    if (pushProposals_.size() + committedSize() >= entryCapacity_)
+    size_t occupied = pushProposals_.size() + committedSize();
+    if (occupied >= entryCapacity_ || exceedsByteCapacity(occupied + 1))
       return false;
     pushProposals_.push_back(std::move(element));
     return true;
@@ -70,13 +88,17 @@ public:
 
   void doXfer(Epoch epoch) override {
     // Commit push proposals
-    for (auto &elem : pushProposals_)
+    for (auto &elem : pushProposals_) {
       committed_.push_back(std::move(elem));
+      ++totalPushes_;
+    }
     pushProposals_.clear();
 
     // Commit pop proposals
-    for (size_t i = 0; i < popProposalCount_ && !committed_.empty(); ++i)
+    for (size_t i = 0; i < popProposalCount_ && !committed_.empty(); ++i) {
       committed_.erase(committed_.begin());
+      ++totalPops_;
+    }
     popProposalCount_ = 0;
 
     // Update statistics
@@ -104,6 +126,12 @@ public:
   }
 
 private:
+  bool exceedsByteCapacity(size_t elementCount) const {
+    if constexpr (PacketTraits<T>::serializedSize == 0)
+      return false;
+    return elementCount > byteCapacity_ / PacketTraits<T>::serializedSize;
+  }
+
   size_t entryCapacity_;
   size_t byteCapacity_;
   std::vector<T> committed_;
@@ -112,6 +140,15 @@ private:
   size_t highWatermark_ = 0;
   uint64_t totalPushes_ = 0;
   uint64_t totalPops_ = 0;
+};
+
+/// Standard-library finite FIFO component. The distinct name is the public
+/// component contract; SimQueue remains the underlying runtime primitive.
+template <typename T> class Queue final : public SimQueue<T> {
+public:
+  static constexpr std::string_view contractName = "ac.std.Queue";
+  static constexpr ObjectKind componentKind = ObjectKind::Queue;
+  using SimQueue<T>::SimQueue;
 };
 
 // ── EventQueue ────────────────────────────────────────────────────────

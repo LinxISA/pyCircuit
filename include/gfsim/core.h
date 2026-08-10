@@ -59,6 +59,7 @@ enum class ObjectKind : uint8_t {
   Sink,
   Probe,
   Statistic,
+  Scheduler,
 };
 
 // ── Termination ───────────────────────────────────────────────────────
