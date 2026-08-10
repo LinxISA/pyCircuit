@@ -157,6 +157,30 @@ PlanSetBuilder::planProcessContinuation(const ExpandedProcess &expanded,
       for (const ProcessPlannedValue &result : act->results)
         act->resultTypes.push_back(result.type());
       act->scalarOp = expanded.actions[i].scalarOperation;
+      if (act->kind == ProcessActionKind::Constant) {
+        act->emission = ProcessEmissionClass::CopyScalar;
+        act->cost = 1;
+        auto scalar = std::make_shared<ProcessScalarOperationPlan::Impl>();
+        scalar->name = "index.constant";
+        scalar->properties = "{}";
+        act->scalarOp = ProcessScalarOperationPlan(std::move(scalar));
+      }
+      if (act->kind == ProcessActionKind::Original && act->sourceOperation) {
+        llvm::StringRef dialect =
+            act->sourceOperation->getName().getDialectNamespace();
+        if ((dialect == "arith" || dialect == "index" ||
+             dialect == "builtin") &&
+            act->sourceOperation->getNumRegions() == 0) {
+          act->emission = ProcessEmissionClass::CopyScalar;
+          act->cost = 1;
+          if (!act->scalarOp) {
+            auto scalar = std::make_shared<ProcessScalarOperationPlan::Impl>();
+            scalar->name = act->sourceOperation->getName().getStringRef().str();
+            scalar->properties = "{}";
+            act->scalarOp = ProcessScalarOperationPlan(std::move(scalar));
+          }
+        }
+      }
       block->actions.push_back(ProcessActionPlan(act));
     }
 

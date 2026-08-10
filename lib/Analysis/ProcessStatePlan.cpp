@@ -3355,12 +3355,20 @@ mlir::LogicalResult verifyProcessStatePlan(const ProcessStatePlanSet &plans,
           return reject(plans, "process-state plan invariant violated: "
                                "unsorted canonical order");
       uint64_t expectedCost = block.loads().size();
+      for (const ProcessTransitionLoadPlan &load : block.loads())
+        if (mlir::isa<mlir::IntegerType, mlir::IndexType>(
+                plan.liveSlots()[load.slot().value()].type()))
+          ++expectedCost;
       for (const ProcessActionPlan &action : block.actions())
         expectedCost += action.cost();
       if (block.edge().kind() == ProcessControlEdgeKind::Suspend) {
         const ProcessTransitionPlan &transition =
             plan.transitions()[block.edge().transition().value()];
         expectedCost += transition.stores().size() + 2;
+        for (const ProcessTransitionStorePlan &store : transition.stores())
+          if (mlir::isa<mlir::IntegerType, mlir::IndexType>(
+                  plan.liveSlots()[store.slot().value()].type()))
+            ++expectedCost;
       } else {
         ++expectedCost;
       }

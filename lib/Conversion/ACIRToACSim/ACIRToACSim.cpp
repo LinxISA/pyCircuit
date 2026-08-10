@@ -17,7 +17,6 @@
 // mutation, so a rejected input never publishes a partial acsim.model.
 #include "acir/Conversion/ACIRToACSim/ACIRToACSim.h"
 
-#include "Analysis/ProcessStatePlanInternal.h"
 #include "acir/Analysis/ProcessStatePlan.h"
 #include "acir/Bindings/Binding.h"
 #include "acir/Dialect/ACIR/ACIROps.h"
@@ -26,6 +25,10 @@
 #include "acir/Dialect/ACSim/ACSimTypes.h"
 #include "acir/Transforms/ResolveBindings.h"
 
+#include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
+#include "mlir/Dialect/Index/IR/IndexDialect.h"
+#include "mlir/Dialect/Index/IR/IndexOps.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/Diagnostics.h"
@@ -39,6 +42,7 @@
 #include "llvm/Support/JSON.h"
 #include "llvm/Support/raw_ostream.h"
 
+#include <cctype>
 #include <cmath>
 #include <map>
 #include <optional>
@@ -259,9 +263,12 @@ private:
     std::string symbol;
     symbol.reserve(identity.size());
     for (char character : identity)
-      symbol.push_back(llvm::isAlnum(character) || character == '_' ? character
-                                                                    : '_');
-    if (symbol.empty() || llvm::isDigit(symbol.front()))
+      symbol.push_back(std::isalnum(static_cast<unsigned char>(character)) ||
+                               character == '_'
+                           ? character
+                           : '_');
+    if (symbol.empty() ||
+        std::isdigit(static_cast<unsigned char>(symbol.front())))
       symbol.insert(symbol.begin(), '_');
     return symbol;
   }
@@ -411,6 +418,7 @@ struct PlacementPlan {
   std::string validate;
   // Process realization.
   ac::ProcessOp process;
+  std::string processDefinitionKey;
   uint64_t fairnessCap = 1;
 };
 
@@ -440,7 +448,8 @@ public:
   }
 
   void getDependentDialects(DialectRegistry &registry) const override {
-    registry.insert<acsim::ACSimDialect>();
+    registry.insert<acsim::ACSimDialect, mlir::arith::ArithDialect,
+                    mlir::index::IndexDialect, mlir::cf::ControlFlowDialect>();
   }
 
   void runOnOperation() override {
@@ -487,8 +496,11 @@ private:
   std::optional<ProcessStatePlanSet> processPlans;
   std::string processPlanBytes;
   TypeSymbolTable typeSymbols;
-  std::string wakeTypeSymbol;
-  std::string wakeImplSymbol;
+  std::vector<std::string> generatedCalleeIdentities;
+  std::vector<std::string> valueTypeIdentities;
+  std::vector<std::string> scalarWrapIdentities;
+  std::vector<std::string> scalarUnwrapIdentities;
+  llvm::StringMap<std::string> wakeTypeIdentities;
 
   struct RuntimeRow {
     unsigned moduleIndex;
@@ -853,19 +865,6 @@ mlir::LogicalResult ACIRToACSimPass::planModule(ac::ModuleOp module,
       continue;
     }
     if (auto process = dyn_cast<ac::ProcessOp>(operation)) {
-      if (!process.getCaptures().empty())
-        return lowerError(process, "ACLOWER-PROCESS-STATE",
-                          "process captures are outside the v0.1 lowering "
-                          "stage");
-      if (!process.getBody().hasOneBlock() ||
-          !llvm::hasSingleElement(process.getBody().front()) ||
-          !isa<ac::YieldSimOp>(process.getBody().front().front()))
-        return lowerError(process, "ACLOWER-PROCESS-STATE",
-                          "ac-lower-to-acsim v0.1 lowers exactly the "
-                          "yield-only process form planned by "
-                          "ProcessStatePlan; process '@" +
-                              process.getSymName() +
-                              "' has an unsupported body");
       PlacementPlan placement;
       placement.kind = PlacementPlan::Kind::Process;
       placement.name = process.getSymName().str();
@@ -907,7 +906,7 @@ mlir::LogicalResult ACIRToACSimPass::planProcesses(mlir::ModuleOp input) {
   if (!hasProcess)
     return mlir::success();
 
-  auto plans = detail::PlanSetBuilder::buildYieldOnly(input);
+  auto plans = planProcessState(input);
   if (failed(plans))
     return mlir::failure();
   if (failed(verifyProcessStatePlan(*plans)))
@@ -921,32 +920,53 @@ mlir::LogicalResult ACIRToACSimPass::planProcesses(mlir::ModuleOp input) {
   }
   processPlanBytes = std::move(*serializedPlans);
 
-  // The yield-only plan names one generated next-delta wake helper; adopt its
-  // exact compiler-generated identities for the ACSim realization.
+  generatedCalleeIdentities.resize(processPlans->callees().size());
   for (const ProcessGeneratedCalleePlan &callee : processPlans->callees()) {
-    if (callee.role() != ProcessHelperRole::WakeNextDelta)
-      continue;
     llvm::StringRef symbol = callee.symbol();
     symbol.consume_front("@");
-    wakeImplSymbol = symbol.str();
+    generatedCalleeIdentities[callee.id().value()] = symbol.str();
     if (failed(typeSymbols.intern(input, symbol, "implementation", callee.cpp(),
                                   callee.fingerprint())))
       return mlir::failure();
   }
-  if (wakeImplSymbol.empty())
-    return lowerError(input, "ACLOWER-PROCESS-STATE",
-                      "process-state plan has no next-delta wake realization");
   for (const ProcessStatePlan &process : processPlans->processes()) {
-    if (process.wakes().size() != 1)
-      return lowerError(process.process(), "ACLOWER-PROCESS-STATE",
-                        "yield-only process plan requires exactly one wake");
-    llvm::StringRef typeKey = process.wakes().front().typeKey();
-    typeKey.consume_front("@");
-    wakeTypeSymbol = typeKey.str();
+    for (const ProcessWakePlan &wake : process.wakes()) {
+      llvm::StringRef typeKey = wake.typeKey();
+      typeKey.consume_front("@");
+      wakeTypeIdentities[typeKey] = typeKey.str();
+    }
   }
-  if (failed(typeSymbols.intern(input, wakeTypeSymbol, "wake",
-                                "acir::generated::wake_next_delta")))
-    return mlir::failure();
+  for (const auto &[typeKey, identity] : wakeTypeIdentities) {
+    llvm::StringRef cppName = identity;
+    cppName.consume_front("acir_");
+    std::string cpp = ("acir::generated::" + cppName).str();
+    if (failed(typeSymbols.intern(input, identity, "wake", cpp)))
+      return mlir::failure();
+  }
+  valueTypeIdentities.resize(processPlans->valueTypes().size());
+  scalarWrapIdentities.resize(processPlans->valueTypes().size());
+  scalarUnwrapIdentities.resize(processPlans->valueTypes().size());
+  for (const ProcessValueTypePlan &valueType : processPlans->valueTypes()) {
+    llvm::StringRef symbol = valueType.symbol();
+    symbol.consume_front("@");
+    valueTypeIdentities[valueType.id().value()] = symbol.str();
+    llvm::StringRef kind =
+        valueType.kind() == ProcessValueTypeKind::Packet ? "packet" : "value";
+    if (failed(typeSymbols.intern(input, symbol, kind, valueType.cpp(),
+                                  valueType.fingerprint())))
+      return mlir::failure();
+    if (valueType.kind() == ProcessValueTypeKind::Value) {
+      std::string wrap = (symbol + "_wrap").str();
+      std::string unwrap = (symbol + "_unwrap").str();
+      scalarWrapIdentities[valueType.id().value()] = wrap;
+      scalarUnwrapIdentities[valueType.id().value()] = unwrap;
+      if (failed(typeSymbols.intern(input, wrap, "implementation",
+                                    (valueType.cpp() + "::wrap").str())) ||
+          failed(typeSymbols.intern(input, unwrap, "implementation",
+                                    (valueType.cpp() + "::unwrap").str())))
+        return mlir::failure();
+    }
+  }
 
   // Attach plan-derived fairness caps to the module placements.
   for (ModulePlan &module : modules)
@@ -959,7 +979,8 @@ mlir::LogicalResult ACIRToACSimPass::planProcesses(mlir::ModuleOp input) {
         return lowerError(placement.process, "ACLOWER-PROCESS-STATE",
                           "process-state plan is missing process '@" +
                               placement.name + "'");
-      placement.fairnessCap = std::max<uint64_t>(plan->fairnessWork(), 2);
+      placement.processDefinitionKey = key;
+      placement.fairnessCap = plan->fairnessWork();
       placement.specialization = processFingerprint(module, placement);
     }
   return mlir::success();
@@ -1318,28 +1339,296 @@ void ACIRToACSimPass::expandModule(unsigned moduleIndex, std::string pathPrefix,
 // Emission
 // ---------------------------------------------------------------------------
 
+void appendOccurrenceKey(llvm::raw_ostream &stream,
+                         const ProcessOccurrenceId &occurrence) {
+  stream << static_cast<unsigned>(occurrence.kind()) << ':';
+  switch (occurrence.kind()) {
+  case ProcessOccurrenceKind::Original: {
+    const ProcessOriginalOccurrence &original = occurrence.original();
+    stream << original.operationPath() << '[';
+    for (const ProcessCallSitePlan &callSite : original.callSites()) {
+      stream << callSite.operationPath() << '(';
+      llvm::interleaveComma(callSite.iterationVector(), stream);
+      stream << ")";
+    }
+    stream << "](";
+    llvm::interleaveComma(original.iterationVector(), stream);
+    stream << ')';
+    break;
+  }
+  case ProcessOccurrenceKind::SyntheticLoop:
+    appendOccurrenceKey(stream, occurrence.syntheticLoop().anchor());
+    stream << ":loop:"
+           << static_cast<unsigned>(occurrence.syntheticLoop().phase());
+    break;
+  case ProcessOccurrenceKind::SyntheticWrapper:
+    appendOccurrenceKey(stream, occurrence.syntheticWrapper().anchor());
+    stream << ":wrapper:" << occurrence.syntheticWrapper().transition().value()
+           << ':' << occurrence.syntheticWrapper().slot().value() << ':'
+           << static_cast<unsigned>(occurrence.syntheticWrapper().direction());
+    break;
+  case ProcessOccurrenceKind::SyntheticConstant:
+    appendOccurrenceKey(stream, occurrence.syntheticConstant().anchor());
+    stream << ":constant:" << occurrence.syntheticConstant().constant();
+    break;
+  }
+}
+
+std::string plannedValueKey(const ProcessPlannedValue &value) {
+  std::string key;
+  llvm::raw_string_ostream stream(key);
+  stream << static_cast<unsigned>(value.kind()) << ':';
+  switch (value.kind()) {
+  case ProcessPlannedValueKind::Original:
+    appendOccurrenceKey(stream, value.original().occurrence());
+    stream << ':' << value.original().coordinate().ownerPath() << ':'
+           << value.original().coordinate().index();
+    break;
+  case ProcessPlannedValueKind::Capture:
+    stream << value.capture().capture().value();
+    break;
+  case ProcessPlannedValueKind::LiveSlot:
+    stream << value.liveSlot().slot().value();
+    break;
+  case ProcessPlannedValueKind::Synthetic:
+    appendOccurrenceKey(stream, value.synthetic().occurrence());
+    stream << ':' << value.synthetic().coordinate().ownerPath() << ':'
+           << value.synthetic().coordinate().index();
+    break;
+  case ProcessPlannedValueKind::Constant:
+    stream << value.constant().value();
+    break;
+  }
+  return key;
+}
+
 void ACIRToACSimPass::emitProcessBody(OpBuilder &builder,
                                       const PlacementPlan &placement) {
   MLIRContext *context = builder.getContext();
-  auto entry = FlatSymbolRefAttr::get(context, "entry");
+  const ProcessStatePlan *plan =
+      processPlans->lookupByDefinitionKey(placement.processDefinitionKey);
+  assert(plan && "process placement must reference its validated public plan");
+
+  llvm::SmallVector<Attribute> pcs;
+  for (const ProcessPcPlan &pc : plan->pcs())
+    pcs.push_back(FlatSymbolRefAttr::get(context, pc.name()));
+  llvm::SmallVector<Attribute> liveSlots;
+  for (const ProcessLiveSlotPlan &slot : plan->liveSlots()) {
+    llvm::StringRef identity = valueTypeIdentities[slot.storageType().value()];
+    auto type = acsim::ValueType::get(
+        context,
+        FlatSymbolRefAttr::get(context, typeSymbols.symbolFor(identity)));
+    liveSlots.push_back(builder.getDictionaryAttr(
+        {builder.getNamedAttr("name", builder.getStringAttr(slot.name())),
+         builder.getNamedAttr("type", TypeAttr::get(type))}));
+  }
   auto process = acsim::ProcessOp::create(
       builder, placement.process->getLoc(), ValueRange{}, placement.name,
-      builder.getArrayAttr({}), "entry", builder.getArrayAttr({entry}),
-      builder.getArrayAttr({}), placement.fairnessCap, placement.specialization,
-      /*statesCount=*/1);
+      builder.getArrayAttr({}), plan->pcs().front().name(),
+      builder.getArrayAttr(pcs), builder.getArrayAttr(liveSlots),
+      placement.fairnessCap, placement.specialization, plan->pcs().size());
 
-  Block *entryBlock = new Block();
-  process.getStates().front().push_back(entryBlock);
+  llvm::SmallVector<Block *> blocks(plan->blocks().size());
+  for (const ProcessPcPlan &pc : plan->pcs()) {
+    Region &state = process.getStates()[pc.id().value()];
+    for (ProcessBlockId id : pc.blocks()) {
+      Block *block = new Block();
+      state.push_back(block);
+      blocks[id.value()] = block;
+    }
+  }
+
   OpBuilder::InsertionGuard guard(builder);
-  builder.setInsertionPointToStart(entryBlock);
-  auto wakeType = acsim::WakeType::get(
-      context, FlatSymbolRefAttr::get(context, wakeTypeSymbol));
-  auto wake = acsim::InvokeOp::create(
-      builder, placement.process->getLoc(), TypeRange{wakeType}, ValueRange{},
-      FlatSymbolRefAttr::get(context, wakeImplSymbol));
-  acsim::SuspendOp::create(builder, placement.process->getLoc(),
-                           wake.getResults().front(), entry);
-  (void)process;
+  llvm::SmallVector<llvm::StringMap<Value>> valuesByPc(plan->pcs().size());
+  for (const ProcessBlockPlan &blockPlan : plan->blocks()) {
+    Block *block = blocks[blockPlan.id().value()];
+    builder.setInsertionPointToStart(block);
+    auto &values = valuesByPc[blockPlan.pc().value()];
+
+    for (const ProcessTransitionLoadPlan &load : blockPlan.loads()) {
+      const ProcessLiveSlotPlan &slot = plan->liveSlots()[load.slot().value()];
+      llvm::StringRef valueIdentity =
+          valueTypeIdentities[slot.storageType().value()];
+      auto storedType = acsim::ValueType::get(
+          context, FlatSymbolRefAttr::get(
+                       context, typeSymbols.symbolFor(valueIdentity)));
+      auto loaded =
+          acsim::LiveLoadOp::create(builder, placement.process->getLoc(),
+                                    storedType, placement.name, slot.name());
+      Value replacement = loaded.getResult();
+      if (!scalarUnwrapIdentities[slot.storageType().value()].empty()) {
+        llvm::StringRef unwrap =
+            scalarUnwrapIdentities[slot.storageType().value()];
+        replacement =
+            acsim::InlineOp::create(
+                builder, placement.process->getLoc(), slot.type(),
+                ValueRange{loaded.getResult()},
+                FlatSymbolRefAttr::get(context, typeSymbols.symbolFor(unwrap)))
+                .getResult();
+      }
+      for (const ProcessPlannedValue &planned : load.replacements())
+        values[plannedValueKey(planned)] = replacement;
+    }
+
+    llvm::StringSet<> requiredValues;
+    const ProcessControlEdgePlan &edge = blockPlan.edge();
+    if (edge.kind() == ProcessControlEdgeKind::Branch)
+      requiredValues.insert(plannedValueKey(edge.condition()));
+    if (edge.kind() == ProcessControlEdgeKind::Suspend) {
+      const ProcessTransitionPlan &transition =
+          plan->transitions()[edge.transition().value()];
+      for (const ProcessTransitionStorePlan &store : transition.stores())
+        requiredValues.insert(plannedValueKey(store.source()));
+    }
+    for (const ProcessActionPlan &action : blockPlan.actions())
+      if (action.emission() != ProcessEmissionClass::ForwardOnly)
+        for (const ProcessPlannedValue &operand : action.operands())
+          requiredValues.insert(plannedValueKey(operand));
+
+    for (const ProcessActionPlan &action : blockPlan.actions()) {
+      if (isa_and_nonnull<ac::WaitUntilOp, ac::WaitForOp, ac::AwaitEventOp,
+                          ac::YieldSimOp>(action.sourceOperation()))
+        continue;
+      bool resultRequired =
+          action.emission() != ProcessEmissionClass::ForwardOnly;
+      for (const ProcessPlannedValue &result : action.results())
+        resultRequired |= requiredValues.contains(plannedValueKey(result));
+      if (!resultRequired) {
+        if (action.kind() == ProcessActionKind::ForInitialize &&
+            action.operands().size() == action.results().size())
+          for (auto [result, operand] :
+               llvm::zip_equal(action.results(), action.operands()))
+            if (auto found = values.find(plannedValueKey(operand));
+                found != values.end())
+              values[plannedValueKey(result)] = found->second;
+        continue;
+      }
+
+      llvm::SmallVector<Value> operands;
+      bool operandsComplete = true;
+      for (const ProcessPlannedValue &operand : action.operands()) {
+        auto found = values.find(plannedValueKey(operand));
+        if (found == values.end()) {
+          operandsComplete = false;
+          break;
+        }
+        operands.push_back(found->second);
+      }
+      if (!operandsComplete)
+        continue;
+
+      llvm::SmallVector<Value> results;
+      if (action.kind() == ProcessActionKind::Constant) {
+        int64_t value = static_cast<int64_t>(
+            action.occurrence().syntheticConstant().constant());
+        results.push_back(index::ConstantOp::create(
+            builder, placement.process->getLoc(), value));
+      } else if (action.emission() == ProcessEmissionClass::Inline ||
+                 action.emission() == ProcessEmissionClass::Wrap ||
+                 action.emission() == ProcessEmissionClass::Unwrap) {
+        llvm::StringRef identity =
+            generatedCalleeIdentities[action.callee()->value()];
+        results.push_back(acsim::InlineOp::create(
+                              builder, placement.process->getLoc(),
+                              action.resultTypes().front(), operands,
+                              FlatSymbolRefAttr::get(
+                                  context, typeSymbols.symbolFor(identity)))
+                              .getResult());
+      } else if (action.emission() == ProcessEmissionClass::Invoke) {
+        llvm::StringRef identity =
+            generatedCalleeIdentities[action.callee()->value()];
+        auto invoke = acsim::InvokeOp::create(
+            builder, placement.process->getLoc(), action.resultTypes(),
+            operands,
+            FlatSymbolRefAttr::get(context, typeSymbols.symbolFor(identity)));
+        results.append(invoke.getResults().begin(), invoke.getResults().end());
+      } else {
+        llvm::StringRef operationName =
+            action.scalarOp()
+                ? action.scalarOp()->name()
+                : action.sourceOperation()->getName().getStringRef();
+        OperationState state(placement.process->getLoc(), operationName);
+        state.addOperands(operands);
+        state.addTypes(action.resultTypes());
+        if (action.sourceOperation())
+          state.addAttributes(action.sourceOperation()->getAttrs());
+        else if (action.scalarOp())
+          for (const ProcessScalarAttribute &attribute :
+               action.scalarOp()->attributes())
+            if (attribute.name() == "predicate")
+              state.addAttribute("predicate", builder.getI64IntegerAttr(2));
+        Operation *emitted = builder.create(state);
+        results.append(emitted->getResults().begin(),
+                       emitted->getResults().end());
+      }
+      for (auto [planned, result] : llvm::zip_equal(action.results(), results))
+        values[plannedValueKey(planned)] = result;
+    }
+
+    if (edge.kind() == ProcessControlEdgeKind::Branch) {
+      auto condition = values.find(plannedValueKey(edge.condition()));
+      assert(condition != values.end() &&
+             "validated branch condition must be emitted");
+      cf::CondBranchOp::create(builder, placement.process->getLoc(),
+                               condition->second,
+                               blocks[edge.trueBlock().value()], ValueRange{},
+                               blocks[edge.falseBlock().value()], ValueRange{});
+      continue;
+    }
+    if (edge.kind() == ProcessControlEdgeKind::LocalContinue) {
+      cf::BranchOp::create(builder, placement.process->getLoc(),
+                           blocks[edge.targetBlock().value()]);
+      continue;
+    }
+    if (edge.kind() == ProcessControlEdgeKind::Terminate) {
+      acsim::TerminateOp::create(
+          builder, placement.process->getLoc(),
+          edge.status() == ProcessTerminateStatus::Success ? "success"
+                                                           : "failure");
+      continue;
+    }
+
+    const ProcessTransitionPlan &transition =
+        plan->transitions()[edge.transition().value()];
+    for (const ProcessTransitionStorePlan &store : transition.stores()) {
+      const ProcessLiveSlotPlan &slot = plan->liveSlots()[store.slot().value()];
+      auto source = values.find(plannedValueKey(store.source()));
+      assert(source != values.end() &&
+             "validated live store source must be emitted");
+      Value stored = source->second;
+      llvm::StringRef valueIdentity =
+          valueTypeIdentities[slot.storageType().value()];
+      auto storedType = acsim::ValueType::get(
+          context, FlatSymbolRefAttr::get(
+                       context, typeSymbols.symbolFor(valueIdentity)));
+      if (stored.getType() != storedType) {
+        llvm::StringRef wrap = scalarWrapIdentities[slot.storageType().value()];
+        stored =
+            acsim::InlineOp::create(
+                builder, placement.process->getLoc(), storedType,
+                ValueRange{stored},
+                FlatSymbolRefAttr::get(context, typeSymbols.symbolFor(wrap)))
+                .getResult();
+      }
+      acsim::LiveStoreOp::create(builder, placement.process->getLoc(), stored,
+                                 placement.name, slot.name());
+    }
+    const ProcessWakePlan &wakePlan = plan->wakes()[transition.wake().value()];
+    llvm::StringRef typeIdentity = wakePlan.typeKey();
+    typeIdentity.consume_front("@");
+    auto wakeType = acsim::WakeType::get(
+        context,
+        FlatSymbolRefAttr::get(context, typeSymbols.symbolFor(typeIdentity)));
+    llvm::StringRef calleeIdentity =
+        generatedCalleeIdentities[wakePlan.callee().value()];
+    auto wake = acsim::InvokeOp::create(
+        builder, placement.process->getLoc(), TypeRange{wakeType}, ValueRange{},
+        FlatSymbolRefAttr::get(context, typeSymbols.symbolFor(calleeIdentity)));
+    acsim::SuspendOp::create(
+        builder, placement.process->getLoc(), wake.getResults().front(),
+        FlatSymbolRefAttr::get(
+            context, plan->pcs()[transition.targetPc().value()].name()));
+  }
 }
 
 void ACIRToACSimPass::emitModuleBody(OpBuilder &builder,

@@ -1,11 +1,9 @@
 // RUN: %split_file %s %t
 // RUN: %acir_opt_public --verify-each=false --pass-pipeline='builtin.module(ac-freeze-topology)' %t/compute-body.mlir -o %t/compute-body.frozen
-// RUN: %not %acir_opt_public --ac-lower-to-acsim --ac-binding-profile=fast --ac-binding-target=arm64-apple-darwin %t/compute-body.frozen -o %t/compute-body.out 2>&1 | %FileCheck %s --check-prefix=COMPUTE
-// RUN: test ! -s %t/compute-body.out
+// RUN: %acir_opt_public --ac-lower-to-acsim --ac-binding-profile=fast --ac-binding-target=arm64-apple-darwin %t/compute-body.frozen | %FileCheck %s --check-prefix=COMPUTE
 
-// Process bodies outside the yield-only v0.1 form are rejected atomically
-// with ACLOWER-PROCESS-STATE: the diagnostic names the process, no partial
-// ACSim is emitted, and the output file stays empty.
+// A process containing ordinary scalar work is planned through the public
+// ProcessStatePlan API and lowered without a yield-only stage restriction.
 
 //--- compute-body.mlir
 builtin.module attributes {ac.contract_epoch = "0.1"} {
@@ -21,4 +19,4 @@ builtin.module attributes {ac.contract_epoch = "0.1"} {
   }
 }
 
-// COMPUTE: error: ACLOWER-PROCESS-STATE: ac-lower-to-acsim v0.1 lowers exactly the yield-only process form planned by ProcessStatePlan; process '@workload' has an unsupported body
+// COMPUTE: acsim.process @workload

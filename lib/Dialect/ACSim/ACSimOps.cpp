@@ -849,6 +849,8 @@ LogicalResult verifyClosedLegality(ModelOp model,
       (void)process;
       if (isProcessOperation(operation))
         continue;
+      if (isa<cf::BranchOp, cf::CondBranchOp>(operation))
+        continue;
       if (isa<UnrealizedConversionCastOp>(operation))
         return operation->emitOpError(
             "conversion placeholders are not legal in canonical ACSim");
