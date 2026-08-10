@@ -93,6 +93,23 @@ def assert_exact_ci_cache_commands(test_case, workflow):
 
 
 class RepositoryContractsTest(unittest.TestCase):
+    def test_ci_runs_address_and_undefined_sanitizer_presets(self):
+        workflow = (ROOT / ".github/workflows/ci.yml").read_text()
+        sanitizer_job = re.search(r"(?ms)^  sanitizers:\n.*\Z", workflow)
+        self.assertIsNotNone(sanitizer_job, "CI lacks sanitizer job legs")
+        job = sanitizer_job.group()
+        self.assertIn("needs: contracts-and-configure", job)
+        self.assertIn('preset: ["asan-llvm22", "ubsan-llvm22"]', job)
+        self.assertIn("fail-on-cache-miss: true", job)
+        self.assertIn('cmake --preset "${{ matrix.preset }}"', job)
+        self.assertIn('cmake --build --preset "${{ matrix.preset }}"', job)
+        self.assertIn("--target GfsimTests CodeGenTests", job)
+        self.assertIn('ctest --test-dir "build/${{ matrix.preset }}"', job)
+        self.assertIn("--output-on-failure -R '^(GfsimTests|CodeGenTests)$'", job)
+        self.assertIn("ASAN_OPTIONS", job)
+        self.assertIn("UBSAN_OPTIONS", job)
+        self.assertIn("halt_on_error=1", job)
+
     def test_ci_caches_verified_llvm_sources_and_exact_build_outputs(self):
         workflow = (ROOT / ".github/workflows/ci.yml").read_text()
         assert_exact_ci_cache_commands(self, workflow)
@@ -163,7 +180,7 @@ class RepositoryContractsTest(unittest.TestCase):
             build_cache_save_step,
         )
         self.assertIn(
-            "steps.llvm-build.outputs.conclusion == 'success'",
+            "steps.llvm-build.conclusion == 'success'",
             build_cache_save_step,
         )
         for fingerprint_input in (

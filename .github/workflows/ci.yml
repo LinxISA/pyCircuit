@@ -94,7 +94,7 @@ jobs:
         # Save even when later steps fail: the LLVM build takes over an hour
         # and must never be rebuilt just because a test regressed. Only save
         # a fully built tree, never a partial one.
-        if: always() && steps.llvm-build-cache.outputs.cache-hit != 'true' && steps.llvm-build.outputs.conclusion == 'success'
+        if: always() && steps.llvm-build-cache.outputs.cache-hit != 'true' && steps.llvm-build.conclusion == 'success'
         uses: actions/cache/save@5a3ec84eff668545956fd18022155c47e93e2684
         with:
           path: .cache/llvm-build
@@ -174,3 +174,70 @@ jobs:
 
       - name: Check whitespace
         run: git diff --check
+
+  sanitizers:
+    name: ${{ matrix.preset }}
+    needs: contracts-and-configure
+    runs-on: ubuntu-24.04
+    env:
+      LLVM_RELEASE: "22.1.8"
+      LLVM_SOURCE_SHA256: "922f1817a0df7b1489272d18134ee0087a8b068828f87ac63b9861b1a9965888"
+    strategy:
+      fail-fast: false
+      matrix:
+        preset: ["asan-llvm22", "ubsan-llvm22"]
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+
+      - name: Install native test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends libgtest-dev
+
+      - name: Compute LLVM build fingerprint
+        id: llvm-build-fingerprint
+        run: |
+          {
+            pwd -P
+            command -v c++
+            c++ --version
+            cmake --version
+            ninja --version
+            uname -m
+            ldd --version 2>&1 | head -n 1
+          } | sha256sum | awk '{print "value=" $1}' >> "${GITHUB_OUTPUT}"
+
+      - name: Restore exact LLVM build outputs
+        uses: actions/cache/restore@5a3ec84eff668545956fd18022155c47e93e2684
+        with:
+          path: .cache/llvm-build
+          key: llvm-build-${{ runner.os }}-${{ runner.arch }}-${{ env.LLVM_SOURCE_SHA256 }}-${{ hashFiles('toolchains/llvm.lock.json', 'scripts/ci-build-llvm.sh') }}-${{ steps.llvm-build-fingerprint.outputs.value }}
+          fail-on-cache-miss: true
+
+      - name: Verify cached LLVM package
+        run: |
+          test -x .cache/llvm-build/bin/mlir-opt
+          test -f .cache/llvm-build/lib/cmake/llvm/LLVMConfigVersion.cmake
+          test -f .cache/llvm-build/lib/cmake/mlir/MLIRConfigVersion.cmake
+          .cache/llvm-build/bin/mlir-opt --version | grep -F "LLVM version ${LLVM_RELEASE}"
+
+      - name: Configure sanitizer preset
+        env:
+          LLVM_PREFIX: "${{ github.workspace }}/.cache/llvm-build"
+        run: >-
+          cmake --preset "${{ matrix.preset }}"
+          -DMLIR_DIR="${LLVM_PREFIX}/lib/cmake/mlir"
+
+      - name: Build sanitizer targets
+        run: >-
+          cmake --build --preset "${{ matrix.preset }}"
+          --target GfsimTests CodeGenTests
+
+      - name: Run sanitizer tests
+        env:
+          ASAN_OPTIONS: "detect_leaks=1:strict_string_checks=1:check_initialization_order=1:halt_on_error=1"
+          UBSAN_OPTIONS: "print_stacktrace=1:halt_on_error=1"
+        run: >-
+          ctest --test-dir "build/${{ matrix.preset }}"
+          --output-on-failure -R '^(GfsimTests|CodeGenTests)$'

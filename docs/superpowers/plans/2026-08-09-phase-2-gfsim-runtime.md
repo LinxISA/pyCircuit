@@ -21,7 +21,7 @@ Exit gate: runtime and component concept tests, sanitizer builds, randomized
 work-order determinism tests, inactive-module suppression tests, protocol and
 resource invariant tests, and PTO trace streaming tests all pass.
 
-## Current state (after T8 on `codex/phase2-gfsim-runtime`)
+## Current state (after T10 implementation on `codex/phase2-gfsim-runtime`)
 
 The branch already carries a runtime foundation (commits `125a72a`, `d44406d`,
 `8ce3f99`, `4efa785`):
@@ -46,6 +46,10 @@ The branch already carries a runtime foundation (commits `125a72a`, `d44406d`,
 - `include/gfsim/statistics.h` — proposal/Xfer counters, gauges, and
   histograms with deterministic snapshots.
 - `unittests/gfsim/core_test.cpp` — 112 unit tests after T8.
+- `schemas/stdlib/` — 36 fingerprinted component records plus an explicit
+  availability catalog and deterministic generator/checker.
+- `.github/workflows/ci.yml` — ASAN and UBSAN matrix legs reuse the locked LLVM
+  cache and existing sanitizer presets for gfsim and codegen tests.
 
 ## Gap analysis vs roadmap scope
 
@@ -67,7 +71,7 @@ The branch already carries a runtime foundation (commits `125a72a`, `d44406d`,
 | Termination results | T8 complete | End-to-end completion, cap, deadlock, and cursor tests |
 | Baseline component templates | T5 complete | Exact compile-time identities, concepts, finite Queue/Scheduler behavior |
 | Frozen catalog schemas | T9 complete | 36 component records, explicit availability, fingerprint/generation gate |
-| Sanitizer builds in CI | Presets exist locally (`asan-llvm22`, `ubsan-llvm22`) | CI job legs |
+| Sanitizer builds in CI | T10 complete | ASAN/UBSAN matrix legs reuse existing presets and locked LLVM cache |
 
 ## Proposed task breakdown
 
@@ -99,8 +103,8 @@ The branch already carries a runtime foundation (commits `125a72a`, `d44406d`,
 9. **T9 — Frozen catalog schemas (complete)**: one validated, fingerprinted
    JSON component schema per catalog entry; unavailable entries explicit;
    deterministic regeneration wired into `scripts/check-contracts.py`.
-10. **T10 — Sanitizer CI legs**: ASAN and UBSAN job legs reusing the existing
-    presets.
+10. **T10 — Sanitizer CI legs (complete)**: ASAN and UBSAN matrix legs reuse
+    the existing presets, exact LLVM cache, and focused runtime/codegen tests.
 
 ## Resolved design decisions
 
