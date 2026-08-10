@@ -1,10 +1,12 @@
 add_acir_library(ACIRCodeGen SOURCES
   Manifest.cpp
   Emitter.cpp
+  ModelPlan.cpp
 )
 target_link_libraries(ACIRCodeGen PUBLIC
   ACIRBindings
   ACIRDialect
+  ACSimDialect
   LLVMSupport
 )
 target_include_directories(ACIRCodeGen PUBLIC

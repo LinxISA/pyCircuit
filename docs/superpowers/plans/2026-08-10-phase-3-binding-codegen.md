@@ -281,7 +281,7 @@ git commit -m "feat(gfsim): attach non-owning module children"
 - Consumes: `acir::acsim::verifyCanonicalACSimFile(mlir::ModuleOp)` and the exact ACSim v0.1 attributes.
 - Produces: `llvm::Expected<ModelPlan> buildModelPlan(mlir::ModuleOp)` and `llvm::Error validateModelPlan(const ModelPlan &)`.
 
-- [ ] **Step 1: Add a reusable canonical ACSim test loader and failing extraction test**
+- [x] **Step 1: Add a reusable canonical ACSim test loader and failing extraction test**
 
 ```cpp
 TEST(ModelPlanTest, ExtractsClosedIdentitiesAndDenseRuntimePlan) {
@@ -303,22 +303,36 @@ TEST(ModelPlanTest, RejectsNonCanonicalOrMixedInput) {
 }
 ```
 
-- [ ] **Step 2: Run the focused test and confirm the missing types**
+- [x] **Step 2: Run the focused test and confirm the missing types**
 
 Run: `cmake --build --preset dev-llvm22 --target CodeGenTests`
 
 Expected: compilation fails because `ModelPlan.h` and `buildModelPlan` do not exist.
 
-- [ ] **Step 3: Define the first immutable plan slice**
+- [x] **Step 3: Define the first immutable plan slice**
 
 ```cpp
-enum class TypeKind { Value, Packet, Interface, Protocol, Policy, Implementation };
-struct TypePlan { std::string symbol; TypeKind kind; std::string cppType; };
+enum class TypeKind {
+  Accessor, Implementation, Interface, Packet, Policy, Protocol, Provider,
+  Resource, Role, Schema, TimeDomain, Value, Wake, Payload
+};
+struct TypePlan {
+  std::string symbol;
+  TypeKind kind;
+  std::string cppType;
+  Fingerprint fingerprint;
+};
 struct RuntimeObjectPlan {
   uint32_t objectId;
-  std::string objectSymbol;
-  std::string cppExpression;
-  std::string objectKind;
+  uint32_t activationId;
+  std::string targetSymbol;
+  std::string hierarchyPath;
+  std::vector<uint64_t> indices;
+  RuntimeObjectKind objectKind;
+  std::string workThunk;
+  std::string xferThunk;
+  std::string resetThunk;
+  std::string validateThunk;
 };
 struct ActivationEdgePlan {
   uint32_t sourceId;
@@ -342,17 +356,17 @@ struct ModelPlan {
 };
 ```
 
-- [ ] **Step 4: Extract only after canonical ACSim verification**
+- [x] **Step 4: Extract only after canonical ACSim verification**
 
 Implement a two-phase builder: verify and collect symbols into temporary maps, then materialize sorted value vectors. Reject duplicate symbols, invalid fingerprint spellings, non-dense object IDs, unsorted/duplicate activation edges, missing sources/targets, and activation offsets that do not reconstruct the exact edge list. Never retain `Operation *`, `Attribute`, or `Value` in `ModelPlan`.
 
-- [ ] **Step 5: Run focused tests and verifier tests**
+- [x] **Step 5: Run focused tests and verifier tests**
 
 Run: `cmake --build --preset dev-llvm22 --target CodeGenTests ACSimOpsTests && build/dev-llvm22/bin/CodeGenTests --gtest_filter='ModelPlanTest.*' && ctest --test-dir build/dev-llvm22 -R '^(CodeGenTests|ACSimOpsTests)$' --output-on-failure`
 
 Expected: canonical fixture extracts identically on repeated runs and malformed input is rejected before plan construction.
 
-- [ ] **Step 6: Commit the plan identity boundary**
+- [x] **Step 6: Commit the plan identity boundary**
 
 ```bash
 git add include/acir/CodeGen/ModelPlan.h lib/CodeGen/ModelPlan.cpp lib/CodeGen/CMakeLists.txt unittests/CodeGen/ModelPlanTest.cpp unittests/CodeGen/CMakeLists.txt
