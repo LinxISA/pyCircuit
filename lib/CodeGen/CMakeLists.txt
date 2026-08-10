@@ -3,6 +3,7 @@ add_acir_library(ACIRCodeGen SOURCES
   Emitter.cpp
 )
 target_link_libraries(ACIRCodeGen PUBLIC
+  ACIRBindings
   ACIRDialect
   LLVMSupport
 )

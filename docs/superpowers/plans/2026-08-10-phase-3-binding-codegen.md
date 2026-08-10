@@ -63,7 +63,7 @@
 - Consumes: `acir::bindings::canonicalizeJson(const llvm::json::Value &)` and LLVM SHA-256.
 - Produces: `Fingerprint`, `isValidFingerprint`, `fingerprintCanonicalJson`, `BuildManifest::validate`, `BuildManifest::canonicalJson`, and `BuildManifest::finalizeBuildFingerprint`.
 
-- [ ] **Step 1: Replace prototype expectations with failing exact-contract tests**
+- [x] **Step 1: Replace prototype expectations with failing exact-contract tests**
 
 ```cpp
 TEST(CodeGenManifestTest, FingerprintsUseNormativeSpelling) {
@@ -93,13 +93,13 @@ TEST(CodeGenManifestTest, ManifestRejectsMissingAndNonCanonicalFields) {
 }
 ```
 
-- [ ] **Step 2: Run the focused tests and confirm the RED state**
+- [x] **Step 2: Run the focused tests and confirm the RED state**
 
 Run: `cmake --build --preset dev-llvm22 --target CodeGenTests && build/dev-llvm22/bin/CodeGenTests --gtest_filter='CodeGenManifestTest.*'`
 
 Expected: compilation fails because the schema-shaped API and normative fingerprint spelling do not exist.
 
-- [ ] **Step 3: Define the exact schema-shaped manifest types**
+- [x] **Step 3: Define the exact schema-shaped manifest types**
 
 ```cpp
 using Fingerprint = std::string;
@@ -169,17 +169,17 @@ struct BuildManifest {
 
 `finalizeBuildFingerprint` canonicalizes the complete object with an empty `build_fingerprint`, fingerprints the versioned preimage `{"domain":"agentic-circuit-build-0.1","manifest":...}`, stores it, and revalidates. Semantic sets sort by their schema keys; `pass_pipeline` and `source_files` retain declared order.
 
-- [ ] **Step 4: Implement closed validation and canonical serialization**
+- [x] **Step 4: Implement closed validation and canonical serialization**
 
 Use `llvm::json::Object` construction followed by `bindings::canonicalizeJson`; validate exact constants, non-empty identities, enum spellings, unique stable keys, normalized relative paths, and every `sha256:` field before serialization. Link `ACIRCodeGen` publicly to `ACIRBindings`.
 
-- [ ] **Step 5: Run focused and complete CodeGen tests**
+- [x] **Step 5: Run focused and complete CodeGen tests**
 
 Run: `cmake --build --preset dev-llvm22 --target CodeGenTests && build/dev-llvm22/bin/CodeGenTests --gtest_filter='CodeGenManifestTest.*' && ctest --test-dir build/dev-llvm22 -R '^CodeGenTests$' --output-on-failure`
 
 Expected: all selected tests pass and the fixture bytes are canonical.
 
-- [ ] **Step 6: Commit the exact manifest boundary**
+- [x] **Step 6: Commit the exact manifest boundary**
 
 ```bash
 git add include/acir/CodeGen/Manifest.h lib/CodeGen/Manifest.cpp lib/CodeGen/CMakeLists.txt unittests/CodeGen/CodeGenTest.cpp
