@@ -102,13 +102,31 @@ def _copy_workspace(source: Path, destination: Path) -> None:
     )
 
 
+def _pack(events: Path, output: Path) -> None:
+    completed = subprocess.run(
+        [
+            sys.executable,
+            os.fspath(REPOSITORY / "tools/pack-perfetto-trace.py"),
+            os.fspath(events),
+            os.fspath(output),
+        ],
+        cwd=REPOSITORY,
+        env=_environment(),
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if completed.returncode != 0:
+        raise AssertionError(completed.stderr)
+
+
 class Phase5ExampleTest(unittest.TestCase):
     maxDiff = None
 
     def test_all_six_workspaces_own_the_complete_golden_set(self) -> None:
         self.assertTrue(EXAMPLES.is_dir())
         self.assertEqual(
-            set(SCENARIOS),
+            {*SCENARIOS, "npu"},
             {path.name for path in EXAMPLES.iterdir() if path.is_dir()},
         )
         for name in SCENARIOS:
@@ -259,21 +277,28 @@ class Phase5ExampleTest(unittest.TestCase):
                         (first_artifacts / "run/events.jsonl").read_bytes(),
                     )
 
-                    replayed = _run_cli(
-                        first,
-                        "run",
-                        "--replay-manifest",
-                        os.fspath(first_artifacts / "run/run-manifest.json"),
-                        "--output-dir",
-                        os.fspath(first_artifacts / "replay"),
-                        "--json",
-                    )
-                    self.assertEqual("completed", replayed["status"])
-                    for relative in ("run-result.json", "stats.json", "events.jsonl"):
-                        self.assertEqual(
-                            (first_artifacts / "run" / relative).read_bytes(),
-                            (first_artifacts / "replay" / relative).read_bytes(),
+                    for replay_name in ("replay-one", "replay-two"):
+                        replayed = _run_cli(
+                            first,
+                            "run",
+                            "--replay-manifest",
+                            os.fspath(first_artifacts / "run/run-manifest.json"),
+                            "--output-dir",
+                            os.fspath(first_artifacts / replay_name),
+                            "--json",
                         )
+                        self.assertEqual("completed", replayed["status"])
+                        for relative in (
+                            "run-result.json",
+                            "stats.json",
+                            "events.jsonl",
+                        ):
+                            self.assertEqual(
+                                (first_artifacts / "run" / relative).read_bytes(),
+                                (
+                                    first_artifacts / replay_name / relative
+                                ).read_bytes(),
+                            )
 
                     _run_cli(
                         second,
@@ -314,6 +339,18 @@ class Phase5ExampleTest(unittest.TestCase):
                             (first_artifacts / "run" / relative).read_bytes(),
                             (second_artifacts / "run" / relative).read_bytes(),
                         )
+                    _pack(
+                        first_artifacts / "run/events.jsonl",
+                        first_artifacts / "perfetto.json",
+                    )
+                    _pack(
+                        second_artifacts / "run/events.jsonl",
+                        second_artifacts / "perfetto.json",
+                    )
+                    self.assertEqual(
+                        (first_artifacts / "perfetto.json").read_bytes(),
+                        (second_artifacts / "perfetto.json").read_bytes(),
+                    )
 
 
 if __name__ == "__main__":

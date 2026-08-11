@@ -50,6 +50,7 @@ class InstallationTest(unittest.TestCase):
             unrelated.mkdir()
             installed = install_to(prefix)
             self.assertEqual(0, installed.returncode, installed.stderr)
+            installed_bins = {path.name for path in (prefix / "bin").iterdir()}
 
             doctor = run_installed(prefix, "doctor", "--json", cwd=unrelated)
             capabilities = run_installed(
@@ -89,6 +90,8 @@ class InstallationTest(unittest.TestCase):
         self.assertEqual("passed", json.loads(checked.stdout)["status"])
         self.assertEqual(0, initialized.returncode, initialized.stderr)
         self.assertEqual(0, built.returncode, built.stderr)
+        self.assertNotIn("import-davincioo-pto-trace.py", installed_bins)
+        self.assertNotIn("pack-perfetto-trace.py", installed_bins)
 
 
 if __name__ == "__main__":

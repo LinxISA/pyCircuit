@@ -28,13 +28,13 @@
         },
         "cpp_type": "phase5_npu_type",
         "effect": "stateful",
-        "fingerprint": "sha256:1a01df33375106cad886f569a08abd1a72af7dbf61c8b615f088400c40a6dcb2",
+        "fingerprint": "sha256:ae24f91ffdded78d2d87c51cf19b5758ed51b771a0f45542c056685edf1192f4",
         "implementation": "gfsim.Phase5NpuTraceSource",
         "ownership": {"kind": "unique", "placement": "member_or_array"},
         "parameters": [],
         "ports": [],
         "provider": "phase5_npu_source",
-        "provider_implementation_fingerprint": "sha256:8888888888888888888888888888888888888888888888888888888888888888",
+        "provider_implementation_fingerprint": "sha256:ca6c3fdd699cec3a02697f3714e1b5f70df101b28929cb6ddb118b8fa30c9180",
         "resources": [],
         "results": []
       }
@@ -67,13 +67,13 @@
         },
         "cpp_type": "phase5_npu_type",
         "effect": "stateful",
-        "fingerprint": "sha256:1a01df33375106cad886f569a08abd1a72af7dbf61c8b615f088400c40a6dcb2",
+        "fingerprint": "sha256:ae24f91ffdded78d2d87c51cf19b5758ed51b771a0f45542c056685edf1192f4",
         "implementation": "gfsim.Phase5NpuTraceSource",
         "ownership": {"kind": "unique", "placement": "member_or_array"},
         "parameters": [],
         "ports": [],
         "provider": "phase5_npu_source",
-        "provider_implementation_fingerprint": "sha256:8888888888888888888888888888888888888888888888888888888888888888",
+        "provider_implementation_fingerprint": "sha256:ca6c3fdd699cec3a02697f3714e1b5f70df101b28929cb6ddb118b8fa30c9180",
         "resources": [],
         "results": []
       }
@@ -106,13 +106,13 @@
         },
         "cpp_type": "phase5_npu_node_type",
         "effect": "stateful",
-        "fingerprint": "sha256:4c999251003f9f30d83deea694e060b53beb781a881d2450394c04dd7d1b5700",
+        "fingerprint": "sha256:5045a1f2d6c4cf1c412abacd811165a123cabec20e5e42c6291f7e56449e8d0a",
         "implementation": "gfsim.Phase5NpuNode",
         "ownership": {"kind": "unique", "placement": "member_or_array"},
         "parameters": [],
         "ports": [],
         "provider": "phase5_npu_node",
-        "provider_implementation_fingerprint": "sha256:9999999999999999999999999999999999999999999999999999999999999999",
+        "provider_implementation_fingerprint": "sha256:ca6c3fdd699cec3a02697f3714e1b5f70df101b28929cb6ddb118b8fa30c9180",
         "resources": [],
         "results": []
       }
@@ -145,13 +145,13 @@
         },
         "cpp_type": "phase5_npu_node_type",
         "effect": "stateful",
-        "fingerprint": "sha256:4c999251003f9f30d83deea694e060b53beb781a881d2450394c04dd7d1b5700",
+        "fingerprint": "sha256:5045a1f2d6c4cf1c412abacd811165a123cabec20e5e42c6291f7e56449e8d0a",
         "implementation": "gfsim.Phase5NpuNode",
         "ownership": {"kind": "unique", "placement": "member_or_array"},
         "parameters": [],
         "ports": [],
         "provider": "phase5_npu_node",
-        "provider_implementation_fingerprint": "sha256:9999999999999999999999999999999999999999999999999999999999999999",
+        "provider_implementation_fingerprint": "sha256:ca6c3fdd699cec3a02697f3714e1b5f70df101b28929cb6ddb118b8fa30c9180",
         "resources": [],
         "results": []
       }
@@ -170,7 +170,7 @@
       "parameters": [],
       "ports": [],
       "provider": "phase5_npu_source",
-      "provider_implementation_fingerprint": "sha256:8888888888888888888888888888888888888888888888888888888888888888",
+      "provider_implementation_fingerprint": "sha256:ca6c3fdd699cec3a02697f3714e1b5f70df101b28929cb6ddb118b8fa30c9180",
       "resolution_key": "@Npu",
       "resources": [],
       "results": []
@@ -187,7 +187,7 @@
       "parameters": [],
       "ports": [],
       "provider": "phase5_npu_node",
-      "provider_implementation_fingerprint": "sha256:9999999999999999999999999999999999999999999999999999999999999999",
+      "provider_implementation_fingerprint": "sha256:ca6c3fdd699cec3a02697f3714e1b5f70df101b28929cb6ddb118b8fa30c9180",
       "resolution_key": "@NpuNode",
       "resources": [],
       "results": []

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -27,10 +28,10 @@ def _environment() -> dict[str, str]:
     return environment
 
 
-def _run_cli(*arguments: str) -> dict[str, object]:
+def _run_cli(*arguments: str, cwd: Path = EXAMPLE) -> dict[str, object]:
     completed = subprocess.run(
         [sys.executable, "-m", "agentic_circuit._cli", *arguments],
-        cwd=EXAMPLE,
+        cwd=cwd,
         env=_environment(),
         text=True,
         capture_output=True,
@@ -44,6 +45,32 @@ def _run_cli(*arguments: str) -> dict[str, object]:
     if completed.stderr:
         raise AssertionError(f"structured CLI wrote stderr: {completed.stderr}")
     return json.loads(completed.stdout)
+
+
+def _copy_workspace(destination: Path) -> None:
+    shutil.copytree(
+        EXAMPLE,
+        destination,
+        ignore=shutil.ignore_patterns("build", "__pycache__", "*.pyc"),
+    )
+
+
+def _pack(events: Path, output: Path) -> None:
+    completed = subprocess.run(
+        [
+            sys.executable,
+            os.fspath(REPOSITORY / "tools/pack-perfetto-trace.py"),
+            os.fspath(events),
+            os.fspath(output),
+        ],
+        cwd=REPOSITORY,
+        env=_environment(),
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if completed.returncode != 0:
+        raise AssertionError(completed.stderr)
 
 
 def _selected_result(run_directory: Path) -> dict[str, object]:
@@ -87,7 +114,10 @@ class Phase5NpuTest(unittest.TestCase):
                 check=False,
             )
             self.assertEqual(0, completed.returncode, completed.stderr)
-            self.assertEqual((EXAMPLE / "traces/pto-trace.json").read_bytes(), output.read_bytes())
+            self.assertEqual(
+                (EXAMPLE / "traces/pto-trace.json").read_bytes(),
+                output.read_bytes(),
+            )
             trace = json.loads(output.read_text())
             self.assertEqual(
                 "davincioo@e73633301cabed0d871ea5ff66e76a91df870aeb",
@@ -170,30 +200,101 @@ class Phase5NpuTest(unittest.TestCase):
                 json.loads((EXAMPLE / "expected-result.json").read_text()),
                 _selected_result(output / "run"),
             )
-            self.assertEqual((EXAMPLE / "expected-stats.json").read_bytes(), (output / "run/stats.json").read_bytes())
-            self.assertEqual((EXAMPLE / "expected-events.jsonl").read_bytes(), (output / "run/events.jsonl").read_bytes())
-            self.assertEqual(6, next(item["value"] for item in stats if item["name"] == "architectural_retired_instructions"))
+            self.assertEqual(
+                (EXAMPLE / "expected-stats.json").read_bytes(),
+                (output / "run/stats.json").read_bytes(),
+            )
+            self.assertEqual(
+                (EXAMPLE / "expected-events.jsonl").read_bytes(),
+                (output / "run/events.jsonl").read_bytes(),
+            )
+            self.assertEqual(
+                6,
+                next(
+                    item["value"]
+                    for item in stats
+                    if item["name"] == "architectural_retired_instructions"
+                ),
+            )
             event_records = [json.loads(line) for line in events]
-            complete_order = [item["args"]["gfsim_root_sequence_id"] for item in event_records if item["name"] == "complete"]
-            retire_order = [item["args"]["gfsim_root_sequence_id"] for item in event_records if item["name"] == "retire"]
+            complete_order = [
+                item["args"]["gfsim_root_sequence_id"]
+                for item in event_records
+                if item["name"] == "complete"
+            ]
+            retire_order = [
+                item["args"]["gfsim_root_sequence_id"]
+                for item in event_records
+                if item["name"] == "retire"
+            ]
             self.assertNotEqual(sorted(complete_order), complete_order)
             self.assertEqual(list(range(6)), retire_order)
 
-            packed = subprocess.run(
-                [
-                    sys.executable,
-                    os.fspath(REPOSITORY / "tools/pack-perfetto-trace.py"),
-                    os.fspath(output / "run/events.jsonl"),
-                    os.fspath(output / "perfetto.json"),
-                ],
-                cwd=REPOSITORY,
-                env=_environment(),
-                text=True,
-                capture_output=True,
-                check=False,
+            _pack(output / "run/events.jsonl", output / "perfetto.json")
+            self.assertEqual(
+                (EXAMPLE / "expected-perfetto.json").read_bytes(),
+                (output / "perfetto.json").read_bytes(),
             )
-            self.assertEqual(0, packed.returncode, packed.stderr)
-            self.assertEqual((EXAMPLE / "expected-perfetto.json").read_bytes(), (output / "perfetto.json").read_bytes())
+
+    def test_replay_and_equivalent_roots_are_byte_identical(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="phase5-npu-determinism-") as temporary:
+            root = Path(temporary)
+            first = root / "alpha" / "npu"
+            second = root / "unrelated" / "omega" / "npu"
+            _copy_workspace(first)
+            _copy_workspace(second)
+
+            for workspace in (first, second):
+                _run_cli(
+                    "run",
+                    "architecture.py",
+                    "--project",
+                    "agentic-circuit.toml",
+                    "--trace",
+                    "traces/pto-trace.json",
+                    "--stats-format",
+                    "json",
+                    "--event-log",
+                    "jsonl",
+                    "--expect-termination",
+                    "--output-dir",
+                    "artifacts/run",
+                    "--json",
+                    cwd=workspace,
+                )
+                _pack(
+                    workspace / "artifacts/run/events.jsonl",
+                    workspace / "artifacts/perfetto.json",
+                )
+
+            for replay_name in ("replay-one", "replay-two"):
+                _run_cli(
+                    "run",
+                    "--replay-manifest",
+                    "artifacts/run/run-manifest.json",
+                    "--output-dir",
+                    f"artifacts/{replay_name}",
+                    "--json",
+                    cwd=first,
+                )
+
+            for relative in ("run-result.json", "stats.json", "events.jsonl"):
+                expected = (first / "artifacts/run" / relative).read_bytes()
+                self.assertEqual(
+                    expected, (second / "artifacts/run" / relative).read_bytes()
+                )
+                self.assertEqual(
+                    expected,
+                    (first / "artifacts/replay-one" / relative).read_bytes(),
+                )
+                self.assertEqual(
+                    expected,
+                    (first / "artifacts/replay-two" / relative).read_bytes(),
+                )
+            self.assertEqual(
+                (first / "artifacts/perfetto.json").read_bytes(),
+                (second / "artifacts/perfetto.json").read_bytes(),
+            )
 
 
 if __name__ == "__main__":
