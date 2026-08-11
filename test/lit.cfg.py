@@ -29,6 +29,7 @@ llvm_tools_dir = configured_paths["LLVM_TOOLS_DIR"]
 config.substitutions.append(("%binary_root", config.acir_binary_root))
 config.substitutions.append(("%cxx", config.acir_cxx))
 config.substitutions.append(("%llvm_lib_dir", config.acir_llvm_lib_dir))
+config.substitutions.append(("%python", config.acir_python))
 config.substitutions.append(("%source_root", config.acir_source_root))
 
 config.substitutions.append(("%acir_opt_public", os.path.join(tools_dir, "acir-opt")))

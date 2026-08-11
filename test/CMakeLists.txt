@@ -1,4 +1,9 @@
 get_filename_component(ACIR_TEST_LLVM_LIB_DIR "${LLVM_DIR}/../.." ABSOLUTE)
+get_filename_component(ACIR_LIT_BIN_DIR "${ACIR_LIT_EXECUTABLE}" DIRECTORY)
+find_program(ACIR_TEST_PYTHON NAMES python python3
+  HINTS "${ACIR_LIT_BIN_DIR}"
+  REQUIRED
+)
 
 configure_lit_site_cfg(
   "${CMAKE_CURRENT_SOURCE_DIR}/lit.site.cfg.py.in"
@@ -8,5 +13,5 @@ configure_lit_site_cfg(
 
 add_lit_testsuite(check-acir "Running Agentic Circuit lit tests"
   "${CMAKE_CURRENT_BINARY_DIR}"
-  DEPENDS acir-cxxgen acir-opt acir-opt-internal
+  DEPENDS acir-cxxgen acir-opt acir-opt-internal agentic_circuit_native
 )

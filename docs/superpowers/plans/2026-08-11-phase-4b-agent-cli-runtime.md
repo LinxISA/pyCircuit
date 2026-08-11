@@ -663,7 +663,7 @@ git commit -m "feat(cli): add isolated check and elaborate commands"
 - Consumes: capture worker, native façade, staging, workspace, and output policy.
 - Produces: `CompileOptions`, `compile_command`, canonical emitted artifact set, and pass dump reports.
 
-- [ ] **Step 1: Write failing stage/emission tests**
+- [x] **Step 1: Write failing stage/emission tests**
 
 ```python
 class CompileCommandTest(unittest.TestCase):
@@ -680,13 +680,13 @@ class CompileCommandTest(unittest.TestCase):
         self.assertIn("ACPY-CLI-PIPELINE", missing.stderr)
 ```
 
-- [ ] **Step 2: Run the focused test and confirm the RED state**
+- [x] **Step 2: Run the focused test and confirm the RED state**
 
 Run: `PYTHONPATH=src:build/dev-llvm22/python .venv/bin/python -m unittest tests.cli.test_compile_command -v`
 
 Expected: FAIL because `compile` is absent.
 
-- [ ] **Step 3: Implement exact compile option normalization**
+- [x] **Step 3: Implement exact compile option normalization**
 
 ```python
 @dataclass(frozen=True, slots=True)
@@ -713,7 +713,7 @@ The public logical stage spellings are `frontend-capture`,
 the owning Python/native stage and retain the same spelling in diagnostics and
 validation reports even when a release pipeline combines physical passes.
 
-- [ ] **Step 4: Implement compile composition and atomic artifact publication**
+- [x] **Step 4: Implement compile composition and atomic artifact publication**
 
 ```python
 def compile_command(args: Namespace, sink: OutputSink) -> ExitCode:
@@ -729,13 +729,13 @@ def compile_command(args: Namespace, sink: OutputSink) -> ExitCode:
     return sink.success(compile_summary(stage.destination, native))
 ```
 
-- [ ] **Step 5: Run CLI, lit, and native compiler tests**
+- [x] **Step 5: Run CLI, lit, and native compiler tests**
 
 Run: `PYTHONPATH=src:build/dev-llvm22/python .venv/bin/python -m unittest tests.cli.test_compile_command -v && cmake --build --preset dev-llvm22 --target CompilerTests check-acir`
 
 Expected: PASS.
 
-- [ ] **Step 6: Commit compile orchestration**
+- [x] **Step 6: Commit compile orchestration**
 
 ```bash
 git add src/agentic_circuit tests/cli test/Python test/CMakeLists.txt

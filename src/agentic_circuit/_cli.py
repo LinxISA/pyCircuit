@@ -10,6 +10,7 @@ from typing import Sequence
 from ._commands import init as init_command
 from ._commands import doctor as doctor_command
 from ._commands import check as check_command
+from ._commands import compile as compile_command
 from ._commands import elaborate as elaborate_command
 from ._commands import explain as explain_command
 from ._commands import schema as schema_command
@@ -153,10 +154,22 @@ def build_parser() -> argparse.ArgumentParser:
     _add_workspace_options(elaborate, output=True, jobs=True)
     _add_output_options(elaborate)
 
-    compile_command = commands.add_parser("compile", allow_abbrev=False)
-    compile_command.add_argument("architecture", nargs="?")
-    _add_workspace_options(compile_command, output=True, jobs=True)
-    _add_output_options(compile_command)
+    compile_parser = commands.add_parser("compile", allow_abbrev=False)
+    compile_parser.add_argument("architecture", nargs="?")
+    compile_parser.add_argument("--emit", action=_OnceValue)
+    compile_parser.add_argument(
+        "--profile",
+        choices=("fast", "validated", "custom"),
+        action=_OnceValue,
+    )
+    compile_parser.add_argument("--stop-after", action=_OnceValue)
+    compile_parser.add_argument("--dump-before", action="append", default=[])
+    compile_parser.add_argument("--dump-after", action="append", default=[])
+    compile_parser.add_argument("--dump-after-each", action=_OnceTrue)
+    compile_parser.add_argument("--verify-after-each", action=_OnceTrue)
+    compile_parser.add_argument("--pass-pipeline", action=_OnceValue)
+    _add_workspace_options(compile_parser, output=True, jobs=True)
+    _add_output_options(compile_parser)
 
     build = commands.add_parser("build", allow_abbrev=False)
     build.add_argument("architecture", nargs="?")
@@ -245,6 +258,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return check_command.run(arguments, workspace, sink)
         if arguments.command == "elaborate":
             return elaborate_command.run(arguments, workspace, sink)
+        if arguments.command == "compile":
+            return compile_command.run(arguments, workspace, sink)
         sink.result(
             _placeholder_result(arguments, workspace.project_name),
             human=f"{arguments.command} accepted for {workspace.project_name}",

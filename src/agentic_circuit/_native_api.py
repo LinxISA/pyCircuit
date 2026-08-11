@@ -19,7 +19,7 @@ class NativeRequest:
     acir: bytes
     stop_after: str | None
     emits: tuple[str, ...]
-    options: tuple[tuple[str, JsonValue], ...] = ()
+    options: tuple[tuple[str, object], ...] = ()
 
     def __post_init__(self) -> None:
         if type(self.acir) is not bytes:
@@ -39,7 +39,17 @@ class NativeRequest:
             if item[0] in names:
                 raise ValueError(f"duplicate native option: {item[0]}")
             names.add(item[0])
-            validate_ijson_value(item[1])
+            value = item[1]
+            if item[0] in ("dump_before", "dump_after"):
+                if type(value) is not tuple or not all(
+                    type(name) is str for name in value
+                ):
+                    raise TypeError(f"native {item[0]} must be a tuple of strings")
+            elif item[0] == "binding_lock":
+                if type(value) is not bytes:
+                    raise TypeError("native binding_lock must be bytes")
+            else:
+                validate_ijson_value(value)  # type: ignore[arg-type]
 
 
 @dataclass(frozen=True, slots=True)
