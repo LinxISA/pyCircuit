@@ -86,6 +86,7 @@ install(
 
 add_subdirectory(include)
 add_subdirectory(lib)
+add_subdirectory(python)
 add_subdirectory(tools)
 if(BUILD_TESTING)
   add_subdirectory(test)

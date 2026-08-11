@@ -8,6 +8,9 @@ license = "Apache-2.0"
 authors = [{ name = "Agentic Circuit contributors" }]
 dependencies = []
 
+[project.scripts]
+agentic-circuit = "agentic_circuit._cli:main"
+
 [tool.setuptools]
 package-dir = { "" = "src" }
 

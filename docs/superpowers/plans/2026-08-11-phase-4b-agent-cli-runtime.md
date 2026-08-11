@@ -213,7 +213,7 @@ git commit -m "feat(compiler): add high-level native driver facade"
 - Consumes: `runCompiler` and compiler façade records from Task 1.
 - Produces: private `_native.run_compiler`, `_native.capabilities`, Python `NativeRequest`, `NativeResult`, and `run_native_compiler`.
 
-- [ ] **Step 1: Write the failing import and round-trip tests**
+- [x] **Step 1: Write the failing import and round-trip tests**
 
 ```python
 class NativeApiTest(unittest.TestCase):
@@ -231,13 +231,13 @@ class NativeApiTest(unittest.TestCase):
         self.assertNotIn("_native", agentic_circuit.__all__)
 ```
 
-- [ ] **Step 2: Run the focused test and confirm the RED state**
+- [x] **Step 2: Run the focused test and confirm the RED state**
 
 Run: `cmake --build --preset dev-llvm22 --target agentic_circuit_native && PYTHONPATH=src:build/dev-llvm22/python .venv/bin/python -m unittest tests.cli.test_native_api -v`
 
 Expected: build/configuration fails because the extension is absent.
 
-- [ ] **Step 3: Implement limited-API request/result conversion**
+- [x] **Step 3: Implement limited-API request/result conversion**
 
 ```cpp
 #define Py_LIMITED_API 0x030B0000
@@ -259,7 +259,7 @@ buffers into owned C++ strings before releasing Python references. Convert all
 errors to result dictionaries; reserve Python exceptions for extension misuse
 or allocation failure.
 
-- [ ] **Step 4: Add immutable Python wrapper records**
+- [x] **Step 4: Add immutable Python wrapper records**
 
 ```python
 @dataclass(frozen=True, slots=True)
@@ -294,7 +294,7 @@ class NativeCapabilities:
 Validate the extension response before exposing it internally. Sort/normalize
 diagnostics through the shared Phase 4A diagnostic model.
 
-- [ ] **Step 5: Configure build-tree and CMake install imports**
+- [x] **Step 5: Configure build-tree and CMake install imports**
 
 Use `find_package(Python3 3.11 REQUIRED COMPONENTS Interpreter Development.Module)`, compile with `Py_LIMITED_API=0x030B0000`, place the module under the build-tree `agentic_circuit` package, install Python sources/resources and the extension to one package directory, and declare `[project.scripts] agentic-circuit = "agentic_circuit._cli:main"` without adding runtime dependencies.
 
@@ -302,7 +302,7 @@ Run: `cmake --build --preset dev-llvm22 --target agentic_circuit_native && PYTHO
 
 Expected: PASS.
 
-- [ ] **Step 6: Commit the native bridge**
+- [x] **Step 6: Commit the native bridge**
 
 ```bash
 git add CMakeLists.txt pyproject.toml python src/agentic_circuit/_native_api.py tests/cli
