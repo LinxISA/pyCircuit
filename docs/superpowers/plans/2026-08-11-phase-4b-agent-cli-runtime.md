@@ -328,7 +328,7 @@ git commit -m "feat(python): bridge frontend to native compiler"
 - Consumes: shared diagnostics and canonical JSON from Phase 4A.
 - Produces: `WorkspaceConfig`, `discover_workspace`, `ArtifactStage`, `OutputSink`, `build_parser`, `ExitCode`, and `main`.
 
-- [ ] **Step 1: Write failing parser/config/output tests**
+- [x] **Step 1: Write failing parser/config/output tests**
 
 ```python
 class CliParserTest(unittest.TestCase):
@@ -353,13 +353,13 @@ class CliParserTest(unittest.TestCase):
         self.assertEqual(0, result.returncode)
 ```
 
-- [ ] **Step 2: Run the focused tests and confirm the RED state**
+- [x] **Step 2: Run the focused tests and confirm the RED state**
 
 Run: `PYTHONPATH=src .venv/bin/python -m unittest tests.cli.test_cli_parser tests.cli.test_workspace -v`
 
 Expected: FAIL because CLI/workspace modules are absent.
 
-- [ ] **Step 3: Implement closed workspace configuration**
+- [x] **Step 3: Implement closed workspace configuration**
 
 ```python
 @dataclass(frozen=True, slots=True)
@@ -396,7 +396,7 @@ wrong epoch, unknown provider/profile, and type/range mismatches. When
 `--project PATH` is present, load exactly that manifest and do not search the
 current directory.
 
-- [ ] **Step 4: Implement contained stages and output policy**
+- [x] **Step 4: Implement contained stages and output policy**
 
 ```python
 class ArtifactStage:
@@ -415,7 +415,7 @@ class ArtifactStage:
 to stdout, and JSONL as one canonical object per line. It bounds captured text
 and strips no semantic diagnostic content.
 
-- [ ] **Step 5: Implement exact parser and `init` mutation rules**
+- [x] **Step 5: Implement exact parser and `init` mutation rules**
 
 ```python
 class ExitCode(IntEnum):
@@ -437,7 +437,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 supports dry-run, and never overwrites source unless a repeatable
 `--force TARGET` names every existing target that will be replaced.
 
-- [ ] **Step 6: Run parser/workspace tests and commit**
+- [x] **Step 6: Run parser/workspace tests and commit**
 
 Run: `PYTHONPATH=src .venv/bin/python -m unittest tests.cli.test_cli_parser tests.cli.test_workspace -v`
 
