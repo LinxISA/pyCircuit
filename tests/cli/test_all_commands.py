@@ -22,6 +22,7 @@ def cli_test_ledger() -> dict[str, CommandCoverage]:
     build = "tests.cli.test_build_command.BuildCommandTest"
     run = "tests.cli.test_run_command.RunCommandTest"
     inspect = "tests.cli.test_inspect_command.InspectCommandTest"
+    exits = "tests.cli.test_exit_codes.ExitCodeTest"
     return {
         "init": CommandCoverage(
             (f"{parser}.test_json_stdout_contains_one_value_and_no_prose",),
@@ -55,7 +56,7 @@ def cli_test_ledger() -> dict[str, CommandCoverage]:
         ),
         "build": CommandCoverage(
             (f"{build}.test_manifest_records_frontend_and_exact_profile",),
-            (f"{build}.test_custom_profile_requires_pipeline_before_output",),
+            (f"{exits}.test_missing_cpp_compiler_is_four",),
             (f"{build}.test_identical_build_reports_cache_hit",),
             (f"{build}.test_identical_build_reports_cache_hit",),
         ),
@@ -79,7 +80,7 @@ def cli_test_ledger() -> dict[str, CommandCoverage]:
         ),
         "doctor": CommandCoverage(
             (f"{discovery}.test_explain_and_doctor_are_read_only",),
-            (f"{parser}.test_unknown_toml_key_is_exit_two",),
+            (f"{exits}.test_internal_tool_failure_is_three",),
             (f"{discovery}.test_explain_and_doctor_are_read_only",),
             (f"{discovery}.test_explain_and_doctor_are_read_only",),
         ),
