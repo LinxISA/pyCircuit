@@ -73,7 +73,7 @@
 - Consumes: Python 3.11 typing and dataclasses only.
 - Produces: `Static[T]`, `Flow[T, P]`, `Endpoint[I, R]`, `ResourceRef[T]`, `SymbolicValue`, `Definition`, and the exact public exports.
 
-- [ ] **Step 1: Write the failing public inventory and coercion tests**
+- [x] **Step 1: Write the failing public inventory and coercion tests**
 
 ```python
 PUBLIC = {
@@ -95,13 +95,13 @@ class PublicApiTest(unittest.TestCase):
                 operation(value)
 ```
 
-- [ ] **Step 2: Run the focused test and confirm the RED state**
+- [x] **Step 2: Run the focused test and confirm the RED state**
 
 Run: `PYTHONPATH=src .venv/bin/python -m unittest tests.python_frontend.test_public_api -v`
 
 Expected: FAIL because `agentic_circuit` does not exist.
 
-- [ ] **Step 3: Implement closed annotation and symbolic types**
+- [x] **Step 3: Implement closed annotation and symbolic types**
 
 ```python
 class Static(Generic[T]): pass
@@ -123,7 +123,7 @@ class SymbolicValue:
     def __iter__(self) -> Never: return self._reject("iteration")
 ```
 
-- [ ] **Step 4: Implement immutable decorator metadata**
+- [x] **Step 4: Implement immutable decorator metadata**
 
 ```python
 DefinitionKind = Literal[
@@ -147,13 +147,13 @@ def _decorate(kind: DefinitionKind, function: F | None = None, **options: object
 Every public decorator delegates to `_decorate`; `Definition` never executes
 the body as a graph-builder DSL. Export only the documented names.
 
-- [ ] **Step 5: Run focused tests and repository metadata checks**
+- [x] **Step 5: Run focused tests and repository metadata checks**
 
 Run: `PYTHONPATH=src .venv/bin/python -m unittest tests.python_frontend.test_public_api -v && .venv/bin/python scripts/check-contracts.py`
 
 Expected: PASS; `requires-python` remains `>=3.11` and dependencies remain `[]`.
 
-- [ ] **Step 6: Commit the public contract**
+- [x] **Step 6: Commit the public contract**
 
 ```bash
 git add pyproject.toml src/agentic_circuit tests/python_frontend
@@ -176,7 +176,7 @@ git commit -m "feat(python): add exact frontend public types"
 - Consumes: `Definition` from Task 1.
 - Produces: `JsonValue`, `SourceSpan`, `RelatedLocation`, `FixIt`, `Diagnostic`, `DiagnosticBag`, `SourceUnit`, `DefinitionSite`, and `load_source_unit`.
 
-- [ ] **Step 1: Write failing path, span, and ordering tests**
+- [x] **Step 1: Write failing path, span, and ordering tests**
 
 ```python
 class SourceCaptureTest(unittest.TestCase):
@@ -193,13 +193,13 @@ class SourceCaptureTest(unittest.TestCase):
                          [item.code for item in bag.freeze()])
 ```
 
-- [ ] **Step 2: Run the focused test and confirm the RED state**
+- [x] **Step 2: Run the focused test and confirm the RED state**
 
 Run: `PYTHONPATH=src .venv/bin/python -m unittest tests.python_frontend.test_source_capture -v`
 
 Expected: FAIL because source and diagnostic records are absent.
 
-- [ ] **Step 3: Implement immutable diagnostics matching the public schema**
+- [x] **Step 3: Implement immutable diagnostics matching the public schema**
 
 ```python
 JsonScalar: TypeAlias = None | bool | int | float | str
@@ -255,7 +255,7 @@ class Diagnostic:
 projects an internal span to its starting `file`, `line`, and `column`, and
 emits every required closed schema field even when its value is null or empty.
 
-- [ ] **Step 4: Implement normalized source loading and AST indexing**
+- [x] **Step 4: Implement normalized source loading and AST indexing**
 
 ```python
 @dataclass(frozen=True, slots=True)
@@ -280,13 +280,13 @@ def load_source_unit(entry: Path, workspace: Path) -> SourceUnit:
 Reject non-UTF-8 files, workspace escape, duplicate qualified definitions, and
 unmatchable definition spans.
 
-- [ ] **Step 5: Run focused and schema tests**
+- [x] **Step 5: Run focused and schema tests**
 
 Run: `PYTHONPATH=src .venv/bin/python -m unittest tests.python_frontend.test_source_capture -v && .venv/bin/python -m unittest tests.contracts.test_contracts.RepositoryContractsTest.test_all_json_schemas_compile_as_draft_2020_12 -v`
 
 Expected: PASS.
 
-- [ ] **Step 6: Commit source and diagnostics**
+- [x] **Step 6: Commit source and diagnostics**
 
 ```bash
 git add src/agentic_circuit tests/python_frontend
@@ -308,7 +308,7 @@ git commit -m "feat(frontend): index source and order diagnostics"
 - Consumes: source/diagnostic records and static/symbolic types.
 - Produces: `ValidationContext`, `validate_definition`, `StaticEnvironment`, `StaticValue`, and `evaluate_static`.
 
-- [ ] **Step 1: Write failing supported and forbidden tests**
+- [x] **Step 1: Write failing supported and forbidden tests**
 
 ```python
 class StaticEvaluationTest(unittest.TestCase):
@@ -322,13 +322,13 @@ class StaticEvaluationTest(unittest.TestCase):
         self.assertEqual((8, 7), (item.source.start_line, item.source.start_column))
 ```
 
-- [ ] **Step 2: Run the focused test and confirm the RED state**
+- [x] **Step 2: Run the focused test and confirm the RED state**
 
 Run: `PYTHONPATH=src .venv/bin/python -m unittest tests.python_frontend.test_static_eval -v`
 
 Expected: FAIL because validation and evaluation are absent.
 
-- [ ] **Step 3: Implement context-sensitive validation**
+- [x] **Step 3: Implement context-sensitive validation**
 
 ```python
 @dataclass(frozen=True, slots=True)
@@ -350,7 +350,7 @@ Use explicit handlers for every admitted node. The fallback emits
 global/nonlocal state, dynamic imports, reflection, arbitrary mutation,
 unbounded loops, and unapproved calls.
 
-- [ ] **Step 4: Implement the closed evaluator**
+- [x] **Step 4: Implement the closed evaluator**
 
 ```python
 StaticScalar: TypeAlias = None | bool | int | float | str
@@ -371,13 +371,13 @@ Support only the specified literal/container/name/attribute/arithmetic/
 comparison/subscript and bounded helper/comprehension forms. Check integer
 ranges, finite floats, unique keys, positive loop steps, and maximum expansion.
 
-- [ ] **Step 5: Run focused and hash-seed tests**
+- [x] **Step 5: Run focused and hash-seed tests**
 
 Run: `for seed in 1 7 99; do PYTHONHASHSEED=$seed PYTHONPATH=src .venv/bin/python -m unittest tests.python_frontend.test_static_eval -v || exit 1; done`
 
 Expected: every run passes identically.
 
-- [ ] **Step 6: Commit validation and evaluation**
+- [x] **Step 6: Commit validation and evaluation**
 
 ```bash
 git add src/agentic_circuit tests/python_frontend
@@ -400,7 +400,7 @@ git commit -m "feat(frontend): validate and evaluate static Python"
 - Consumes: `SourceSpan`, `Diagnostic`, and `StaticValue`.
 - Produces: `SourceFile`, `SchemaRef`, `Property`, `Entity`, `AcpyDocument`, `EntityAllocator`, `canonical_json_bytes`, and `sha256_bytes`.
 
-- [ ] **Step 1: Write failing schema and canonical-byte tests**
+- [x] **Step 1: Write failing schema and canonical-byte tests**
 
 ```python
 class AcpyContractTest(unittest.TestCase):
@@ -415,13 +415,13 @@ class AcpyContractTest(unittest.TestCase):
         self.assertEqual((), document.verify())
 ```
 
-- [ ] **Step 2: Run the focused test and confirm the RED state**
+- [x] **Step 2: Run the focused test and confirm the RED state**
 
 Run: `PYTHONPATH=src .venv/bin/python -m unittest tests.python_frontend.test_acpy -v`
 
 Expected: FAIL because ACPy is absent.
 
-- [ ] **Step 3: Implement the exact frozen model**
+- [x] **Step 3: Implement the exact frozen model**
 
 ```python
 EntityKind: TypeAlias = Literal[
@@ -456,7 +456,7 @@ class AcpyDocument:
 `verify()` enforces constants, dense IDs, reference/source closure, unique
 ordered uses, canonical property order, kind-specific properties, and I-JSON.
 
-- [ ] **Step 4: Implement canonical serialization and hashes**
+- [x] **Step 4: Implement canonical serialization and hashes**
 
 ```python
 def canonical_json_bytes(value: JsonValue) -> bytes:
@@ -471,13 +471,13 @@ Use RFC 8785 string escaping, UTF-16 key ordering, finite binary64 number
 spelling, and no insignificant whitespace. Validate the golden against the
 checked-in schema in repository contracts.
 
-- [ ] **Step 5: Run ACPy and repository contracts**
+- [x] **Step 5: Run ACPy and repository contracts**
 
 Run: `PYTHONPATH=src .venv/bin/python -m unittest tests.python_frontend.test_acpy -v && .venv/bin/python -m unittest tests.contracts.test_contracts -v && .venv/bin/python scripts/check-contracts.py`
 
 Expected: PASS.
 
-- [ ] **Step 6: Commit ACPy**
+- [x] **Step 6: Commit ACPy**
 
 ```bash
 git add src/agentic_circuit tests/python_frontend tests/contracts
@@ -502,7 +502,7 @@ git commit -m "feat(acpy): add closed semantic document contract"
 - Consumes: source index, decorators, static evaluator, diagnostics, and ACPy records.
 - Produces: `ComponentSchema`, `SchemaRegistry`, `ComponentCallable`, `CaptureRequest`, `FrontendResult`, and `capture_definitions`.
 
-- [ ] **Step 1: Write failing definition and signature tests**
+- [x] **Step 1: Write failing definition and signature tests**
 
 ```python
 class DefinitionCaptureTest(unittest.TestCase):
@@ -517,13 +517,13 @@ class DefinitionCaptureTest(unittest.TestCase):
             queue(_test_symbolic("input", object()), depth=4, surprise=True)
 ```
 
-- [ ] **Step 2: Run the focused test and confirm the RED state**
+- [x] **Step 2: Run the focused test and confirm the RED state**
 
 Run: `PYTHONPATH=src .venv/bin/python -m unittest tests.python_frontend.test_definitions -v`
 
 Expected: FAIL because schema callables and capture composition are absent.
 
-- [ ] **Step 3: Implement closed schemas and generated callables**
+- [x] **Step 3: Implement closed schemas and generated callables**
 
 ```python
 @dataclass(frozen=True, slots=True)
@@ -548,7 +548,7 @@ class ComponentCallable:
 Load only exact epoch `0.1` entries, verify fingerprints/closed fields, preserve
 declared port/result order, and refuse callables for `declared_unavailable`.
 
-- [ ] **Step 4: Implement deterministic definition capture**
+- [x] **Step 4: Implement deterministic definition capture**
 
 ```python
 @dataclass(frozen=True, slots=True)
@@ -580,13 +580,13 @@ ambiguous systems. Enforce static-only `@system` parameters and the exact
 annotated input/static/result signature rules for modules, external/generated
 modules, records, protocols, interfaces, and processes.
 
-- [ ] **Step 5: Run focused and public API tests**
+- [x] **Step 5: Run focused and public API tests**
 
 Run: `PYTHONPATH=src .venv/bin/python -m unittest tests.python_frontend.test_definitions tests.python_frontend.test_public_api -v`
 
 Expected: PASS.
 
-- [ ] **Step 6: Commit definition and schema capture**
+- [x] **Step 6: Commit definition and schema capture**
 
 ```bash
 git add src/agentic_circuit tests/python_frontend
@@ -609,7 +609,7 @@ git commit -m "feat(frontend): capture definitions and schema calls"
 - Consumes: `CapturedProgram`, component schemas, static values, ACPy allocation, and diagnostics.
 - Produces: `NormalizedProgram`, `ValueVersion`, `ResolvedCall`, `PortBinding`, `ResultBinding`, and `StableNameAllocator`.
 
-- [ ] **Step 1: Write failing SSA, mapping, and naming tests**
+- [x] **Step 1: Write failing SSA, mapping, and naming tests**
 
 ```python
 class NormalizationTest(unittest.TestCase):
@@ -626,13 +626,13 @@ class NormalizationTest(unittest.TestCase):
         self.assertIn("attempted", item.related[0].message)
 ```
 
-- [ ] **Step 2: Run the focused test and confirm the RED state**
+- [x] **Step 2: Run the focused test and confirm the RED state**
 
 Run: `PYTHONPATH=src .venv/bin/python -m unittest tests.python_frontend.test_normalization -v`
 
 Expected: FAIL because normalization and inference are absent.
 
-- [ ] **Step 3: Implement normalized values and calls**
+- [x] **Step 3: Implement normalized values and calls**
 
 ```python
 @dataclass(frozen=True, slots=True)
@@ -660,7 +660,7 @@ dense ACPy IDs are assigned. Materialize `static_if`, `static_for`, and
 `get_static` entities before specialization, retain selected-branch or
 unrolled-iteration evidence, then exclude rejected static paths from ACIR.
 
-- [ ] **Step 4: Implement exact inference and naming precedence**
+- [x] **Step 4: Implement exact inference and naming precedence**
 
 ```python
 class StableNameAllocator:
@@ -682,13 +682,13 @@ def resolve_call(call: NormalizedCall, schema: ComponentSchema,
 Resolve by exact declared order/names, cardinality, payload/interface identity,
 protocol identity, and complementary role. Never choose by unordered scoring.
 
-- [ ] **Step 5: Run normalization and hash-seed tests**
+- [x] **Step 5: Run normalization and hash-seed tests**
 
 Run: `for seed in 3 11 41; do PYTHONHASHSEED=$seed PYTHONPATH=src .venv/bin/python -m unittest tests.python_frontend.test_normalization tests.python_frontend.test_acpy -v || exit 1; done`
 
 Expected: identical names, mappings, and entity order.
 
-- [ ] **Step 6: Commit normalization and inference**
+- [x] **Step 6: Commit normalization and inference**
 
 ```bash
 git add src/agentic_circuit tests/python_frontend
@@ -711,7 +711,7 @@ git commit -m "feat(frontend): normalize SSA and resolve component calls"
 - Consumes: normalized program, static evaluation, naming, and ACPy allocation.
 - Produces: `CollectionPlan`, `OutlinedScope`, `CaptureBinding`, `EscapeBinding`, `expand_collections`, and `outline_scopes`.
 
-- [ ] **Step 1: Write failing collection and scope tests**
+- [x] **Step 1: Write failing collection and scope tests**
 
 ```python
 class ScopeCollectionTest(unittest.TestCase):
@@ -727,13 +727,13 @@ class ScopeCollectionTest(unittest.TestCase):
         self.assertEqual(["stored"], property_value(scope, "escapes"))
 ```
 
-- [ ] **Step 2: Run the focused test and confirm the RED state**
+- [x] **Step 2: Run the focused test and confirm the RED state**
 
 Run: `PYTHONPATH=src .venv/bin/python -m unittest tests.python_frontend.test_scopes_collections -v`
 
 Expected: FAIL because collection and scope planning are absent.
 
-- [ ] **Step 3: Implement canonical collection expansion**
+- [x] **Step 3: Implement canonical collection expansion**
 
 ```python
 @dataclass(frozen=True, slots=True)
@@ -756,7 +756,7 @@ def classify_collection(elements: Sequence[ResolvedCall]) -> CollectionPlan:
 Expand only statically bounded loops/comprehensions, preserve index order,
 reject ragged arrays, and record every `view` projection exactly.
 
-- [ ] **Step 4: Implement minimal capture and escape signatures**
+- [x] **Step 4: Implement minimal capture and escape signatures**
 
 ```python
 @dataclass(frozen=True, slots=True)
@@ -779,13 +779,13 @@ def outline_scopes(definition: NormalizedDefinition) -> tuple[OutlinedScope, ...
 Static captures become specialization inputs; symbolic values become exact
 ports/results. Reject ownership escape, hidden fan-out, and invalid roles.
 
-- [ ] **Step 5: Run scope, collection, normalization, and ACPy tests**
+- [x] **Step 5: Run scope, collection, normalization, and ACPy tests**
 
 Run: `PYTHONPATH=src .venv/bin/python -m unittest tests.python_frontend.test_scopes_collections tests.python_frontend.test_normalization tests.python_frontend.test_acpy -v`
 
 Expected: PASS.
 
-- [ ] **Step 6: Commit scopes and collections**
+- [x] **Step 6: Commit scopes and collections**
 
 ```bash
 git add src/agentic_circuit tests/python_frontend
@@ -809,7 +809,7 @@ git commit -m "feat(frontend): outline scopes and canonicalize collections"
 - Consumes: schema registry, normalized values, static evaluator, and diagnostics.
 - Produces: `ProtocolContract`, `QueueSpec`, `AddressSpaceSpec`, `AddressMapEntry`, and public queue/address helpers.
 
-- [ ] **Step 1: Write failing protocol/resource tests**
+- [x] **Step 1: Write failing protocol/resource tests**
 
 ```python
 class ResourceFrontendTest(unittest.TestCase):
@@ -826,13 +826,13 @@ class ResourceFrontendTest(unittest.TestCase):
         })
 ```
 
-- [ ] **Step 2: Run the focused test and confirm the RED state**
+- [x] **Step 2: Run the focused test and confirm the RED state**
 
 Run: `PYTHONPATH=src .venv/bin/python -m unittest tests.python_frontend.test_resources -v`
 
 Expected: FAIL because resource semantics are absent.
 
-- [ ] **Step 3: Implement protocol and queue checks**
+- [x] **Step 3: Implement protocol and queue checks**
 
 ```python
 @dataclass(frozen=True, slots=True)
@@ -855,7 +855,7 @@ class QueueSpec:
 Verify complementary roles, exact payload/protocol identities, cardinality,
 time-domain compatibility, and positive static queue depth.
 
-- [ ] **Step 4: Implement closed address maps**
+- [x] **Step 4: Implement closed address maps**
 
 ```python
 @dataclass(frozen=True, slots=True)
@@ -877,13 +877,13 @@ def verify_address_map(entries: Sequence[AddressMapEntry]) -> tuple[AddressMapEn
 Require finite non-negative static ranges, declared spaces, exact resource
 kinds, and deterministic selector priority.
 
-- [ ] **Step 5: Run resource and inference tests**
+- [x] **Step 5: Run resource and inference tests**
 
 Run: `PYTHONPATH=src .venv/bin/python -m unittest tests.python_frontend.test_resources tests.python_frontend.test_normalization -v`
 
 Expected: PASS.
 
-- [ ] **Step 6: Commit resource semantics**
+- [x] **Step 6: Commit resource semantics**
 
 ```bash
 git add src/agentic_circuit tests/python_frontend
@@ -906,7 +906,7 @@ git commit -m "feat(frontend): add protocol resource and address semantics"
 - Consumes: captured process definitions, normalized values, static evaluation, schema effects, and diagnostics.
 - Produces: `ProcessProgram`, `ProcessBlock`, `ProcessAction`, `ProcessEdge`, `ProcessEffect`, and `construct_process`.
 
-- [ ] **Step 1: Write failing CFG, suspension, and rejection tests**
+- [x] **Step 1: Write failing CFG, suspension, and rejection tests**
 
 ```python
 class ProcessFrontendTest(unittest.TestCase):
@@ -924,13 +924,13 @@ class ProcessFrontendTest(unittest.TestCase):
         })
 ```
 
-- [ ] **Step 2: Run the focused test and confirm the RED state**
+- [x] **Step 2: Run the focused test and confirm the RED state**
 
 Run: `PYTHONPATH=src .venv/bin/python -m unittest tests.python_frontend.test_process -v`
 
 Expected: FAIL because process construction is absent.
 
-- [ ] **Step 3: Implement immutable process CFG records**
+- [x] **Step 3: Implement immutable process CFG records**
 
 ```python
 @dataclass(frozen=True, slots=True)
@@ -953,7 +953,7 @@ Normalize nested runtime `if`, bounded `for`, and progress-proven `while` into
 source-ordered blocks; make every suspension/resume edge, capture, and value
 live across suspension explicit.
 
-- [ ] **Step 4: Implement legality and effect verification**
+- [x] **Step 4: Implement legality and effect verification**
 
 ```python
 def construct_process(definition: NormalizedDefinition,
@@ -970,13 +970,13 @@ def construct_process(definition: NormalizedDefinition,
 Reject Python generators/coroutines, polling, unsupported exception/finally
 suspension, cursor fork/merge, illegal effects, and unbounded runtime loops.
 
-- [ ] **Step 5: Run process and complete frontend tests**
+- [x] **Step 5: Run process and complete frontend tests**
 
 Run: `PYTHONPATH=src .venv/bin/python -m unittest tests.python_frontend.test_process -v && PYTHONPATH=src .venv/bin/python -m unittest discover -s tests/python_frontend -v`
 
 Expected: PASS.
 
-- [ ] **Step 6: Commit process construction**
+- [x] **Step 6: Commit process construction**
 
 ```bash
 git add src/agentic_circuit tests/python_frontend
@@ -1003,7 +1003,7 @@ git commit -m "feat(frontend): construct supported process CFGs"
 - Consumes: verified ACPy, normalized program, outlined scopes, resources, and process CFGs.
 - Produces: `AcirArtifact`, `lower_to_acir`, and `elaborate_frontend`.
 
-- [ ] **Step 1: Write failing golden and cross-root tests**
+- [x] **Step 1: Write failing golden and cross-root tests**
 
 ```python
 class AcirLoweringTest(unittest.TestCase):
@@ -1022,13 +1022,13 @@ class AcirLoweringTest(unittest.TestCase):
         self.assertEqual(first.acir, second.acir)
 ```
 
-- [ ] **Step 2: Run the focused tests and confirm the RED state**
+- [x] **Step 2: Run the focused tests and confirm the RED state**
 
 Run: `PYTHONPATH=src .venv/bin/python -m unittest tests.python_frontend.test_lower_acir -v`
 
 Expected: FAIL because ACIR lowering is absent.
 
-- [ ] **Step 3: Implement typed deterministic emission**
+- [x] **Step 3: Implement typed deterministic emission**
 
 ```python
 @dataclass(frozen=True, slots=True)
@@ -1055,7 +1055,7 @@ Emit declarations in identity order and bodies in semantic order. Lower scopes
 to modules/instances, flows to Graph SSA/`ac.bind`, collections to exact ACIR
 forms, resources to exact declarations, and processes to structured ACIR.
 
-- [ ] **Step 4: Compose the frontend result atomically**
+- [x] **Step 4: Compose the frontend result atomically**
 
 ```python
 def elaborate_frontend(request: CaptureRequest,
@@ -1070,7 +1070,7 @@ def elaborate_frontend(request: CaptureRequest,
     return FrontendResult(document, artifact.text, diagnostics.freeze())
 ```
 
-- [ ] **Step 5: Parse and verify every emitted ACIR golden**
+- [x] **Step 5: Parse and verify every emitted ACIR golden**
 
 Configure `test/Python/frontend-lowering.mlir` to generate each artifact, check
 its golden, and pipe it through `acir-opt --normalize-ac-file --verify-ac-file`.
@@ -1079,7 +1079,7 @@ Run: `cmake --build --preset dev-llvm22 --target acir-opt check-acir && PYTHONPA
 
 Expected: all Python goldens and native ACIR verifiers pass.
 
-- [ ] **Step 6: Commit lowering**
+- [x] **Step 6: Commit lowering**
 
 ```bash
 git add src/agentic_circuit tests/python_frontend test/Python test/CMakeLists.txt
@@ -1105,7 +1105,7 @@ git commit -m "feat(frontend): lower verified ACPy to canonical ACIR"
 - Consumes: canonical `acsim.process` regions with `cf.br`, `cf.cond_br`, scalar operations, live operations, calls, suspension, and termination.
 - Produces: `PcBlockPlan`, `BlockArgumentPlan`, `BranchPlan`, `ConditionalBranchPlan`, CFG-preserving `ProcessPlan`, and typed local block dispatch.
 
-- [ ] **Step 1: Add a failing CFG extraction test**
+- [x] **Step 1: Add a failing CFG extraction test**
 
 ```cpp
 TEST(ModelPlanTest, PreservesEveryBlockAndBranchOperandInProcessStates) {
@@ -1120,13 +1120,13 @@ TEST(ModelPlanTest, PreservesEveryBlockAndBranchOperandInProcessStates) {
 }
 ```
 
-- [ ] **Step 2: Run the focused test and confirm the RED state**
+- [x] **Step 2: Run the focused test and confirm the RED state**
 
 Run: `cmake --build --preset dev-llvm22 --target CodeGenTests && build/dev-llvm22/bin/CodeGenTests --gtest_filter='ModelPlanTest.PreservesEveryBlockAndBranchOperandInProcessStates'`
 
 Expected: compilation fails because the block/branch plan types do not exist.
 
-- [ ] **Step 3: Define CFG-preserving plan types**
+- [x] **Step 3: Define CFG-preserving plan types**
 
 ```cpp
 struct BlockArgumentPlan { std::string name; std::string type; };
@@ -1151,7 +1151,7 @@ struct PcBlockPlan {
 Make `PcStatePlan` own `std::vector<PcBlockPlan>`. Validate dense/reachable
 blocks, legal local targets, exact successor arity/types, and value dominance.
 
-- [ ] **Step 4: Extract ACSim branches without flattening**
+- [x] **Step 4: Extract ACSim branches without flattening**
 
 ```cpp
 if (auto branch = dyn_cast<cf::BranchOp>(operation)) {
@@ -1171,7 +1171,7 @@ if (auto branch = dyn_cast<cf::BranchOp>(operation)) {
 Use one value namespace per PC and reject unknown operations, missing
 terminators, cross-PC branch targets, or incomplete helper realization.
 
-- [ ] **Step 5: Emit typed local block dispatch**
+- [x] **Step 5: Emit typed local block dispatch**
 
 Generate a closed block enum per multi-block PC, typed `std::optional<T>` only
 for cross-block values, and a local loop/switch. Branches assign successor
@@ -1190,7 +1190,7 @@ for (;;) {
 }
 ```
 
-- [ ] **Step 6: Add compile/run and forbidden-dependency tests**
+- [x] **Step 6: Add compile/run and forbidden-dependency tests**
 
 Run: `cmake --build --preset dev-llvm22 --target CodeGenTests acir-cxxgen && build/dev-llvm22/bin/CodeGenTests --gtest_filter='ModelPlanTest.*Process*:GeneratorTest.*Process*:GeneratedModelCompileTest.*Process*' && lit -v build/dev-llvm22/test/CodeGen`
 
@@ -1198,13 +1198,13 @@ Expected: branched processes extract, compile, run both paths, and contain no
 opaque process blob, operation-name interpreter, Python, coroutine, or
 `std::function`.
 
-- [ ] **Step 7: Run all affected native suites**
+- [x] **Step 7: Run all affected native suites**
 
 Run: `ctest --test-dir build/dev-llvm22 -R '^(AnalysisTests|ConversionTests|CodeGenTests)$' --output-on-failure && cmake --build --preset dev-llvm22 --target check-acir`
 
 Expected: PASS.
 
-- [ ] **Step 8: Commit process CFG closure**
+- [x] **Step 8: Commit process CFG closure**
 
 ```bash
 git add include/acir/CodeGen lib/CodeGen lib/Conversion unittests/CodeGen test/CodeGen test/CMakeLists.txt
@@ -1226,7 +1226,7 @@ git commit -m "feat(codegen): preserve frontend process control flow"
 - Consumes: all Phase 4A Python and native process surfaces.
 - Produces: CI gates, complete coverage/determinism evidence, and the audit.
 
-- [ ] **Step 1: Add failing complete-surface tests**
+- [x] **Step 1: Add failing complete-surface tests**
 
 ```python
 class FrontendDeterminismTest(unittest.TestCase):
@@ -1242,13 +1242,13 @@ class FrontendDeterminismTest(unittest.TestCase):
         self.assertTrue(all(row.positive and row.negative for row in ledger.values()))
 ```
 
-- [ ] **Step 2: Run the new test and confirm the RED state**
+- [x] **Step 2: Run the new test and confirm the RED state**
 
 Run: `PYTHONPATH=src .venv/bin/python -m unittest tests.python_frontend.test_determinism -v`
 
 Expected: FAIL because the ledger/corpus runner is absent.
 
-- [ ] **Step 3: Add Python 3.11, 3.12, and 3.13 CI coverage**
+- [x] **Step 3: Add Python 3.11, 3.12, and 3.13 CI coverage**
 
 ```yaml
 - name: Run Python frontend contracts
@@ -1262,20 +1262,20 @@ Expected: FAIL because the ledger/corpus runner is absent.
 
 Retain all existing repository, native build, sanitizer, and lit gates.
 
-- [ ] **Step 4: Run the complete local Phase 4A gate**
+- [x] **Step 4: Run the complete local Phase 4A gate**
 
 Run: `PYTHONPATH=src .venv/bin/python -m unittest discover -s tests/python_frontend -v && .venv/bin/python -m unittest tests.contracts.test_contracts -v && .venv/bin/python scripts/check-contracts.py && cmake --build --preset dev-llvm22 && ctest --test-dir build/dev-llvm22 --output-on-failure && cmake --build --preset dev-llvm22 --target check-acir && git diff --check`
 
 Expected: PASS.
 
-- [ ] **Step 5: Write the Phase 4A audit**
+- [x] **Step 5: Write the Phase 4A audit**
 
 Record environment, commit range, exact counts, public API/entity coverage,
 syntax coverage, golden hashes, cross-root/hash-seed determinism, process CFG
 compile/run evidence, forbidden dependency scan, and residual risk. Mark plan
 checkboxes only from observed commit/test evidence.
 
-- [ ] **Step 6: Commit the audit**
+- [x] **Step 6: Commit the audit**
 
 ```bash
 git add .github/workflows/ci.yml tests docs/implementation/phase-4a-audit.md docs/superpowers/plans/2026-08-11-phase-4a-python-frontend.md

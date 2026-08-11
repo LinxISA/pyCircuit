@@ -124,6 +124,28 @@ class RepositoryContractsTest(unittest.TestCase):
         self.assertIn("UBSAN_OPTIONS", job)
         self.assertIn("halt_on_error=1", job)
 
+    def test_ci_runs_frontend_on_every_supported_python_minor(self):
+        workflow = (ROOT / ".github/workflows/ci.yml").read_text()
+        frontend_job = re.search(
+            r"(?ms)^  python-frontend:\n.*?(?=^  [a-z][a-z0-9-]*:\n|\Z)",
+            workflow,
+        )
+        self.assertIsNotNone(frontend_job, "CI lacks the Python frontend matrix")
+        job = frontend_job.group()
+        self.assertIn('python-version: ["3.11", "3.12", "3.13"]', job)
+        self.assertIn("python-version: ${{ matrix.python-version }}", job)
+        self.assertIn("python -m unittest discover -s tests/python_frontend -v", job)
+        self.assertIn(
+            "PYTHONHASHSEED=1 python -m unittest "
+            "tests.python_frontend.test_determinism -v",
+            job,
+        )
+        self.assertIn(
+            "PYTHONHASHSEED=99 python -m unittest "
+            "tests.python_frontend.test_determinism -v",
+            job,
+        )
+
     def test_ci_caches_verified_llvm_sources_and_exact_build_outputs(self):
         workflow = (ROOT / ".github/workflows/ci.yml").read_text()
         assert_exact_ci_cache_commands(self, workflow)

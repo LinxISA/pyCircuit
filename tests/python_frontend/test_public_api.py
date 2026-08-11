@@ -91,6 +91,20 @@ class PublicApiTest(unittest.TestCase):
             (("alpha", 1), ("zeta", 2)), generated.explicit_options
         )
 
+    def test_ast_only_markers_reject_runtime_execution(self) -> None:
+        api = importlib.import_module("agentic_circuit")
+
+        operations = (
+            lambda: api.scope("nested"),
+            lambda: api.array(1, 2),
+            lambda: api.instances(1, 2),
+            lambda: api.view(object(), "field"),
+        )
+        for operation in operations:
+            with self.subTest(operation=operation):
+                with self.assertRaises(NotImplementedError):
+                    operation()
+
 
 if __name__ == "__main__":
     unittest.main()

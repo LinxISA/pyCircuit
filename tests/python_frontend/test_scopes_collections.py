@@ -125,6 +125,15 @@ class ScopeCollectionTest(unittest.TestCase):
         self.assertEqual("instances", collection.kind)
         self.assertIsNone(collection.element_schema)
 
+    def test_ragged_collection_is_rejected(self) -> None:
+        from agentic_circuit._collections import CollectionError, classify_collection
+
+        compute = schema("test.Compute", (), (), static=("lanes",))
+        element = resolved_call("worker", compute, lanes=2)
+
+        with self.assertRaisesRegex(CollectionError, "ragged collection"):
+            classify_collection(((element,), (element, element)))
+
     def test_scope_signature_is_minimal_and_ordered(self) -> None:
         from agentic_circuit._scopes import outline_scopes
 
