@@ -9,7 +9,7 @@ from pathlib import Path
 
 from ._acpy import AcpyDocument
 from ._definitions import Definition
-from ._diagnostics import Diagnostic, DiagnosticBag
+from ._diagnostics import Diagnostic, DiagnosticBag, SourceSpan
 from ._schemas import SchemaRegistry
 from ._source import DefinitionSite, SourceUnit, load_source_unit
 from ._static_eval import StaticValue, evaluate_static, StaticEnvironment
@@ -227,3 +227,28 @@ def capture_definitions(
         static_arguments=request.static_arguments,
         diagnostics=diagnostics.freeze(),
     )
+
+
+def construct_captured_process(
+    captured: CapturedProgram, definition: str, effects: object
+):
+    """Construct one captured ``@process`` without executing its Python body."""
+
+    from ._process import EffectRegistry, ProcessConstructionError, construct_process
+
+    if not isinstance(effects, EffectRegistry):
+        raise TypeError("effects must be an EffectRegistry")
+    matches = [
+        site
+        for site in captured.source.definitions
+        if site.qualified_name == definition or site.name == definition
+    ]
+    if len(matches) != 1:
+        raise ProcessConstructionError(
+            "ACPY-PROCESS-001",
+            f"captured process {definition!r} is missing or ambiguous",
+            captured.source.definitions[0].span
+            if captured.source.definitions
+            else SourceSpan(captured.source.path, 1, 1, 1, 1),
+        )
+    return construct_process(matches[0], effects)

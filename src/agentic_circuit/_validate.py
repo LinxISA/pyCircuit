@@ -18,6 +18,13 @@ class ValidationContext:
     approved_helpers: frozenset[str]
 
 
+@dataclass(frozen=True, slots=True)
+class ProcessValidationIssue:
+    code: str
+    message: str
+    node: ast.AST
+
+
 def _span(path: str, node: ast.AST) -> SourceSpan:
     line = getattr(node, "lineno", 1)
     column = getattr(node, "col_offset", 0)
@@ -208,3 +215,52 @@ def validate_definition(
         )
         return
     _Validator(site.span.file, context, diagnostics).validate_statements(site.node.body)
+
+
+def validate_process_site(site: DefinitionSite) -> tuple[ProcessValidationIssue, ...]:
+    """Validate syntax that can never be represented by a portable process CFG."""
+
+    node = site.node
+    if isinstance(node, ast.AsyncFunctionDef):
+        return (
+            ProcessValidationIssue(
+                "ACPY-PROCESS-002",
+                "Python coroutines are not a process runtime mechanism",
+                node,
+            ),
+        )
+    if not isinstance(node, ast.FunctionDef):
+        return (
+            ProcessValidationIssue(
+                "ACPY-PROCESS-002", "a process must decorate a function", node
+            ),
+        )
+
+    issues: list[ProcessValidationIssue] = []
+    for candidate in ast.walk(node):
+        if isinstance(candidate, (ast.Yield, ast.YieldFrom, ast.Await)):
+            issues.append(
+                ProcessValidationIssue(
+                    "ACPY-PROCESS-002",
+                    "Python generators and await are not process suspension points",
+                    candidate,
+                )
+            )
+        elif isinstance(candidate, (ast.Try, ast.Raise)):
+            issues.append(
+                ProcessValidationIssue(
+                    "ACPY-PROCESS-004",
+                    "exception-driven process control is not portable",
+                    candidate,
+                )
+            )
+    return tuple(
+        sorted(
+            issues,
+            key=lambda issue: (
+                getattr(issue.node, "lineno", 0),
+                getattr(issue.node, "col_offset", 0),
+                issue.code,
+            ),
+        )
+    )
