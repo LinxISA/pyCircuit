@@ -112,6 +112,8 @@ llvm::Expected<acir::codegen::BuildRequest> makeCompileRequest() {
   request.project = {projectName, projectIdentity};
   request.system = {systemName, systemIdentity};
   request.profile = profile;
+  request.passPipeline = {"acsim-emit-cxx", "acsim-check-cxx-contract",
+                          "compile", "link"};
   request.toolchain = std::move(*toolchain);
   request.includeRoots.assign(includeRoots.begin(), includeRoots.end());
   request.definitions.assign(definitions.begin(), definitions.end());

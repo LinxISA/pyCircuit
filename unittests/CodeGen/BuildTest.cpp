@@ -56,6 +56,23 @@ llvm::Expected<Fingerprint> jsonFingerprint(llvm::json::Value value) {
   return fingerprintCanonicalJson(value);
 }
 
+FrontendProvenance makeFrontendProvenance() {
+  const std::string acpy = "{\"schema\":\"agentic-circuit-acpy\"}\n";
+  const std::string acir = "module attributes {ac.contract_epoch = \"0.1\"}\n";
+  FrontendProvenance frontend;
+  frontend.sourceFiles = {
+      {"architecture.py", computeFingerprint("architecture source\n")}};
+  frontend.acpy = {"input/model.acpy.json", ArtifactKind::Acpy,
+                   computeFingerprint(acpy)};
+  frontend.acpyBytes = acpy;
+  frontend.canonicalAcir = {"input/model.ac.mlir", ArtifactKind::Acir,
+                            computeFingerprint(acir)};
+  frontend.canonicalAcirBytes = acir;
+  frontend.pythonVersion = "CPython 3.12";
+  frontend.helperIdentities = {{"agentic-circuit", computeFingerprint("0.1")}};
+  return frontend;
+}
+
 class PublishFixture {
 public:
   explicit PublishFixture(llvm::StringRef outputRoot) {
@@ -98,10 +115,12 @@ public:
 
     request_.project = {"project", "project.example"};
     request_.system = {"system", "system.example"};
+    request_.frontend = makeFrontendProvenance();
     request_.canonicalACSim = *module_;
     request_.frozenAcirBytes = frozenBytes;
     request_.bindingLockBytes = lockBytes;
     request_.profile = "fast";
+    request_.passPipeline = {"acsim-emit-cxx", "compile", "link"};
     request_.includeRoots = {ACIR_TEST_SOURCE_DIR "/include"};
     request_.linkInputs = {ACIR_TEST_BINARY_DIR "/lib/gfsim/libgfsim.a",
                            ACIR_TEST_BINARY_DIR
@@ -128,7 +147,9 @@ llvm::Expected<BuildRequest> makeBuildRequest() {
   BuildRequest request;
   request.project = {"project", "project.example"};
   request.system = {"system", "system.example"};
+  request.frontend = makeFrontendProvenance();
   request.profile = "fast";
+  request.passPipeline = {"acsim-emit-cxx", "compile", "link"};
   request.toolchain = std::move(*toolchain);
   request.includeRoots = {"vendor/include", "include"};
   request.definitions = {"ZETA=1", "ALPHA=1"};
@@ -246,6 +267,21 @@ TEST(BuildTest, PublishedBuildRequiresFrozenAcirAndBindingLockBytes) {
   EXPECT_TRUE(hasError(preflightBuildRequest(second.request())));
 }
 
+TEST(BuildTest, FrontendProvenanceIsClosedAndContentAddressed) {
+  auto request = makeBuildRequest();
+  ASSERT_TRUE(static_cast<bool>(request));
+  EXPECT_FALSE(hasError(preflightBuildRequest(*request)));
+
+  request->frontend.acpy.kind = ArtifactKind::Report;
+  EXPECT_TRUE(hasError(preflightBuildRequest(*request)));
+
+  request = makeBuildRequest();
+  ASSERT_TRUE(static_cast<bool>(request));
+  request->frontend.sourceFiles.push_back(
+      request->frontend.sourceFiles.front());
+  EXPECT_TRUE(hasError(preflightBuildRequest(*request)));
+}
+
 TEST(BuildTest, RejectsNonCanonicalPathsAndSourceFingerprintMismatch) {
   auto request = makeBuildRequest();
   ASSERT_TRUE(static_cast<bool>(request));
@@ -278,8 +314,12 @@ TEST(BuildTest, ExactSecondBuildIsCacheHitAndUnequalInputMisses) {
   EXPECT_FALSE(first->cacheHit);
   EXPECT_TRUE(second->cacheHit);
   EXPECT_EQ(first->buildFingerprint, second->buildFingerprint);
+  const std::string manifest =
+      readFile(first->buildDirectory + "/build-manifest.json");
+  EXPECT_NE(manifest.find("architecture.py"), std::string::npos);
+  EXPECT_NE(manifest.find("input/model.acpy.json"), std::string::npos);
 
-  fixture.request().instrumentationLayers.push_back("trace");
+  fixture.request().frontend.pythonVersion = "CPython 3.13";
   auto third = buildGeneratedModel(fixture.request());
   ASSERT_TRUE(static_cast<bool>(third));
   EXPECT_FALSE(third->cacheHit);

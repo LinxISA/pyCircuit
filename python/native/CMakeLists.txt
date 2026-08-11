@@ -1,5 +1,12 @@
 Python3_add_library(agentic_circuit_native MODULE NativeModule.cpp)
+get_filename_component(ACIR_NATIVE_LLVM_LIB_DIR "${LLVM_DIR}/../.." ABSOLUTE)
 target_compile_definitions(agentic_circuit_native PRIVATE Py_LIMITED_API=0x030B0000)
+target_compile_definitions(agentic_circuit_native PRIVATE
+  ACIR_NATIVE_BINARY_DIR="${PROJECT_BINARY_DIR}"
+  ACIR_NATIVE_CXX_COMPILER="${CMAKE_CXX_COMPILER}"
+  ACIR_NATIVE_LLVM_LIB_DIR="${ACIR_NATIVE_LLVM_LIB_DIR}"
+  ACIR_NATIVE_SOURCE_DIR="${PROJECT_SOURCE_DIR}"
+)
 target_link_libraries(agentic_circuit_native PRIVATE
   ACIRCompiler
   Python3::Module

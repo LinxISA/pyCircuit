@@ -63,6 +63,33 @@ const TypePlan *findType(const ModelPlan &plan, llvm::StringRef symbol) {
   return found == plan.types.end() ? nullptr : &*found;
 }
 
+llvm::Expected<std::string> wakeKind(const TypePlan &implementation) {
+  llvm::StringRef symbol(implementation.symbol);
+  if (symbol.starts_with("acir_impl_wake_condition"))
+    return std::string("Condition");
+  if (symbol.starts_with("acir_impl_wake_resource"))
+    return std::string("Resource");
+  if (symbol.starts_with("acir_impl_wake_event_queue"))
+    return std::string("EventQueue");
+  if (symbol.starts_with("acir_impl_wake_next_delta"))
+    return std::string("NextDelta");
+  return processError("generated wake implementation has an unknown role");
+}
+
+llvm::Error emitWakeHelper(std::ostringstream &output,
+                           const TypePlan &implementation) {
+  llvm::StringRef name(implementation.cppType);
+  if (!name.consume_front("acir::generated::") || !isIdentifier(name))
+    return processError(
+        "generated wake implementation has an invalid C++ name");
+  auto kind = wakeKind(implementation);
+  if (!kind)
+    return kind.takeError();
+  output << "inline gfsim::ProcessWake " << name.str()
+         << "() { return {gfsim::ProcessWakeKind::" << *kind << ", 0}; }\n";
+  return llvm::Error::success();
+}
+
 llvm::Expected<std::string> cppType(const ModelPlan &plan,
                                     llvm::StringRef type) {
   if (type == "i1")
@@ -705,6 +732,19 @@ generateProcessHeader(const ModelPlan &plan, const ProcessPlan &process) {
     return underlyingType.takeError();
 
   std::set<std::string> headers;
+  std::map<std::string, const TypePlan *> wakeHelpers;
+  auto collectHelper = [&](const ProcessOperationPlan &operation) {
+    std::visit(
+        Overloaded{
+            [&](const InvokePlan &call) {
+              const TypePlan *type = findType(plan, call.callee);
+              if (type && type->kind == TypeKind::Implementation &&
+                  llvm::StringRef(type->symbol).starts_with("acir_impl_wake_"))
+                wakeHelpers.emplace(type->symbol, type);
+            },
+            [&](const auto &) {}},
+        operation);
+  };
   for (const CapturePlan &capture : process.captures) {
     const size_t start = capture.type.find('@');
     const size_t end = capture.type.find('>', start);
@@ -714,7 +754,8 @@ generateProcessHeader(const ModelPlan &plan, const ProcessPlan &process) {
         headers.insert(binding->header);
   }
   for (const PcStatePlan &state : process.states)
-    for (const ProcessOperationPlan &operation : state.operations)
+    for (const ProcessOperationPlan &operation : state.operations) {
+      collectHelper(operation);
       std::visit(
           Overloaded{
               [&](const InlineCallPlan &call) {
@@ -733,6 +774,11 @@ generateProcessHeader(const ModelPlan &plan, const ProcessPlan &process) {
               },
               [&](const auto &) {}},
           operation);
+    }
+  for (const PcStatePlan &state : process.states)
+    for (const PcBlockPlan &block : state.blocks)
+      for (const ProcessOperationPlan &operation : block.operations)
+        collectHelper(operation);
 
   std::ostringstream output;
   output << "#pragma once\n\n#include \"gfsim/process.h\"\n";
@@ -740,6 +786,11 @@ generateProcessHeader(const ModelPlan &plan, const ProcessPlan &process) {
     output << "#include \"" << header << "\"\n";
   output << "\n#include <cmath>\n#include <cstdint>\n#include <string>\n"
             "#include <type_traits>\n\n"
+         << "namespace acir::generated {\n";
+  for (const auto &[symbol, implementation] : wakeHelpers)
+    if (auto error = emitWakeHelper(output, *implementation))
+      return std::move(error);
+  output << "} // namespace acir::generated\n\n"
          << "namespace acsim_generated {\n\nclass " << process.className
          << " final : public gfsim::ProcessRuntime<" << process.className
          << "> {\npublic:\n  enum class Pc : " << *underlyingType << " {\n";

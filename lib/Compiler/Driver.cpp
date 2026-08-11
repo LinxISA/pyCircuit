@@ -165,7 +165,6 @@ std::string printModule(mlir::ModuleOp module) {
   std::string bytes;
   llvm::raw_string_ostream output(bytes);
   module.print(output);
-  output << '\n';
   output.flush();
   return bytes;
 }
@@ -359,6 +358,17 @@ llvm::Error runStage(CompilerStage stage, const CompilerRequest &request,
                           ? "validated"
                       : request.profile == CompilerProfile::Custom ? "custom"
                                                                    : "fast";
+    build.passPipeline = {
+        "acir-verify",
+        request.customPipeline.value_or("acir-normalize"),
+        "acir-freeze",
+        "acsim-lower",
+        "acsim-verify",
+        "acsim-emit-cxx",
+        "acsim-check-cxx-contract",
+        "compile",
+        "link",
+    };
     auto built = codegen::buildGeneratedModel(build);
     if (!built)
       return compilerFailure(stage, built.takeError());

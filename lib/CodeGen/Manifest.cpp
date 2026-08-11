@@ -98,9 +98,12 @@ llvm::json::Object identityJson(const Identity &identity) {
 llvm::json::Object manifestJson(const BuildManifest &manifest,
                                 llvm::StringRef buildFingerprint) {
   llvm::json::Array sources;
-  for (const auto &source : manifest.sourceFiles)
+  for (const FileHash *source :
+       sortedPointers(manifest.sourceFiles, [](const FileHash &value) {
+         return llvm::StringRef(value.path);
+       }))
     sources.push_back(
-        llvm::json::Object{{"path", source.path}, {"sha256", source.sha256}});
+        llvm::json::Object{{"path", source->path}, {"sha256", source->sha256}});
 
   llvm::json::Object compiler{
       {"name", manifest.compiler.name},

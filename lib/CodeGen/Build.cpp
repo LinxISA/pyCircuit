@@ -60,6 +60,28 @@ publicationFingerprint(const BuildRequest &request, const SourceBundle &bundle,
   llvm::json::Array providers;
   for (const std::string &provider : providerIdentities)
     providers.push_back(provider);
+  std::vector<FileHash> sourceFiles = request.frontend.sourceFiles;
+  std::sort(sourceFiles.begin(), sourceFiles.end(),
+            [](const FileHash &lhs, const FileHash &rhs) {
+              return lhs.path < rhs.path;
+            });
+  llvm::json::Array frontendSources;
+  for (const FileHash &source : sourceFiles)
+    frontendSources.push_back(
+        llvm::json::Object{{"path", source.path}, {"sha256", source.sha256}});
+  llvm::json::Array helpers;
+  for (const NamedFingerprint &helper : request.frontend.helperIdentities)
+    helpers.push_back(llvm::json::Object{{"name", helper.name},
+                                         {"fingerprint", helper.fingerprint}});
+  llvm::json::Object frontend{
+      {"source_files", std::move(frontendSources)},
+      {"acpy", llvm::json::Object{{"path", request.frontend.acpy.path},
+                                  {"sha256", request.frontend.acpy.sha256}}},
+      {"canonical_acir",
+       llvm::json::Object{{"path", request.frontend.canonicalAcir.path},
+                          {"sha256", request.frontend.canonicalAcir.sha256}}},
+      {"python_version", request.frontend.pythonVersion},
+      {"helpers", std::move(helpers)}};
   llvm::json::Object preimage{
       {"domain", "agentic-circuit-generated-build-0.1"},
       {"source_bundle", bundle.sourceFingerprint},
@@ -68,7 +90,15 @@ publicationFingerprint(const BuildRequest &request, const SourceBundle &bundle,
                                      {"identity", request.project.identity}}},
       {"system", llvm::json::Object{{"name", request.system.name},
                                     {"identity", request.system.identity}}},
+      {"frontend", std::move(frontend)},
       {"profile", request.profile},
+      {"pass_pipeline",
+       [&] {
+         llvm::json::Array pipeline;
+         for (const std::string &pass : request.passPipeline)
+           pipeline.push_back(pass);
+         return pipeline;
+       }()},
       {"instrumentation_layers", std::move(instrumentation)},
       {"providers", std::move(providers)}};
   return fingerprintCanonicalJson(llvm::json::Value(std::move(preimage)));
@@ -184,8 +214,7 @@ llvm::Expected<BuildManifest> makeManifest(const BuildRequest &request,
   manifest.compiler = {request.toolchain.compilerName,
                        request.toolchain.compilerBuildId,
                        request.toolchain.targetTriple};
-  manifest.passPipeline = {"acsim-emit-cxx", "acsim-check-cxx-contract",
-                           "compile", "link"};
+  manifest.passPipeline = request.passPipeline;
   std::map<std::string, std::string> providerNamespaces;
   std::map<std::string, std::string> typeIdentities;
   for (const TypePlan &type : model.types)
@@ -248,6 +277,7 @@ llvm::Expected<BuildManifest> makeManifest(const BuildRequest &request,
   manifest.buildProfile = request.profile;
   manifest.instrumentationLayers = request.instrumentationLayers;
   manifest.buildFingerprint = bundle.buildFingerprint;
+  manifest.sourceFiles = request.frontend.sourceFiles;
   for (const GeneratedFile &file : bundle.files)
     manifest.sourceFiles.push_back({file.relativePath, file.fingerprint});
   return manifest;
@@ -343,6 +373,16 @@ buildGeneratedModelForTesting(const BuildRequest &request,
     mlir::ModuleOp canonical = request.canonicalACSim;
     canonical.print(output);
     output.flush();
+  }
+  if (!request.frontend.sourceFiles.empty()) {
+    if (auto error = addArtifact(stage, request.frontend.acpy.path,
+                                 request.frontend.acpyBytes, ArtifactKind::Acpy,
+                                 artifacts))
+      return std::move(error);
+    if (auto error = addArtifact(stage, request.frontend.canonicalAcir.path,
+                                 request.frontend.canonicalAcirBytes,
+                                 ArtifactKind::Acir, artifacts))
+      return std::move(error);
   }
   if (auto error =
           addArtifact(stage, "input/frozen.acir", request.frozenAcirBytes,

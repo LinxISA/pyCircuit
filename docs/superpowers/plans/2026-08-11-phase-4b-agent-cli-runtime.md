@@ -759,7 +759,7 @@ git commit -m "feat(cli): add deterministic compile stages"
 - Consumes: compile command inputs, native façade, Phase 3 build API, and build-manifest schema.
 - Produces: `FrontendProvenance`, extended `BuildRequest::frontend`, `BuildOptions`, and `build_command`.
 
-- [ ] **Step 1: Write failing provenance/profile/cache tests**
+- [x] **Step 1: Write failing provenance/profile/cache tests**
 
 ```python
 class BuildCommandTest(unittest.TestCase):
@@ -782,13 +782,13 @@ class BuildCommandTest(unittest.TestCase):
         self.assertNotEqual(first.fingerprint, third.fingerprint)
 ```
 
-- [ ] **Step 2: Run focused Python/native tests and confirm the RED state**
+- [x] **Step 2: Run focused Python/native tests and confirm the RED state**
 
 Run: `PYTHONPATH=src:build/dev-llvm22/python .venv/bin/python -m unittest tests.cli.test_build_command -v && cmake --build --preset dev-llvm22 --target CodeGenTests`
 
 Expected: FAIL because frontend provenance and `build` are absent.
 
-- [ ] **Step 3: Extend the build request with exact frontend provenance**
+- [x] **Step 3: Extend the build request with exact frontend provenance**
 
 ```cpp
 struct FrontendProvenance {
@@ -810,7 +810,7 @@ non-empty Python identity, sorted helpers, and consistency between canonical
 ACIR bytes and its recorded hash. Merge frontend sources/artifacts into the
 closed manifest and publication stage without changing schema fields.
 
-- [ ] **Step 4: Implement profile normalization and build composition**
+- [x] **Step 4: Implement profile normalization and build composition**
 
 ```python
 @dataclass(frozen=True, slots=True)
@@ -847,13 +847,13 @@ Map source/static errors to `2`, internal compiler failures to `3`, and
 generation/compile/link failures to `4`. Do not publish partial CLI artifacts
 outside Phase 3's immutable build stage.
 
-- [ ] **Step 5: Run build, manifest, and failure-atomicity suites**
+- [x] **Step 5: Run build, manifest, and failure-atomicity suites**
 
 Run: `PYTHONPATH=src:build/dev-llvm22/python .venv/bin/python -m unittest tests.cli.test_build_command -v && cmake --build --preset dev-llvm22 --target CodeGenTests && build/dev-llvm22/bin/CodeGenTests --gtest_filter='CodeGenManifestTest.*:BuildTest.*'`
 
 Expected: PASS.
 
-- [ ] **Step 6: Commit build orchestration**
+- [x] **Step 6: Commit build orchestration**
 
 ```bash
 git add include/acir/CodeGen lib/CodeGen unittests/CodeGen src/agentic_circuit tests/cli

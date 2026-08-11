@@ -10,6 +10,7 @@ from typing import Sequence
 from ._commands import init as init_command
 from ._commands import doctor as doctor_command
 from ._commands import check as check_command
+from ._commands import build as build_command
 from ._commands import compile as compile_command
 from ._commands import elaborate as elaborate_command
 from ._commands import explain as explain_command
@@ -173,6 +174,16 @@ def build_parser() -> argparse.ArgumentParser:
 
     build = commands.add_parser("build", allow_abbrev=False)
     build.add_argument("architecture", nargs="?")
+    build.add_argument(
+        "-o", "--output", dest="output_dir", type=Path, action=_OnceValue
+    )
+    build.add_argument(
+        "--profile",
+        choices=("fast", "validated", "custom"),
+        action=_OnceValue,
+    )
+    build.add_argument("--verify-after-each", action=_OnceTrue)
+    build.add_argument("--pass-pipeline", action=_OnceValue)
     _add_workspace_options(build, output=True, jobs=True)
     _add_output_options(build)
 
@@ -260,6 +271,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return elaborate_command.run(arguments, workspace, sink)
         if arguments.command == "compile":
             return compile_command.run(arguments, workspace, sink)
+        if arguments.command == "build":
+            return build_command.run(arguments, workspace, sink)
         sink.result(
             _placeholder_result(arguments, workspace.project_name),
             human=f"{arguments.command} accepted for {workspace.project_name}",

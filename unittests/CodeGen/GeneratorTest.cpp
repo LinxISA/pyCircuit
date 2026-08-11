@@ -306,7 +306,16 @@ TEST(GeneratorTest, EmitsTypedLocalDispatchForMultiBlockProcess) {
                                return file.relativePath.starts_with(
                                    "src/generated/processes/");
                              });
+  auto header = std::find_if(bundle->files.begin(), bundle->files.end(),
+                             [](const GeneratedFile &file) {
+                               return file.relativePath.starts_with(
+                                   "include/generated/processes/");
+                             });
+  ASSERT_NE(header, bundle->files.end());
   ASSERT_NE(source, bundle->files.end());
+  EXPECT_NE(
+      header->content.find("inline gfsim::ProcessWake impl_wake_next_delta"),
+      std::string::npos);
   EXPECT_NE(source->content.find("enum class Block_entry"), std::string::npos);
   EXPECT_NE(source->content.find("std::optional<"), std::string::npos);
   EXPECT_NE(source->content.find("b1_arg0"), std::string::npos);

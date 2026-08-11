@@ -52,6 +52,18 @@ struct LinkInputIdentity {
   Fingerprint fingerprint;
 };
 
+struct FrontendProvenance {
+  // Empty only for the internal canonical-ACSim driver. Frontend-originated
+  // builds populate this record completely and are validated atomically.
+  std::vector<FileHash> sourceFiles;
+  Artifact acpy;
+  std::string acpyBytes;
+  Artifact canonicalAcir;
+  std::string canonicalAcirBytes;
+  std::string pythonVersion;
+  std::vector<NamedFingerprint> helperIdentities;
+};
+
 struct CompilePlan {
   std::string schema = "acsim-compile-plan-0.1";
   std::vector<std::string> sourceUnits;
@@ -76,11 +88,13 @@ struct CompilePlan {
 struct BuildRequest {
   Identity project;
   Identity system;
+  FrontendProvenance frontend;
   mlir::ModuleOp canonicalACSim;
   std::string frozenAcirBytes;
   std::string canonicalACSimBytes;
   std::string bindingLockBytes;
   std::string profile;
+  std::vector<std::string> passPipeline;
   std::vector<std::string> instrumentationLayers;
   std::vector<std::string> providerInputs;
   ToolchainIdentity toolchain;

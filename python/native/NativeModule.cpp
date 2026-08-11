@@ -15,6 +15,8 @@
 namespace {
 
 using acir::codegen::ArtifactKind;
+using acir::codegen::FileHash;
+using acir::codegen::NamedFingerprint;
 using acir::compiler::CompilerArtifact;
 using acir::compiler::CompilerDiagnostic;
 using acir::compiler::CompilerProfile;
@@ -197,10 +199,153 @@ bool parseStringTuple(PyObject *value, llvm::StringRef label,
   return true;
 }
 
+bool parseStringList(PyObject *value, llvm::StringRef label,
+                     std::vector<std::string> &result) {
+  if (!PyList_Check(value)) {
+    PyErr_Format(PyExc_TypeError, "%s must be a list", label.str().c_str());
+    return false;
+  }
+  const Py_ssize_t size = PyList_Size(value);
+  if (size < 0)
+    return false;
+  result.reserve(static_cast<size_t>(size));
+  for (Py_ssize_t index = 0; index < size; ++index) {
+    auto item = pythonString(PyList_GetItem(value, index), label);
+    if (!item)
+      return false;
+    result.push_back(std::move(*item));
+  }
+  return true;
+}
+
+bool parseNamedFingerprints(PyObject *value, llvm::StringRef label,
+                            std::vector<NamedFingerprint> &result) {
+  if (!PyList_Check(value)) {
+    PyErr_Format(PyExc_TypeError, "%s must be a list", label.str().c_str());
+    return false;
+  }
+  const Py_ssize_t size = PyList_Size(value);
+  if (size < 0)
+    return false;
+  for (Py_ssize_t index = 0; index < size; ++index) {
+    PyObject *entry = PyList_GetItem(value, index);
+    static constexpr std::array<llvm::StringRef, 2> keys{"name", "fingerprint"};
+    if (!hasOnlyKeys(entry, keys, label))
+      return false;
+    auto name = pythonString(PyDict_GetItemString(entry, "name"), label);
+    auto fingerprint =
+        pythonString(PyDict_GetItemString(entry, "fingerprint"), label);
+    if (!name || !fingerprint)
+      return false;
+    result.push_back({std::move(*name), std::move(*fingerprint)});
+  }
+  return true;
+}
+
+bool parseFileHashes(PyObject *value, std::vector<FileHash> &result) {
+  if (!PyList_Check(value)) {
+    PyErr_SetString(PyExc_TypeError, "source_files must be a list");
+    return false;
+  }
+  const Py_ssize_t size = PyList_Size(value);
+  if (size < 0)
+    return false;
+  for (Py_ssize_t index = 0; index < size; ++index) {
+    PyObject *entry = PyList_GetItem(value, index);
+    static constexpr std::array<llvm::StringRef, 2> keys{"path", "sha256"};
+    if (!hasOnlyKeys(entry, keys, "source file"))
+      return false;
+    auto path =
+        pythonString(PyDict_GetItemString(entry, "path"), "source path");
+    auto fingerprint =
+        pythonString(PyDict_GetItemString(entry, "sha256"), "source hash");
+    if (!path || !fingerprint)
+      return false;
+    result.push_back({std::move(*path), std::move(*fingerprint)});
+  }
+  return true;
+}
+
+bool parseBuildOptions(PyObject *value, CompilerRequest &request) {
+  static constexpr std::array<llvm::StringRef, 11> keys{
+      "project_name",           "project_identity", "system_name",
+      "system_identity",        "source_files",     "python_version",
+      "helper_identities",      "compiler",         "standard_library",
+      "instrumentation_layers", "output_root"};
+  if (!hasOnlyKeys(value, keys, "native build options"))
+    return false;
+  for (llvm::StringRef key : keys)
+    if (!PyDict_GetItemString(value, key.data())) {
+      PyErr_Format(PyExc_ValueError, "native build options are missing '%s'",
+                   key.str().c_str());
+      return false;
+    }
+  auto projectName =
+      pythonString(PyDict_GetItemString(value, "project_name"), "project_name");
+  auto projectIdentity = pythonString(
+      PyDict_GetItemString(value, "project_identity"), "project_identity");
+  auto systemName =
+      pythonString(PyDict_GetItemString(value, "system_name"), "system_name");
+  auto systemIdentity = pythonString(
+      PyDict_GetItemString(value, "system_identity"), "system_identity");
+  auto pythonVersion = pythonString(
+      PyDict_GetItemString(value, "python_version"), "python_version");
+  auto compiler =
+      pythonString(PyDict_GetItemString(value, "compiler"), "compiler");
+  auto standardLibrary = pythonString(
+      PyDict_GetItemString(value, "standard_library"), "standard_library");
+  auto outputRoot =
+      pythonString(PyDict_GetItemString(value, "output_root"), "output_root");
+  if (!projectName || !projectIdentity || !systemName || !systemIdentity ||
+      !pythonVersion || !compiler || !standardLibrary || !outputRoot)
+    return false;
+
+  auto toolchain =
+      acir::codegen::identifyToolchain(*compiler, *standardLibrary, "default",
+#ifdef __APPLE__
+                                       "mach-o",
+#else
+                                       "elf",
+#endif
+                                       {"-std=c++20"});
+  if (!toolchain) {
+    std::string message = llvm::toString(toolchain.takeError());
+    PyErr_SetString(PyExc_ValueError, message.c_str());
+    return false;
+  }
+
+  auto &build = request.build;
+  build.project = {std::move(*projectName), std::move(*projectIdentity)};
+  build.system = {std::move(*systemName), std::move(*systemIdentity)};
+  build.frontend.pythonVersion = std::move(*pythonVersion);
+  if (!parseFileHashes(PyDict_GetItemString(value, "source_files"),
+                       build.frontend.sourceFiles) ||
+      !parseNamedFingerprints(PyDict_GetItemString(value, "helper_identities"),
+                              "helper_identities",
+                              build.frontend.helperIdentities) ||
+      !parseStringList(PyDict_GetItemString(value, "instrumentation_layers"),
+                       "instrumentation_layers", build.instrumentationLayers))
+    return false;
+  build.frontend.acpy = {
+      "input/model.acpy.json", ArtifactKind::Acpy,
+      acir::codegen::computeFingerprint(build.frontend.acpyBytes)};
+  build.frontend.canonicalAcir = {
+      "input/model.ac.mlir", ArtifactKind::Acir,
+      acir::codegen::computeFingerprint(build.frontend.canonicalAcirBytes)};
+  build.toolchain = std::move(*toolchain);
+  build.includeRoots = {ACIR_NATIVE_SOURCE_DIR "/include"};
+  build.linkInputs = {ACIR_NATIVE_BINARY_DIR "/lib/gfsim/libgfsim.a",
+                      ACIR_NATIVE_BINARY_DIR "/lib/Bindings/libACIRBindings.a"};
+  build.linkerFlags = {"-L" ACIR_NATIVE_LLVM_LIB_DIR, "-lLLVM"};
+  build.outputRoot = std::move(*outputRoot);
+  return true;
+}
+
 bool parseOptions(PyObject *options, CompilerRequest &request) {
-  static constexpr std::array<llvm::StringRef, 7> keys{
-      "profile",    "binding_lock",    "custom_pipeline",   "dump_before",
-      "dump_after", "dump_after_each", "verify_after_each",
+  static constexpr std::array<llvm::StringRef, 10> keys{
+      "profile",       "binding_lock",    "custom_pipeline",   "dump_before",
+      "dump_after",    "dump_after_each", "verify_after_each", "frontend_acpy",
+      "frontend_acir", "build",
   };
   if (!hasOnlyKeys(options, keys, "native compiler options"))
     return false;
@@ -227,6 +372,21 @@ bool parseOptions(PyObject *options, CompilerRequest &request) {
       return false;
     request.bindingLockBytes = std::move(*bytes);
   }
+  if (PyObject *value = PyDict_GetItemString(options, "frontend_acpy")) {
+    auto bytes = pythonBytes(value, "frontend_acpy");
+    if (!bytes)
+      return false;
+    request.build.frontend.acpyBytes = std::move(*bytes);
+  }
+  if (PyObject *value = PyDict_GetItemString(options, "frontend_acir")) {
+    auto bytes = pythonBytes(value, "frontend_acir");
+    if (!bytes)
+      return false;
+    request.build.frontend.canonicalAcirBytes = std::move(*bytes);
+  }
+  if (PyObject *value = PyDict_GetItemString(options, "build"))
+    if (!parseBuildOptions(value, request))
+      return false;
   if (PyObject *value = PyDict_GetItemString(options, "custom_pipeline")) {
     auto pipeline = pythonString(value, "custom_pipeline");
     if (!pipeline)
@@ -448,11 +608,14 @@ OwnedPy resultToPython(const CompilerResult &result) {
         !setItem(output.get(), "executable",
                  pyString(result.build->executable)) ||
         !setItem(output.get(), "build_fingerprint",
-                 pyString(result.build->buildFingerprint)))
+                 pyString(result.build->buildFingerprint)) ||
+        !setItem(output.get(), "cache_hit",
+                 OwnedPy(PyBool_FromLong(result.build->cacheHit))))
       return {};
   } else if (!setItem(output.get(), "build_directory", pyNone()) ||
              !setItem(output.get(), "executable", pyNone()) ||
-             !setItem(output.get(), "build_fingerprint", pyNone())) {
+             !setItem(output.get(), "build_fingerprint", pyNone()) ||
+             !setItem(output.get(), "cache_hit", pyNone())) {
     return {};
   }
   return output;

@@ -251,6 +251,52 @@ llvm::Error preflightBuildRequest(const BuildRequest &request) {
       request.profile != "custom")
     return buildError("ACLOWER-PROFILE",
                       "build profile is outside the closed set");
+  if (request.canonicalACSim &&
+      (request.passPipeline.empty() ||
+       std::any_of(request.passPipeline.begin(), request.passPipeline.end(),
+                   [](const std::string &pass) { return pass.empty(); })))
+    return buildError("ACLOWER-PROFILE", "build pass pipeline is incomplete");
+  const FrontendProvenance &frontend = request.frontend;
+  const bool hasFrontend =
+      !frontend.sourceFiles.empty() || !frontend.acpy.path.empty() ||
+      !frontend.acpyBytes.empty() || !frontend.canonicalAcir.path.empty() ||
+      !frontend.canonicalAcirBytes.empty() || !frontend.pythonVersion.empty() ||
+      !frontend.helperIdentities.empty();
+  if (hasFrontend) {
+    if (frontend.sourceFiles.empty() || frontend.pythonVersion.empty())
+      return buildError("ACLOWER-FINGERPRINT",
+                        "frontend source and Python identities are required");
+    std::set<std::string> frontendPaths;
+    for (const FileHash &source : frontend.sourceFiles)
+      if (!isNormalizedRelativePath(source.path) ||
+          !isValidFingerprint(source.sha256) ||
+          !frontendPaths.insert(source.path).second)
+        return buildError("ACLOWER-FINGERPRINT",
+                          "frontend source identity is invalid");
+    auto validFrontendArtifact = [](const Artifact &artifact,
+                                    ArtifactKind expected,
+                                    llvm::StringRef bytes) {
+      return artifact.kind == expected &&
+             isNormalizedRelativePath(artifact.path) &&
+             isValidFingerprint(artifact.sha256) &&
+             artifact.sha256 == computeFingerprint(bytes);
+    };
+    if (!validFrontendArtifact(frontend.acpy, ArtifactKind::Acpy,
+                               frontend.acpyBytes) ||
+        !validFrontendArtifact(frontend.canonicalAcir, ArtifactKind::Acir,
+                               frontend.canonicalAcirBytes) ||
+        frontend.acpy.path == frontend.canonicalAcir.path)
+      return buildError("ACLOWER-FINGERPRINT",
+                        "frontend artifacts are invalid or inconsistent");
+    llvm::StringRef previousHelper;
+    for (const NamedFingerprint &helper : frontend.helperIdentities) {
+      if (helper.name.empty() || !isValidFingerprint(helper.fingerprint) ||
+          (!previousHelper.empty() && previousHelper >= helper.name))
+        return buildError("ACLOWER-FINGERPRINT",
+                          "frontend helper identities are not canonical");
+      previousHelper = helper.name;
+    }
+  }
   const ToolchainIdentity &toolchain = request.toolchain;
   if (toolchain.compilerPath.empty() || toolchain.compilerName.empty() ||
       toolchain.compilerBuildId.empty() || toolchain.targetTriple.empty() ||

@@ -45,9 +45,13 @@ class NativeRequest:
                     type(name) is str for name in value
                 ):
                     raise TypeError(f"native {item[0]} must be a tuple of strings")
-            elif item[0] == "binding_lock":
+            elif item[0] in (
+                "binding_lock",
+                "frontend_acpy",
+                "frontend_acir",
+            ):
                 if type(value) is not bytes:
-                    raise TypeError("native binding_lock must be bytes")
+                    raise TypeError(f"native {item[0]} must be bytes")
             else:
                 validate_ijson_value(value)  # type: ignore[arg-type]
 
@@ -67,6 +71,7 @@ class NativeResult:
     build_directory: str | None
     executable: str | None
     build_fingerprint: str | None
+    cache_hit: bool | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -211,6 +216,7 @@ def _result(value: object) -> NativeResult:
                 "build_directory",
                 "executable",
                 "build_fingerprint",
+                "cache_hit",
             }
         ),
         "compiler result",
@@ -232,7 +238,12 @@ def _result(value: object) -> NativeResult:
         ):
             raise TypeError("native artifact fields have invalid types")
         artifacts.append(NativeArtifact(**artifact))  # type: ignore[arg-type]
-    diagnostics = tuple(sorted(map(_diagnostic, diagnostic_values), key=Diagnostic.sort_key))
+    diagnostics = tuple(
+        sorted(map(_diagnostic, diagnostic_values), key=Diagnostic.sort_key)
+    )
+    cache_hit = item["cache_hit"]
+    if cache_hit is not None and type(cache_hit) is not bool:
+        raise TypeError("native cache hit must be a boolean or None")
     return NativeResult(
         artifacts=tuple(artifacts),
         diagnostics=diagnostics,
@@ -241,6 +252,7 @@ def _result(value: object) -> NativeResult:
         build_fingerprint=_optional_string(
             item["build_fingerprint"], "build fingerprint"
         ),
+        cache_hit=cache_hit,
     )
 
 
