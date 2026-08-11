@@ -37,6 +37,14 @@ class BuildPublication:
     cache_hit: bool
 
 
+@dataclass(frozen=True, slots=True)
+class BuildAttempt:
+    publication: BuildPublication | None
+    diagnostics: tuple[Diagnostic, ...]
+    exit_code: int
+    profile: Profile
+
+
 def _fail(code: str, message: str) -> NoReturn:
     raise UserInputError(
         Diagnostic(stage="build", code=code, severity="error", message=message)
@@ -125,18 +133,23 @@ def _failure_exit(diagnostics: tuple[Diagnostic, ...]) -> int:
     return 3
 
 
-def run(arguments: object, workspace: WorkspaceConfig, sink: OutputSink) -> int:
+def build_publication(
+    arguments: object,
+    workspace: WorkspaceConfig,
+    *,
+    output: Path | None = None,
+) -> BuildAttempt:
     options = build_options(arguments, workspace)
-    output = _output(arguments)
+    destination = output.resolve() if output is not None else _output(arguments)
     frontend = capture(arguments, workspace)
     if _has_errors(frontend.diagnostics):
-        sink.diagnostics(frontend.diagnostics)
-        return 2
+        return BuildAttempt(None, frontend.diagnostics, 2, options.profile)
     if frontend.acpy is None or frontend.acir is None:
         _fail("ACPY-VERIFY-001", "frontend produced incomplete build artifacts")
     compiler = shutil.which(workspace.compiler)
     if compiler is None:
-        sink.diagnostics(
+        return BuildAttempt(
+            None,
             (
                 Diagnostic(
                     stage="cxx",
@@ -144,9 +157,10 @@ def run(arguments: object, workspace: WorkspaceConfig, sink: OutputSink) -> int:
                     severity="error",
                     message=f"C++ compiler is unavailable: {workspace.compiler}",
                 ),
-            )
+            ),
+            4,
+            options.profile,
         )
-        return 4
 
     native_options: list[tuple[str, object]] = [
         ("profile", options.profile),
@@ -174,7 +188,7 @@ def run(arguments: object, workspace: WorkspaceConfig, sink: OutputSink) -> int:
                 "compiler": compiler,
                 "standard_library": workspace.standard_library,
                 "instrumentation_layers": list(options.instrumentation_layers),
-                "output_root": output.as_posix(),
+                "output_root": destination.as_posix(),
             },
         ),
     ]
@@ -192,8 +206,9 @@ def run(arguments: object, workspace: WorkspaceConfig, sink: OutputSink) -> int:
     )
     diagnostics = _logical_diagnostics(native.diagnostics)
     if _has_errors(diagnostics):
-        sink.diagnostics(diagnostics)
-        return _failure_exit(diagnostics)
+        return BuildAttempt(
+            None, diagnostics, _failure_exit(diagnostics), options.profile
+        )
     if (
         native.build_directory is None
         or native.executable is None
@@ -208,13 +223,22 @@ def run(arguments: object, workspace: WorkspaceConfig, sink: OutputSink) -> int:
         fingerprint=native.build_fingerprint,
         cache_hit=native.cache_hit,
     )
+    return BuildAttempt(publication, diagnostics, 0, options.profile)
+
+
+def run(arguments: object, workspace: WorkspaceConfig, sink: OutputSink) -> int:
+    attempt = build_publication(arguments, workspace)
+    if attempt.publication is None:
+        sink.diagnostics(attempt.diagnostics)
+        return attempt.exit_code
+    publication = attempt.publication
     sink.result(
         {
             "schema": "agentic-circuit-build-result",
             "version": "0.1",
             "contract_epoch": "0.1",
             "status": "passed",
-            "profile": options.profile,
+            "profile": attempt.profile,
             "directory": publication.directory.as_posix(),
             "executable": publication.executable.as_posix(),
             "manifest": publication.manifest.as_posix(),

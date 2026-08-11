@@ -1051,7 +1051,7 @@ git commit -m "feat(runtime): execute immutable run manifests"
 - Consumes: build command, runtime harness executable, staging, run schemas, and output policy.
 - Produces: `RunOptions`, `RunPublication`, `create_run_manifest`, `execute_run`, `replay_run`, and `run_command`.
 
-- [ ] **Step 1: Write failing complete/incomplete/failure/replay tests**
+- [x] **Step 1: Write failing complete/incomplete/failure/replay tests**
 
 ```python
 class RunCommandTest(unittest.TestCase):
@@ -1075,13 +1075,13 @@ class RunCommandTest(unittest.TestCase):
         self.assertEqual(2, result.returncode)
 ```
 
-- [ ] **Step 2: Run the focused test and confirm the RED state**
+- [x] **Step 2: Run the focused test and confirm the RED state**
 
 Run: `PYTHONPATH=src:build/dev-llvm22/python .venv/bin/python -m unittest tests.cli.test_run_command -v`
 
 Expected: FAIL because `run` is absent.
 
-- [ ] **Step 3: Normalize exact run inputs and canonical manifest**
+- [x] **Step 3: Normalize exact run inputs and canonical manifest**
 
 ```python
 @dataclass(frozen=True, slots=True)
@@ -1119,7 +1119,7 @@ Accept exact controls `--deadlock-window N`, `--max-ticks N`, repeatable
 `--event-log jsonl`, and `--replay-manifest PATH`; replay rejects every runtime
 override other than the output destination allowed by the spec.
 
-- [ ] **Step 4: Implement end-to-end run and replay**
+- [x] **Step 4: Implement end-to-end run and replay**
 
 ```python
 def execute_run(publication: BuildPublication, options: RunOptions) -> RunPublication:
@@ -1141,13 +1141,13 @@ Replay verifies the immutable manifest/build/executable and uses no architecture
 source or ambient runtime override. Map preflight/trace to `5`, runtime failure
 to `6`, caps to `7`, interruption to `130`, and completed success to `0`.
 
-- [ ] **Step 5: Run run/replay, schema, and failure-atomicity tests**
+- [x] **Step 5: Run run/replay, schema, and failure-atomicity tests**
 
 Run: `PYTHONPATH=src:build/dev-llvm22/python .venv/bin/python -m unittest tests.cli.test_run_command -v && .venv/bin/python -m unittest tests.contracts.test_contracts -v`
 
 Expected: PASS.
 
-- [ ] **Step 6: Commit run orchestration**
+- [x] **Step 6: Commit run orchestration**
 
 ```bash
 git add src/agentic_circuit tests/cli

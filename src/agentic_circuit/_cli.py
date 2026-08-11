@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 from enum import IntEnum
 from pathlib import Path
-from typing import Sequence
+from typing import Callable, Sequence
 
 from ._commands import init as init_command
 from ._commands import doctor as doctor_command
@@ -14,6 +14,7 @@ from ._commands import build as build_command
 from ._commands import compile as compile_command
 from ._commands import elaborate as elaborate_command
 from ._commands import explain as explain_command
+from ._commands import run as run_command
 from ._commands import schema as schema_command
 from ._diagnostics import Diagnostic
 from ._output import OutputSink
@@ -83,6 +84,13 @@ def _positive(value: str) -> int:
     return parsed
 
 
+def _uint64(value: str) -> int:
+    parsed = int(value)
+    if not 0 <= parsed <= (1 << 64) - 1:
+        raise argparse.ArgumentTypeError("value must be an unsigned 64-bit integer")
+    return parsed
+
+
 def _add_output_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--json", action=_OnceTrue)
     parser.add_argument(
@@ -102,6 +110,7 @@ def _add_workspace_options(
     output: bool = False,
     jobs: bool = False,
     seed: bool = False,
+    seed_type: Callable[[str], int] = int,
 ) -> None:
     parser.add_argument("--project", type=Path, action=_OnceValue)
     parser.add_argument("--system", action=_OnceValue)
@@ -110,7 +119,7 @@ def _add_workspace_options(
     if jobs:
         parser.add_argument("--jobs", type=_positive, action=_OnceValue)
     if seed:
-        parser.add_argument("--seed", type=int, action=_OnceValue)
+        parser.add_argument("--seed", type=seed_type, action=_OnceValue)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -189,8 +198,15 @@ def build_parser() -> argparse.ArgumentParser:
 
     run = commands.add_parser("run", allow_abbrev=False)
     run.add_argument("architecture", nargs="?")
-    run.add_argument("--replay", type=Path, action=_OnceValue)
-    _add_workspace_options(run, output=True, jobs=True, seed=True)
+    run.add_argument("--trace", type=Path, action=_OnceValue)
+    run.add_argument("--deadlock-window", type=_positive, action=_OnceValue)
+    run.add_argument("--max-ticks", type=_positive, action=_OnceValue)
+    run.add_argument("--max-domain-cycles", action="append", default=[])
+    run.add_argument("--expect-termination", action=_OnceTrue)
+    run.add_argument("--stats-format", choices=("json",), action=_OnceValue)
+    run.add_argument("--event-log", choices=("jsonl",), action=_OnceValue)
+    run.add_argument("--replay-manifest", type=Path, action=_OnceValue)
+    _add_workspace_options(run, output=True, jobs=True, seed=True, seed_type=_uint64)
     _add_output_options(run)
 
     inspect = commands.add_parser("inspect", allow_abbrev=False)
@@ -257,6 +273,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return explain_command.run(arguments, sink)
         if arguments.command == "doctor":
             return doctor_command.run(arguments, sink)
+        if arguments.command == "run" and arguments.replay_manifest is not None:
+            return run_command.run(arguments, None, sink)
         workspace = (
             load_workspace(arguments.project)
             if arguments.project is not None
@@ -273,6 +291,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return compile_command.run(arguments, workspace, sink)
         if arguments.command == "build":
             return build_command.run(arguments, workspace, sink)
+        if arguments.command == "run":
+            return run_command.run(arguments, workspace, sink)
         sink.result(
             _placeholder_result(arguments, workspace.project_name),
             human=f"{arguments.command} accepted for {workspace.project_name}",
