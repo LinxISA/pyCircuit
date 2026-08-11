@@ -60,7 +60,9 @@ record with exactly these fields:
 A tile descriptor contains exactly `address`, `shape`, `layout`, and `dtype`.
 `address` is a canonical hexadecimal unsigned 64-bit integer, `shape` is a
 bounded integer array, and `layout` and `dtype` are non-empty strings. A scalar
-descriptor contains exactly `dtype` and string `value`.
+descriptor contains exactly `dtype` and string `value`. Source values that
+cannot cross the canonical target's portable I-JSON integer boundary are
+rejected explicitly; the importer never rounds a semantic integer.
 
 The importer pins this shape rather than accepting whatever a future DavinciOO
 checkout happens to emit. Importing a changed external shape requires an
@@ -110,6 +112,15 @@ Every scalar operand becomes an `immediate` whose `type` is the source dtype and
 whose `value` remains the source string. The importer does not guess enum,
 floating-point, signedness, or width semantics that are absent from the source
 format.
+
+### 4.2 Runtime handoff
+
+Run preflight parses and validates the canonical document once, then moves the
+typed `PtoTraceDocument` into the generated model's single statically declared
+trace owner before simulation begins. The generated model declares that owner
+in static metadata; a non-empty trace with zero owners or any model with more
+than one owner fails before state advances. Components beyond the trace source
+receive typed records or typed decoded transactions and never receive JSON.
 
 The canonical metadata contains:
 
