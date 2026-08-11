@@ -2,6 +2,7 @@
 
 #include "gtest/gtest.h"
 
+#include <algorithm>
 #include <array>
 #include <string>
 #include <utility>
@@ -85,6 +86,45 @@ PtoTraceRecord representative(std::string opcode) {
       {tileOperand("block/3/tile/0x20"), scalarOperand("float32", "1.25"),
        tileOperand("block/3/tile/0x40")});
 }
+
+NpuInstruction tileInstruction(std::string opcode, uint64_t sequenceId,
+                               uint64_t blockId,
+                               std::vector<std::string> inputAddresses,
+                               std::vector<std::string> outputAddresses) {
+  PtoValue::Array inputs;
+  PtoValue::Array outputs;
+  std::vector<std::string> roles;
+  std::vector<PtoTraceOperand> operands;
+  for (std::string &address : inputAddresses) {
+    inputs.push_back(tile(address));
+    roles.push_back("input_tile");
+    operands.push_back(
+        tileOperand("block/" + std::to_string(blockId) + "/tile/" + address));
+  }
+  for (std::string &address : outputAddresses) {
+    outputs.push_back(tile(address));
+    roles.push_back("output_tile");
+    operands.push_back(
+        tileOperand("block/" + std::to_string(blockId) + "/tile/" + address));
+  }
+  NpuDecodeResult decoded = NpuDecoder{}.decode(
+      record(std::move(opcode), sequenceId, blockId, std::move(inputs), {},
+             std::move(outputs), std::move(roles), std::move(operands)));
+  EXPECT_TRUE(decoded.succeeded());
+  return std::move(*decoded.instruction);
+}
+
+void commit(NpuDependencyTracker &tracker, Epoch epoch) {
+  tracker.doArbitrate(epoch);
+  tracker.doXfer(epoch);
+}
+
+struct RecorderSink final : ObservationSink {
+  ObservationRecorder recorder;
+  bool proposeObservation(EventProposal proposal) override {
+    return recorder.propose(std::move(proposal));
+  }
+};
 
 TEST(NpuDecoderTest, ClassifiesRepresentativePinnedDavinciOOOpcodes) {
   NpuDecoder decoder;
@@ -211,6 +251,222 @@ TEST(NpuDecoderTest, UnsupportedOpcodeNeverCommitsATraceOffer) {
   EXPECT_FALSE(source.hasOffer());
   EXPECT_EQ(source.position().nextRecordIndex, 0u);
   EXPECT_EQ(source.runtimeFailureCode(), "trace_decode_failed");
+}
+
+TEST(NpuDependencyTrackerTest, RawDependencyWakesOnlyAtCompletionXfer) {
+  RecorderSink sink;
+  NpuDependencyTracker tracker("dependencies", 40, nullptr, {2, 2, 2, 2},
+                               &sink);
+  const NpuInstruction producer = tileInstruction("TADD", 10, 0, {}, {"0x10"});
+  NpuInstruction consumer = tileInstruction("TADD", 11, 0, {"0x10"}, {"0x20"});
+  consumer.dependencies = {4, 9};
+
+  ASSERT_TRUE(tracker.proposeDispatch(producer, 7));
+  commit(tracker, {0, 0});
+  ASSERT_TRUE(sink.recorder.commitOwner(40, {0, 0}));
+  ASSERT_TRUE(tracker.proposeDispatch(consumer, 8));
+  commit(tracker, {1, 0});
+  ASSERT_TRUE(sink.recorder.commitOwner(40, {1, 0}));
+
+  ASSERT_EQ(tracker.dependencies(11).size(), 1u);
+  EXPECT_EQ(tracker.dependencies(11).front().producerSequenceId, 10u);
+  ASSERT_EQ(tracker.queued(NpuEngineClass::Vector).size(), 2u);
+  EXPECT_EQ(
+      tracker.queued(NpuEngineClass::Vector).back().instruction.dependencies,
+      (std::vector<uint64_t>{4, 9}));
+  EXPECT_FALSE(tracker.isReady(11));
+  ASSERT_TRUE(tracker.proposeIssue(NpuEngineClass::Vector));
+  EXPECT_EQ(
+      tracker.proposedIssue(NpuEngineClass::Vector)->instruction.sequenceId,
+      10u);
+  commit(tracker, {2, 0});
+  ASSERT_TRUE(sink.recorder.commitOwner(40, {2, 0}));
+
+  ASSERT_TRUE(tracker.proposeComplete(10));
+  EXPECT_FALSE(tracker.isReady(11));
+  commit(tracker, {3, 0});
+  ASSERT_TRUE(sink.recorder.commitOwner(40, {3, 0}));
+  EXPECT_TRUE(tracker.isReady(11));
+  ASSERT_TRUE(tracker.proposeIssue(NpuEngineClass::Vector));
+  EXPECT_EQ(
+      tracker.proposedIssue(NpuEngineClass::Vector)->instruction.sequenceId,
+      11u);
+  commit(tracker, {4, 0});
+  ASSERT_TRUE(sink.recorder.commitOwner(40, {4, 0}));
+
+  std::vector<TraceEventPhase> dependencyPhases;
+  for (const CommittedEvent &event : sink.recorder.events())
+    if (event.category == "dependency" && event.name == "tile")
+      dependencyPhases.push_back(event.phase);
+  EXPECT_EQ(dependencyPhases,
+            (std::vector<TraceEventPhase>{TraceEventPhase::FlowStart,
+                                          TraceEventPhase::FlowEnd}));
+
+  std::vector<StatSnapshot> statistics;
+  tracker.collectStatistics(statistics);
+  auto valueOf = [&](std::string_view name) {
+    auto position = std::ranges::find(statistics, name, &StatSnapshot::name);
+    EXPECT_NE(position, statistics.end());
+    return position == statistics.end() ? uint64_t{0} : position->value;
+  };
+  EXPECT_EQ(valueOf("issued_instructions"), 2u);
+  EXPECT_EQ(valueOf("dependency_wakeups"), 1u);
+}
+
+TEST(NpuDependencyTrackerTest, FourFiniteEngineQueuesIssueIndependently) {
+  NpuDependencyTracker tracker("dependencies", 40, nullptr, {1, 1, 1, 1});
+  const std::array instructions = {
+      tileInstruction("TASSIGN", 1, 0, {}, {"0x10"}),
+      tileInstruction("TADD", 2, 0, {}, {"0x20"}),
+      tileInstruction("TMATMUL", 3, 0, {}, {"0x30"}),
+      tileInstruction("TLOAD", 4, 0, {}, {"0x40"}),
+  };
+  for (size_t index = 0; index < instructions.size(); ++index)
+    ASSERT_TRUE(tracker.proposeDispatch(instructions[index],
+                                        static_cast<ObjectId>(10 + index)));
+  commit(tracker, {0, 0});
+
+  EXPECT_EQ(tracker.queueSize(NpuEngineClass::Scalar), 1u);
+  EXPECT_EQ(tracker.queueSize(NpuEngineClass::Vector), 1u);
+  EXPECT_EQ(tracker.queueSize(NpuEngineClass::Cube), 1u);
+  EXPECT_EQ(tracker.queueSize(NpuEngineClass::Tma), 1u);
+  EXPECT_TRUE(tracker.proposeIssue(NpuEngineClass::Tma));
+  EXPECT_TRUE(tracker.proposeIssue(NpuEngineClass::Cube));
+  EXPECT_TRUE(tracker.proposeIssue(NpuEngineClass::Vector));
+  EXPECT_TRUE(tracker.proposeIssue(NpuEngineClass::Scalar));
+  commit(tracker, {1, 0});
+
+  ASSERT_EQ(tracker.issued().size(), 4u);
+  for (size_t index = 0; index < tracker.issued().size(); ++index) {
+    EXPECT_EQ(tracker.issued()[index].instruction.sequenceId, index + 1);
+    EXPECT_EQ(tracker.issued()[index].instruction.timestamps.issued, 1u);
+  }
+}
+
+TEST(NpuDependencyTrackerTest, OldestReadySelectionIgnoresInsertionOrder) {
+  auto run = [](std::array<size_t, 3> order) {
+    NpuDependencyTracker tracker("dependencies", 40, nullptr, {3, 3, 3, 3});
+    const std::array instructions = {
+        tileInstruction("TADD", 30, 0, {}, {"0x30"}),
+        tileInstruction("TADD", 10, 0, {}, {"0x10"}),
+        tileInstruction("TADD", 20, 0, {}, {"0x20"}),
+    };
+    for (size_t index : order)
+      EXPECT_TRUE(tracker.proposeDispatch(instructions[index],
+                                          static_cast<ObjectId>(9 - index)));
+    commit(tracker, {0, 0});
+    EXPECT_TRUE(tracker.proposeIssue(NpuEngineClass::Vector));
+    return tracker.proposedIssue(NpuEngineClass::Vector)
+        ->instruction.sequenceId;
+  };
+
+  EXPECT_EQ(run({0, 1, 2}), 10u);
+  EXPECT_EQ(run({2, 0, 1}), 10u);
+}
+
+TEST(NpuDependencyTrackerTest, RenameUsesLatestProducerAndIsBlockLocal) {
+  NpuDependencyTracker tracker("dependencies", 40, nullptr, {8, 8, 8, 8});
+  const NpuInstruction first = tileInstruction("TADD", 1, 0, {}, {"0x10"});
+  const NpuInstruction overwrite = tileInstruction("TADD", 2, 0, {}, {"0x10"});
+  const NpuInstruction sameBlock =
+      tileInstruction("TADD", 3, 0, {"0x10"}, {"0x20"});
+  const NpuInstruction otherBlock =
+      tileInstruction("TADD", 4, 1, {"0x10"}, {"0x20"});
+
+  ASSERT_TRUE(tracker.proposeDispatch(first, 1));
+  ASSERT_TRUE(tracker.proposeDispatch(overwrite, 2));
+  commit(tracker, {0, 0});
+  ASSERT_TRUE(tracker.proposeDispatch(sameBlock, 3));
+  ASSERT_TRUE(tracker.proposeDispatch(otherBlock, 4));
+  commit(tracker, {1, 0});
+
+  ASSERT_EQ(tracker.dependencies(3).size(), 1u);
+  EXPECT_EQ(tracker.dependencies(3).front().producerSequenceId, 2u);
+  EXPECT_TRUE(tracker.dependencies(4).empty());
+  EXPECT_TRUE(tracker.isReady(4));
+}
+
+TEST(NpuDependencyTrackerTest, FiniteCapacityRejectsWithoutMutatingOffer) {
+  RecorderSink sink;
+  NpuDependencyTracker tracker("dependencies", 40, nullptr, {1, 1, 1, 1},
+                               &sink);
+  tracker.setPath("/npu/dependencies");
+  const NpuInstruction first = tileInstruction("TADD", 1, 0, {}, {"0x10"});
+  const NpuInstruction blocked = tileInstruction("TADD", 2, 0, {}, {"0x20"});
+  const NpuInstruction original = blocked;
+
+  ASSERT_TRUE(tracker.proposeDispatch(first, 1));
+  commit(tracker, {0, 0});
+  ASSERT_TRUE(sink.recorder.commitOwner(40, {0, 0}));
+  ASSERT_TRUE(tracker.proposeDispatch(blocked, 2));
+  commit(tracker, {1, 0});
+  ASSERT_TRUE(sink.recorder.commitOwner(40, {1, 0}));
+
+  EXPECT_EQ(blocked, original);
+  EXPECT_EQ(tracker.queueSize(NpuEngineClass::Vector), 1u);
+  EXPECT_EQ(tracker.rejectedDispatches(), (std::vector<uint64_t>{2}));
+  EXPECT_FALSE(tracker.dispatchAccepted(2));
+  ASSERT_FALSE(sink.recorder.events().empty());
+  EXPECT_EQ(sink.recorder.events().back().category, "stall");
+  EXPECT_EQ(sink.recorder.events().back().name, "issue_queue_capacity");
+
+  ASSERT_TRUE(tracker.proposeIssue(NpuEngineClass::Vector));
+  ASSERT_TRUE(tracker.proposeDispatch(blocked, 2));
+  commit(tracker, {2, 0});
+  ASSERT_TRUE(sink.recorder.commitOwner(40, {2, 0}));
+  EXPECT_TRUE(tracker.dispatchAccepted(2));
+  ASSERT_EQ(tracker.queued(NpuEngineClass::Vector).size(), 1u);
+  EXPECT_EQ(
+      tracker.queued(NpuEngineClass::Vector).front().instruction.sequenceId,
+      2u);
+
+  std::vector<StatSnapshot> statistics;
+  tracker.collectStatistics(statistics);
+  auto find = [&](std::string_view name) -> const StatSnapshot * {
+    auto position = std::ranges::find(statistics, name, &StatSnapshot::name);
+    return position == statistics.end() ? nullptr : &*position;
+  };
+  ASSERT_NE(find("dispatch_stalls"), nullptr);
+  EXPECT_EQ(find("dispatch_stalls")->value, 1u);
+  ASSERT_NE(find("issue_queue_occupancy_vector"), nullptr);
+  EXPECT_EQ(find("issue_queue_occupancy_vector")->value, 1u);
+}
+
+TEST(NpuDependencyTrackerTest,
+     WorkPermutationPreservesQueuesStatisticsAndObservations) {
+  struct Snapshot {
+    std::vector<NpuIssueEntry> queue;
+    std::vector<std::pair<std::string, uint64_t>> statistics;
+    std::vector<CommittedEvent> observations;
+    bool operator==(const Snapshot &) const = default;
+  };
+  auto run = [](std::array<size_t, 3> order) {
+    RecorderSink sink;
+    NpuDependencyTracker tracker("dependencies", 40, nullptr, {1, 2, 1, 1},
+                                 &sink);
+    tracker.setPath("/npu/dependencies");
+    const std::array instructions = {
+        tileInstruction("TADD", 3, 0, {}, {"0x30"}),
+        tileInstruction("TADD", 1, 0, {}, {"0x10"}),
+        tileInstruction("TADD", 2, 0, {"0x10"}, {"0x20"}),
+    };
+    for (size_t index : order)
+      EXPECT_TRUE(tracker.proposeDispatch(instructions[index],
+                                          static_cast<ObjectId>(10 + index)));
+    commit(tracker, {0, 0});
+    EXPECT_TRUE(sink.recorder.commitOwner(40, {0, 0}));
+    std::vector<StatSnapshot> statistics;
+    tracker.collectStatistics(statistics);
+    std::vector<std::pair<std::string, uint64_t>> statisticValues;
+    for (const StatSnapshot &statistic : statistics)
+      statisticValues.emplace_back(statistic.name, statistic.value);
+    return Snapshot{tracker.queued(NpuEngineClass::Vector),
+                    std::move(statisticValues),
+                    std::vector<CommittedEvent>(sink.recorder.events().begin(),
+                                                sink.recorder.events().end())};
+  };
+
+  EXPECT_EQ(run({0, 1, 2}), run({2, 0, 1}));
 }
 
 } // namespace
