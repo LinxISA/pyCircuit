@@ -550,10 +550,11 @@ llvm::Expected<RunManifest> loadRunManifest(llvm::StringRef bytes,
   return manifest;
 }
 
-llvm::Error preflightRunManifest(const RunManifest &manifest,
-                                 llvm::StringRef buildFingerprint,
-                                 std::span<const TimeDomainRuntime> timeDomains,
-                                 llvm::StringRef resultStage) {
+llvm::Expected<PtoTraceDocument>
+preflightRunManifest(const RunManifest &manifest,
+                     llvm::StringRef buildFingerprint,
+                     std::span<const TimeDomainRuntime> timeDomains,
+                     llvm::StringRef resultStage) {
   if (!isFingerprint(buildFingerprint))
     return harnessError("generated build fingerprint is invalid");
   auto buildPath = resolvedInputPath(manifest, manifest.buildManifest.path);
@@ -618,7 +619,7 @@ llvm::Error preflightRunManifest(const RunManifest &manifest,
       std::mismatch(root.begin(), root.end(), stage.begin(), stage.end());
   if (rootEnd != root.end() || stage == root)
     return harnessError("result stage escapes the run-manifest root");
-  return llvm::Error::success();
+  return std::move(*trace.document);
 }
 
 RunResultDocument makeRunResult(const RunManifest &manifest,

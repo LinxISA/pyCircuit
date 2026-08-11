@@ -5,6 +5,7 @@
 #include "gfsim/trace.h"
 
 #include "llvm/ADT/StringRef.h"
+#include "llvm/Support/Errc.h"
 #include "llvm/Support/Error.h"
 
 #include <concepts>
@@ -14,6 +15,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace gfsim {
@@ -72,10 +74,11 @@ struct RunResultDocument {
 llvm::Expected<RunManifest> loadRunManifest(llvm::StringRef bytes,
                                             llvm::StringRef rootDirectory);
 
-llvm::Error preflightRunManifest(const RunManifest &manifest,
-                                 llvm::StringRef buildFingerprint,
-                                 std::span<const TimeDomainRuntime> timeDomains,
-                                 llvm::StringRef resultStage);
+llvm::Expected<PtoTraceDocument>
+preflightRunManifest(const RunManifest &manifest,
+                     llvm::StringRef buildFingerprint,
+                     std::span<const TimeDomainRuntime> timeDomains,
+                     llvm::StringRef resultStage);
 
 RunResultDocument makeRunResult(const RunManifest &manifest,
                                 const TerminationResult &termination);
@@ -91,6 +94,7 @@ llvm::Expected<RunResultDocument> runGeneratedModel(Model &model,
                                                     const RunManifest &manifest,
                                                     llvm::StringRef resultStage)
   requires requires(Model &value, const RuntimeLimits &limits) {
+    { value.loadTrace(PtoTraceDocument{}) } -> std::same_as<bool>;
     value.configure(limits);
     { value.run() } -> std::same_as<TerminationResult>;
     { value.buildFingerprint() } -> std::convertible_to<std::string_view>;
@@ -103,10 +107,15 @@ llvm::Expected<RunResultDocument> runGeneratedModel(Model &model,
     } -> std::convertible_to<std::span<const CommittedEvent>>;
   }
 {
-  if (llvm::Error error = preflightRunManifest(
-          manifest, std::string_view(model.buildFingerprint()),
-          std::span<const TimeDomainRuntime>(model.timeDomains()), resultStage))
-    return std::move(error);
+  auto trace = preflightRunManifest(
+      manifest, std::string_view(model.buildFingerprint()),
+      std::span<const TimeDomainRuntime>(model.timeDomains()), resultStage);
+  if (!trace)
+    return trace.takeError();
+  if (!model.loadTrace(std::move(*trace)))
+    return llvm::createStringError(llvm::errc::invalid_argument,
+                                   "ACRUN-PREFLIGHT-001: generated model "
+                                   "rejected the validated trace document");
   model.configure(manifest.limits);
   RunResultDocument result = makeRunResult(manifest, model.run());
   std::vector<StatSnapshot> statistics = model.statistics();

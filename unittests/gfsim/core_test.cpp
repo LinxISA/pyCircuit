@@ -137,6 +137,10 @@ std::string harnessTrace() {
   return R"json({"schema":"pto-trace","version":"0.1","contract_epoch":"0.1","metadata":{"record_count":0},"records":[]})json";
 }
 
+std::string harnessTraceWithOneRecord() {
+  return R"json({"schema":"pto-trace","version":"0.1","contract_epoch":"0.1","metadata":{"record_count":1},"records":[{"sequence_id":17,"opcode":"pto.test","operands":[],"dependencies":[],"attributes":{}}]})json";
+}
+
 std::string harnessRunManifest(std::string_view buildHash,
                                std::string_view traceHash,
                                std::string_view eventLog = "disabled") {
@@ -158,7 +162,15 @@ std::string harnessRunManifest(std::string_view buildHash,
 
 class HarnessModel {
 public:
-  void configure(const RuntimeLimits &limits) { configured = limits; }
+  bool loadTrace(PtoTraceDocument document) {
+    ++traceLoadCount;
+    loadedTrace = std::move(document);
+    return acceptTrace;
+  }
+  void configure(const RuntimeLimits &limits) {
+    configuredAfterTrace = traceLoadCount == 1;
+    configured = limits;
+  }
   TerminationResult run() {
     ++workCount;
     TerminationResult result;
@@ -178,6 +190,10 @@ public:
 
   RuntimeLimits configured;
   uint64_t workCount = 0;
+  uint64_t traceLoadCount = 0;
+  bool acceptTrace = true;
+  bool configuredAfterTrace = false;
+  PtoTraceDocument loadedTrace;
   std::vector<StatSnapshot> snapshots = {{.name = "accepted_transactions",
                                           .objectPath = "/generated/root/queue",
                                           .kind = StatisticKind::Counter,
@@ -260,6 +276,9 @@ TEST(RuntimeHarnessTest, ExactManifestConfiguresLimitsAndProducesClosedResult) {
   EXPECT_EQ(result->status, RunStatus::Incomplete);
   EXPECT_EQ(result->terminationReason, "max_domain_cycles");
   EXPECT_EQ(result->domainCycles.at("core"), 25u);
+  EXPECT_EQ(model.traceLoadCount, 1u);
+  EXPECT_TRUE(model.configuredAfterTrace);
+  EXPECT_TRUE(model.loadedTrace.records.empty());
   ASSERT_TRUE(model.configured.maxTicks);
   EXPECT_EQ(*model.configured.maxTicks, 100u);
   auto document =
@@ -271,6 +290,10 @@ TEST(RuntimeHarnessTest, ExactManifestConfiguresLimitsAndProducesClosedResult) {
   EXPECT_EQ(object->size(), 12u);
   EXPECT_EQ(object->getString("status"), "incomplete");
   EXPECT_EQ(object->getString("termination_reason"), "max_domain_cycles");
+  const llvm::json::Object *tracePosition = object->getObject("trace_position");
+  ASSERT_NE(tracePosition, nullptr);
+  EXPECT_EQ(tracePosition->getInteger("next_record_index"), 3);
+  EXPECT_EQ(tracePosition->getInteger("last_committed_sequence_id"), 11);
   auto statistics =
       acir::bindings::parseIJson(root.read("result-stage/stats.json"));
   ASSERT_TRUE(static_cast<bool>(statistics))
@@ -285,6 +308,75 @@ TEST(RuntimeHarnessTest, ExactManifestConfiguresLimitsAndProducesClosedResult) {
   EXPECT_EQ(snapshot->getString("kind"), "counter");
   EXPECT_EQ(snapshot->getInteger("value"), 2);
   EXPECT_FALSE(root.exists("result-stage/events.jsonl"));
+}
+
+TEST(RuntimeHarnessTest, MovesTypedTraceIntoModelExactlyOnceBeforeConfigure) {
+  HarnessTempRoot root;
+  const std::string build = harnessBuildManifest();
+  const std::string trace = harnessTraceWithOneRecord();
+  root.write("build-manifest.json", build);
+  root.write("trace.json", trace);
+  auto manifest = loadRunManifest(
+      harnessRunManifest(acir::bindings::sha256Fingerprint(build),
+                         acir::bindings::sha256Fingerprint(trace)),
+      root.path());
+  ASSERT_TRUE(static_cast<bool>(manifest));
+
+  HarnessModel model;
+  llvm::SmallString<256> resultStage(root.path());
+  llvm::sys::path::append(resultStage, "result-stage");
+  auto result = runGeneratedModel(model, *manifest, resultStage);
+  ASSERT_TRUE(static_cast<bool>(result)) << llvm::toString(result.takeError());
+  ASSERT_EQ(model.traceLoadCount, 1u);
+  ASSERT_TRUE(model.configuredAfterTrace);
+  ASSERT_EQ(model.loadedTrace.records.size(), 1u);
+  EXPECT_EQ(model.loadedTrace.records.front().sequenceId, 17u);
+  EXPECT_EQ(model.loadedTrace.records.front().opcode, "pto.test");
+}
+
+TEST(RuntimeHarnessTest, TraceOwnerRejectionStopsBeforeConfigureAndRun) {
+  HarnessTempRoot root;
+  const std::string build = harnessBuildManifest();
+  const std::string trace = harnessTraceWithOneRecord();
+  root.write("build-manifest.json", build);
+  root.write("trace.json", trace);
+  auto manifest = loadRunManifest(
+      harnessRunManifest(acir::bindings::sha256Fingerprint(build),
+                         acir::bindings::sha256Fingerprint(trace)),
+      root.path());
+  ASSERT_TRUE(static_cast<bool>(manifest));
+
+  HarnessModel model;
+  model.acceptTrace = false;
+  llvm::SmallString<256> resultStage(root.path());
+  llvm::sys::path::append(resultStage, "result-stage");
+  EXPECT_FALSE(runGeneratedModel(model, *manifest, resultStage));
+  EXPECT_EQ(model.traceLoadCount, 1u);
+  EXPECT_FALSE(model.configuredAfterTrace);
+  EXPECT_EQ(model.workCount, 0u);
+  EXPECT_FALSE(root.exists("result-stage"));
+}
+
+TEST(RuntimeHarnessTest, RawDavinciJsonlNeverReachesModelCode) {
+  HarnessTempRoot root;
+  const std::string build = harnessBuildManifest();
+  const std::string trace =
+      R"json({"block_idx":0,"sequence_id":0,"opcode":"TASSIGN","input_tiles":[],"scalar_inputs":[],"output_tiles":[]})json"
+      "\n";
+  root.write("build-manifest.json", build);
+  root.write("trace.json", trace);
+  auto manifest = loadRunManifest(
+      harnessRunManifest(acir::bindings::sha256Fingerprint(build),
+                         acir::bindings::sha256Fingerprint(trace)),
+      root.path());
+  ASSERT_TRUE(static_cast<bool>(manifest));
+
+  HarnessModel model;
+  llvm::SmallString<256> resultStage(root.path());
+  llvm::sys::path::append(resultStage, "result-stage");
+  EXPECT_FALSE(runGeneratedModel(model, *manifest, resultStage));
+  EXPECT_EQ(model.traceLoadCount, 0u);
+  EXPECT_EQ(model.workCount, 0u);
 }
 
 TEST(RuntimeHarnessTest, JsonlEventLogContainsCommittedStableKeys) {
@@ -1574,7 +1666,8 @@ TEST(GfsimTraceTest, ParsesCanonicalDavinciOOAdapterFixture) {
   EXPECT_EQ(record.operands[1].id, "block/0/tile/0x0");
   auto attributes = record.attributes.find("davincioo");
   ASSERT_NE(attributes, record.attributes.end());
-  const auto *davincioo = std::get_if<PtoValue::Object>(&attributes->second.value);
+  const auto *davincioo =
+      std::get_if<PtoValue::Object>(&attributes->second.value);
   ASSERT_NE(davincioo, nullptr);
   EXPECT_TRUE(davincioo->contains("block_idx"));
   EXPECT_TRUE(davincioo->contains("input_tiles"));
@@ -1711,6 +1804,20 @@ TEST(GfsimTraceTest, CursorAdvancesOnlyOnAcceptedXferAndHonorsDependencies) {
   EXPECT_EQ(source.position().nextRecordIndex, 2u);
   EXPECT_EQ(source.position().lastCommittedSequenceId, 20u);
   EXPECT_TRUE(source.validate());
+}
+
+TEST(GfsimTraceTest, UnloadedSourceAcceptsOneTypedDocumentBeforeExecution) {
+  TraceLoadResult loaded = parsePtoTrace(ValidPtoTrace);
+  ASSERT_TRUE(loaded.succeeded());
+  TraceSource<> source("trace", 1, nullptr);
+
+  EXPECT_TRUE(source.loadDocument(std::move(*loaded.document)));
+  EXPECT_FALSE(source.loadDocument(PtoTraceDocument{}));
+  EXPECT_FALSE(source.eof());
+  source.doWork({2, 0});
+  source.doXfer({2, 0});
+  ASSERT_NE(source.peekOffer(), nullptr);
+  EXPECT_EQ(source.peekOffer()->sequenceId, 10u);
 }
 
 TEST(GfsimTraceTest, IssueTimeSchedulesAnExactWakeInsteadOfPolling) {
@@ -1912,7 +2019,8 @@ public:
         commit_(commit) {}
 
   void doWork(Epoch) override {
-    EXPECT_TRUE(system_.proposeObservation(testObservation(id(), "work", id())));
+    EXPECT_TRUE(
+        system_.proposeObservation(testObservation(id(), "work", id())));
     pending_ = commit_;
   }
   bool hasPendingCommit() const override { return pending_; }

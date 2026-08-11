@@ -177,12 +177,30 @@ public:
   static constexpr ObjectKind componentKind = ObjectKind::TraceSource;
 
   TraceSource(std::string name, ObjectId id, SimObject *parent,
-              PtoTraceDocument document = {}, Decoder decoder = {},
+              Decoder decoder = {}, SimSystem *system = nullptr)
+      : SimObject(ObjectKind::TraceSource, std::move(name), id, parent),
+        decoder_(std::move(decoder)), system_(system) {
+    position_.endOfTrace = true;
+  }
+
+  TraceSource(std::string name, ObjectId id, SimObject *parent,
+              PtoTraceDocument document, Decoder decoder = {},
               SimSystem *system = nullptr)
       : SimObject(ObjectKind::TraceSource, std::move(name), id, parent),
         document_(std::move(document)), decoder_(std::move(decoder)),
-        system_(system) {
+        documentLoaded_(true), system_(system) {
     position_.endOfTrace = document_.records.empty();
+  }
+
+  bool loadDocument(PtoTraceDocument document) {
+    if (documentLoaded_ || committedOffer_ || offerProposal_ ||
+        acceptProposal_ || position_.nextRecordIndex != 0 ||
+        !issuedSequences_.empty() || !completedSequences_.empty())
+      return false;
+    document_ = std::move(document);
+    documentLoaded_ = true;
+    position_.endOfTrace = document_.records.empty();
+    return true;
   }
 
   const Transaction *peekOffer() const {
@@ -359,6 +377,7 @@ private:
   std::optional<uint64_t> proposedSequenceId_;
   bool acceptProposal_ = false;
   bool issueWakeScheduled_ = false;
+  bool documentLoaded_ = false;
   std::set<uint64_t> issuedSequences_;
   std::set<uint64_t> completedSequences_;
   SimSystem *system_ = nullptr;
