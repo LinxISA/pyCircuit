@@ -51,6 +51,13 @@ class PublicApiTest(unittest.TestCase):
                 with self.assertRaisesRegex(TypeError, "ACPY-STATIC-002"):
                     operation(value)
 
+    def test_symbolic_value_repr_uses_only_stable_identity(self) -> None:
+        types = importlib.import_module("agentic_circuit._types")
+
+        value = types._test_symbolic("request", object())
+
+        self.assertEqual("SymbolicValue('request')", repr(value))
+
     def test_decorators_create_immutable_definition_metadata(self) -> None:
         api = importlib.import_module("agentic_circuit")
 

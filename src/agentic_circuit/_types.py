@@ -35,6 +35,9 @@ class SymbolicValue:
     stable_name: str
     annotation: object
 
+    def __repr__(self) -> str:
+        return f"SymbolicValue({self.stable_name!r})"
+
     def _reject(self, operation: str) -> Never:
         raise TypeError(
             f"ACPY-STATIC-002: {self.stable_name!r} cannot be used for {operation}"

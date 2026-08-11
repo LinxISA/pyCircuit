@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import inspect
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Callable, Literal, TypeAlias, TypeVar, overload
 
 
@@ -29,6 +31,36 @@ class Definition:
     function: Callable[..., object]
     qualified_name: str
     explicit_options: tuple[tuple[str, object], ...]
+    module_name: str
+    source_file: str | None
+    source_line: int | None
+
+    def __repr__(self) -> str:
+        return (
+            f"Definition(kind={self.kind!r}, qualified_name={self.qualified_name!r})"
+        )
+
+    @property
+    def __signature__(self) -> inspect.Signature:
+        return inspect.signature(self.function)
+
+    @property
+    def __name__(self) -> str:
+        return self.function.__name__
+
+    def __call__(self, *args: object, **kwargs: object) -> "PendingDefinitionCall":
+        try:
+            bound = self.__signature__.bind(*args, **kwargs)
+        except TypeError as error:
+            raise TypeError(f"ACPY-CALL-003: {error}") from error
+        bound.apply_defaults()
+        return PendingDefinitionCall(self, tuple(bound.arguments.items()))
+
+
+@dataclass(frozen=True, slots=True)
+class PendingDefinitionCall:
+    definition: Definition
+    arguments: tuple[tuple[str, object], ...]
 
 
 @overload
@@ -45,11 +77,27 @@ def _decorate(
     kind: DefinitionKind, function: F | None = None, **options: object
 ) -> Definition | Callable[[F], Definition]:
     def apply(target: F) -> Definition:
+        module_name = getattr(target, "__module__", "")
+        source_file = inspect.getsourcefile(target)
+        source_line: int | None
+        code = getattr(target, "__code__", None)
+        if code is not None:
+            source_line = code.co_firstlineno
+        else:
+            try:
+                _, source_line = inspect.getsourcelines(target)
+            except (OSError, TypeError):
+                source_line = None
         return Definition(
             kind=kind,
             function=target,
             qualified_name=target.__qualname__,
             explicit_options=tuple(sorted(options.items())),
+            module_name=module_name,
+            source_file=(
+                str(Path(source_file).resolve()) if source_file is not None else None
+            ),
+            source_line=source_line,
         )
 
     return apply(function) if function is not None else apply
