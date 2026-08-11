@@ -1406,6 +1406,38 @@ TEST(GfsimTraceTest, ParsesClosedTypedPtoTraceDocument) {
             (std::vector<uint64_t>{10}));
 }
 
+TEST(GfsimTraceTest, ParsesCanonicalDavinciOOAdapterFixture) {
+  auto buffer = llvm::MemoryBuffer::getFile(
+      ACIR_TEST_SOURCE_DIR
+      "/tests/tools/fixtures/davincioo-valid.pto-trace.json");
+  ASSERT_TRUE(static_cast<bool>(buffer));
+  TraceLoadResult result = parsePtoTrace((*buffer)->getBuffer());
+  ASSERT_TRUE(result.succeeded()) << result.primaryDiagnostic();
+  ASSERT_TRUE(result.document.has_value());
+  EXPECT_EQ(result.document->metadata.producer,
+            "davincioo@e73633301cabed0d871ea5ff66e76a91df870aeb");
+  EXPECT_EQ(result.document->metadata.ptoIdentity,
+            "pto-isa@f6d0567c1cae2d6a7b0ebaf7ad0e3b93f8a39da3");
+  ASSERT_EQ(result.document->records.size(), 2u);
+  const PtoTraceRecord &record = result.document->records.front();
+  EXPECT_EQ(record.sequenceId, 0u);
+  EXPECT_EQ(record.opcode, "TASSIGN");
+  ASSERT_EQ(record.operands.size(), 2u);
+  EXPECT_EQ(record.operands[0].kind, PtoOperandKind::Immediate);
+  EXPECT_EQ(record.operands[0].type, "uint64");
+  EXPECT_EQ(record.operands[1].kind, PtoOperandKind::Tile);
+  EXPECT_EQ(record.operands[1].id, "block/0/tile/0x0");
+  auto attributes = record.attributes.find("davincioo");
+  ASSERT_NE(attributes, record.attributes.end());
+  const auto *davincioo = std::get_if<PtoValue::Object>(&attributes->second.value);
+  ASSERT_NE(davincioo, nullptr);
+  EXPECT_TRUE(davincioo->contains("block_idx"));
+  EXPECT_TRUE(davincioo->contains("input_tiles"));
+  EXPECT_TRUE(davincioo->contains("scalar_inputs"));
+  EXPECT_TRUE(davincioo->contains("output_tiles"));
+  EXPECT_TRUE(davincioo->contains("operand_roles"));
+}
+
 TEST(GfsimTraceTest, StreamingAndBufferedParsingProduceIdenticalDocument) {
   TraceLoadResult buffered = parsePtoTrace(ValidPtoTrace);
   ASSERT_TRUE(buffered.succeeded());

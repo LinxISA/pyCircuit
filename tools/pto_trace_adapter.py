@@ -7,9 +7,13 @@ The accepted source shape is pinned by the Phase 5 design document.
 from __future__ import annotations
 
 import hashlib
+import errno
 import json
+import os
 import re
+import tempfile
 from dataclasses import dataclass
+from pathlib import Path
 from typing import NoReturn
 
 from agentic_circuit._canonical_json import (
@@ -483,3 +487,82 @@ def convert_davincioo_trace(
     }
     _validate_target(document)
     return canonical_json_bytes(document) + b"\n"
+
+
+def _regular_input(path: Path) -> bytes:
+    try:
+        if path.is_symlink() or not path.is_file():
+            raise OSError("input is not a regular file")
+        return path.read_bytes()
+    except OSError as error:
+        _fail("ACTRACE-ADAPTER-IO", f"cannot read input: {error}")
+
+
+def _fsync_directory(path: Path) -> None:
+    descriptor = os.open(path, os.O_RDONLY)
+    try:
+        try:
+            os.fsync(descriptor)
+        except OSError as error:
+            if error.errno not in (errno.EINVAL, errno.ENOTSUP):
+                raise
+    finally:
+        os.close(descriptor)
+
+
+def publish_davincioo_trace(
+    input_path: Path,
+    output_path: Path,
+    *,
+    source_program: str | None = None,
+    limits: AdapterLimits = AdapterLimits(),
+) -> None:
+    """Convert one regular input and atomically publish one canonical file."""
+
+    source = input_path.absolute()
+    destination = output_path.absolute()
+    try:
+        source_identity = source.resolve(strict=True)
+    except OSError as error:
+        _fail("ACTRACE-ADAPTER-IO", f"cannot resolve input: {error}")
+    try:
+        destination_identity = destination.resolve(strict=False)
+    except OSError as error:
+        _fail("ACTRACE-ADAPTER-IO", f"cannot resolve output: {error}")
+    if source_identity == destination_identity:
+        _fail("ACTRACE-ADAPTER-IO", "input and output must be different files")
+    parent = destination.parent
+    if parent.is_symlink() or not parent.is_dir():
+        _fail("ACTRACE-ADAPTER-IO", "output parent must be an existing directory")
+    if destination.exists() and (destination.is_symlink() or not destination.is_file()):
+        _fail("ACTRACE-ADAPTER-IO", "existing output must be a regular file")
+
+    output = convert_davincioo_trace(
+        _regular_input(source), source_program=source_program, limits=limits
+    )
+    descriptor = -1
+    stage: Path | None = None
+    try:
+        descriptor, stage_name = tempfile.mkstemp(
+            prefix=f".{destination.name}.", suffix=".tmp", dir=parent
+        )
+        stage = Path(stage_name)
+        os.fchmod(descriptor, 0o644)
+        with os.fdopen(descriptor, "wb") as stream:
+            descriptor = -1
+            stream.write(output)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(stage, destination)
+        stage = None
+        _fsync_directory(parent)
+    except OSError as error:
+        _fail("ACTRACE-ADAPTER-IO", f"cannot publish output: {error}")
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+        if stage is not None:
+            try:
+                stage.unlink(missing_ok=True)
+            except OSError:
+                pass

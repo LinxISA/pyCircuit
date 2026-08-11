@@ -2,6 +2,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import subprocess
+import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -204,6 +208,115 @@ class DavinciOOAdapterTest(unittest.TestCase):
         left = convert_davincioo_trace(source, source_program="suite/kernel")
         right = convert_davincioo_trace(source, source_program="suite/kernel")
         self.assertEqual(left, right)
+
+
+class DavinciOOAdapterCommandTest(unittest.TestCase):
+    command = ROOT / "tools" / "import-davincioo-pto-trace.py"
+
+    def run_command(
+        self, *arguments: object, cwd: Path | None = None
+    ) -> subprocess.CompletedProcess[bytes]:
+        return subprocess.run(
+            [sys.executable, os.fspath(self.command), *(os.fspath(arg) for arg in arguments)],
+            cwd=cwd or ROOT,
+            env={**os.environ, "PYTHONPATH": os.fspath(ROOT / "src")},
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+
+    def test_help_and_exact_argument_surface(self) -> None:
+        help_result = self.run_command("--help")
+        self.assertEqual(0, help_result.returncode)
+        self.assertIn(b"INPUT OUTPUT", help_result.stdout)
+        self.assertEqual(b"", help_result.stderr)
+
+        missing = self.run_command()
+        self.assertEqual(2, missing.returncode)
+        self.assertEqual(b"", missing.stdout)
+
+    def test_command_atomically_publishes_exact_library_bytes(self) -> None:
+        source = (FIXTURES / "davincioo-valid.jsonl").read_bytes()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            input_path = root / "input.pto.trace"
+            output_path = root / "canonical.json"
+            input_path.write_bytes(source)
+
+            result = self.run_command(
+                input_path,
+                output_path,
+                "--source-program",
+                "examples/beginner_matmul",
+                cwd=root,
+            )
+
+            self.assertEqual(0, result.returncode, result.stderr.decode())
+            self.assertEqual(b"", result.stdout)
+            self.assertEqual(b"", result.stderr)
+            self.assertEqual(
+                convert_davincioo_trace(
+                    source, source_program="examples/beginner_matmul"
+                ),
+                output_path.read_bytes(),
+            )
+            self.assertEqual([], list(root.glob(".canonical.json.*.tmp")))
+
+    def test_failure_preserves_existing_output_and_cleans_stage(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            input_path = root / "invalid.pto.trace"
+            output_path = root / "canonical.json"
+            input_path.write_bytes((FIXTURES / "davincioo-invalid.jsonl").read_bytes())
+            output_path.write_bytes(b"prior\n")
+
+            result = self.run_command(input_path, output_path, cwd=root)
+
+            self.assertEqual(2, result.returncode)
+            self.assertEqual(b"", result.stdout)
+            self.assertIn(b"ACTRACE-ADAPTER-SCHEMA", result.stderr)
+            self.assertEqual(b"prior\n", output_path.read_bytes())
+            self.assertEqual([], list(root.glob(".canonical.json.*.tmp")))
+
+    def test_command_rejects_aliasing_input_and_missing_parent(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            input_path = root / "input.pto.trace"
+            input_path.write_bytes(jsonl(row()))
+            alias = self.run_command(input_path, input_path, cwd=root)
+            self.assertEqual(2, alias.returncode)
+            self.assertIn(b"ACTRACE-ADAPTER-IO", alias.stderr)
+            self.assertEqual(jsonl(row()), input_path.read_bytes())
+
+            missing = self.run_command(input_path, root / "missing" / "out.json", cwd=root)
+            self.assertEqual(2, missing.returncode)
+            self.assertIn(b"ACTRACE-ADAPTER-IO", missing.stderr)
+
+    def test_output_bytes_do_not_depend_on_root_or_umask(self) -> None:
+        source = (FIXTURES / "davincioo-valid.jsonl").read_bytes()
+        outputs: list[bytes] = []
+        for mask in (0o022, 0o077):
+            with tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                input_path = root / "nested" / "input.pto.trace"
+                output_path = root / "out.json"
+                input_path.parent.mkdir()
+                input_path.write_bytes(source)
+                previous = os.umask(mask)
+                try:
+                    result = self.run_command(
+                        input_path,
+                        output_path,
+                        "--source-program",
+                        "fixture/stable",
+                        cwd=root,
+                    )
+                finally:
+                    os.umask(previous)
+                self.assertEqual(0, result.returncode, result.stderr.decode())
+                outputs.append(output_path.read_bytes())
+        self.assertEqual(outputs[0], outputs[1])
 
 
 if __name__ == "__main__":
