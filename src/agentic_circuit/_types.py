@@ -24,11 +24,7 @@ class Endpoint(Generic[I, R]):
     """Describe interface ``I`` bound in role ``R``."""
 
 
-class ResourceRef(Generic[T, R]):
-    """Describe a typed resource capability bound in role ``R``."""
-
-
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, eq=False)
 class SymbolicValue:
     """Frontend identity for an architecture value without a Python value."""
 
@@ -54,6 +50,26 @@ class SymbolicValue:
 
     def __iter__(self) -> Never:
         return self._reject("iteration")
+
+    def __eq__(self, other: object) -> Never:
+        return self._reject("equality")
+
+    def __ne__(self, other: object) -> Never:
+        return self._reject("equality")
+
+
+@dataclass(frozen=True, slots=True, eq=False, repr=False)
+class ResourceRef(SymbolicValue, Generic[T, R]):
+    """A typed resource capability bound in a declared role."""
+
+    role: object
+
+    @property
+    def resource_type(self) -> object:
+        return self.annotation
+
+    def __repr__(self) -> str:
+        return f"ResourceRef({self.stable_name!r})"
 
 
 def _test_symbolic(stable_name: str, annotation: object) -> SymbolicValue:

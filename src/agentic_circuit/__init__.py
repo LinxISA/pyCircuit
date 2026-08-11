@@ -16,6 +16,7 @@ from ._definitions import (
     system,
     transaction,
 )
+from ._resources import address_map, address_space, queue
 from ._types import Endpoint, Flow, ResourceRef, Static
 
 
@@ -64,15 +65,3 @@ def instances(*values: object) -> Never:
 
 def view(value: object, *selectors: object) -> Never:
     return _not_implemented("view")
-
-
-def queue(*values: object, **options: object) -> Never:
-    return _not_implemented("queue")
-
-
-def address_space(*values: object, **options: object) -> Never:
-    return _not_implemented("address_space")
-
-
-def address_map(*values: object, **options: object) -> Never:
-    return _not_implemented("address_map")

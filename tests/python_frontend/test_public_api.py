@@ -51,6 +51,14 @@ class PublicApiTest(unittest.TestCase):
                 with self.assertRaisesRegex(TypeError, "ACPY-STATIC-002"):
                     operation(value)
 
+    def test_symbolic_values_reject_python_equality(self) -> None:
+        types = importlib.import_module("agentic_circuit._types")
+        left = types._test_symbolic("left", object())
+        right = types._test_symbolic("right", object())
+
+        with self.assertRaisesRegex(TypeError, "ACPY-STATIC-002"):
+            left == right
+
     def test_symbolic_value_repr_uses_only_stable_identity(self) -> None:
         types = importlib.import_module("agentic_circuit._types")
 
