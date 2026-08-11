@@ -81,6 +81,11 @@ class ArtifactStage:
         if tuple(found) != self.expected:
             raise ValueError("staged artifact set does not match the declared file set")
 
+    def verify(self) -> None:
+        """Validate the staged closed file set without publishing it."""
+
+        self._verify()
+
     def commit(self, *, allow_replace: Iterable[str] = ()) -> None:
         self._verify()
         assert self.path is not None

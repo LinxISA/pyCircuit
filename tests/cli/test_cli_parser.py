@@ -18,7 +18,9 @@ REPOSITORY = Path(__file__).parents[2]
 
 def run_cli(*arguments: str, cwd: Path) -> subprocess.CompletedProcess[str]:
     environment = os.environ.copy()
-    environment["PYTHONPATH"] = str(REPOSITORY / "src")
+    environment["PYTHONPATH"] = os.pathsep.join(
+        (str(REPOSITORY / "src"), str(REPOSITORY / "build/dev-llvm22/python"))
+    )
     return subprocess.run(
         [sys.executable, "-m", "agentic_circuit._cli", *arguments],
         cwd=cwd,
@@ -62,6 +64,15 @@ class CliParserTest(unittest.TestCase):
             unrelated.mkdir()
             manifest = project / "agentic-circuit.toml"
             manifest.write_bytes(FIXTURE.read_bytes())
+            project.joinpath("architecture.py").write_text(
+                "from agentic_circuit import module, system\n"
+                "@module\n"
+                "def top() -> None:\n"
+                "    return\n"
+                "@system(root='top')\n"
+                "def main() -> None:\n"
+                "    return\n"
+            )
             result = run_cli(
                 "check",
                 "architecture.py",

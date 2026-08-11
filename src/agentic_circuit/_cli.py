@@ -9,6 +9,8 @@ from typing import Sequence
 
 from ._commands import init as init_command
 from ._commands import doctor as doctor_command
+from ._commands import check as check_command
+from ._commands import elaborate as elaborate_command
 from ._commands import explain as explain_command
 from ._commands import schema as schema_command
 from ._diagnostics import Diagnostic
@@ -136,6 +138,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     check = commands.add_parser("check", allow_abbrev=False)
     check.add_argument("architecture", nargs="?")
+    check.add_argument(
+        "--stop-after", choices=("acpy-verify",), action=_OnceValue
+    )
     _add_workspace_options(check, jobs=True)
     _add_output_options(check)
 
@@ -236,6 +241,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         sink = OutputSink.from_arguments(
             arguments, workspace_format=workspace.diagnostic_format
         )
+        if arguments.command == "check":
+            return check_command.run(arguments, workspace, sink)
+        if arguments.command == "elaborate":
+            return elaborate_command.run(arguments, workspace, sink)
         sink.result(
             _placeholder_result(arguments, workspace.project_name),
             human=f"{arguments.command} accepted for {workspace.project_name}",

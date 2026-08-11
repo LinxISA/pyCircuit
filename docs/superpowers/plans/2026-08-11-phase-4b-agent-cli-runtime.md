@@ -559,7 +559,7 @@ git commit -m "feat(cli): add schema capability and doctor discovery"
 - Consumes: Phase 4A `CaptureRequest`/`elaborate_frontend`, workspace, staging, output policy, and native ACIR verification.
 - Produces: `CaptureWorkerRequest`, `CaptureWorkerResult`, `run_capture_worker`, `check_command`, and `elaborate_command`.
 
-- [ ] **Step 1: Write failing isolation and artifact tests**
+- [x] **Step 1: Write failing isolation and artifact tests**
 
 ```python
 class FrontendCommandTest(unittest.TestCase):
@@ -577,13 +577,13 @@ class FrontendCommandTest(unittest.TestCase):
         self.assertNotIn("project noise", first.stdout)
 ```
 
-- [ ] **Step 2: Run the focused test and confirm the RED state**
+- [x] **Step 2: Run the focused test and confirm the RED state**
 
 Run: `PYTHONPATH=src:build/dev-llvm22/python .venv/bin/python -m unittest tests.cli.test_frontend_commands -v`
 
 Expected: FAIL because capture commands are absent.
 
-- [ ] **Step 3: Implement fresh trusted-worker execution**
+- [x] **Step 3: Implement fresh trusted-worker execution**
 
 ```python
 @dataclass(frozen=True, slots=True)
@@ -618,7 +618,7 @@ The worker imports the package first, then adds the explicit workspace root,
 executes only the requested trusted entry, redirects project stdout/stderr to a
 bounded report, and writes verified ACPy/ACIR plus diagnostics into its stage.
 
-- [ ] **Step 4: Implement command stop/output behavior**
+- [x] **Step 4: Implement command stop/output behavior**
 
 `check` runs through ACIR construction and native parse/verification without
 lowering or C++ compilation. Support `--stop-after=acpy-verify`. `elaborate`
@@ -635,13 +635,13 @@ def elaborate_command(args: Namespace, sink: OutputSink) -> ExitCode:
     return sink.success({"path": args.output, "sha256": sha256_bytes(data)})
 ```
 
-- [ ] **Step 5: Run frontend command and determinism tests**
+- [x] **Step 5: Run frontend command and determinism tests**
 
 Run: `PYTHONPATH=src:build/dev-llvm22/python .venv/bin/python -m unittest tests.cli.test_frontend_commands tests.python_frontend.test_determinism -v`
 
 Expected: PASS.
 
-- [ ] **Step 6: Commit capture/check/elaborate**
+- [x] **Step 6: Commit capture/check/elaborate**
 
 ```bash
 git add src/agentic_circuit tests/cli
