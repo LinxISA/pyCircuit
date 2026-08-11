@@ -1,5 +1,6 @@
 find_package(GTest CONFIG REQUIRED)
 add_executable(GfsimTests
+  ShowcaseTest.cpp
   core_test.cpp
 )
 target_include_directories(GfsimTests PRIVATE
