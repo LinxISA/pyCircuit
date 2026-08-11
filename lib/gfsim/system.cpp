@@ -18,6 +18,7 @@ struct SimSystem::Impl {
   ActivationPlan activation;
   uint64_t committedEventCount = 0;
   bool executingEpoch = false;
+  std::optional<ObjectId> activeWorkOwner;
   NoProgressReport noProgress;
   size_t traceOwnerCount = 0;
   bool traceEof = true;
@@ -27,6 +28,7 @@ struct SimSystem::Impl {
   std::map<std::string, TimeDomainRuntime> timeDomains;
   std::map<std::string, uint64_t> maxDomainCycles;
   std::map<std::string, uint64_t> domainCycles;
+  ObservationRecorder observations;
   std::optional<uint64_t> deadlockWindow;
   Tick lastProgressTick = 0;
 };
@@ -189,6 +191,23 @@ std::vector<StatSnapshot> SimSystem::statistics() const {
                             std::tie(right.objectPath, right.name);
                    });
   return snapshots;
+}
+
+std::span<const CommittedEvent> SimSystem::observations() const {
+  return impl_->observations.events();
+}
+
+bool SimSystem::proposeObservation(EventProposal proposal) {
+  if (terminated_ || !impl_->executingEpoch || !impl_->activeWorkOwner)
+    return false;
+  if (proposal.ownerId != *impl_->activeWorkOwner ||
+      !lookup(proposal.ownerId))
+    return fail("invalid_observation_owner",
+                "observation owner must be the active Work object");
+  if (!impl_->observations.propose(std::move(proposal)))
+    return fail("invalid_observation_proposal",
+                std::string(impl_->observations.lastError()));
+  return true;
 }
 
 void SimSystem::registerObject(SimObject *obj) {
@@ -414,10 +433,12 @@ bool SimSystem::step() {
 
   impl_->executingEpoch = true;
   for (ObjectId id : currentWork) {
+    impl_->activeWorkOwner = id;
     if (const DispatchRow *row = impl_->dispatch.lookup(id))
       row->work(row->object, epoch_);
     else if (SimObject *object = lookup(id))
       object->doWork(epoch_);
+    impl_->activeWorkOwner.reset();
     if (terminated_)
       return false;
   }
@@ -465,6 +486,13 @@ bool SimSystem::step() {
     if (object && !object->runtimeFailureCode().empty())
       return fail(std::string(object->runtimeFailureCode()),
                   "runtime object reported a committed failure");
+    if (committed) {
+      if (!impl_->observations.commitOwner(id, epoch_))
+        return fail("invalid_observation_commit",
+                    std::string(impl_->observations.lastError()));
+    } else {
+      impl_->observations.rejectOwner(id);
+    }
   }
   if (impl_->eventQueue.hasPendingCommit()) {
     if (impl_->eventQueueLastCommitTick == epoch_.time)
@@ -502,6 +530,7 @@ bool SimSystem::step() {
     impl_->lastProgressTick = epoch_.time;
   }
   impl_->executingEpoch = false;
+  impl_->activeWorkOwner.reset();
 
   std::optional<Epoch> nextEpoch;
   bool nextEpochIsEvent = false;
@@ -602,7 +631,9 @@ void SimSystem::reset() {
   impl_->eventQueue.reset();
   impl_->committedEventCount = 0;
   impl_->executingEpoch = false;
+  impl_->activeWorkOwner.reset();
   impl_->noProgress = {};
+  impl_->observations.reset();
   impl_->traceOwnerCount = 0;
   impl_->traceEof = true;
   impl_->preflightValidated = false;

@@ -3,6 +3,7 @@
 
 #include "gfsim/core.h"
 #include "gfsim/dispatch.h"
+#include "gfsim/observation.h"
 
 #include <algorithm>
 #include <cassert>
@@ -238,6 +239,8 @@ public:
   TerminationResult terminationResult() const { return result_; }
   NoProgressReport noProgressReport() const;
   std::vector<StatSnapshot> statistics() const;
+  std::span<const CommittedEvent> observations() const;
+  bool proposeObservation(EventProposal proposal);
 
   // ── Object registry ─────────────────────────────────────────────────
 

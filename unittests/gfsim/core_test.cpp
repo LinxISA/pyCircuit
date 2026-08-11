@@ -3,6 +3,7 @@
 #include "gfsim/dispatch.h"
 #include "gfsim/harness.h"
 #include "gfsim/object.h"
+#include "gfsim/observation.h"
 #include "gfsim/packet.h"
 #include "gfsim/process.h"
 #include "gfsim/queue.h"
@@ -1663,6 +1664,137 @@ TEST(GfsimStatisticsTest, QueueSnapshotsUseFrozenNamesAndKinds) {
   EXPECT_EQ(find("accepted_transactions")->kind, StatisticKind::Counter);
   ASSERT_NE(find("completed_transactions"), nullptr);
   EXPECT_EQ(find("completed_transactions")->kind, StatisticKind::Counter);
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// Committed observations
+// ═══════════════════════════════════════════════════════════════════════
+
+EventProposal testObservation(ObjectId owner, std::string name,
+                              uint64_t sequenceId) {
+  return {.ownerId = owner,
+          .category = "transaction",
+          .name = std::move(name),
+          .phase = TraceEventPhase::Instant,
+          .rootSequenceId = sequenceId,
+          .arguments = {{"accepted", true}, {"bytes", uint64_t{64}}}};
+}
+
+TEST(GfsimObservationTest, ProposalsBecomeVisibleOnlyAtCommit) {
+  ObservationRecorder recorder;
+  ASSERT_TRUE(recorder.propose(testObservation(4, "accepted", 10)));
+  EXPECT_TRUE(recorder.events().empty());
+  recorder.rejectOwner(4);
+  EXPECT_TRUE(recorder.events().empty());
+
+  ASSERT_TRUE(recorder.propose(testObservation(4, "accepted", 11)));
+  ASSERT_TRUE(recorder.commitOwner(4, {3, 1}));
+  ASSERT_EQ(recorder.events().size(), 1u);
+  const CommittedEvent &event = recorder.events().front();
+  EXPECT_EQ(event.epoch, (Epoch{3, 1}));
+  EXPECT_EQ(event.ownerId, 4u);
+  EXPECT_EQ(event.localCommittedIndex, 0u);
+  EXPECT_EQ(event.rootSequenceId, 11u);
+}
+
+TEST(GfsimObservationTest, StableKeyDoesNotDependOnProposalOrCommitOrder) {
+  auto run = [](std::array<ObjectId, 3> proposalOrder,
+                std::array<ObjectId, 3> commitOrder) {
+    ObservationRecorder recorder;
+    for (ObjectId owner : proposalOrder)
+      EXPECT_TRUE(recorder.propose(
+          testObservation(owner, "owner_" + std::to_string(owner), owner)));
+    for (ObjectId owner : commitOrder)
+      EXPECT_TRUE(recorder.commitOwner(owner, {7, 0}));
+    return std::vector<CommittedEvent>(recorder.events().begin(),
+                                       recorder.events().end());
+  };
+
+  const auto ascending = run({1, 3, 7}, {1, 3, 7});
+  const auto permuted = run({7, 1, 3}, {3, 7, 1});
+  EXPECT_EQ(ascending, permuted);
+  ASSERT_EQ(permuted.size(), 3u);
+  EXPECT_EQ(permuted[0].ownerId, 1u);
+  EXPECT_EQ(permuted[1].ownerId, 3u);
+  EXPECT_EQ(permuted[2].ownerId, 7u);
+}
+
+TEST(GfsimObservationTest, RejectionConsumesNoOwnerLocalIndex) {
+  ObservationRecorder recorder;
+  ASSERT_TRUE(recorder.propose(testObservation(2, "rejected", 1)));
+  recorder.rejectOwner(2);
+  ASSERT_TRUE(recorder.propose(testObservation(2, "first_commit", 2)));
+  ASSERT_TRUE(recorder.commitOwner(2, {1, 0}));
+  ASSERT_TRUE(recorder.propose(testObservation(2, "second_commit", 3)));
+  ASSERT_TRUE(recorder.commitOwner(2, {2, 0}));
+  ASSERT_EQ(recorder.events().size(), 2u);
+  EXPECT_EQ(recorder.events()[0].localCommittedIndex, 0u);
+  EXPECT_EQ(recorder.events()[1].localCommittedIndex, 1u);
+}
+
+TEST(GfsimObservationTest, ValidatesNamesArgumentsFlowsAndMonotonicTime) {
+  ObservationRecorder recorder;
+  EventProposal invalid = testObservation(kInvalidObjectId, "accepted", 1);
+  EXPECT_FALSE(recorder.propose(invalid));
+  invalid = testObservation(1, "not valid", 1);
+  EXPECT_FALSE(recorder.propose(invalid));
+  invalid = testObservation(1, "accepted", 1);
+  invalid.arguments = {{"z", uint64_t{1}}, {"a", uint64_t{2}}};
+  EXPECT_FALSE(recorder.propose(invalid));
+
+  EventProposal start = testObservation(1, "dependency", 1);
+  start.phase = TraceEventPhase::FlowStart;
+  start.flowId = 9;
+  ASSERT_TRUE(recorder.propose(start));
+  ASSERT_TRUE(recorder.commitOwner(1, {4, 0}));
+  EventProposal end = start;
+  end.phase = TraceEventPhase::FlowEnd;
+  ASSERT_TRUE(recorder.propose(end));
+  ASSERT_TRUE(recorder.commitOwner(1, {5, 0}));
+  EXPECT_FALSE(recorder.commitOwner(1, {3, 0}));
+
+  recorder.reset();
+  EXPECT_TRUE(recorder.events().empty());
+  ASSERT_TRUE(recorder.propose(start));
+  EXPECT_EQ(recorder.pendingCount(1), 1u);
+}
+
+class ObservedCommitObject final : public SimObject {
+public:
+  ObservedCommitObject(ObjectId id, SimSystem &system, bool commit)
+      : SimObject(ObjectKind::Compute, "observed", id), system_(system),
+        commit_(commit) {}
+
+  void doWork(Epoch) override {
+    EXPECT_TRUE(system_.proposeObservation(testObservation(id(), "work", id())));
+    pending_ = commit_;
+  }
+  bool hasPendingCommit() const override { return pending_; }
+  void doXfer(Epoch) override { pending_ = false; }
+
+private:
+  SimSystem &system_;
+  bool commit_ = false;
+  bool pending_ = false;
+};
+
+TEST(GfsimObservationTest, SystemAdmitsOnlyObjectsThatCommitAtXfer) {
+  SimSystem system("observed");
+  ObservedCommitObject committed(0, system, true);
+  ObservedCommitObject rejected(1, system, false);
+  system.registerObject(&committed);
+  system.registerObject(&rejected);
+  ASSERT_TRUE(system.scheduleWork(rejected.id(), {0, 0}));
+  ASSERT_TRUE(system.scheduleWork(committed.id(), {0, 0}));
+
+  const TerminationResult result = system.run();
+  EXPECT_EQ(result.classification, TerminationClass::Completed);
+  ASSERT_EQ(system.observations().size(), 1u);
+  EXPECT_EQ(system.observations().front().ownerId, committed.id());
+  EXPECT_EQ(system.observations().front().localCommittedIndex, 0u);
+
+  system.reset();
+  EXPECT_TRUE(system.observations().empty());
 }
 
 TEST(GfsimSystemTest, NonEmptyQueueWithoutWakeFailsWithNoProgressReport) {
