@@ -1,5 +1,6 @@
 add_library(gfsim STATIC
   harness.cpp
+  npu.cpp
   observation.cpp
   showcase.cpp
   system.cpp
