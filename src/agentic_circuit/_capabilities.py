@@ -9,6 +9,7 @@ from typing import Mapping
 
 from ._canonical_json import JsonValue, canonical_json_bytes, sha256_bytes
 from ._native_api import NativeCapabilities, capabilities as native_capabilities
+from ._package_data import resource_directory
 
 
 EXACT_CONTRACT_IDENTITIES: dict[str, str] = {
@@ -26,26 +27,12 @@ EXACT_CONTRACT_IDENTITIES: dict[str, str] = {
 }
 
 
-def _package_data_root() -> Path:
-    packaged = Path(__file__).resolve().parent / "_data"
-    if packaged.is_dir():
-        return packaged
-    repository = Path(__file__).resolve().parents[2]
-    if (repository / "schemas").is_dir() and (repository / "resources").is_dir():
-        return repository
-    raise FileNotFoundError("Agentic Circuit schema resources are unavailable")
-
-
 def schema_root() -> Path:
-    root = _package_data_root()
-    packaged = root / "schemas"
-    return packaged if packaged.is_dir() else root / "schemas"
+    return resource_directory("schemas")
 
 
 def diagnostics_catalog_path() -> Path:
-    root = _package_data_root()
-    packaged = root / "diagnostics-v0.1.json"
-    return packaged if packaged.is_file() else root / "resources" / packaged.name
+    return resource_directory("resources") / "diagnostics-v0.1.json"
 
 
 def load_json(path: Path) -> dict[str, JsonValue]:

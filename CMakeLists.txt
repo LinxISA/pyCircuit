@@ -77,12 +77,18 @@ install(
 )
 install(FILES cmake/modules/AddACIR.cmake DESTINATION lib/cmake/AgenticCircuit/modules)
 install(DIRECTORY include/acir DESTINATION include)
+install(DIRECTORY include/gfsim DESTINATION include)
 install(
   DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/include/acir"
   DESTINATION include
   FILES_MATCHING
   PATTERN "*.h.inc"
 )
+
+# The Python bridge locates the same installed-style runtime surface in the
+# build tree, keeping native compilation independent of source-tree paths.
+file(COPY "${CMAKE_CURRENT_SOURCE_DIR}/include/gfsim"
+  DESTINATION "${CMAKE_CURRENT_BINARY_DIR}/include")
 
 add_subdirectory(include)
 add_subdirectory(lib)

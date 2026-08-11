@@ -267,11 +267,14 @@ bool parseFileHashes(PyObject *value, std::vector<FileHash> &result) {
 }
 
 bool parseBuildOptions(PyObject *value, CompilerRequest &request) {
-  static constexpr std::array<llvm::StringRef, 11> keys{
-      "project_name",           "project_identity", "system_name",
-      "system_identity",        "source_files",     "python_version",
-      "helper_identities",      "compiler",         "standard_library",
-      "instrumentation_layers", "output_root"};
+  static constexpr std::array<llvm::StringRef, 13> keys{
+      "project_name",      "project_identity",
+      "system_name",       "system_identity",
+      "source_files",      "python_version",
+      "helper_identities", "compiler",
+      "standard_library",  "instrumentation_layers",
+      "output_root",       "include_roots",
+      "link_inputs"};
   if (!hasOnlyKeys(value, keys, "native build options"))
     return false;
   for (llvm::StringRef key : keys)
@@ -324,7 +327,11 @@ bool parseBuildOptions(PyObject *value, CompilerRequest &request) {
                               "helper_identities",
                               build.frontend.helperIdentities) ||
       !parseStringList(PyDict_GetItemString(value, "instrumentation_layers"),
-                       "instrumentation_layers", build.instrumentationLayers))
+                       "instrumentation_layers", build.instrumentationLayers) ||
+      !parseStringList(PyDict_GetItemString(value, "include_roots"),
+                       "include_roots", build.includeRoots) ||
+      !parseStringList(PyDict_GetItemString(value, "link_inputs"),
+                       "link_inputs", build.linkInputs))
     return false;
   build.frontend.acpy = {
       "input/model.acpy.json", ArtifactKind::Acpy,
@@ -333,9 +340,6 @@ bool parseBuildOptions(PyObject *value, CompilerRequest &request) {
       "input/model.ac.mlir", ArtifactKind::Acir,
       acir::codegen::computeFingerprint(build.frontend.canonicalAcirBytes)};
   build.toolchain = std::move(*toolchain);
-  build.includeRoots = {ACIR_NATIVE_SOURCE_DIR "/include"};
-  build.linkInputs = {ACIR_NATIVE_BINARY_DIR "/lib/gfsim/libgfsim.a",
-                      ACIR_NATIVE_BINARY_DIR "/lib/Bindings/libACIRBindings.a"};
   build.linkerFlags = {"-L" ACIR_NATIVE_LLVM_LIB_DIR, "-lLLVM"};
   build.outputRoot = std::move(*outputRoot);
   return true;

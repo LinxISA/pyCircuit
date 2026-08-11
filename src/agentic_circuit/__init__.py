@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+from pkgutil import extend_path
 from typing import Never
+
+
+__path__ = extend_path(__path__, __name__)
 
 from ._definitions import (
     extern_module,

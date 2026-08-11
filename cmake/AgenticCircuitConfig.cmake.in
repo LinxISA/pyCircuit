@@ -8,4 +8,11 @@ include("${CMAKE_CURRENT_LIST_DIR}/AgenticCircuitTargets.cmake")
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_LIST_DIR}/modules")
 include(AddACIR)
 
+set(AgenticCircuit_EXECUTABLE "${PACKAGE_PREFIX_DIR}/bin/agentic-circuit")
+if(NOT EXISTS "${AgenticCircuit_EXECUTABLE}")
+  set(AgenticCircuit_FOUND FALSE)
+  set(AgenticCircuit_NOT_FOUND_MESSAGE
+      "Agentic Circuit executable is missing: ${AgenticCircuit_EXECUTABLE}")
+endif()
+
 check_required_components(AgenticCircuit)

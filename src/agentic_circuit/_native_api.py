@@ -112,6 +112,13 @@ def _load_native() -> ModuleType:
     return imported
 
 
+def native_extension_path() -> Path:
+    path = getattr(_load_native(), "__file__", None)
+    if type(path) is not str:
+        raise RuntimeError("the Agentic Circuit native extension has no file identity")
+    return Path(path).resolve()
+
+
 def _closed_dict(value: object, keys: frozenset[str], label: str) -> dict[str, object]:
     if type(value) is not dict:
         raise TypeError(f"native {label} must be a dictionary")

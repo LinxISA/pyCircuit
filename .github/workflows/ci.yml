@@ -37,6 +37,10 @@ jobs:
           PYTHONPATH: src
         run: |
           python -m unittest discover -s tests/python_frontend -v
+          python -m unittest \
+            tests.cli.test_cli_parser.CliParserTest.test_exact_command_inventory \
+            tests.cli.test_cli_parser.CliParserTest.test_aliases_and_repeated_singleton_options_are_rejected \
+            tests.cli.test_all_commands -v
           PYTHONHASHSEED=1 python -m unittest tests.python_frontend.test_determinism -v
           PYTHONHASHSEED=99 python -m unittest tests.python_frontend.test_determinism -v
 
@@ -160,6 +164,13 @@ jobs:
 
       - name: Run unit tests with assertions
         run: ctest --test-dir build/dev-llvm22 --output-on-failure
+
+      - name: Run public CLI and Python frontend tests
+        env:
+          PYTHONPATH: src:${{ github.workspace }}/build/dev-llvm22/python
+        run: |
+          python -m unittest discover -s tests/cli -v
+          python -m unittest discover -s tests/python_frontend -v
 
       - name: Install clang-tidy
         run: sudo apt-get install --yes --no-install-recommends clang-tidy

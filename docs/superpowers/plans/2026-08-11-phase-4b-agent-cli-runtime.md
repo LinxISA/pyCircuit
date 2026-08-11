@@ -1248,7 +1248,7 @@ git commit -m "feat(cli): add deterministic architecture inspection"
 - Consumes: all Phase 4A/4B public and installation surfaces.
 - Produces: installed command/package/native extension and complete success/error/determinism/machine-output gate.
 
-- [ ] **Step 1: Add failing complete command ledger tests**
+- [x] **Step 1: Add failing complete command ledger tests**
 
 ```python
 class AllCommandsTest(unittest.TestCase):
@@ -1267,13 +1267,13 @@ class AllCommandsTest(unittest.TestCase):
         self.assertEqual(0, result.returncode)
 ```
 
-- [ ] **Step 2: Run ledger/install tests and confirm the RED state**
+- [x] **Step 2: Run ledger/install tests and confirm the RED state**
 
 Run: `PYTHONPATH=src:build/dev-llvm22/python .venv/bin/python -m unittest tests.cli.test_all_commands tests.cli.test_installation -v`
 
 Expected: FAIL because the complete ledger/install path is absent.
 
-- [ ] **Step 3: Finish CMake install and source-independent resource lookup**
+- [x] **Step 3: Finish CMake install and source-independent resource lookup**
 
 Install the Python package, `_native` module, schemas, stdlib catalog,
 diagnostic catalog, templates, and executable launcher under one relocatable
@@ -1281,7 +1281,7 @@ prefix. Resolve resources with `importlib.resources`, never repository-relative
 paths. Extend the external install consumer to run `schema capabilities` and a
 minimal `check`.
 
-- [ ] **Step 4: Add complete CLI and Python-version CI matrices**
+- [x] **Step 4: Add complete CLI and Python-version CI matrices**
 
 ```yaml
 - name: Run public CLI tests
@@ -1296,13 +1296,13 @@ Add Python 3.11/3.12/3.13 pure frontend/CLI parser jobs and native integration
 on the locked primary interpreter. Retain Debug, Release, ASan, UBSan,
 clang-format, clang-tidy, contract, lit, and install-consumer gates.
 
-- [ ] **Step 5: Run complete development, release, and install checks**
+- [x] **Step 5: Run complete development, release, and install checks**
 
 Run: `PYTHONPATH=src:build/dev-llvm22/python .venv/bin/python -m unittest discover -s tests/cli -v && PYTHONPATH=src .venv/bin/python -m unittest discover -s tests/python_frontend -v && cmake --build --preset dev-llvm22 && ctest --test-dir build/dev-llvm22 --output-on-failure && cmake --build --preset dev-llvm22 --target check-acir && cmake --build --preset release-llvm22 && ctest --test-dir build/release-llvm22 --output-on-failure && cmake --build --preset release-llvm22 --target check-acir`
 
 Expected: PASS.
 
-- [ ] **Step 6: Commit public installation and CI gates**
+- [x] **Step 6: Commit public installation and CI gates**
 
 ```bash
 git add .github CMakeLists.txt cmake tests

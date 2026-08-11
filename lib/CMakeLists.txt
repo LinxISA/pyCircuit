@@ -19,9 +19,10 @@ add_subdirectory(CodeGen)
 add_subdirectory(Compiler)
 
 # Install every library that owns symbols declared by the installed public
-# headers. The gfsim runtime remains a separate build-tree surface.
+# headers, including the generated-model runtime.
 install(
   TARGETS
+    gfsim
     ACIRDialect
     ACSimDialect
     ACIRBindings

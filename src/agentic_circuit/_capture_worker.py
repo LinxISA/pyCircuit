@@ -121,10 +121,17 @@ def _request_json(request: CaptureWorkerRequest, output: Path) -> dict[str, Json
 
 
 def run_capture_worker(request: CaptureWorkerRequest) -> CaptureWorkerResult:
-    package_parent = Path(__file__).resolve().parents[1]
+    package_parents = os.pathsep.join(
+        sorted(
+            {
+                str(Path(location).resolve().parent)
+                for location in sys.modules["agentic_circuit"].__path__
+            }
+        )
+    )
     bootstrap = (
-        "import runpy,sys;"
-        "sys.path.insert(0,sys.argv.pop(1));"
+        "import os,runpy,sys;"
+        "sys.path[:0]=sys.argv.pop(1).split(os.pathsep);"
         "runpy.run_module('agentic_circuit._capture_worker',run_name='__main__')"
     )
     with ArtifactStage(request.private_output, expected=_STAGE_FILES) as stage:
@@ -144,7 +151,7 @@ def run_capture_worker(request: CaptureWorkerRequest) -> CaptureWorkerResult:
                     "-I",
                     "-c",
                     bootstrap,
-                    os.fspath(package_parent),
+                    package_parents,
                     "--request",
                     os.fspath(request_path),
                 ),

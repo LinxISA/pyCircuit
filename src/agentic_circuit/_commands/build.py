@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Literal, NoReturn
 
 from .._diagnostics import Diagnostic
-from .._native_api import NativeRequest, run_native_compiler
+from .._native_api import NativeRequest, native_extension_path, run_native_compiler
 from .._output import OutputSink
 from .._workspace import UserInputError, WorkspaceConfig
 from .check import _has_errors, capture
@@ -96,6 +96,25 @@ def _source_files(acpy: bytes) -> list[dict[str, str]]:
         _fail("ACPY-VERIFY-001", f"ACPy source provenance is invalid: {error}")
 
 
+def _runtime_linkage() -> tuple[list[str], list[str]]:
+    for root in native_extension_path().parents:
+        include = root / "include"
+        build_tree = (
+            root / "lib/gfsim/libgfsim.a",
+            root / "lib/Bindings/libACIRBindings.a",
+        )
+        installed = (root / "lib/libgfsim.a", root / "lib/libACIRBindings.a")
+        for libraries in (build_tree, installed):
+            if (include / "gfsim").is_dir() and all(
+                library.is_file() for library in libraries
+            ):
+                return (
+                    [include.resolve().as_posix()],
+                    [library.resolve().as_posix() for library in libraries],
+                )
+    raise RuntimeError("Agentic Circuit runtime development files are unavailable")
+
+
 def _logical_diagnostics(
     diagnostics: tuple[Diagnostic, ...],
 ) -> tuple[Diagnostic, ...]:
@@ -162,6 +181,7 @@ def build_publication(
             options.profile,
         )
 
+    include_roots, link_inputs = _runtime_linkage()
     native_options: list[tuple[str, object]] = [
         ("profile", options.profile),
         ("binding_lock", b"[]"),
@@ -189,6 +209,8 @@ def build_publication(
                 "standard_library": workspace.standard_library,
                 "instrumentation_layers": list(options.instrumentation_layers),
                 "output_root": destination.as_posix(),
+                "include_roots": include_roots,
+                "link_inputs": link_inputs,
             },
         ),
     ]
