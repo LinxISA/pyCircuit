@@ -18,6 +18,7 @@ struct SimSystem::Impl {
   ActivationPlan activation;
   uint64_t committedEventCount = 0;
   bool executingEpoch = false;
+  std::optional<ObjectId> activeProposalOwner;
   NoProgressReport noProgress;
   size_t traceOwnerCount = 0;
   bool traceEof = true;
@@ -27,6 +28,7 @@ struct SimSystem::Impl {
   std::map<std::string, TimeDomainRuntime> timeDomains;
   std::map<std::string, uint64_t> maxDomainCycles;
   std::map<std::string, uint64_t> domainCycles;
+  ObservationRecorder observations;
   std::optional<uint64_t> deadlockWindow;
   Tick lastProgressTick = 0;
 };
@@ -189,6 +191,23 @@ std::vector<StatSnapshot> SimSystem::statistics() const {
                             std::tie(right.objectPath, right.name);
                    });
   return snapshots;
+}
+
+std::span<const CommittedEvent> SimSystem::observations() const {
+  return impl_->observations.events();
+}
+
+bool SimSystem::proposeObservation(EventProposal proposal) {
+  if (terminated_ || !impl_->executingEpoch || !impl_->activeProposalOwner)
+    return false;
+  if (proposal.ownerId != *impl_->activeProposalOwner ||
+      !lookup(proposal.ownerId))
+    return fail("invalid_observation_owner",
+                "observation owner must be the active runtime object");
+  if (!impl_->observations.propose(std::move(proposal)))
+    return fail("invalid_observation_proposal",
+                std::string(impl_->observations.lastError()));
+  return true;
 }
 
 void SimSystem::registerObject(SimObject *obj) {
@@ -414,19 +433,23 @@ bool SimSystem::step() {
 
   impl_->executingEpoch = true;
   for (ObjectId id : currentWork) {
+    impl_->activeProposalOwner = id;
     if (const DispatchRow *row = impl_->dispatch.lookup(id))
       row->work(row->object, epoch_);
     else if (SimObject *object = lookup(id))
       object->doWork(epoch_);
+    impl_->activeProposalOwner.reset();
     if (terminated_)
       return false;
   }
 
   for (ObjectId id : currentWork) {
+    impl_->activeProposalOwner = id;
     if (const DispatchRow *row = impl_->dispatch.lookup(id))
       row->xfer(row->object, epoch_, XferPhase::Arbitrate);
     else if (SimObject *object = lookup(id))
       object->doArbitrate(epoch_);
+    impl_->activeProposalOwner.reset();
     if (terminated_)
       return false;
   }
@@ -465,6 +488,13 @@ bool SimSystem::step() {
     if (object && !object->runtimeFailureCode().empty())
       return fail(std::string(object->runtimeFailureCode()),
                   "runtime object reported a committed failure");
+    if (committed) {
+      if (!impl_->observations.commitOwner(id, epoch_))
+        return fail("invalid_observation_commit",
+                    std::string(impl_->observations.lastError()));
+    } else {
+      impl_->observations.rejectOwner(id);
+    }
   }
   if (impl_->eventQueue.hasPendingCommit()) {
     if (impl_->eventQueueLastCommitTick == epoch_.time)
@@ -502,6 +532,7 @@ bool SimSystem::step() {
     impl_->lastProgressTick = epoch_.time;
   }
   impl_->executingEpoch = false;
+  impl_->activeProposalOwner.reset();
 
   std::optional<Epoch> nextEpoch;
   bool nextEpochIsEvent = false;
@@ -517,6 +548,34 @@ bool SimSystem::step() {
     if (stopAtTraceCap())
       return false;
     refreshRuntimeSummary();
+    if (impl_->traceOwnerCount == 1 && impl_->traceEof) {
+      std::vector<ObjectId> traceEndProcesses;
+      for (SimObject *object : runtimeObjects())
+        if (object->requestTraceEnd())
+          traceEndProcesses.push_back(object->id());
+      if (!traceEndProcesses.empty()) {
+        if (epoch_.time == std::numeric_limits<Tick>::max())
+          return fail("tick_overflow",
+                      "trace-end process termination exceeds tick range");
+        Epoch shutdownEpoch{epoch_.time + 1, 0};
+        if (shutdownEpoch.time >= maxTicks_) {
+          epoch_ = {maxTicks_, 0};
+          terminated_ = true;
+          result_.classification = TerminationClass::Incomplete;
+          result_.finalEpoch = epoch_;
+          result_.committedEventCount = impl_->committedEventCount;
+          result_.terminationCap = maxTicks_;
+          result_.domainCycles = impl_->domainCycles;
+          result_.diagnosticCode = "max_ticks_reached";
+          return false;
+        }
+        for (ObjectId id : traceEndProcesses)
+          if (!scheduleWork(id, shutdownEpoch))
+            return false;
+        epoch_ = shutdownEpoch;
+        return true;
+      }
+    }
     if (!impl_->noProgress.blockedObjects.empty() && impl_->deadlockWindow) {
       const Tick window = *impl_->deadlockWindow;
       if (impl_->lastProgressTick > std::numeric_limits<Tick>::max() - window)
@@ -602,7 +661,9 @@ void SimSystem::reset() {
   impl_->eventQueue.reset();
   impl_->committedEventCount = 0;
   impl_->executingEpoch = false;
+  impl_->activeProposalOwner.reset();
   impl_->noProgress = {};
+  impl_->observations.reset();
   impl_->traceOwnerCount = 0;
   impl_->traceEof = true;
   impl_->preflightValidated = false;

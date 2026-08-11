@@ -473,6 +473,13 @@ and carries the trace cursor position and last committed sequence ID. An empty
 schedule is `completed` only when this report has no blocked object and the
 event queue is empty.
 
+After the unique trace cursor reaches EOF, a process suspended specifically at
+an `ac.yield_sim` `next_delta` wake is at a voluntary trace-end shutdown point.
+The scheduler makes that process runnable at the next integer tick, where it
+commits `Terminated` through the ordinary Work/Xfer barrier. Condition,
+resource, and event-queue suspensions remain unfinished and cannot be converted
+to trace-end termination.
+
 ## Statistics, replay, and determinism
 
 Statistics and event logs are deterministic and machine-readable. Logging and

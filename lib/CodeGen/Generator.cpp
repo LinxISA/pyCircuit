@@ -313,7 +313,8 @@ llvm::Expected<GeneratedFile> moduleHeader(const ModelPlan &plan,
   for (const ExportPlan &exported : module.exports)
     output << "  decltype(auto) " << exported.symbol << "();\n"
            << "  decltype(auto) " << exported.symbol << "() const;\n";
-  output << "\nprivate:\n  friend struct DispatchAccess;\n";
+  output
+      << "\nprivate:\n  friend class Model;\n  friend struct DispatchAccess;\n";
   for (const PlacementPlan &placement : module.placements) {
     auto type = placementType(plan, placement);
     if (!type)
@@ -676,7 +677,7 @@ llvm::Expected<GeneratedFile> modelHeader(const ModelPlan &plan,
       << "#pragma once\n\n#include \"generated/modules/" << root->className
       << ".h\"\n#include \"gfsim/dispatch.h\"\n#include \"gfsim/harness.h\"\n"
          "#include \"gfsim/object.h\"\n\n"
-         "#include <array>\n#include <string_view>\n\n"
+         "#include <array>\n#include <string_view>\n#include <vector>\n\n"
          "namespace acsim_generated {\n\ninline constexpr std::string_view "
          "kBuildFingerprint = \""
       << fingerprint.str()
@@ -692,13 +693,21 @@ llvm::Expected<GeneratedFile> modelHeader(const ModelPlan &plan,
   output
       << "}};\n\nstruct DispatchAccess;\n\nclass Model final {\n"
          "public:\n  Model();\n  void configure(const gfsim::RuntimeLimits "
-         "&limits);\n  gfsim::TerminationResult run();\n  std::string_view "
+         "&limits);\n  bool loadTrace(gfsim::PtoTraceDocument document);\n  "
+         "gfsim::TerminationResult run();\n  std::string_view "
          "buildFingerprint() const { return kBuildFingerprint; }\n  "
          "std::span<const gfsim::TimeDomainRuntime> timeDomains() const { "
-         "return kTimeDomains; }\n\nprivate:\n "
+         "return kTimeDomains; }\n  std::vector<gfsim::StatSnapshot> "
+         "statistics() const { return system_.statistics(); }\n  "
+         "std::span<const gfsim::CommittedEvent> observations() const { "
+         "return system_.observations(); }\n\nprivate:\n "
          " "
          "friend struct "
-         "DispatchAccess;\n  "
+         "DispatchAccess;\n  static constexpr std::size_t kTraceOwnerCount = "
+      << std::count_if(
+             plan.runtimeObjects.begin(), plan.runtimeObjects.end(),
+             [](const RuntimeObjectPlan &object) { return object.traceOwner; })
+      << ";\n  "
       << "gfsim::SimSystem system_;\n  gfsim::ObjectId nextObjectId_ = 0;\n  "
       << root->className << " top_;\n"
       << "  std::array<gfsim::DispatchRow, " << plan.runtimeObjects.size()
@@ -706,9 +715,10 @@ llvm::Expected<GeneratedFile> modelHeader(const ModelPlan &plan,
   return makeFile("include/generated/model.h", output.str());
 }
 
-GeneratedFile modelSource() {
+llvm::Expected<GeneratedFile> modelSource(const ModelPlan &plan) {
   std::ostringstream output;
-  output << "#include \"generated/dispatch.h\"\n\n#include <stdexcept>\n\n"
+  output << "#include \"generated/dispatch.h\"\n\n#include <stdexcept>\n"
+            "#include <utility>\n\n"
             "namespace acsim_generated {\n\nModel::Model()\n"
             "    : system_(\"generated\"),\n"
             "      nextObjectId_(0),\n"
@@ -717,6 +727,11 @@ GeneratedFile modelSource() {
             "dispatch_(DispatchAccess::makeRows(*this)) {\n"
             "  if (!system_.root().attachChild(top_))\n"
             "    throw std::logic_error(\"ACLOWER-OWNERSHIP\");\n"
+            "  for (gfsim::DispatchRow &row : dispatch_) {\n"
+            "    auto *object = static_cast<gfsim::SimObject *>(row.object);\n"
+            "    object->bindSystem(&system_);\n"
+            "    object->setObservationSink(&system_);\n"
+            "  }\n"
             "  if (!system_.setDispatchTable(dispatch_))\n"
             "    throw std::logic_error(\"ACLOWER-DISPATCH\");\n"
             "  if (!system_.setActivationPlan(kActivationOffsets, "
@@ -727,7 +742,29 @@ GeneratedFile modelSource() {
             "}\n\nvoid Model::configure(const gfsim::RuntimeLimits &limits) {\n"
             "  if (!system_.setRuntimeLimits(limits))\n"
             "    throw std::logic_error(\"ACRUN-LIMITS\");\n"
-            "}\n\ngfsim::TerminationResult Model::run() {\n"
+            "}\n\nbool Model::loadTrace(gfsim::PtoTraceDocument document) {\n";
+  const auto traceOwnerCount = std::count_if(
+      plan.runtimeObjects.begin(), plan.runtimeObjects.end(),
+      [](const RuntimeObjectPlan &object) { return object.traceOwner; });
+  if (traceOwnerCount == 0) {
+    output << "  return document.records.empty();\n";
+  } else if (traceOwnerCount == 1) {
+    const RuntimeObjectPlan &traceOwner = *std::find_if(
+        plan.runtimeObjects.begin(), plan.runtimeObjects.end(),
+        [](const RuntimeObjectPlan &object) { return object.traceOwner; });
+    auto expression = runtimeObjectExpression(plan, traceOwner);
+    if (!expression)
+      return expression.takeError();
+    llvm::StringRef memberExpression(*expression);
+    if (!memberExpression.consume_front("model."))
+      return generatorError("ACLOWER-DISPATCH",
+                            "trace owner expression is not model-relative");
+    output << "  return " << memberExpression.str()
+           << ".loadDocument(std::move(document));\n";
+  } else {
+    output << "  return false;\n";
+  }
+  output << "}\n\ngfsim::TerminationResult Model::run() {\n"
             "  return system_.run();\n}\n\n} // namespace acsim_generated\n";
   return makeFile("src/generated/model.cpp", output.str());
 }
@@ -830,7 +867,10 @@ llvm::Expected<SourceBundle> generateModelSources(const ModelPlan &plan) {
   bundle.files.push_back(std::move(*generatedDispatch));
   bundle.files.push_back(std::move(*generatedModel));
   bundle.files.push_back(mainSource());
-  bundle.files.push_back(modelSource());
+  auto generatedModelSource = modelSource(plan);
+  if (!generatedModelSource)
+    return generatedModelSource.takeError();
+  bundle.files.push_back(std::move(*generatedModelSource));
   for (const ModulePlan &module : plan.modules) {
     auto header = moduleHeader(plan, module);
     if (!header)

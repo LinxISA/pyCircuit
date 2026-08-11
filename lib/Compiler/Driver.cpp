@@ -1,5 +1,9 @@
 #include "CompilerInternal.h"
 
+#include "acir/Bindings/Registry.h"
+#include "acir/Dialect/ACIR/GraphRegion.h"
+#include "acir/Transforms/ResolveBindings.h"
+
 #include "acir/CodeGen/Generator.h"
 #include "acir/CodeGen/ModelPlan.h"
 #include "acir/Conversion/ACIRToACSim/ACIRToACSim.h"
@@ -38,6 +42,8 @@ struct DriverState {
   std::optional<codegen::BuildResult> build;
   std::string frozenAcir;
   std::string canonicalAcsim;
+  std::string bindingLock = "[]";
+  std::vector<std::string> providerInputs;
 };
 
 std::string severityName(mlir::DiagnosticSeverity severity) {
@@ -300,6 +306,14 @@ llvm::Error runStage(CompilerStage stage, const CompilerRequest &request,
                   state.frozenAcir);
     return llvm::Error::success();
   case CompilerStage::AcsimLower: {
+    bindings::BindingRegistryDocument registry;
+    if (!request.bindingRegistryBytes.empty()) {
+      auto parsed =
+          bindings::parseBindingRegistry(request.bindingRegistryBytes);
+      if (!parsed)
+        return compilerFailure(stage, parsed.takeError());
+      registry = std::move(*parsed);
+    }
     ACIRToACSimPassOptions options;
     options.profile = request.profile == CompilerProfile::Validated
                           ? "validated"
@@ -308,6 +322,22 @@ llvm::Error runStage(CompilerStage stage, const CompilerRequest &request,
     options.target = request.build.toolchain.targetTriple.empty()
                          ? "unknown-unknown"
                          : request.build.toolchain.targetTriple;
+    ResolveBindingsPassOptions resolutionOptions;
+    resolutionOptions.candidates = registry.candidates;
+    resolutionOptions.requests = registry.requests;
+    resolutionOptions.profile = options.profile;
+    resolutionOptions.target = options.target;
+    auto resolution = resolveModuleBindings(*state.module, resolutionOptions);
+    if (!resolution)
+      return compilerFailure(stage, resolution.takeError());
+    if (!resolution->selections().empty() || request.bindingLockBytes.empty())
+      state.bindingLock = resolution->canonicalLock().str();
+    std::set<std::string> providers;
+    for (const bindings::ResolvedBinding &selection : resolution->selections())
+      providers.insert(selection.record().provider().str());
+    state.providerInputs.assign(providers.begin(), providers.end());
+    options.candidates = std::move(registry.candidates);
+    options.requests = std::move(registry.requests);
     if (mlir::failed(runPass(state, createACIRToACSimPass(std::move(options)))))
       return capture.takeFailure(stage);
     return llvm::Error::success();
@@ -352,7 +382,8 @@ llvm::Error runStage(CompilerStage stage, const CompilerRequest &request,
     build.canonicalACSim = *state.module;
     build.frozenAcirBytes = state.frozenAcir;
     build.canonicalACSimBytes = state.canonicalAcsim;
-    build.bindingLockBytes = request.bindingLockBytes;
+    build.bindingLockBytes = state.bindingLock;
+    build.providerInputs = state.providerInputs;
     if (build.profile.empty())
       build.profile = request.profile == CompilerProfile::Validated
                           ? "validated"
@@ -458,8 +489,21 @@ llvm::Expected<CompilerResult> runCompiler(const CompilerRequest &request) {
   mlir::DialectRegistry registry;
   registerAllDialects(registry);
   DriverState state;
+  state.bindingLock =
+      request.bindingLockBytes.empty() ? "[]" : request.bindingLockBytes;
   state.context.appendDialectRegistry(registry);
   state.context.loadAllAvailableDialects();
+  if (!request.bindingRegistryBytes.empty()) {
+    auto bindingRegistry =
+        bindings::parseBindingRegistry(request.bindingRegistryBytes);
+    if (!bindingRegistry)
+      return compilerFailure(CompilerStage::AcirParse,
+                             bindingRegistry.takeError());
+    auto &providers = ac::getStructuralProviderRegistry(&state.context);
+    for (const bindings::BindingRequest &bindingRequest :
+         bindingRegistry->requests)
+      providers.registerExternal(bindingRequest.binding);
+  }
   DiagnosticCapture capture(state.context);
   CompilerResult result;
 

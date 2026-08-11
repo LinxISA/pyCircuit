@@ -1,0 +1,27 @@
+contract_epoch = "0.1"
+
+[project]
+name = "phase5-npu"
+version = "0.1.0"
+architecture = "architecture.py"
+system = "main"
+
+[providers]
+standard_library = ["ac.std"]
+
+[build]
+profile = "fast"
+compiler = "c++"
+standard_library = "libc++"
+component_roots = ["components"]
+protocol_roots = ["protocols"]
+build_root = "build"
+instrumentation_layers = []
+
+[run]
+trace_roots = ["traces"]
+default_trace = "traces/pto-trace.json"
+inputs = {}
+
+[diagnostics]
+format = "text"

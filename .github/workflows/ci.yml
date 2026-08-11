@@ -172,6 +172,21 @@ jobs:
           python -m unittest discover -s tests/cli -v
           python -m unittest discover -s tests/python_frontend -v
 
+      - name: Run Phase 5 tool and end-to-end tests
+        env:
+          PYTHONPATH: src:${{ github.workspace }}/build/dev-llvm22/python
+        run: |
+          python -m unittest discover -s tests/tools -v
+          python -m unittest \
+            tests.e2e.test_phase5_examples \
+            tests.e2e.test_phase5_npu -v
+
+      - name: Audit Phase 5 determinism and generated dependencies
+        env:
+          PYTHONPATH: src:${{ github.workspace }}/build/dev-llvm22/python
+          RUNS: "2"
+        run: scripts/audit-phase5-determinism.sh
+
       - name: Install clang-tidy
         run: sudo apt-get install --yes --no-install-recommends clang-tidy
 

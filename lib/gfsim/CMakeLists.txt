@@ -1,8 +1,12 @@
 add_library(gfsim STATIC
   harness.cpp
+  npu.cpp
+  observation.cpp
+  showcase.cpp
   system.cpp
   trace.cpp
 )
+add_dependencies(gfsim acir_runtime_headers)
 target_include_directories(gfsim PUBLIC
   "$<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>"
   "$<INSTALL_INTERFACE:include>"

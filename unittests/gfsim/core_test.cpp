@@ -3,6 +3,7 @@
 #include "gfsim/dispatch.h"
 #include "gfsim/harness.h"
 #include "gfsim/object.h"
+#include "gfsim/observation.h"
 #include "gfsim/packet.h"
 #include "gfsim/process.h"
 #include "gfsim/queue.h"
@@ -118,6 +119,12 @@ public:
     return buffer ? buffer.get()->getBuffer().str() : std::string();
   }
 
+  bool exists(std::string_view relativePath) const {
+    llvm::SmallString<256> path(path_);
+    llvm::sys::path::append(path, relativePath);
+    return llvm::sys::fs::exists(path);
+  }
+
 private:
   llvm::SmallString<256> path_;
 };
@@ -130,8 +137,13 @@ std::string harnessTrace() {
   return R"json({"schema":"pto-trace","version":"0.1","contract_epoch":"0.1","metadata":{"record_count":0},"records":[]})json";
 }
 
+std::string harnessTraceWithOneRecord() {
+  return R"json({"schema":"pto-trace","version":"0.1","contract_epoch":"0.1","metadata":{"record_count":1},"records":[{"sequence_id":17,"opcode":"pto.test","operands":[],"dependencies":[],"attributes":{}}]})json";
+}
+
 std::string harnessRunManifest(std::string_view buildHash,
-                               std::string_view traceHash) {
+                               std::string_view traceHash,
+                               std::string_view eventLog = "disabled") {
   return "{\"schema\":\"agentic-circuit-run-manifest\",\"version\":\"0.1\","
          "\"contract_epoch\":\"0.1\",\"build_manifest\":{\"path\":"
          "\"build-manifest.json\",\"sha256\":\"" +
@@ -141,14 +153,24 @@ std::string harnessRunManifest(std::string_view buildHash,
          std::string(traceHash) +
          "\"},\"seed\":1,\"output_directory\":\"run\",\"deadlock_window\":null,"
          "\"max_ticks\":100,\"max_domain_cycles\":{\"core\":25},"
-         "\"stats_format\":\"json\",\"event_log\":\"disabled\","
+         "\"stats_format\":\"json\",\"event_log\":\"" +
+         std::string(eventLog) +
+         "\","
          "\"termination_expectation\":{\"kind\":\"incomplete\","
          "\"reason\":\"max_domain_cycles\"}}";
 }
 
 class HarnessModel {
 public:
-  void configure(const RuntimeLimits &limits) { configured = limits; }
+  bool loadTrace(PtoTraceDocument document) {
+    ++traceLoadCount;
+    loadedTrace = std::move(document);
+    return acceptTrace;
+  }
+  void configure(const RuntimeLimits &limits) {
+    configuredAfterTrace = traceLoadCount == 1;
+    configured = limits;
+  }
   TerminationResult run() {
     ++workCount;
     TerminationResult result;
@@ -163,9 +185,38 @@ public:
   }
   std::string_view buildFingerprint() const { return kHarnessFingerprint; }
   std::span<const TimeDomainRuntime> timeDomains() const { return domains; }
+  std::vector<StatSnapshot> statistics() const { return snapshots; }
+  std::span<const CommittedEvent> observations() const { return events; }
 
   RuntimeLimits configured;
   uint64_t workCount = 0;
+  uint64_t traceLoadCount = 0;
+  bool acceptTrace = true;
+  bool configuredAfterTrace = false;
+  PtoTraceDocument loadedTrace;
+  std::vector<StatSnapshot> snapshots = {{.name = "accepted_transactions",
+                                          .objectPath = "/generated/root/queue",
+                                          .kind = StatisticKind::Counter,
+                                          .value = 2,
+                                          .lastUpdate = {4, 0}}};
+  std::vector<CommittedEvent> events = {
+      {.epoch = {2, 3},
+       .ownerId = 5,
+       .localCommittedIndex = 0,
+       .category = "transaction",
+       .name = "accepted",
+       .phase = TraceEventPhase::Instant,
+       .rootSequenceId = 11,
+       .arguments = {{"accepted", true}, {"bytes", uint64_t{64}}}},
+      {.epoch = {4, 0},
+       .ownerId = 7,
+       .localCommittedIndex = 0,
+       .category = "execution",
+       .name = "execute",
+       .phase = TraceEventPhase::Complete,
+       .rootSequenceId = 12,
+       .duration = 3,
+       .arguments = {{"engine", std::string("cube")}}}};
 
 private:
   static constexpr std::array<TimeDomainRuntime, 1> domains = {
@@ -225,6 +276,9 @@ TEST(RuntimeHarnessTest, ExactManifestConfiguresLimitsAndProducesClosedResult) {
   EXPECT_EQ(result->status, RunStatus::Incomplete);
   EXPECT_EQ(result->terminationReason, "max_domain_cycles");
   EXPECT_EQ(result->domainCycles.at("core"), 25u);
+  EXPECT_EQ(model.traceLoadCount, 1u);
+  EXPECT_TRUE(model.configuredAfterTrace);
+  EXPECT_TRUE(model.loadedTrace.records.empty());
   ASSERT_TRUE(model.configured.maxTicks);
   EXPECT_EQ(*model.configured.maxTicks, 100u);
   auto document =
@@ -236,6 +290,189 @@ TEST(RuntimeHarnessTest, ExactManifestConfiguresLimitsAndProducesClosedResult) {
   EXPECT_EQ(object->size(), 12u);
   EXPECT_EQ(object->getString("status"), "incomplete");
   EXPECT_EQ(object->getString("termination_reason"), "max_domain_cycles");
+  const llvm::json::Object *tracePosition = object->getObject("trace_position");
+  ASSERT_NE(tracePosition, nullptr);
+  EXPECT_EQ(tracePosition->getInteger("next_record_index"), 3);
+  EXPECT_EQ(tracePosition->getInteger("last_committed_sequence_id"), 11);
+  auto statistics =
+      acir::bindings::parseIJson(root.read("result-stage/stats.json"));
+  ASSERT_TRUE(static_cast<bool>(statistics))
+      << llvm::toString(statistics.takeError());
+  const llvm::json::Array *array = statistics->getAsArray();
+  ASSERT_NE(array, nullptr);
+  ASSERT_EQ(array->size(), 1u);
+  const llvm::json::Object *snapshot = array->front().getAsObject();
+  ASSERT_NE(snapshot, nullptr);
+  EXPECT_EQ(snapshot->getString("object_path"), "/generated/root/queue");
+  EXPECT_EQ(snapshot->getString("name"), "accepted_transactions");
+  EXPECT_EQ(snapshot->getString("kind"), "counter");
+  EXPECT_EQ(snapshot->getInteger("value"), 2);
+  EXPECT_FALSE(root.exists("result-stage/events.jsonl"));
+}
+
+TEST(RuntimeHarnessTest, MovesTypedTraceIntoModelExactlyOnceBeforeConfigure) {
+  HarnessTempRoot root;
+  const std::string build = harnessBuildManifest();
+  const std::string trace = harnessTraceWithOneRecord();
+  root.write("build-manifest.json", build);
+  root.write("trace.json", trace);
+  auto manifest = loadRunManifest(
+      harnessRunManifest(acir::bindings::sha256Fingerprint(build),
+                         acir::bindings::sha256Fingerprint(trace)),
+      root.path());
+  ASSERT_TRUE(static_cast<bool>(manifest));
+
+  HarnessModel model;
+  llvm::SmallString<256> resultStage(root.path());
+  llvm::sys::path::append(resultStage, "result-stage");
+  auto result = runGeneratedModel(model, *manifest, resultStage);
+  ASSERT_TRUE(static_cast<bool>(result)) << llvm::toString(result.takeError());
+  ASSERT_EQ(model.traceLoadCount, 1u);
+  ASSERT_TRUE(model.configuredAfterTrace);
+  ASSERT_EQ(model.loadedTrace.records.size(), 1u);
+  EXPECT_EQ(model.loadedTrace.records.front().sequenceId, 17u);
+  EXPECT_EQ(model.loadedTrace.records.front().opcode, "pto.test");
+}
+
+TEST(RuntimeHarnessTest, TraceOwnerRejectionStopsBeforeConfigureAndRun) {
+  HarnessTempRoot root;
+  const std::string build = harnessBuildManifest();
+  const std::string trace = harnessTraceWithOneRecord();
+  root.write("build-manifest.json", build);
+  root.write("trace.json", trace);
+  auto manifest = loadRunManifest(
+      harnessRunManifest(acir::bindings::sha256Fingerprint(build),
+                         acir::bindings::sha256Fingerprint(trace)),
+      root.path());
+  ASSERT_TRUE(static_cast<bool>(manifest));
+
+  HarnessModel model;
+  model.acceptTrace = false;
+  llvm::SmallString<256> resultStage(root.path());
+  llvm::sys::path::append(resultStage, "result-stage");
+  EXPECT_FALSE(runGeneratedModel(model, *manifest, resultStage));
+  EXPECT_EQ(model.traceLoadCount, 1u);
+  EXPECT_FALSE(model.configuredAfterTrace);
+  EXPECT_EQ(model.workCount, 0u);
+  EXPECT_FALSE(root.exists("result-stage"));
+}
+
+TEST(RuntimeHarnessTest, RawDavinciJsonlNeverReachesModelCode) {
+  HarnessTempRoot root;
+  const std::string build = harnessBuildManifest();
+  const std::string trace =
+      R"json({"block_idx":0,"sequence_id":0,"opcode":"TASSIGN","input_tiles":[],"scalar_inputs":[],"output_tiles":[]})json"
+      "\n";
+  root.write("build-manifest.json", build);
+  root.write("trace.json", trace);
+  auto manifest = loadRunManifest(
+      harnessRunManifest(acir::bindings::sha256Fingerprint(build),
+                         acir::bindings::sha256Fingerprint(trace)),
+      root.path());
+  ASSERT_TRUE(static_cast<bool>(manifest));
+
+  HarnessModel model;
+  llvm::SmallString<256> resultStage(root.path());
+  llvm::sys::path::append(resultStage, "result-stage");
+  EXPECT_FALSE(runGeneratedModel(model, *manifest, resultStage));
+  EXPECT_EQ(model.traceLoadCount, 0u);
+  EXPECT_EQ(model.workCount, 0u);
+}
+
+TEST(RuntimeHarnessTest, JsonlEventLogContainsCommittedStableKeys) {
+  HarnessTempRoot root;
+  const std::string build = harnessBuildManifest();
+  const std::string trace = harnessTrace();
+  root.write("build-manifest.json", build);
+  root.write("trace.json", trace);
+  auto manifest = loadRunManifest(
+      harnessRunManifest(acir::bindings::sha256Fingerprint(build),
+                         acir::bindings::sha256Fingerprint(trace), "jsonl"),
+      root.path());
+  ASSERT_TRUE(static_cast<bool>(manifest));
+
+  HarnessModel model;
+  llvm::SmallString<256> resultStage(root.path());
+  llvm::sys::path::append(resultStage, "result-stage");
+  auto result = runGeneratedModel(model, *manifest, resultStage);
+  ASSERT_TRUE(static_cast<bool>(result)) << llvm::toString(result.takeError());
+
+  llvm::SmallVector<llvm::StringRef> lines;
+  std::string eventBytes = root.read("result-stage/events.jsonl");
+  llvm::StringRef(eventBytes).split(lines, '\n', -1, false);
+  ASSERT_EQ(lines.size(), 2u);
+  auto first = acir::bindings::parseIJson(lines.front());
+  ASSERT_TRUE(static_cast<bool>(first)) << llvm::toString(first.takeError());
+  const llvm::json::Object *event = first->getAsObject();
+  ASSERT_NE(event, nullptr);
+  EXPECT_EQ(event->getString("name"), "accepted");
+  EXPECT_EQ(event->getString("cat"), "transaction");
+  EXPECT_EQ(event->getString("ph"), "i");
+  EXPECT_EQ(event->getInteger("ts"), 2 * kMaxDeltasPerTick + 3);
+  EXPECT_EQ(event->getInteger("pid"), 0);
+  EXPECT_EQ(event->getInteger("tid"), 5);
+  const llvm::json::Object *arguments = event->getObject("args");
+  ASSERT_NE(arguments, nullptr);
+  EXPECT_EQ(arguments->getInteger("gfsim_epoch_time"), 2);
+  EXPECT_EQ(arguments->getInteger("gfsim_epoch_delta"), 3);
+  EXPECT_EQ(arguments->getInteger("gfsim_object_id"), 5);
+  EXPECT_EQ(arguments->getInteger("gfsim_local_committed_index"), 0);
+  EXPECT_EQ(arguments->getInteger("gfsim_root_sequence_id"), 11);
+  EXPECT_EQ(arguments->getBoolean("accepted"), true);
+  EXPECT_EQ(arguments->getInteger("bytes"), 64);
+
+  auto second = acir::bindings::parseIJson(lines.back());
+  ASSERT_TRUE(static_cast<bool>(second)) << llvm::toString(second.takeError());
+  const llvm::json::Object *complete = second->getAsObject();
+  ASSERT_NE(complete, nullptr);
+  EXPECT_EQ(complete->getString("ph"), "X");
+  EXPECT_EQ(complete->getInteger("dur"), 3);
+  EXPECT_EQ(complete->getInteger("tid"), 7);
+  EXPECT_EQ(complete->getObject("args")->getString("engine"), "cube");
+
+  auto resultDocument =
+      acir::bindings::parseIJson(root.read("result-stage/run-result.json"));
+  ASSERT_TRUE(static_cast<bool>(resultDocument));
+  const llvm::json::Array *outputs =
+      resultDocument->getAsObject()->getArray("outputs");
+  ASSERT_NE(outputs, nullptr);
+  auto eventOutput = std::find_if(
+      outputs->begin(), outputs->end(), [](const llvm::json::Value &value) {
+        const llvm::json::Object *object = value.getAsObject();
+        return object && object->getString("path") == "events.jsonl";
+      });
+  ASSERT_NE(eventOutput, outputs->end());
+  EXPECT_EQ(eventOutput->getAsObject()->getString("sha256"),
+            acir::bindings::sha256Fingerprint(eventBytes));
+}
+
+TEST(RuntimeHarnessTest, RejectsNoncanonicalObservationsBeforePublication) {
+  auto runInvalid = [](bool invalidStatistics) {
+    HarnessTempRoot root;
+    const std::string build = harnessBuildManifest();
+    const std::string trace = harnessTrace();
+    root.write("build-manifest.json", build);
+    root.write("trace.json", trace);
+    auto manifest = loadRunManifest(
+        harnessRunManifest(acir::bindings::sha256Fingerprint(build),
+                           acir::bindings::sha256Fingerprint(trace), "jsonl"),
+        root.path());
+    EXPECT_TRUE(static_cast<bool>(manifest));
+    HarnessModel model;
+    if (invalidStatistics)
+      model.snapshots.push_back({.name = "earlier",
+                                 .objectPath = "/a",
+                                 .kind = StatisticKind::Counter});
+    else
+      std::swap(model.events[0], model.events[1]);
+    llvm::SmallString<256> resultStage(root.path());
+    llvm::sys::path::append(resultStage, "result-stage");
+    EXPECT_FALSE(runGeneratedModel(model, *manifest, resultStage));
+    EXPECT_FALSE(root.exists("result-stage"));
+  };
+
+  runInvalid(true);
+  runInvalid(false);
 }
 
 TEST(RuntimeHarnessTest, BuildFingerprintMismatchFailsBeforeModelWork) {
@@ -1406,6 +1643,39 @@ TEST(GfsimTraceTest, ParsesClosedTypedPtoTraceDocument) {
             (std::vector<uint64_t>{10}));
 }
 
+TEST(GfsimTraceTest, ParsesCanonicalDavinciOOAdapterFixture) {
+  auto buffer = llvm::MemoryBuffer::getFile(
+      ACIR_TEST_SOURCE_DIR
+      "/tests/tools/fixtures/davincioo-valid.pto-trace.json");
+  ASSERT_TRUE(static_cast<bool>(buffer));
+  TraceLoadResult result = parsePtoTrace((*buffer)->getBuffer());
+  ASSERT_TRUE(result.succeeded()) << result.primaryDiagnostic();
+  ASSERT_TRUE(result.document.has_value());
+  EXPECT_EQ(result.document->metadata.producer,
+            "davincioo@e73633301cabed0d871ea5ff66e76a91df870aeb");
+  EXPECT_EQ(result.document->metadata.ptoIdentity,
+            "pto-isa@f6d0567c1cae2d6a7b0ebaf7ad0e3b93f8a39da3");
+  ASSERT_EQ(result.document->records.size(), 2u);
+  const PtoTraceRecord &record = result.document->records.front();
+  EXPECT_EQ(record.sequenceId, 0u);
+  EXPECT_EQ(record.opcode, "TASSIGN");
+  ASSERT_EQ(record.operands.size(), 2u);
+  EXPECT_EQ(record.operands[0].kind, PtoOperandKind::Immediate);
+  EXPECT_EQ(record.operands[0].type, "uint64");
+  EXPECT_EQ(record.operands[1].kind, PtoOperandKind::Tile);
+  EXPECT_EQ(record.operands[1].id, "block/0/tile/0x0");
+  auto attributes = record.attributes.find("davincioo");
+  ASSERT_NE(attributes, record.attributes.end());
+  const auto *davincioo =
+      std::get_if<PtoValue::Object>(&attributes->second.value);
+  ASSERT_NE(davincioo, nullptr);
+  EXPECT_TRUE(davincioo->contains("block_idx"));
+  EXPECT_TRUE(davincioo->contains("input_tiles"));
+  EXPECT_TRUE(davincioo->contains("scalar_inputs"));
+  EXPECT_TRUE(davincioo->contains("output_tiles"));
+  EXPECT_TRUE(davincioo->contains("operand_roles"));
+}
+
 TEST(GfsimTraceTest, StreamingAndBufferedParsingProduceIdenticalDocument) {
   TraceLoadResult buffered = parsePtoTrace(ValidPtoTrace);
   ASSERT_TRUE(buffered.succeeded());
@@ -1536,6 +1806,20 @@ TEST(GfsimTraceTest, CursorAdvancesOnlyOnAcceptedXferAndHonorsDependencies) {
   EXPECT_TRUE(source.validate());
 }
 
+TEST(GfsimTraceTest, UnloadedSourceAcceptsOneTypedDocumentBeforeExecution) {
+  TraceLoadResult loaded = parsePtoTrace(ValidPtoTrace);
+  ASSERT_TRUE(loaded.succeeded());
+  TraceSource<> source("trace", 1, nullptr);
+
+  EXPECT_TRUE(source.loadDocument(std::move(*loaded.document)));
+  EXPECT_FALSE(source.loadDocument(PtoTraceDocument{}));
+  EXPECT_FALSE(source.eof());
+  source.doWork({2, 0});
+  source.doXfer({2, 0});
+  ASSERT_NE(source.peekOffer(), nullptr);
+  EXPECT_EQ(source.peekOffer()->sequenceId, 10u);
+}
+
 TEST(GfsimTraceTest, IssueTimeSchedulesAnExactWakeInsteadOfPolling) {
   TraceLoadResult loaded = parsePtoTrace(ValidPtoTrace);
   ASSERT_TRUE(loaded.succeeded());
@@ -1631,6 +1915,362 @@ TEST(GfsimStatisticsTest, QueueSnapshotsUseFrozenNamesAndKinds) {
   EXPECT_EQ(find("accepted_transactions")->kind, StatisticKind::Counter);
   ASSERT_NE(find("completed_transactions"), nullptr);
   EXPECT_EQ(find("completed_transactions")->kind, StatisticKind::Counter);
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// Committed observations
+// ═══════════════════════════════════════════════════════════════════════
+
+EventProposal testObservation(ObjectId owner, std::string name,
+                              uint64_t sequenceId) {
+  return {.ownerId = owner,
+          .category = "transaction",
+          .name = std::move(name),
+          .phase = TraceEventPhase::Instant,
+          .rootSequenceId = sequenceId,
+          .arguments = {{"accepted", true}, {"bytes", uint64_t{64}}}};
+}
+
+TEST(GfsimObservationTest, ProposalsBecomeVisibleOnlyAtCommit) {
+  ObservationRecorder recorder;
+  ASSERT_TRUE(recorder.propose(testObservation(4, "accepted", 10)));
+  EXPECT_TRUE(recorder.events().empty());
+  recorder.rejectOwner(4);
+  EXPECT_TRUE(recorder.events().empty());
+
+  ASSERT_TRUE(recorder.propose(testObservation(4, "accepted", 11)));
+  ASSERT_TRUE(recorder.commitOwner(4, {3, 1}));
+  ASSERT_EQ(recorder.events().size(), 1u);
+  const CommittedEvent &event = recorder.events().front();
+  EXPECT_EQ(event.epoch, (Epoch{3, 1}));
+  EXPECT_EQ(event.ownerId, 4u);
+  EXPECT_EQ(event.localCommittedIndex, 0u);
+  EXPECT_EQ(event.rootSequenceId, 11u);
+}
+
+TEST(GfsimObservationTest, StableKeyDoesNotDependOnProposalOrCommitOrder) {
+  auto run = [](std::array<ObjectId, 3> proposalOrder,
+                std::array<ObjectId, 3> commitOrder) {
+    ObservationRecorder recorder;
+    for (ObjectId owner : proposalOrder)
+      EXPECT_TRUE(recorder.propose(
+          testObservation(owner, "owner_" + std::to_string(owner), owner)));
+    for (ObjectId owner : commitOrder)
+      EXPECT_TRUE(recorder.commitOwner(owner, {7, 0}));
+    return std::vector<CommittedEvent>(recorder.events().begin(),
+                                       recorder.events().end());
+  };
+
+  const auto ascending = run({1, 3, 7}, {1, 3, 7});
+  const auto permuted = run({7, 1, 3}, {3, 7, 1});
+  EXPECT_EQ(ascending, permuted);
+  ASSERT_EQ(permuted.size(), 3u);
+  EXPECT_EQ(permuted[0].ownerId, 1u);
+  EXPECT_EQ(permuted[1].ownerId, 3u);
+  EXPECT_EQ(permuted[2].ownerId, 7u);
+}
+
+TEST(GfsimObservationTest, RejectionConsumesNoOwnerLocalIndex) {
+  ObservationRecorder recorder;
+  ASSERT_TRUE(recorder.propose(testObservation(2, "rejected", 1)));
+  recorder.rejectOwner(2);
+  ASSERT_TRUE(recorder.propose(testObservation(2, "first_commit", 2)));
+  ASSERT_TRUE(recorder.commitOwner(2, {1, 0}));
+  ASSERT_TRUE(recorder.propose(testObservation(2, "second_commit", 3)));
+  ASSERT_TRUE(recorder.commitOwner(2, {2, 0}));
+  ASSERT_EQ(recorder.events().size(), 2u);
+  EXPECT_EQ(recorder.events()[0].localCommittedIndex, 0u);
+  EXPECT_EQ(recorder.events()[1].localCommittedIndex, 1u);
+}
+
+TEST(GfsimObservationTest, ValidatesNamesArgumentsFlowsAndMonotonicTime) {
+  ObservationRecorder recorder;
+  EventProposal invalid = testObservation(kInvalidObjectId, "accepted", 1);
+  EXPECT_FALSE(recorder.propose(invalid));
+  invalid = testObservation(1, "not valid", 1);
+  EXPECT_FALSE(recorder.propose(invalid));
+  invalid = testObservation(1, "accepted", 1);
+  invalid.arguments = {{"z", uint64_t{1}}, {"a", uint64_t{2}}};
+  EXPECT_FALSE(recorder.propose(invalid));
+  invalid.arguments = {{"gfsim_object_id", uint64_t{2}}};
+  EXPECT_FALSE(recorder.propose(invalid));
+
+  EventProposal start = testObservation(1, "dependency", 1);
+  start.phase = TraceEventPhase::FlowStart;
+  start.flowId = 9;
+  ASSERT_TRUE(recorder.propose(start));
+  ASSERT_TRUE(recorder.commitOwner(1, {4, 0}));
+  EventProposal end = start;
+  end.phase = TraceEventPhase::FlowEnd;
+  ASSERT_TRUE(recorder.propose(end));
+  ASSERT_TRUE(recorder.commitOwner(1, {5, 0}));
+  EXPECT_FALSE(recorder.commitOwner(1, {3, 0}));
+
+  recorder.reset();
+  EXPECT_TRUE(recorder.events().empty());
+  ASSERT_TRUE(recorder.propose(start));
+  EXPECT_EQ(recorder.pendingCount(1), 1u);
+}
+
+class ObservedCommitObject final : public SimObject {
+public:
+  ObservedCommitObject(ObjectId id, SimSystem &system, bool commit)
+      : SimObject(ObjectKind::Compute, "observed", id), system_(system),
+        commit_(commit) {}
+
+  void doWork(Epoch) override {
+    EXPECT_TRUE(
+        system_.proposeObservation(testObservation(id(), "work", id())));
+    pending_ = commit_;
+  }
+  bool hasPendingCommit() const override { return pending_; }
+  void doXfer(Epoch) override { pending_ = false; }
+
+private:
+  SimSystem &system_;
+  bool commit_ = false;
+  bool pending_ = false;
+};
+
+TEST(GfsimObservationTest, SystemAdmitsOnlyObjectsThatCommitAtXfer) {
+  SimSystem system("observed");
+  ObservedCommitObject committed(0, system, true);
+  ObservedCommitObject rejected(1, system, false);
+  system.registerObject(&committed);
+  system.registerObject(&rejected);
+  ASSERT_TRUE(system.scheduleWork(rejected.id(), {0, 0}));
+  ASSERT_TRUE(system.scheduleWork(committed.id(), {0, 0}));
+
+  const TerminationResult result = system.run();
+  EXPECT_EQ(result.classification, TerminationClass::Completed);
+  ASSERT_EQ(system.observations().size(), 1u);
+  EXPECT_EQ(system.observations().front().ownerId, committed.id());
+  EXPECT_EQ(system.observations().front().localCommittedIndex, 0u);
+
+  system.reset();
+  EXPECT_TRUE(system.observations().empty());
+}
+
+const CommittedEvent *findObservation(std::span<const CommittedEvent> events,
+                                      ObjectId owner, std::string_view name,
+                                      size_t occurrence = 0) {
+  for (const CommittedEvent &event : events) {
+    if (event.ownerId == owner && event.name == name) {
+      if (occurrence == 0)
+        return &event;
+      --occurrence;
+    }
+  }
+  return nullptr;
+}
+
+const ObservationValue *findArgument(const CommittedEvent &event,
+                                     std::string_view name) {
+  auto argument =
+      std::ranges::find(event.arguments, name, &ObservationArgument::name);
+  return argument == event.arguments.end() ? nullptr : &argument->value;
+}
+
+TEST(GfsimComponentObservationTest,
+     QueueSchedulerAndResourcePublishAcceptedOutcomesAndOccupancy) {
+  SimSystem system("observed");
+  Queue<uint64_t> queue("queue", 0, nullptr, 2, SIZE_MAX, &system);
+  Scheduler<uint64_t> scheduler("scheduler", 1, nullptr, 1, &system);
+  Resource resource("resource", 2, nullptr, 1, &system);
+  system.registerObject(&queue);
+  system.registerObject(&scheduler);
+  system.registerObject(&resource);
+
+  ASSERT_TRUE(queue.proposePush(5));
+  queue.doXfer({0, 0});
+  ASSERT_TRUE(queue.proposePop().has_value());
+  ASSERT_TRUE(queue.proposePush(10));
+  ASSERT_TRUE(scheduler.proposeSchedule(1, 0, 0, 0, 7, 70));
+  ASSERT_TRUE(scheduler.proposeSchedule(2, 0, 0, 0, 8, 80));
+  ASSERT_TRUE(resource.proposeReserve(9, 1, {1, 0}, 100, {4, 0}, 900));
+  ASSERT_TRUE(resource.proposeReserve(10, 1, {1, 0}, 101, {5, 0}, 901));
+  ASSERT_TRUE(system.scheduleWork(queue.id(), {1, 0}));
+  ASSERT_TRUE(system.scheduleWork(scheduler.id(), {1, 0}));
+  ASSERT_TRUE(system.scheduleWork(resource.id(), {1, 0}));
+
+  system.run();
+  auto events = system.observations();
+  ASSERT_NE(findObservation(events, queue.id(), "accepted", 0), nullptr);
+  ASSERT_NE(findObservation(events, queue.id(), "completed"), nullptr);
+  const CommittedEvent *queueOccupancy =
+      findObservation(events, queue.id(), "occupancy");
+  ASSERT_NE(queueOccupancy, nullptr);
+  EXPECT_EQ(queueOccupancy->phase, TraceEventPhase::Counter);
+  ASSERT_NE(findArgument(*queueOccupancy, "occupancy"), nullptr);
+  EXPECT_EQ(std::get<uint64_t>(*findArgument(*queueOccupancy, "occupancy")),
+            1u);
+
+  const CommittedEvent *scheduled =
+      findObservation(events, scheduler.id(), "accepted");
+  ASSERT_NE(scheduled, nullptr);
+  EXPECT_EQ(scheduled->rootSequenceId, 70u);
+  ASSERT_NE(findArgument(*scheduled, "child_owner_id"), nullptr);
+  EXPECT_EQ(std::get<uint64_t>(*findArgument(*scheduled, "child_owner_id")),
+            7u);
+  const CommittedEvent *schedulerStall =
+      findObservation(events, scheduler.id(), "capacity");
+  ASSERT_NE(schedulerStall, nullptr);
+  EXPECT_EQ(schedulerStall->category, "stall");
+  EXPECT_EQ(schedulerStall->rootSequenceId, 80u);
+
+  const CommittedEvent *reservation =
+      findObservation(events, resource.id(), "reservation");
+  ASSERT_NE(reservation, nullptr);
+  EXPECT_EQ(reservation->phase, TraceEventPhase::Complete);
+  EXPECT_EQ(reservation->duration, 3 * kMaxDeltasPerTick);
+  EXPECT_EQ(reservation->rootSequenceId, 900u);
+  const CommittedEvent *resourceStall =
+      findObservation(events, resource.id(), "capacity");
+  ASSERT_NE(resourceStall, nullptr);
+  EXPECT_EQ(resourceStall->rootSequenceId, 901u);
+}
+
+TEST(GfsimComponentObservationTest,
+     ComputeLinkMemoryAndSinkPublishOnlyCommittedActivity) {
+  SimSystem system("observed");
+  Compute<> compute("compute", 0, nullptr, {}, &system);
+  Link<> link("link", 1, nullptr, &system);
+  Memory<> memory("memory", 2, nullptr, 4, &system);
+  Sink<> sink("sink", 3, nullptr, &system);
+  system.registerObject(&compute);
+  system.registerObject(&link);
+  system.registerObject(&memory);
+  system.registerObject(&sink);
+  compute.setInput(12);
+  link.forward(13);
+  ASSERT_TRUE(memory.proposeWrite(2, 14));
+  sink.receive(15);
+  for (ObjectId id = 0; id != 4; ++id)
+    ASSERT_TRUE(system.scheduleWork(id, {0, 0}));
+
+  TerminationResult result = system.run();
+  EXPECT_EQ(result.classification, TerminationClass::Completed);
+  EXPECT_EQ(compute.output(), 12u);
+  EXPECT_EQ(link.value(), 13u);
+  EXPECT_EQ(memory.read(2), 14u);
+  EXPECT_EQ(sink.received(), (std::vector<uint64_t>{15}));
+  auto events = system.observations();
+  EXPECT_NE(findObservation(events, compute.id(), "completed"), nullptr);
+  EXPECT_NE(findObservation(events, link.id(), "completed"), nullptr);
+  const CommittedEvent *write = findObservation(events, memory.id(), "write");
+  ASSERT_NE(write, nullptr);
+  EXPECT_EQ(std::get<uint64_t>(*findArgument(*write, "address")), 2u);
+  EXPECT_NE(findObservation(events, sink.id(), "accepted"), nullptr);
+}
+
+class ProtocolObservationDriver final : public SimObject {
+public:
+  ProtocolObservationDriver(
+      ObjectId id, ReadyValid<uint64_t> &readyValid,
+      RequestResponse<uint64_t, uint64_t> &requestResponse,
+      TraceSource<> &trace)
+      : SimObject(ObjectKind::Process, "driver", id), readyValid_(readyValid),
+        requestResponse_(requestResponse), trace_(trace) {}
+
+  void doWork(Epoch epoch) override {
+    if (epoch.time == 1) {
+      readyValid_.proposeReady(true);
+      EXPECT_TRUE(requestResponse_.proposePopRequest().has_value());
+      EXPECT_TRUE(trace_.proposeAccept());
+    } else if (epoch.time == 2) {
+      EXPECT_TRUE(requestResponse_.proposeResponse(99, 44));
+    } else if (epoch.time == 3) {
+      EXPECT_TRUE(requestResponse_.proposePopResponse().has_value());
+    }
+  }
+
+private:
+  ReadyValid<uint64_t> &readyValid_;
+  RequestResponse<uint64_t, uint64_t> &requestResponse_;
+  TraceSource<> &trace_;
+};
+
+TEST(GfsimComponentObservationTest,
+     ProtocolBackpressureRequestsResponsesAndTraceCursorAreCommitted) {
+  constexpr std::string_view oneRecord = R"json({
+    "schema":"pto-trace","version":"0.1","contract_epoch":"0.1",
+    "metadata":{"record_count":1},"records":[{
+      "sequence_id":17,"opcode":"pto.done","operands":[],
+      "dependencies":[],"attributes":{}}]})json";
+  TraceLoadResult loaded = parsePtoTrace(oneRecord);
+  ASSERT_TRUE(loaded.succeeded());
+  SimSystem system("observed");
+  ReadyValid<uint64_t> readyValid("ready_valid", 0, nullptr, &system);
+  RequestResponse<uint64_t, uint64_t> requestResponse("request_response", 1,
+                                                      nullptr, 2, &system);
+  TraceSource<> trace("trace", 2, nullptr, std::move(*loaded.document), {},
+                      &system, &system);
+  ProtocolObservationDriver driver(3, readyValid, requestResponse, trace);
+  system.registerObject(&readyValid);
+  system.registerObject(&requestResponse);
+  system.registerObject(&trace);
+  system.registerObject(&driver);
+  ASSERT_TRUE(readyValid.proposeOffer(42));
+  ASSERT_TRUE(requestResponse.proposeRequest(7, 44));
+  ASSERT_TRUE(system.scheduleWork(readyValid.id(), {0, 0}));
+  ASSERT_TRUE(system.scheduleWork(requestResponse.id(), {0, 0}));
+  for (Tick tick = 1; tick <= 3; ++tick) {
+    ASSERT_TRUE(system.scheduleWork(driver.id(), {tick, 0}));
+    ASSERT_TRUE(system.scheduleWork(requestResponse.id(), {tick, 0}));
+  }
+  ASSERT_TRUE(system.scheduleWork(readyValid.id(), {1, 0}));
+  ASSERT_TRUE(system.scheduleWork(trace.id(), {1, 0}));
+
+  TerminationResult result = system.run();
+  EXPECT_EQ(result.classification, TerminationClass::Completed);
+  EXPECT_EQ(result.tracePosition, 1u);
+  EXPECT_EQ(result.traceLastCommittedSequenceId, 17u);
+  auto events = system.observations();
+  EXPECT_NE(findObservation(events, readyValid.id(), "backpressure"), nullptr);
+  EXPECT_NE(findObservation(events, readyValid.id(), "completed"), nullptr);
+  EXPECT_NE(findObservation(events, requestResponse.id(), "accepted"), nullptr);
+  EXPECT_NE(findObservation(events, requestResponse.id(), "request"), nullptr);
+  EXPECT_NE(findObservation(events, requestResponse.id(), "completed"),
+            nullptr);
+  EXPECT_NE(findObservation(events, requestResponse.id(), "response"), nullptr);
+  const CommittedEvent *traceAccepted =
+      findObservation(events, trace.id(), "accepted");
+  ASSERT_NE(traceAccepted, nullptr);
+  EXPECT_EQ(traceAccepted->rootSequenceId, 17u);
+  EXPECT_EQ(std::get<uint64_t>(*findArgument(*traceAccepted, "trace_position")),
+            1u);
+}
+
+TEST(GfsimComponentObservationTest,
+     DisabledAndEnabledObservationProduceEqualFunctionalResults) {
+  auto run = [](bool enabled) {
+    SimSystem system("observed");
+    Compute<uint64_t> compute("compute", 0, nullptr, {},
+                              enabled ? &system : nullptr);
+    system.registerObject(&compute);
+    compute.setInput(23);
+    EXPECT_TRUE(system.scheduleWork(compute.id(), {0, 0}));
+    TerminationResult result = system.run();
+    std::vector<
+        std::tuple<std::string, std::string, StatisticKind, uint64_t, Epoch>>
+        statistics;
+    for (const StatSnapshot &snapshot : system.statistics())
+      statistics.emplace_back(snapshot.objectPath, snapshot.name, snapshot.kind,
+                              snapshot.value, snapshot.lastUpdate);
+    return std::tuple(result.classification, result.finalEpoch,
+                      result.diagnosticCode, compute.output(),
+                      std::move(statistics), system.observations().size());
+  };
+
+  auto disabled = run(false);
+  auto enabled = run(true);
+  EXPECT_EQ(std::get<0>(disabled), std::get<0>(enabled));
+  EXPECT_EQ(std::get<1>(disabled), std::get<1>(enabled));
+  EXPECT_EQ(std::get<2>(disabled), std::get<2>(enabled));
+  EXPECT_EQ(std::get<3>(disabled), std::get<3>(enabled));
+  EXPECT_EQ(std::get<4>(disabled), std::get<4>(enabled));
+  EXPECT_EQ(std::get<5>(disabled), 0u);
+  EXPECT_GT(std::get<5>(enabled), 0u);
 }
 
 TEST(GfsimSystemTest, NonEmptyQueueWithoutWakeFailsWithNoProgressReport) {
@@ -2232,6 +2872,16 @@ public:
   uint64_t stepCount = 0;
 };
 
+class YieldingProcess final : public ProcessRuntime<YieldingProcess> {
+public:
+  YieldingProcess() : ProcessRuntime("yielding", 0, nullptr, 0, 2) {}
+
+  ProcessStep executeProcessStep(uint32_t, Epoch) {
+    return ProcessStep::suspendAt(
+        0, {.kind = ProcessWakeKind::NextDelta, .id = 0}, 1);
+  }
+};
+
 class InvalidContinuationProcess final
     : public ProcessRuntime<InvalidContinuationProcess> {
 public:
@@ -2274,6 +2924,33 @@ TEST(GfsimProcessTest, FairnessCapProducesDeterministicFailure) {
   EXPECT_EQ(process.status(), ProcessStatus::Failed);
   EXPECT_EQ(process.diagnosticCode(), "process_fairness_exceeded");
   EXPECT_FALSE(process.isRunnable({1, 0}));
+}
+
+TEST(GfsimProcessTest, TraceEndTerminatesOnlyVoluntaryYieldSuspension) {
+  {
+    SimSystem system("test");
+    YieldingProcess process;
+    TraceSource<> trace("trace", 1, nullptr);
+    std::array rows = {makeDispatchRow(&process), makeDispatchRow(&trace)};
+    ASSERT_TRUE(system.setDispatchTable(rows));
+
+    const TerminationResult result = system.run();
+    EXPECT_EQ(result.classification, TerminationClass::Completed);
+    EXPECT_EQ(result.finalEpoch, (Epoch{1, 0}));
+    EXPECT_EQ(process.status(), ProcessStatus::Terminated);
+  }
+  {
+    SimSystem system("test");
+    SuspendingProcess process;
+    TraceSource<> trace("trace", 1, nullptr);
+    std::array rows = {makeDispatchRow(&process), makeDispatchRow(&trace)};
+    ASSERT_TRUE(system.setDispatchTable(rows));
+
+    const TerminationResult result = system.run();
+    EXPECT_EQ(result.classification, TerminationClass::Failed);
+    EXPECT_EQ(result.diagnosticCode, "no_progress");
+    EXPECT_EQ(process.status(), ProcessStatus::Suspended);
+  }
 }
 
 TEST(GfsimProcessTest, ResetRestoresEntryState) {

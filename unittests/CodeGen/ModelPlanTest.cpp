@@ -8,6 +8,7 @@
 #include "mlir/IR/MLIRContext.h"
 #include "mlir/Parser/Parser.h"
 #include "llvm/Support/Error.h"
+#include "llvm/Support/MemoryBuffer.h"
 #include "gtest/gtest.h"
 
 #include <sstream>
@@ -119,6 +120,31 @@ TEST(ModelPlanTest, ExtractsClosedIdentitiesTypesAndDenseRuntimePlan) {
       {0, 0}, {1, 1}, {1, 2}, {1, 3}, {2, 2}, {3, 3}};
   EXPECT_EQ(plan->activationEdges, expectedEdges);
   EXPECT_FALSE(hasError(validateModelPlan(*plan)));
+}
+
+TEST(ModelPlanTest, IdentifiesTraceOwnersFromTypedBindingMetadata) {
+  mlir::MLIRContext context;
+  loadACSimDialects(context);
+  auto input = llvm::MemoryBuffer::getFile(ACSIM_VALID_TEST_FILE);
+  ASSERT_TRUE(static_cast<bool>(input));
+  std::string source = input.get()->getBuffer().str();
+  auto replaceAll = [&](std::string_view from, std::string_view to) {
+    for (size_t position = source.find(from); position != std::string::npos;
+         position = source.find(from, position + to.size()))
+      source.replace(position, from.size(), to);
+  };
+  replaceAll("gfsim::Fifo", "gfsim::TraceSource");
+  replaceAll("fifo.schema", "ac.std.TraceSource");
+  auto file = mlir::parseSourceString<mlir::ModuleOp>(source, &context);
+  ASSERT_TRUE(file);
+
+  auto plan = buildModelPlan(*file);
+  ASSERT_TRUE(static_cast<bool>(plan)) << llvm::toString(plan.takeError());
+  ASSERT_EQ(plan->runtimeObjects.size(), 4u);
+  EXPECT_TRUE(plan->runtimeObjects[0].traceOwner);
+  EXPECT_TRUE(plan->runtimeObjects[1].traceOwner);
+  EXPECT_TRUE(plan->runtimeObjects[2].traceOwner);
+  EXPECT_FALSE(plan->runtimeObjects[3].traceOwner);
 }
 
 TEST(ModelPlanTest, RejectsInputWithoutOneCanonicalACSimModel) {

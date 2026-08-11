@@ -219,6 +219,29 @@ class RunCommandTest(unittest.TestCase):
 
         self.assertEqual(5, result.returncode, result.stderr)
 
+    def test_raw_davincioo_jsonl_is_rejected_before_publication(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = workspace(temporary)
+            raw = root / "davincioo.jsonl"
+            raw.write_text(
+                '{"block_idx":0,"sequence_id":0,"opcode":"TASSIGN",'
+                '"input_tiles":[],"scalar_inputs":[],"output_tiles":[]}\n'
+            )
+            result = run_cli(
+                "run",
+                "architecture.py",
+                "--trace",
+                raw.name,
+                "--output-dir",
+                "runs/raw",
+                cwd=root,
+            )
+
+            self.assertFalse((root / "runs/raw").exists())
+
+        self.assertEqual(5, result.returncode, result.stderr)
+        self.assertIn("ACTRACE-SCHEMA-001", result.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -47,6 +47,7 @@ class NativeRequest:
                     raise TypeError(f"native {item[0]} must be a tuple of strings")
             elif item[0] in (
                 "binding_lock",
+                "binding_registry",
                 "frontend_acpy",
                 "frontend_acir",
             ):

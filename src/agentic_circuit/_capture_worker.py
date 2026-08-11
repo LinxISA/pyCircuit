@@ -30,6 +30,7 @@ class CaptureWorkerRequest:
     entry: Path
     system: str
     static_arguments: tuple[tuple[str, JsonValue], ...]
+    component_roots: tuple[Path, ...]
     private_output: Path
     timeout: float = 30.0
 
@@ -116,6 +117,10 @@ def _request_json(request: CaptureWorkerRequest, output: Path) -> dict[str, Json
         "entry": request.entry.resolve().as_posix(),
         "system": request.system,
         "static_arguments": {key: value for key, value in request.static_arguments},
+        "component_roots": [
+            path.resolve().relative_to(request.workspace.resolve()).as_posix()
+            for path in request.component_roots
+        ],
         "output": output.resolve().as_posix(),
     }
 
@@ -260,6 +265,13 @@ def _worker_main(request_path: Path) -> int:
             schemas = SchemaRegistry.from_catalog(
                 schema_root() / "stdlib" / "catalog.json", schema_root().parent
             )
+            component_roots = tuple(
+                (workspace / value).resolve()
+                for value in request["component_roots"]
+            )
+            if any(not path.is_relative_to(workspace) for path in component_roots):
+                raise ValueError("component root escapes the workspace")
+            schemas = schemas.with_component_roots(component_roots)
             result = elaborate_frontend(
                 CaptureRequest(
                     entry=entry,

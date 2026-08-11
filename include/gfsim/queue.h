@@ -21,8 +21,9 @@ namespace gfsim {
 template <typename T> class SimQueue : public SimObject {
 public:
   SimQueue(std::string name, ObjectId id, SimObject *parent,
-           size_t entryCapacity, size_t byteCapacity = SIZE_MAX)
-      : SimObject(ObjectKind::Queue, std::move(name), id, parent),
+           size_t entryCapacity, size_t byteCapacity = SIZE_MAX,
+           ObservationSink *observations = nullptr)
+      : SimObject(ObjectKind::Queue, std::move(name), id, parent, observations),
         entryCapacity_(entryCapacity), byteCapacity_(byteCapacity) {}
 
   // ── Capacity ────────────────────────────────────────────────────────
@@ -69,11 +70,27 @@ public:
 
   // ── Arbitration ─────────────────────────────────────────────────────
 
-  void doArbitrate(Epoch epoch) override {
+  void doArbitrate(Epoch) override {
     // Deterministic local arbitration: FIFO order.
     // Push proposals are appended in order.
     // Pop proposals are served from the front.
     // In v0.1, arbitration is simple FIFO.
+    for (size_t index = 0; index < pushProposals_.size(); ++index)
+      emitObservation({.category = "transaction",
+                       .name = "accepted",
+                       .phase = TraceEventPhase::Instant});
+    for (size_t index = 0; index < popProposalCount_; ++index)
+      emitObservation({.category = "transaction",
+                       .name = "completed",
+                       .phase = TraceEventPhase::Instant});
+    if (!pushProposals_.empty() || popProposalCount_ != 0) {
+      const uint64_t occupancy =
+          committed_.size() + pushProposals_.size() - popProposalCount_;
+      emitObservation({.category = "queue",
+                       .name = "occupancy",
+                       .phase = TraceEventPhase::Counter,
+                       .arguments = {{"occupancy", occupancy}}});
+    }
   }
 
   // ── Xfer ────────────────────────────────────────────────────────────
@@ -143,6 +160,7 @@ public:
     totalPushes_ = 0;
     totalPops_ = 0;
     lastUpdate_ = {};
+    clearRuntimeFailureCode();
   }
 
 private:

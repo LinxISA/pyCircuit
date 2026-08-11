@@ -53,8 +53,9 @@ public:
   static constexpr ObjectKind componentKind = ObjectKind::Compute;
 
   Compute(std::string name, ObjectId id, SimObject *parent,
-          FunctionalPolicy policy = {})
-      : SimObject(ObjectKind::Compute, std::move(name), id, parent),
+          FunctionalPolicy policy = {}, ObservationSink *observations = nullptr)
+      : SimObject(ObjectKind::Compute, std::move(name), id, parent,
+                  observations),
         policy_(std::move(policy)) {}
 
   void setInput(Input value) {
@@ -66,6 +67,10 @@ public:
     if (hasInput_) {
       outputProposal_ = std::invoke(std::as_const(policy_), inputProposal_);
       hasOutput_ = true;
+      emitObservation({.category = "transaction",
+                       .name = "completed",
+                       .phase = TraceEventPhase::Complete,
+                       .duration = 0});
     }
   }
 
@@ -100,6 +105,7 @@ public:
     hasOutput_ = false;
     totalComputations_ = 0;
     lastUpdate_ = {};
+    clearRuntimeFailureCode();
   }
 
 private:
@@ -121,10 +127,19 @@ public:
   static constexpr std::string_view contractName = "ac.std.Sink";
   static constexpr ObjectKind componentKind = ObjectKind::Sink;
 
-  Sink(std::string name, ObjectId id, SimObject *parent)
-      : SimObject(ObjectKind::Sink, std::move(name), id, parent) {}
+  Sink(std::string name, ObjectId id, SimObject *parent,
+       ObservationSink *observations = nullptr)
+      : SimObject(ObjectKind::Sink, std::move(name), id, parent, observations) {
+  }
 
   void receive(T value) { receivedProposals_.push_back(std::move(value)); }
+
+  void doArbitrate(Epoch) override {
+    for (size_t index = 0; index < receivedProposals_.size(); ++index)
+      emitObservation({.category = "transaction",
+                       .name = "accepted",
+                       .phase = TraceEventPhase::Instant});
+  }
 
   void doXfer(Epoch epoch) override {
     bool changed = !receivedProposals_.empty();
@@ -157,6 +172,7 @@ public:
     receivedProposals_.clear();
     totalReceived_ = 0;
     lastUpdate_ = {};
+    clearRuntimeFailureCode();
   }
 
 private:
@@ -174,12 +190,21 @@ public:
   static constexpr std::string_view contractName = "ac.std.Link";
   static constexpr ObjectKind componentKind = ObjectKind::Link;
 
-  Link(std::string name, ObjectId id, SimObject *parent)
-      : SimObject(ObjectKind::Link, std::move(name), id, parent) {}
+  Link(std::string name, ObjectId id, SimObject *parent,
+       ObservationSink *observations = nullptr)
+      : SimObject(ObjectKind::Link, std::move(name), id, parent, observations) {
+  }
 
   void forward(T value) {
     forwardedProposal_ = std::move(value);
     hasProposal_ = true;
+  }
+
+  void doArbitrate(Epoch) override {
+    if (hasProposal_)
+      emitObservation({.category = "transaction",
+                       .name = "completed",
+                       .phase = TraceEventPhase::Instant});
   }
 
   void doXfer(Epoch epoch) override {
@@ -214,6 +239,7 @@ public:
     hasForwarded_ = false;
     totalTransfers_ = 0;
     lastUpdate_ = {};
+    clearRuntimeFailureCode();
   }
 
 private:
@@ -233,8 +259,10 @@ public:
   static constexpr std::string_view contractName = "ac.std.Memory";
   static constexpr ObjectKind componentKind = ObjectKind::Memory;
 
-  Memory(std::string name, ObjectId id, SimObject *parent, size_t capacity)
-      : SimObject(ObjectKind::Memory, std::move(name), id, parent),
+  Memory(std::string name, ObjectId id, SimObject *parent, size_t capacity,
+         ObservationSink *observations = nullptr)
+      : SimObject(ObjectKind::Memory, std::move(name), id, parent,
+                  observations),
         storage_(capacity) {}
 
   size_t capacity() const { return storage_.size(); }
@@ -250,6 +278,15 @@ public:
     if (addr >= storage_.size())
       return {};
     return storage_[addr];
+  }
+
+  void doArbitrate(Epoch) override {
+    for (const auto &proposal : writeProposals_)
+      emitObservation(
+          {.category = "memory",
+           .name = "write",
+           .phase = TraceEventPhase::Instant,
+           .arguments = {{"address", static_cast<uint64_t>(proposal.first)}}});
   }
 
   void doXfer(Epoch epoch) override {
@@ -277,6 +314,7 @@ public:
     writeProposals_.clear();
     totalWrites_ = 0;
     lastUpdate_ = {};
+    clearRuntimeFailureCode();
   }
 
 private:
@@ -295,8 +333,10 @@ public:
   static constexpr std::string_view contractName = "ac.std.Scheduler";
   static constexpr ObjectKind componentKind = ObjectKind::Scheduler;
 
-  Scheduler(std::string name, ObjectId id, SimObject *parent, size_t capacity)
-      : SimObject(ObjectKind::Scheduler, std::move(name), id, parent),
+  Scheduler(std::string name, ObjectId id, SimObject *parent, size_t capacity,
+            ObservationSink *observations = nullptr)
+      : SimObject(ObjectKind::Scheduler, std::move(name), id, parent,
+                  observations),
         capacity_(capacity) {}
 
   bool proposeSchedule(T value, uint32_t priority, uint32_t portIndex,
@@ -339,6 +379,29 @@ public:
         std::make_move_iterator(proposals_.begin() + acceptedCount),
         std::make_move_iterator(proposals_.end()));
     proposals_.clear();
+    auto observe = [&](const Entry &entry, std::string category,
+                       std::string name) {
+      emitObservation({.category = std::move(category),
+                       .name = std::move(name),
+                       .phase = TraceEventPhase::Instant,
+                       .rootSequenceId = entry.transactionId,
+                       .arguments = {{"child_owner_id",
+                                      static_cast<uint64_t>(entry.ownerId)},
+                                     {"transaction_id", entry.transactionId}}});
+    };
+    for (const Entry &entry : accepted_)
+      observe(entry, "transaction", "accepted");
+    for (const Entry &entry : rejected_)
+      observe(entry, "stall", "capacity");
+    if (!accepted_.empty() || !rejected_.empty() || popProposalCount_ != 0) {
+      const uint64_t occupancy =
+          committed_.size() - std::min(popProposalCount_, committed_.size()) +
+          accepted_.size();
+      emitObservation({.category = "queue",
+                       .name = "occupancy",
+                       .phase = TraceEventPhase::Counter,
+                       .arguments = {{"occupancy", occupancy}}});
+    }
   }
 
   void doXfer(Epoch epoch) override {
@@ -426,6 +489,7 @@ public:
     totalScheduled_ = 0;
     totalPops_ = 0;
     lastUpdate_ = {};
+    clearRuntimeFailureCode();
   }
 
 private:
@@ -479,8 +543,10 @@ public:
   static constexpr std::string_view contractName = "ac.std.ready_valid";
   static constexpr ObjectKind componentKind = ObjectKind::Link;
 
-  ReadyValid(std::string name, ObjectId id, SimObject *parent)
-      : SimObject(ObjectKind::Link, std::move(name), id, parent) {}
+  ReadyValid(std::string name, ObjectId id, SimObject *parent,
+             ObservationSink *observations = nullptr)
+      : SimObject(ObjectKind::Link, std::move(name), id, parent, observations) {
+  }
 
   bool proposeOffer(T data) {
     if (offer_ || offerProposal_)
@@ -493,6 +559,21 @@ public:
   bool isReady() const { return ready_; }
   bool hasOffer() const { return offer_.has_value(); }
   const T *peekOffer() const { return offer_ ? &*offer_ : nullptr; }
+
+  void doArbitrate(Epoch) override {
+    const bool nextReady = readyProposal_.value_or(ready_);
+    const bool nextOffer = offer_.has_value() || offerProposal_.has_value();
+    if (nextOffer && nextReady) {
+      emitObservation({.category = "transaction",
+                       .name = "completed",
+                       .phase = TraceEventPhase::Instant});
+    } else if (offerProposal_ && !nextReady) {
+      emitObservation({.category = "stall",
+                       .name = "backpressure",
+                       .phase = TraceEventPhase::Instant,
+                       .arguments = {{"pending_offers", uint64_t{1}}}});
+    }
+  }
 
   void doXfer(Epoch epoch) override {
     bool changed = hasPendingCommit() || (offer_ && ready_);
@@ -548,6 +629,7 @@ public:
     lastTransferred_ = {};
     transferCount_ = 0;
     lastUpdate_ = {};
+    clearRuntimeFailureCode();
   }
 
 private:
@@ -569,8 +651,9 @@ public:
   static constexpr ObjectKind componentKind = ObjectKind::Link;
 
   RequestResponse(std::string name, ObjectId id, SimObject *parent,
-                  size_t maxInFlight = 16)
-      : SimObject(ObjectKind::Link, std::move(name), id, parent),
+                  size_t maxInFlight = 16,
+                  ObservationSink *observations = nullptr)
+      : SimObject(ObjectKind::Link, std::move(name), id, parent, observations),
         maxInFlight_(maxInFlight) {}
 
   struct RequestEnvelope {
@@ -620,6 +703,27 @@ public:
     if (responsePopCount_ >= committedResponses_.size())
       return std::nullopt;
     return committedResponses_[responsePopCount_++];
+  }
+
+  void doArbitrate(Epoch) override {
+    auto observe = [&](uint64_t correlationId, std::string name) {
+      emitObservation({.category = "transaction",
+                       .name = std::move(name),
+                       .phase = TraceEventPhase::Instant,
+                       .rootSequenceId = correlationId,
+                       .arguments = {{"correlation_id", correlationId}}});
+    };
+    for (const RequestEnvelope &request : requestProposals_)
+      observe(request.correlationId, "accepted");
+    for (size_t index = 0;
+         index < std::min(requestPopCount_, committedRequests_.size()); ++index)
+      observe(committedRequests_[index].correlationId, "request");
+    for (const ResponseEnvelope &response : responseProposals_)
+      observe(response.correlationId, "completed");
+    for (size_t index = 0;
+         index < std::min(responsePopCount_, committedResponses_.size());
+         ++index)
+      observe(committedResponses_[index].correlationId, "response");
   }
 
   void doXfer(Epoch epoch) override {
@@ -718,6 +822,7 @@ public:
     responsePopCount_ = 0;
     totalCompleted_ = 0;
     lastUpdate_ = {};
+    clearRuntimeFailureCode();
   }
 
 private:

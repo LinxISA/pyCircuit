@@ -182,7 +182,8 @@ def _after_stages(options: CompileOptions) -> tuple[str, ...]:
 
 
 def _native_request(
-    acir: bytes, options: CompileOptions, profile: str
+    acir: bytes, options: CompileOptions, profile: str,
+    binding_registry: bytes = b'{"candidates":[],"requests":[]}',
 ) -> NativeRequest:
     native_emits: list[str] = []
     if "frozen-acir" in options.emits:
@@ -192,7 +193,10 @@ def _native_request(
     if "cpp" in options.emits:
         native_emits.extend(("cpp-header", "cpp-source"))
 
-    native_options: list[tuple[str, object]] = [("profile", profile)]
+    native_options: list[tuple[str, object]] = [
+        ("profile", profile),
+        ("binding_registry", binding_registry),
+    ]
     if options.pass_pipeline is not None:
         native_options.append(("custom_pipeline", options.pass_pipeline))
     before = _unique_physical(options.dump_before, before=True)
@@ -304,8 +308,15 @@ def run(arguments: object, workspace: WorkspaceConfig, sink: OutputSink) -> int:
 
     native: NativeResult | None = None
     if STAGES.index(options.final_stage) > STAGES.index("acpy-verify"):
+        from .build import _binding_registry
+
         native = run_native_compiler(
-            _native_request(frontend.acir, options, profile)
+            _native_request(
+                frontend.acir,
+                options,
+                profile,
+                _binding_registry(workspace.component_roots),
+            )
         )
         diagnostics = _logical_diagnostics(native.diagnostics)
         if _has_errors(diagnostics):
