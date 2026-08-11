@@ -64,17 +64,17 @@ class PendingDefinitionCall:
 
 
 @overload
-def _decorate(kind: DefinitionKind, function: F) -> Definition: ...
+def _decorate(definition_kind: DefinitionKind, function: F) -> Definition: ...
 
 
 @overload
 def _decorate(
-    kind: DefinitionKind, function: None = None, **options: object
+    definition_kind: DefinitionKind, function: None = None, **options: object
 ) -> Callable[[F], Definition]: ...
 
 
 def _decorate(
-    kind: DefinitionKind, function: F | None = None, **options: object
+    definition_kind: DefinitionKind, function: F | None = None, **options: object
 ) -> Definition | Callable[[F], Definition]:
     def apply(target: F) -> Definition:
         module_name = getattr(target, "__module__", "")
@@ -89,7 +89,7 @@ def _decorate(
             except (OSError, TypeError):
                 source_line = None
         return Definition(
-            kind=kind,
+            kind=definition_kind,
             function=target,
             qualified_name=target.__qualname__,
             explicit_options=tuple(sorted(options.items())),
