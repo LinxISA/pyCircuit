@@ -1,5 +1,8 @@
 # Phase 4A Python Frontend and ACPy-to-ACIR Implementation Plan
 
+**Status:** Complete — verified by
+[`phase-4-audit.md`](../../implementation/phase-4-audit.md).
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Implement every specified Python construction API and deterministically lower the supported Python subset through verified ACPy into canonical ACIR, including a buildable process path.
@@ -15,7 +18,7 @@
 - The exact public names are `system`, `module`, `extern_module`, `generated_module`, `struct`, `packet`, `transaction`, `protocol`, `interface`, `process`, `scope`, schema-generated component callables, `array`, `instances`, `view`, `queue`, `ResourceRef`, `address_space`, and `address_map`.
 - AST capture is authoritative. Executed operator-overload traces alone are never accepted as source semantics.
 - Static evaluation never calls Python `eval`, executes arbitrary callables, invokes user conversion hooks, or coerces symbolic values.
-- ACPy has exactly the 17 entity kinds declared by `schemas/acpy.schema.json`; no private kind or legacy alias is accepted.
+- ACPy has exactly the 16 entity kinds declared by `schemas/acpy.schema.json`; no private kind or legacy alias is accepted.
 - Ordinary Python assignments and calls lower to Graph-region SSA and bindings; no public `ins`, `outs`, `connect`, or emitted `ac.connect` surface is added.
 - Strong scopes outline real nested modules with minimal capture/escape signatures.
 - Every collection shape, specialization value, instance name, loop bound, and static branch is resolved before topology construction.

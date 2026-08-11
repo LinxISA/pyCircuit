@@ -1,5 +1,8 @@
 # Phase 4B Agent-First CLI and Runtime Orchestration Implementation Plan
 
+**Status:** Complete — verified by
+[`phase-4-audit.md`](../../implementation/phase-4-audit.md).
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Deliver the exact public `agentic-circuit` command surface over the Phase 4A frontend and existing native compiler/runtime, with stable diagnostics, capabilities, immutable artifacts, deterministic builds, and manifest-driven runs/replay.
@@ -1323,13 +1326,13 @@ git commit -m "test(cli): gate commands installation and determinism"
 - Consumes: Phase 4A audit, all Phase 4B tests, schemas, manifests, and commits.
 - Produces: complete roadmap exit evidence and reviewed plan checkboxes.
 
-- [ ] **Step 1: Run the clean combined verification gate**
+- [x] **Step 1: Run the clean combined verification gate**
 
 Run: `.venv/bin/python -m unittest tests.contracts.test_contracts -v && .venv/bin/python scripts/check-contracts.py && PYTHONPATH=src .venv/bin/python -m unittest discover -s tests/python_frontend -v && PYTHONPATH=src:build/dev-llvm22/python .venv/bin/python -m unittest discover -s tests/cli -v && cmake --build --preset dev-llvm22 && ctest --test-dir build/dev-llvm22 --output-on-failure && cmake --build --preset dev-llvm22 --target check-acir && cmake --build --preset release-llvm22 && ctest --test-dir build/release-llvm22 --output-on-failure && cmake --build --preset release-llvm22 --target check-acir && git diff --check`
 
 Expected: every command passes with no skipped required contract.
 
-- [ ] **Step 2: Run sanitizer and forbidden-dependency gates**
+- [x] **Step 2: Run sanitizer and forbidden-dependency gates**
 
 Run: `cmake --build --preset asan-llvm22 && ctest --test-dir build/asan-llvm22 --output-on-failure && cmake --build --preset ubsan-llvm22 && ctest --test-dir build/ubsan-llvm22 --output-on-failure && lit -v build/dev-llvm22/test/CodeGen`
 
@@ -1337,7 +1340,7 @@ Expected: PASS; generated simulator dependency scans find no Python runtime,
 dynamic plugin loader, descriptor interpreter, schema walker, coroutine,
 `std::function` process frame, or hot-path RTTI.
 
-- [ ] **Step 3: Verify exact public coverage and canonical samples**
+- [x] **Step 3: Verify exact public coverage and canonical samples**
 
 Generate the coverage table mapping every public API, ACPy entity kind,
 diagnostic class, command, option family, schema property, exit code, manifest,
@@ -1346,7 +1349,7 @@ builds and runs from equivalent roots, recursively compare canonical artifacts,
 and record representative ACPy, ACIR, ACSim, build-manifest, run-manifest, and
 run-result hashes.
 
-- [ ] **Step 4: Write the combined audit and close checkboxes**
+- [x] **Step 4: Write the combined audit and close checkboxes**
 
 Record environment, reviewed commit ranges, exact counts, profile/stage gates,
 failure atomicity, cache behavior, process closure, install evidence,
@@ -1354,7 +1357,7 @@ Python-free runtime proof, replay proof, and residual risks that do not leave a
 public contract broken. Change the design status from approved for implementation to
 implemented only after evidence is complete.
 
-- [ ] **Step 5: Commit the audit**
+- [x] **Step 5: Commit the audit**
 
 ```bash
 git add docs/implementation/phase-4-audit.md docs/superpowers/plans docs/superpowers/specs/2026-08-11-phase-4-python-cli-design.md

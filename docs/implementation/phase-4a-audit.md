@@ -79,7 +79,7 @@ one resolvable positive and negative test reference. Coverage includes:
 - bounded/static control, forbidden Python constructs, and process effects;
 - closed process blocks, branch termination, suspension, liveness, and linear use.
 
-The ACPy schema continues to expose exactly 17 entity kinds. The repository IR
+The ACPy schema continues to expose exactly 16 entity kinds. The repository IR
 coverage checker reports complete positive and negative coverage for the ACIR
 and ACSim ODS inventories, and the generated ledger is current.
 

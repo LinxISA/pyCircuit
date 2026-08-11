@@ -1,6 +1,9 @@
 # Phase 4 ACPy, Python Frontend, and Agent-First CLI Design
 
-**Status:** Approved for implementation
+**Status:** Implemented
+
+**Implementation audit:**
+[`phase-4-audit.md`](../../implementation/phase-4-audit.md)
 
 **Date:** 2026-08-11
 
