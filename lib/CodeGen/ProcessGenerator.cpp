@@ -200,6 +200,108 @@ llvm::Error validateScalarOperation(
   return llvm::Error::success();
 }
 
+llvm::Error
+validateOperations(const ModelPlan &plan, const ProcessPlan &process,
+                   const std::vector<ProcessOperationPlan> &operations,
+                   std::map<std::string, std::string> &values) {
+  auto requireValue = [&](llvm::StringRef value) -> llvm::Error {
+    if (!values.contains(value.str()))
+      return processError("operation uses a value outside its PC");
+    return llvm::Error::success();
+  };
+  auto addResults = [&](const std::vector<std::string> &results,
+                        const std::vector<std::string> &types) -> llvm::Error {
+    if (results.size() != types.size())
+      return processError("operation result arity is inconsistent");
+    for (auto [result, type] : llvm::zip_equal(results, types)) {
+      if (!isIdentifier(result) || values.contains(result))
+        return processError("operation result is not a fresh identifier");
+      auto realization = cppType(plan, type);
+      if (!realization)
+        return realization.takeError();
+      values.emplace(result, type);
+    }
+    return llvm::Error::success();
+  };
+
+  for (const ProcessOperationPlan &operation : operations) {
+    llvm::Error error = std::visit(
+        Overloaded{
+            [&](const ConstantPlan &constant) -> llvm::Error {
+              if (!isIdentifier(constant.resultValue) ||
+                  values.contains(constant.resultValue))
+                return processError("scalar constant is invalid");
+              auto type = cppType(plan, constant.resultType);
+              if (!type)
+                return type.takeError();
+              auto literal =
+                  scalarLiteral(constant.canonicalValue, constant.resultType);
+              if (!literal)
+                return literal.takeError();
+              values.emplace(constant.resultValue, constant.resultType);
+              return llvm::Error::success();
+            },
+            [&](const ArithmeticPlan &scalar) -> llvm::Error {
+              if (auto validation = validateScalarOperation(
+                      plan, values, scalar.operationName, scalar.arguments,
+                      scalar.results, scalar.resultTypes, scalar.predicate,
+                      true))
+                return validation;
+              return addResults(scalar.results, scalar.resultTypes);
+            },
+            [&](const IndexPlan &scalar) -> llvm::Error {
+              if (auto validation = validateScalarOperation(
+                      plan, values, scalar.operationName, scalar.arguments,
+                      scalar.results, scalar.resultTypes, scalar.predicate,
+                      false))
+                return validation;
+              return addResults(scalar.results, scalar.resultTypes);
+            },
+            [&](const LiveLoadPlan &load) -> llvm::Error {
+              const LiveSlotPlan *slot = findSlot(process, load.slot);
+              if (!slot || slot->type != load.type)
+                return processError("live load slot or type is invalid");
+              return addResults({load.resultValue}, {load.type});
+            },
+            [&](const LiveStorePlan &store) -> llvm::Error {
+              if (auto validation = requireValue(store.sourceValue))
+                return validation;
+              const LiveSlotPlan *slot = findSlot(process, store.slot);
+              if (!slot || values.at(store.sourceValue) != slot->type)
+                return processError("live store slot or type is invalid");
+              return llvm::Error::success();
+            },
+            [&](const InlineCallPlan &call) -> llvm::Error {
+              const BindingPlan *binding = findBinding(plan, call.callee);
+              const TypePlan *implementation = findType(plan, call.callee);
+              if ((!binding || binding->effect != BindingEffect::Pure) &&
+                  (!implementation ||
+                   implementation->kind != TypeKind::Implementation))
+                return processError("inline callee is not a pure binding");
+              for (const std::string &argument : call.arguments)
+                if (auto validation = requireValue(argument))
+                  return validation;
+              return addResults(call.results, call.resultTypes);
+            },
+            [&](const InvokePlan &call) -> llvm::Error {
+              const BindingPlan *binding = findBinding(plan, call.callee);
+              const TypePlan *implementation = findType(plan, call.callee);
+              if ((!binding || binding->effect != BindingEffect::Stateful) &&
+                  (!implementation ||
+                   implementation->kind != TypeKind::Implementation))
+                return processError("invoke callee is not a stateful binding");
+              for (const std::string &argument : call.arguments)
+                if (auto validation = requireValue(argument))
+                  return validation;
+              return addResults(call.results, call.resultTypes);
+            }},
+        operation);
+    if (error)
+      return error;
+  }
+  return llvm::Error::success();
+}
+
 llvm::Error validateProcess(const ModelPlan &plan, const ProcessPlan &process) {
   if (!isIdentifier(process.className) || !isIdentifier(process.symbol) ||
       process.states.empty() || process.fairnessWork == 0)
@@ -227,103 +329,107 @@ llvm::Error validateProcess(const ModelPlan &plan, const ProcessPlan &process) {
     std::map<std::string, std::string> values;
     for (auto [index, capture] : llvm::enumerate(process.captures))
       values.emplace("arg" + std::to_string(index), capture.type);
-
-    auto requireValue = [&](llvm::StringRef value) -> llvm::Error {
-      if (!values.contains(value.str()))
-        return processError("operation uses a value outside its PC");
-      return llvm::Error::success();
-    };
-    auto addResults =
-        [&](const std::vector<std::string> &results,
-            const std::vector<std::string> &types) -> llvm::Error {
-      if (results.size() != types.size())
-        return processError("operation result arity is inconsistent");
-      for (auto [result, type] : llvm::zip_equal(results, types)) {
-        if (!isIdentifier(result) || values.contains(result))
-          return processError("operation result is not a fresh identifier");
-        auto realization = cppType(plan, type);
-        if (!realization)
-          return realization.takeError();
-        values.emplace(result, type);
+    if (state.blocks.size() > 1) {
+      for (const PcBlockPlan &block : state.blocks) {
+        for (const BlockArgumentPlan &argument : block.arguments) {
+          if (!isIdentifier(argument.name))
+            return processError("block argument is not a fresh process value");
+          auto prior = values.find(argument.name);
+          if (prior != values.end()) {
+            if (block.ordinal == 0 && prior->second == argument.type)
+              continue;
+            return processError("block argument is not a fresh process value");
+          }
+          auto type = cppType(plan, argument.type);
+          if (!type)
+            return type.takeError();
+          values.emplace(argument.name, argument.type);
+        }
       }
-      return llvm::Error::success();
-    };
+    }
 
-    for (const ProcessOperationPlan &operation : state.operations) {
-      llvm::Error error = std::visit(
-          Overloaded{
-              [&](const ConstantPlan &constant) -> llvm::Error {
-                if (!isIdentifier(constant.resultValue) ||
-                    values.contains(constant.resultValue))
-                  return processError("scalar constant is invalid");
-                auto type = cppType(plan, constant.resultType);
-                if (!type)
-                  return type.takeError();
-                auto literal =
-                    scalarLiteral(constant.canonicalValue, constant.resultType);
-                if (!literal)
-                  return literal.takeError();
-                values.emplace(constant.resultValue, constant.resultType);
-                return llvm::Error::success();
-              },
-              [&](const ArithmeticPlan &scalar) -> llvm::Error {
-                if (auto error = validateScalarOperation(
-                        plan, values, scalar.operationName, scalar.arguments,
-                        scalar.results, scalar.resultTypes, scalar.predicate,
-                        true))
-                  return error;
-                return addResults(scalar.results, scalar.resultTypes);
-              },
-              [&](const IndexPlan &scalar) -> llvm::Error {
-                if (auto error = validateScalarOperation(
-                        plan, values, scalar.operationName, scalar.arguments,
-                        scalar.results, scalar.resultTypes, scalar.predicate,
-                        false))
-                  return error;
-                return addResults(scalar.results, scalar.resultTypes);
-              },
-              [&](const LiveLoadPlan &load) -> llvm::Error {
-                const LiveSlotPlan *slot = findSlot(process, load.slot);
-                if (!slot || slot->type != load.type)
-                  return processError("live load slot or type is invalid");
-                return addResults({load.resultValue}, {load.type});
-              },
-              [&](const LiveStorePlan &store) -> llvm::Error {
-                if (auto error = requireValue(store.sourceValue))
-                  return error;
-                const LiveSlotPlan *slot = findSlot(process, store.slot);
-                if (!slot || values.at(store.sourceValue) != slot->type)
-                  return processError("live store slot or type is invalid");
-                return llvm::Error::success();
-              },
-              [&](const InlineCallPlan &call) -> llvm::Error {
-                const BindingPlan *binding = findBinding(plan, call.callee);
-                const TypePlan *implementation = findType(plan, call.callee);
-                if ((!binding || binding->effect != BindingEffect::Pure) &&
-                    (!implementation ||
-                     implementation->kind != TypeKind::Implementation))
-                  return processError("inline callee is not a pure binding");
-                for (const std::string &argument : call.arguments)
-                  if (auto error = requireValue(argument))
+    if (auto error =
+            validateOperations(plan, process, state.operations, values))
+      return error;
+
+    if (state.blocks.size() > 1) {
+      for (const PcBlockPlan &block : state.blocks) {
+        std::map<std::string, std::string> localValues;
+        for (auto [index, capture] : llvm::enumerate(process.captures))
+          localValues.emplace("arg" + std::to_string(index), capture.type);
+        for (const BlockArgumentPlan &argument : block.arguments)
+          localValues.emplace(argument.name, argument.type);
+
+        auto requireLocalValue = [&](llvm::StringRef value) -> llvm::Error {
+          if (!localValues.contains(value.str()))
+            return processError(
+                "multi-block operation uses a value outside its block");
+          return llvm::Error::success();
+        };
+        if (auto error = validateOperations(plan, process, block.operations,
+                                            localValues))
+          return error;
+
+        auto validateSuccessor =
+            [&](uint32_t targetOrdinal,
+                const std::vector<std::string> &arguments) -> llvm::Error {
+          if (targetOrdinal >= state.blocks.size())
+            return processError("branch target is outside its PC");
+          const PcBlockPlan &target = state.blocks[targetOrdinal];
+          if (arguments.size() != target.arguments.size())
+            return processError("branch successor arity is inconsistent");
+          for (auto [argument, targetArgument] :
+               llvm::zip_equal(arguments, target.arguments)) {
+            if (auto error = requireLocalValue(argument))
+              return error;
+            if (localValues.at(argument) != targetArgument.type)
+              return processError("branch successor type is inconsistent");
+          }
+          return llvm::Error::success();
+        };
+        llvm::Error blockError = std::visit(
+            Overloaded{
+                [&](const BranchPlan &branch) -> llvm::Error {
+                  return validateSuccessor(branch.targetBlock,
+                                           branch.arguments);
+                },
+                [&](const ConditionalBranchPlan &branch) -> llvm::Error {
+                  if (auto error = requireLocalValue(branch.condition))
                     return error;
-                return addResults(call.results, call.resultTypes);
-              },
-              [&](const InvokePlan &call) -> llvm::Error {
-                const BindingPlan *binding = findBinding(plan, call.callee);
-                const TypePlan *implementation = findType(plan, call.callee);
-                if ((!binding || binding->effect != BindingEffect::Stateful) &&
-                    (!implementation ||
-                     implementation->kind != TypeKind::Implementation))
-                  return processError(
-                      "invoke callee is not a stateful binding");
-                for (const std::string &argument : call.arguments)
-                  if (auto error = requireValue(argument))
+                  if (localValues.at(branch.condition) != "i1")
+                    return processError(
+                        "conditional branch condition is not i1");
+                  if (auto error = validateSuccessor(branch.trueBlock,
+                                                     branch.trueArguments))
                     return error;
-                return addResults(call.results, call.resultTypes);
-              }},
-          operation);
-      if (error)
-        return error;
+                  return validateSuccessor(branch.falseBlock,
+                                           branch.falseArguments);
+                },
+                [&](const ContinuePlan &next) -> llvm::Error {
+                  return findState(process, next.targetPc)
+                             ? llvm::Error::success()
+                             : processError(
+                                   "continue target is outside the PC set");
+                },
+                [&](const SuspendPlan &suspend) -> llvm::Error {
+                  auto found = localValues.find(suspend.wakeValue);
+                  if (found == localValues.end() ||
+                      !llvm::StringRef(found->second)
+                           .starts_with("!acsim.wake<") ||
+                      !findState(process, suspend.targetPc))
+                    return processError("suspend wake or target is invalid");
+                  return llvm::Error::success();
+                },
+                [&](const TerminatePlan &terminate) -> llvm::Error {
+                  return terminate.status == "success" ||
+                                 terminate.status == "failure"
+                             ? llvm::Error::success()
+                             : processError("terminate status is invalid");
+                }},
+            block.terminator);
+        if (blockError)
+          return blockError;
+      }
     }
 
     llvm::Error terminatorError = std::visit(
@@ -679,7 +785,7 @@ generateProcessSource(const ModelPlan &plan, const ProcessPlan &process) {
 
   std::ostringstream output;
   output << "#include \"generated/processes/" << process.className
-         << ".h\"\n\nnamespace acsim_generated {\n\n"
+         << ".h\"\n\n#include <optional>\n\nnamespace acsim_generated {\n\n"
          << process.className << "::" << process.className
          << "(std::string name, gfsim::ObjectId id, gfsim::SimObject *parent";
   for (const CapturePlan &capture : process.captures) {
@@ -701,9 +807,109 @@ generateProcessSource(const ModelPlan &plan, const ProcessPlan &process) {
     for (auto [index, capture] : llvm::enumerate(process.captures))
       output << "    auto &arg" << index << " = *capture_" << capture.name
              << "_;\n";
-    for (const ProcessOperationPlan &operation : state.operations)
-      if (auto error = emitOperation(plan, process, output, operation))
-        return std::move(error);
+    if (state.blocks.size() > 1) {
+      output << "    enum class Block_" << state.name << " {";
+      for (auto [index, block] : llvm::enumerate(state.blocks))
+        output << (index == 0 ? " " : ", ") << "b" << block.ordinal;
+      output << " };\n";
+      for (const PcBlockPlan &block : state.blocks) {
+        for (auto [index, argument] : llvm::enumerate(block.arguments)) {
+          auto type = cppType(plan, argument.type);
+          if (!type)
+            return type.takeError();
+          output << "    std::optional<" << *type << "> b" << block.ordinal
+                 << "_arg" << index << ";\n";
+        }
+      }
+      output << "    auto block_" << state.name << " = Block_" << state.name
+             << "::b0;\n    for (;;) {\n      switch (block_" << state.name
+             << ") {\n";
+      for (const PcBlockPlan &block : state.blocks) {
+        output << "      case Block_" << state.name << "::b" << block.ordinal
+               << ": {\n";
+        if (block.ordinal != 0)
+          for (auto [index, argument] : llvm::enumerate(block.arguments))
+            output << "        auto " << argument.name << " = *b"
+                   << block.ordinal << "_arg" << index << ";\n";
+        for (const ProcessOperationPlan &operation : block.operations)
+          if (auto error = emitOperation(plan, process, output, operation))
+            return std::move(error);
+        llvm::Error terminatorError = std::visit(
+            Overloaded{
+                [&](const BranchPlan &branch) -> llvm::Error {
+                  const PcBlockPlan &target =
+                      state.blocks.at(branch.targetBlock);
+                  for (auto [index, argument] :
+                       llvm::enumerate(branch.arguments))
+                    output << "        b" << target.ordinal << "_arg" << index
+                           << " = " << argument << ";\n";
+                  output << "        block_" << state.name << " = Block_"
+                         << state.name << "::b" << target.ordinal
+                         << ";\n        continue;\n";
+                  return llvm::Error::success();
+                },
+                [&](const ConditionalBranchPlan &branch) -> llvm::Error {
+                  output << "        if (" << branch.condition << ") {\n";
+                  const PcBlockPlan &trueTarget =
+                      state.blocks.at(branch.trueBlock);
+                  for (auto [index, argument] :
+                       llvm::enumerate(branch.trueArguments))
+                    output << "          b" << trueTarget.ordinal << "_arg"
+                           << index << " = " << argument << ";\n";
+                  output << "          block_" << state.name << " = Block_"
+                         << state.name << "::b" << trueTarget.ordinal
+                         << ";\n        } else {\n";
+                  const PcBlockPlan &falseTarget =
+                      state.blocks.at(branch.falseBlock);
+                  for (auto [index, argument] :
+                       llvm::enumerate(branch.falseArguments))
+                    output << "          b" << falseTarget.ordinal << "_arg"
+                           << index << " = " << argument << ";\n";
+                  output << "          block_" << state.name << " = Block_"
+                         << state.name << "::b" << falseTarget.ordinal
+                         << ";\n        }\n        continue;\n";
+                  return llvm::Error::success();
+                },
+                [&](const ContinuePlan &next) -> llvm::Error {
+                  output << "        return gfsim::ProcessStep::continueAt("
+                         << "static_cast<uint32_t>(Pc::" << next.targetPc
+                         << "));\n";
+                  return llvm::Error::success();
+                },
+                [&](const SuspendPlan &suspend) -> llvm::Error {
+                  const PcStatePlan *target =
+                      findState(process, suspend.targetPc);
+                  output << "        return gfsim::ProcessStep::suspendAt("
+                         << "static_cast<uint32_t>(Pc::" << suspend.targetPc
+                         << "), " << suspend.wakeValue << ", "
+                         << static_cast<uint64_t>(target->ordinal) + 1
+                         << ");\n";
+                  return llvm::Error::success();
+                },
+                [&](const TerminatePlan &terminate) -> llvm::Error {
+                  if (terminate.status == "success")
+                    output
+                        << "        return gfsim::ProcessStep::terminate();\n";
+                  else
+                    output << "        return gfsim::ProcessStep::fail("
+                              "\"process_terminated_failure\");\n";
+                  return llvm::Error::success();
+                }},
+            block.terminator);
+        if (terminatorError)
+          return std::move(terminatorError);
+        output << "      }\n";
+      }
+      output << "      }\n    }\n";
+    } else {
+      for (const ProcessOperationPlan &operation : state.operations)
+        if (auto error = emitOperation(plan, process, output, operation))
+          return std::move(error);
+    }
+    if (state.blocks.size() > 1) {
+      output << "  }\n";
+      continue;
+    }
     std::visit(
         Overloaded{
             [&](const ContinuePlan &next) {

@@ -1036,7 +1036,8 @@ LogicalResult verifyCanonicalType(Type type, Operation *from,
       })
       .Case<ObjectIdType, ActivationIdType>([](auto) { return success(); })
       .Default([&](Type other) -> LogicalResult {
-        if ((from->getParentOfType<ProcessOp>() || isa<InlineOp>(from)) &&
+        if ((isa<ProcessOp>(from) || from->getParentOfType<ProcessOp>() ||
+             isa<InlineOp>(from)) &&
             isa<IntegerType, FloatType, IndexType>(other))
           return success();
         return from->emitOpError()

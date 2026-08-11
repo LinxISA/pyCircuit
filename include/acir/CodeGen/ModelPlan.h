@@ -262,14 +262,40 @@ struct SuspendPlan {
 struct TerminatePlan {
   std::string status;
 };
+struct BlockArgumentPlan {
+  std::string name;
+  std::string type;
+};
+struct BranchPlan {
+  uint32_t targetBlock = 0;
+  std::vector<std::string> arguments;
+};
+struct ConditionalBranchPlan {
+  std::string condition;
+  uint32_t trueBlock = 0;
+  std::vector<std::string> trueArguments;
+  uint32_t falseBlock = 0;
+  std::vector<std::string> falseArguments;
+};
 using ProcessTerminatorPlan =
     std::variant<ContinuePlan, SuspendPlan, TerminatePlan>;
+using BlockTerminatorPlan =
+    std::variant<BranchPlan, ConditionalBranchPlan, ContinuePlan, SuspendPlan,
+                 TerminatePlan>;
+
+struct PcBlockPlan {
+  uint32_t ordinal = 0;
+  std::vector<BlockArgumentPlan> arguments;
+  std::vector<ProcessOperationPlan> operations;
+  BlockTerminatorPlan terminator = BranchPlan{};
+};
 
 struct PcStatePlan {
   uint32_t ordinal = 0;
   std::string name;
   std::vector<ProcessOperationPlan> operations;
   ProcessTerminatorPlan terminator = ContinuePlan{};
+  std::vector<PcBlockPlan> blocks;
 };
 
 struct ProcessPlan {

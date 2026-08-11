@@ -46,6 +46,32 @@ ModelPlan makeMinimalRunnablePlan() {
   state.operations.push_back(
       ArithmeticPlan{"arith.addi", {"left", "right"}, {"sum"}, {"i32"}, {}});
   state.terminator = TerminatePlan{"success"};
+  PcBlockPlan entryBlock{.ordinal = 0};
+  entryBlock.operations.push_back(ConstantPlan{"condition", "i1", true});
+  entryBlock.operations.push_back(ConstantPlan{"left", "i32", 7});
+  entryBlock.operations.push_back(ConstantPlan{"right", "i32", 5});
+  entryBlock.terminator =
+      ConditionalBranchPlan{"condition", 1, {"left"}, 2, {"right"}};
+  PcBlockPlan trueBlock{.ordinal = 1,
+                        .arguments = {{"selected_true", "i32"}},
+                        .terminator = TerminatePlan{"success"}};
+  trueBlock.operations.push_back(
+      ArithmeticPlan{"arith.addi",
+                     {"selected_true", "selected_true"},
+                     {"true_sum"},
+                     {"i32"},
+                     {}});
+  PcBlockPlan falseBlock{.ordinal = 2,
+                         .arguments = {{"selected_false", "i32"}},
+                         .terminator = TerminatePlan{"success"}};
+  falseBlock.operations.push_back(
+      ArithmeticPlan{"arith.addi",
+                     {"selected_false", "selected_false"},
+                     {"false_sum"},
+                     {"i32"},
+                     {}});
+  state.blocks = {std::move(entryBlock), std::move(trueBlock),
+                  std::move(falseBlock)};
   process.states.push_back(std::move(state));
   module.processes.push_back(std::move(process));
   plan.modules.push_back(std::move(module));

@@ -27,6 +27,7 @@ target_link_libraries(CodeGenTests PRIVATE
 )
 target_compile_definitions(CodeGenTests PRIVATE
   ACSIM_VALID_TEST_FILE="${PROJECT_SOURCE_DIR}/test/ACSim/ops-valid.mlir"
+  ACSIM_PROCESS_CONTROL_FLOW_TEST_FILE="${PROJECT_SOURCE_DIR}/test/CodeGen/process-control-flow.mlir"
   ACIR_TEST_BINARY_DIR="${PROJECT_BINARY_DIR}"
   ACIR_TEST_CXX_COMPILER="${CMAKE_CXX_COMPILER}"
   ACIR_TEST_LLVM_LIB_DIR="${ACIR_TEST_LLVM_LIB_DIR}"

@@ -213,6 +213,44 @@ TEST(ModelPlanTest, ExtractsHierarchyBindingsExpressionsAndProcesses) {
   EXPECT_FALSE(hasError(validateModelPlan(*plan)));
 }
 
+TEST(ModelPlanTest, PreservesEveryBlockAndBranchOperandInProcessStates) {
+  mlir::MLIRContext context;
+  loadACSimDialects(context);
+  auto file = mlir::parseSourceFile<mlir::ModuleOp>(
+      ACSIM_PROCESS_CONTROL_FLOW_TEST_FILE, &context);
+  ASSERT_TRUE(file);
+  auto plan = buildModelPlan(*file);
+  if (!plan) {
+    ADD_FAILURE() << llvm::toString(plan.takeError());
+    return;
+  }
+
+  const ProcessPlan &process = plan->modules.front().processes.front();
+  ASSERT_EQ(process.states.front().blocks.size(), 3u);
+  EXPECT_TRUE(std::holds_alternative<ConditionalBranchPlan>(
+      process.states.front().blocks[0].terminator));
+  ASSERT_EQ(process.states.front().blocks[1].arguments.size(), 1u);
+  EXPECT_EQ(process.states.front().blocks[1].arguments.front().type, "i32");
+}
+
+TEST(ModelPlanTest, RejectsBranchOutsideClosedPcBlockSet) {
+  mlir::MLIRContext context;
+  loadACSimDialects(context);
+  auto file = mlir::parseSourceFile<mlir::ModuleOp>(
+      ACSIM_PROCESS_CONTROL_FLOW_TEST_FILE, &context);
+  ASSERT_TRUE(file);
+  auto plan = buildModelPlan(*file);
+  ASSERT_TRUE(static_cast<bool>(plan));
+  auto &branch = std::get<ConditionalBranchPlan>(plan->modules.front()
+                                                     .processes.front()
+                                                     .states.front()
+                                                     .blocks.front()
+                                                     .terminator);
+  branch.trueBlock = 99;
+
+  EXPECT_TRUE(hasError(validateModelPlan(*plan)));
+}
+
 TEST(ModelPlanTest, ValidationRejectsTransitionOutsideClosedPcSet) {
   mlir::MLIRContext context;
   loadACSimDialects(context);

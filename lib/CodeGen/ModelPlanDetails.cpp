@@ -1,6 +1,7 @@
 #include "ModelPlanInternal.h"
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/Dialect/Index/IR/IndexOps.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
@@ -15,6 +16,11 @@
 
 namespace acir::codegen::detail {
 namespace {
+
+template <class... Ts> struct Overloaded : Ts... {
+  using Ts::operator()...;
+};
+template <class... Ts> Overloaded(Ts...) -> Overloaded<Ts...>;
 
 llvm::Error detailError(const llvm::Twine &code, const llvm::Twine &message) {
   return llvm::createStringError(
@@ -262,10 +268,24 @@ extractProcess(acsim::ProcessOp process,
             .str();
     llvm::DenseMap<mlir::Value, std::string> values;
     uint32_t nextValue = 0;
+    llvm::DenseMap<mlir::Block *, uint32_t> blockOrdinals;
+    for (auto [blockIndex, block] : llvm::enumerate(region))
+      blockOrdinals.try_emplace(&block, static_cast<uint32_t>(blockIndex));
     for (mlir::Block &block : region) {
-      for (auto [index, argument] : llvm::enumerate(block.getArguments()))
-        values.try_emplace(argument,
-                           (llvm::Twine("arg") + llvm::Twine(index)).str());
+      PcBlockPlan blockPlan;
+      blockPlan.ordinal = blockOrdinals.lookup(&block);
+      for (auto [index, argument] : llvm::enumerate(block.getArguments())) {
+        std::string name =
+            blockPlan.ordinal == 0
+                ? (llvm::Twine("arg") + llvm::Twine(index)).str()
+                : (llvm::Twine("block") + llvm::Twine(blockPlan.ordinal) +
+                   "_value" + llvm::Twine(index))
+                      .str();
+        values.try_emplace(argument, std::move(name));
+      }
+      for (mlir::BlockArgument argument : block.getArguments())
+        blockPlan.arguments.push_back({valueName(values, argument, nextValue),
+                                       printType(argument.getType())});
       for (mlir::Operation &operation : block) {
         for (mlir::Value value : operation.getResults())
           valueName(values, value, nextValue);
@@ -273,32 +293,54 @@ extractProcess(acsim::ProcessOp process,
           state.operations.push_back(LiveLoadPlan{
               valueName(values, load.getResult(), nextValue),
               load.getSlot().str(), printType(load.getResult().getType())});
+          blockPlan.operations.push_back(state.operations.back());
         } else if (auto store = mlir::dyn_cast<acsim::LiveStoreOp>(operation)) {
           state.operations.push_back(
               LiveStorePlan{valueName(values, store.getValue(), nextValue),
                             store.getSlot().str()});
+          blockPlan.operations.push_back(state.operations.back());
         } else if (auto call = mlir::dyn_cast<acsim::InlineOp>(operation)) {
           state.operations.push_back(
               InlineCallPlan{call.getCallee().str(),
                              valueNames(values, call.getArgs(), nextValue),
                              {valueName(values, call.getResult(), nextValue)},
                              {printType(call.getResult().getType())}});
+          blockPlan.operations.push_back(state.operations.back());
         } else if (auto call = mlir::dyn_cast<acsim::InvokeOp>(operation)) {
           state.operations.push_back(
               InvokePlan{call.getCallee().str(),
                          valueNames(values, call.getArgs(), nextValue),
                          valueNames(values, call.getResults(), nextValue),
                          resultTypeNames(call.getResults())});
+          blockPlan.operations.push_back(state.operations.back());
+        } else if (auto branch =
+                       mlir::dyn_cast<mlir::cf::BranchOp>(operation)) {
+          blockPlan.terminator = BranchPlan{
+              blockOrdinals.lookup(branch.getDest()),
+              valueNames(values, branch.getDestOperands(), nextValue)};
+        } else if (auto branch =
+                       mlir::dyn_cast<mlir::cf::CondBranchOp>(operation)) {
+          blockPlan.terminator = ConditionalBranchPlan{
+              valueName(values, branch.getCondition(), nextValue),
+              blockOrdinals.lookup(branch.getTrueDest()),
+              valueNames(values, branch.getTrueDestOperands(), nextValue),
+              blockOrdinals.lookup(branch.getFalseDest()),
+              valueNames(values, branch.getFalseDestOperands(), nextValue)};
         } else if (auto transition =
                        mlir::dyn_cast<acsim::ContinueOp>(operation)) {
-          state.terminator = ContinuePlan{transition.getTargetPc().str()};
+          ContinuePlan plan{transition.getTargetPc().str()};
+          state.terminator = plan;
+          blockPlan.terminator = std::move(plan);
         } else if (auto suspend = mlir::dyn_cast<acsim::SuspendOp>(operation)) {
-          state.terminator =
-              SuspendPlan{valueName(values, suspend.getWake(), nextValue),
-                          suspend.getTargetPc().str()};
+          SuspendPlan plan{valueName(values, suspend.getWake(), nextValue),
+                           suspend.getTargetPc().str()};
+          state.terminator = plan;
+          blockPlan.terminator = std::move(plan);
         } else if (auto terminate =
                        mlir::dyn_cast<acsim::TerminateOp>(operation)) {
-          state.terminator = TerminatePlan{terminate.getStatus().str()};
+          TerminatePlan plan{terminate.getStatus().str()};
+          state.terminator = plan;
+          blockPlan.terminator = std::move(plan);
         } else if (auto constant =
                        mlir::dyn_cast<mlir::arith::ConstantOp>(operation)) {
           auto value = staticValue(constant.getValue());
@@ -307,6 +349,7 @@ extractProcess(acsim::ProcessOp process,
           state.operations.push_back(ConstantPlan{
               valueName(values, constant.getResult(), nextValue),
               printType(constant.getResult().getType()), std::move(*value)});
+          blockPlan.operations.push_back(state.operations.back());
         } else if (auto constant =
                        mlir::dyn_cast<mlir::index::ConstantOp>(operation)) {
           if (!constant.getValue().isSignedIntN(64))
@@ -316,6 +359,7 @@ extractProcess(acsim::ProcessOp process,
               valueName(values, constant.getResult(), nextValue),
               printType(constant.getResult().getType()),
               llvm::json::Value(constant.getValue().getSExtValue())});
+          blockPlan.operations.push_back(state.operations.back());
         } else if (operation.getName().getStringRef().starts_with("arith.")) {
           std::string predicate;
           if (auto compare = mlir::dyn_cast<mlir::arith::CmpIOp>(operation))
@@ -332,6 +376,7 @@ extractProcess(acsim::ProcessOp process,
               valueNames(values, operation.getOperands(), nextValue),
               valueNames(values, operation.getResults(), nextValue),
               resultTypeNames(operation.getResults()), std::move(predicate)});
+          blockPlan.operations.push_back(state.operations.back());
         } else if (operation.getName().getStringRef().starts_with("index.")) {
           std::string predicate;
           if (auto compare = mlir::dyn_cast<mlir::index::CmpOp>(operation))
@@ -343,12 +388,14 @@ extractProcess(acsim::ProcessOp process,
               valueNames(values, operation.getOperands(), nextValue),
               valueNames(values, operation.getResults(), nextValue),
               resultTypeNames(operation.getResults()), std::move(predicate)});
+          blockPlan.operations.push_back(state.operations.back());
         } else {
           return detailError("ACLOWER-PROCESS-STATE",
                              "process operation is outside the closed C++ "
                              "generation subset");
         }
       }
+      state.blocks.push_back(std::move(blockPlan));
     }
     result.states.push_back(std::move(state));
   }
@@ -549,6 +596,61 @@ llvm::Error validateModelDetails(const ModelPlan &plan) {
             state.terminator);
         if (transitionError)
           return transitionError;
+        for (auto [blockOrdinal, block] : llvm::enumerate(state.blocks)) {
+          if (block.ordinal != blockOrdinal)
+            return detailError("ACLOWER-PROCESS-STATE",
+                               "PC blocks are not dense and ordered");
+          auto checkSuccessor =
+              [&](uint32_t target,
+                  const std::vector<std::string> &arguments) -> llvm::Error {
+            if (target >= state.blocks.size())
+              return detailError("ACLOWER-PROCESS-STATE",
+                                 "branch target is outside its PC");
+            if (arguments.size() != state.blocks[target].arguments.size())
+              return detailError("ACLOWER-PROCESS-STATE",
+                                 "branch successor arity is inconsistent");
+            return llvm::Error::success();
+          };
+          llvm::Error blockError = std::visit(
+              Overloaded{
+                  [&](const BranchPlan &branch) -> llvm::Error {
+                    return checkSuccessor(branch.targetBlock, branch.arguments);
+                  },
+                  [&](const ConditionalBranchPlan &branch) -> llvm::Error {
+                    if (branch.condition.empty())
+                      return detailError("ACLOWER-PROCESS-STATE",
+                                         "conditional branch has no condition");
+                    if (auto error = checkSuccessor(branch.trueBlock,
+                                                    branch.trueArguments))
+                      return error;
+                    return checkSuccessor(branch.falseBlock,
+                                          branch.falseArguments);
+                  },
+                  [&](const ContinuePlan &next) -> llvm::Error {
+                    return pcs.contains(next.targetPc)
+                               ? llvm::Error::success()
+                               : detailError(
+                                     "ACLOWER-PROCESS-STATE",
+                                     "continue target is outside PC set");
+                  },
+                  [&](const SuspendPlan &suspend) -> llvm::Error {
+                    return !suspend.wakeValue.empty() &&
+                                   pcs.contains(suspend.targetPc)
+                               ? llvm::Error::success()
+                               : detailError("ACLOWER-PROCESS-STATE",
+                                             "suspend target is invalid");
+                  },
+                  [&](const TerminatePlan &terminate) -> llvm::Error {
+                    return terminate.status == "success" ||
+                                   terminate.status == "failure"
+                               ? llvm::Error::success()
+                               : detailError("ACLOWER-PROCESS-STATE",
+                                             "terminate status is not closed");
+                  }},
+              block.terminator);
+          if (blockError)
+            return std::move(blockError);
+        }
       }
     }
   }

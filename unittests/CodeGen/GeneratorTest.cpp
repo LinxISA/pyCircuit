@@ -35,6 +35,17 @@ llvm::Expected<ModelPlan> fixturePlan(mlir::MLIRContext &context) {
   return buildModelPlan(*file);
 }
 
+llvm::Expected<ModelPlan> processControlFlowPlan(mlir::MLIRContext &context) {
+  context
+      .loadDialect<acsim::ACSimDialect, mlir::arith::ArithDialect,
+                   mlir::cf::ControlFlowDialect, mlir::index::IndexDialect>();
+  auto file = mlir::parseSourceFile<mlir::ModuleOp>(
+      ACSIM_PROCESS_CONTROL_FLOW_TEST_FILE, &context);
+  if (!file)
+    return llvm::createStringError("failed to parse process CFG fixture");
+  return buildModelPlan(*file);
+}
+
 llvm::Expected<ModelPlan> reusableModulePlan(mlir::MLIRContext &context) {
   context.loadDialect<acsim::ACSimDialect>();
   auto file = mlir::parseSourceFile<mlir::ModuleOp>(
@@ -279,6 +290,70 @@ TEST(GeneratorTest, EmitsClosedEnumPcProcessWithoutRawFrames) {
             std::string::npos);
   EXPECT_EQ(source->content.find("std::function"), std::string::npos);
   EXPECT_EQ(source->content.find("co_await"), std::string::npos);
+}
+
+TEST(GeneratorTest, EmitsTypedLocalDispatchForMultiBlockProcess) {
+  mlir::MLIRContext context;
+  auto plan = processControlFlowPlan(context);
+  ASSERT_TRUE(static_cast<bool>(plan));
+  auto bundle = generateModelSources(*plan);
+  if (!bundle) {
+    ADD_FAILURE() << llvm::toString(bundle.takeError());
+    return;
+  }
+  auto source = std::find_if(bundle->files.begin(), bundle->files.end(),
+                             [](const GeneratedFile &file) {
+                               return file.relativePath.starts_with(
+                                   "src/generated/processes/");
+                             });
+  ASSERT_NE(source, bundle->files.end());
+  EXPECT_NE(source->content.find("enum class Block_entry"), std::string::npos);
+  EXPECT_NE(source->content.find("std::optional<"), std::string::npos);
+  EXPECT_NE(source->content.find("b1_arg0"), std::string::npos);
+  EXPECT_NE(source->content.find("if ("), std::string::npos);
+  EXPECT_NE(source->content.find("block1_value0 + block1_value0"),
+            std::string::npos);
+  EXPECT_EQ(source->content.find("std::function"), std::string::npos);
+  EXPECT_EQ(source->content.find("coroutine"), std::string::npos);
+}
+
+TEST(GeneratorTest, RejectsMismatchedMultiBlockSuccessorType) {
+  mlir::MLIRContext context;
+  auto plan = processControlFlowPlan(context);
+  ASSERT_TRUE(static_cast<bool>(plan));
+  auto &branch = std::get<ConditionalBranchPlan>(plan->modules.front()
+                                                     .processes.front()
+                                                     .states.front()
+                                                     .blocks.front()
+                                                     .terminator);
+  branch.trueArguments.front() = branch.condition;
+
+  auto bundle = generateModelSources(*plan);
+  ASSERT_FALSE(bundle);
+  EXPECT_NE(llvm::toString(bundle.takeError()).find("ACLOWER-PROCESS-STATE"),
+            std::string::npos);
+}
+
+TEST(GeneratorTest, RejectsMultiBlockSuccessorValueOutsideSourceBlock) {
+  mlir::MLIRContext context;
+  auto plan = processControlFlowPlan(context);
+  ASSERT_TRUE(static_cast<bool>(plan));
+  auto &branch = std::get<ConditionalBranchPlan>(plan->modules.front()
+                                                     .processes.front()
+                                                     .states.front()
+                                                     .blocks.front()
+                                                     .terminator);
+  branch.trueArguments.front() = plan->modules.front()
+                                     .processes.front()
+                                     .states.front()
+                                     .blocks[1]
+                                     .arguments.front()
+                                     .name;
+
+  auto bundle = generateModelSources(*plan);
+  ASSERT_FALSE(bundle);
+  EXPECT_NE(llvm::toString(bundle.takeError()).find("ACLOWER-PROCESS-STATE"),
+            std::string::npos);
 }
 
 TEST(GeneratorTest, EmitsTypedScalarOperationsWithoutRuntimeHelpers) {
