@@ -364,6 +364,7 @@ class ComponentSchema:
     results: tuple[ResultSchema, ...]
     parameters: tuple[ParameterSchema, ...]
     availability: Availability
+    effect_kind: Literal["pure", "stateful"] = "stateful"
 
 
 @dataclass(frozen=True, slots=True)
@@ -496,6 +497,7 @@ def _component_schema(
         results=tuple(results),
         parameters=tuple(parameters),
         availability=availability,
+        effect_kind=record["effect"]["kind"],
     )
 
 
@@ -614,6 +616,14 @@ class SchemaRegistry:
         if schema.availability != "available":
             raise LookupError(f"ACPY-CALL-001: {identity} is declared unavailable")
         return ComponentCallable(schema)
+
+    def candidates(self, short_name: str) -> tuple[ComponentSchema, ...]:
+        return tuple(
+            schema
+            for identity, schema in sorted(self._schemas.items())
+            if identity.rsplit(".", 1)[-1] == short_name
+            and schema.availability == "available"
+        )
 
     def __len__(self) -> int:
         return len(self._schemas)

@@ -36,7 +36,8 @@ class CapturedProgram:
     definitions: tuple[Definition, ...]
     selected_system: Definition | None
     registry: SchemaRegistry
-    diagnostics: tuple[Diagnostic, ...]
+    static_arguments: tuple[tuple[str, StaticValue], ...] = ()
+    diagnostics: tuple[Diagnostic, ...] = ()
 
 
 def _diagnostic(
@@ -223,5 +224,6 @@ def capture_definitions(
         definitions=definitions,
         selected_system=selected,
         registry=registry,
+        static_arguments=request.static_arguments,
         diagnostics=diagnostics.freeze(),
     )
