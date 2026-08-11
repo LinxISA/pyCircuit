@@ -1,0 +1,81 @@
+from __future__ import annotations
+
+import importlib
+import unittest
+from dataclasses import FrozenInstanceError
+
+
+PUBLIC = {
+    "system",
+    "module",
+    "extern_module",
+    "generated_module",
+    "struct",
+    "packet",
+    "transaction",
+    "protocol",
+    "interface",
+    "process",
+    "scope",
+    "array",
+    "instances",
+    "view",
+    "queue",
+    "ResourceRef",
+    "address_space",
+    "address_map",
+    "Static",
+    "Flow",
+    "Endpoint",
+}
+
+
+class ReadyValid:
+    """Local schema marker used to form a public Flow annotation."""
+
+
+class PublicApiTest(unittest.TestCase):
+    def test_exact_public_inventory_is_importable(self) -> None:
+        api = importlib.import_module("agentic_circuit")
+
+        self.assertEqual(PUBLIC, set(api.__all__))
+        for name in PUBLIC:
+            self.assertIsNotNone(getattr(api, name))
+
+    def test_symbolic_values_reject_python_coercion(self) -> None:
+        types = importlib.import_module("agentic_circuit._types")
+        value = types._test_symbolic("request", types.Flow[int, ReadyValid])
+
+        for operation in (bool, int, hash, iter):
+            with self.subTest(operation=operation.__name__):
+                with self.assertRaisesRegex(TypeError, "ACPY-STATIC-002"):
+                    operation(value)
+
+    def test_decorators_create_immutable_definition_metadata(self) -> None:
+        api = importlib.import_module("agentic_circuit")
+
+        @api.module
+        def producer() -> None:
+            raise AssertionError("decorating a definition must not execute it")
+
+        self.assertEqual("module", producer.kind)
+        self.assertEqual(producer.function.__qualname__, producer.qualified_name)
+        self.assertTrue(producer.qualified_name.endswith(".<locals>.producer"))
+        self.assertEqual((), producer.explicit_options)
+        with self.assertRaises(FrozenInstanceError):
+            producer.kind = "system"
+
+    def test_decorator_options_are_canonicalized(self) -> None:
+        api = importlib.import_module("agentic_circuit")
+
+        @api.generated_module(zeta=2, alpha=1)
+        def generated() -> None:
+            pass
+
+        self.assertEqual(
+            (("alpha", 1), ("zeta", 2)), generated.explicit_options
+        )
+
+
+if __name__ == "__main__":
+    unittest.main()

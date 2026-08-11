@@ -8,6 +8,12 @@ license = "Apache-2.0"
 authors = [{ name = "Agentic Circuit contributors" }]
 dependencies = []
 
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
 [project.urls]
 Repository = "https://github.com/PTO-ISA/agentic-circuit"
 Issues = "https://github.com/PTO-ISA/agentic-circuit/issues"
