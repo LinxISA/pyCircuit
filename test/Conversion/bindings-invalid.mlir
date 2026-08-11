@@ -7,8 +7,7 @@
 // RUN: %not %acir_opt --ac-lower-to-acsim --ac-binding-registry=%S/Inputs/stateful-fast.json --ac-binding-profile=fast --ac-binding-target=arm64-apple-darwin %t/heterogeneous-array.frozen -o %t/array.out 2>&1 | %FileCheck %s --check-prefix=ARRAY
 // RUN: test ! -s %t/array.out
 // RUN: %acir_opt --verify-each=false --pass-pipeline='builtin.module(ac-freeze-topology)' %t/time-domain.mlir -o %t/time-domain.frozen
-// RUN: %not %acir_opt --ac-lower-to-acsim --ac-binding-profile=fast --ac-binding-target=arm64-apple-darwin %t/time-domain.frozen -o %t/td.out 2>&1 | %FileCheck %s --check-prefix=ACERR
-// RUN: test ! -s %t/td.out
+// RUN: %acir_opt --ac-lower-to-acsim --ac-binding-profile=fast --ac-binding-target=arm64-apple-darwin %t/time-domain.frozen | %FileCheck %s --check-prefix=TD
 // RUN: %not %acir_opt --ac-lower-to-acsim --ac-binding-registry=%S/Inputs/bad-registry-structure.json --ac-binding-profile=fast --ac-binding-target=arm64-apple-darwin %t/extern.frozen 2>&1 | %FileCheck %s --check-prefix=REGISTRY
 // RUN: %not %acir_opt --ac-lower-to-acsim --ac-binding-registry=%S/Inputs/bad-metadata-empty-work.json --ac-binding-profile=fast --ac-binding-target=arm64-apple-darwin %t/extern.frozen 2>&1 | %FileCheck %s --check-prefix=METADATA
 
@@ -79,6 +78,6 @@ builtin.module attributes {ac.contract_epoch = "0.1"} {
 // SORT: acsim.module @Zebra
 // SORT: acsim.module @Top
 // ARRAY: error: ACLOWER-ARRAY: differently specialized array elements are outside the v0.1 lowering stage; lower them as ordered named members instead
-// ACERR: error: ACLOWER-UNSUPPORTED-CONSTRUCT: operation 'ac.time_domain' has no ACSim realization in the v0.1 lowering stage {{.*}}
+// TD: acsim.type @global cpp "gfsim::TimeDomainRuntime" kind "time_domain" fingerprint "sha256:{{[0-9a-f]+}}" {period = 1 : i64, phase = 0 : i64, tick_scale = 1 : i64}
 // REGISTRY: error: ACLOWER-BINDING-REGISTRY: registry must contain exactly candidates and requests arrays
 // METADATA: error: ACLOWER-BINDING-METADATA: binding effect requires exact executable entry points

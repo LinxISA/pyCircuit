@@ -254,6 +254,10 @@ public:
   void setMaxTicks(Tick max) { maxTicks_ = max; }
   void setMaxEvents(uint64_t max) { maxEvents_ = max; }
   void setMaxTraceRecords(uint64_t max) { maxTraceRecords_ = max; }
+  bool setDeadlockWindow(std::optional<uint64_t> window);
+  bool setMaxDomainCycles(const std::map<std::string, uint64_t> &limits);
+  bool setRuntimeLimits(const RuntimeLimits &limits);
+  bool setTimeDomains(std::span<const TimeDomainRuntime> domains);
 
 private:
   std::unique_ptr<Module> root_;

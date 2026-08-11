@@ -24,6 +24,11 @@ struct SimSystem::Impl {
   bool preflightValidated = false;
   std::map<ObjectId, Tick> lastCommitTick;
   std::optional<Tick> eventQueueLastCommitTick;
+  std::map<std::string, TimeDomainRuntime> timeDomains;
+  std::map<std::string, uint64_t> maxDomainCycles;
+  std::map<std::string, uint64_t> domainCycles;
+  std::optional<uint64_t> deadlockWindow;
+  Tick lastProgressTick = 0;
 };
 
 SimSystem::~SimSystem() = default;
@@ -43,6 +48,7 @@ bool SimSystem::fail(std::string code, std::string message) {
   result_.classification = TerminationClass::Failed;
   result_.finalEpoch = epoch_;
   result_.committedEventCount = impl_->committedEventCount;
+  result_.domainCycles = impl_->domainCycles;
   result_.diagnosticCode = std::move(code);
   result_.message = std::move(message);
   return false;
@@ -163,6 +169,7 @@ bool SimSystem::stopAtTraceCap() {
   result_.classification = TerminationClass::Incomplete;
   result_.finalEpoch = epoch_;
   result_.committedEventCount = impl_->committedEventCount;
+  result_.domainCycles = impl_->domainCycles;
   result_.terminationCap = maxTraceRecords_;
   result_.diagnosticCode = "max_trace_records_reached";
   return true;
@@ -213,6 +220,61 @@ bool SimSystem::setActivationPlan(std::span<const uint32_t> offsets,
     return fail("invalid_activation_plan",
                 "activation offsets and targets must be canonical and dense");
   impl_->activation = candidate;
+  return true;
+}
+
+bool SimSystem::setTimeDomains(std::span<const TimeDomainRuntime> domains) {
+  if (terminated_)
+    return false;
+  std::map<std::string, TimeDomainRuntime> candidate;
+  std::string previous;
+  for (const TimeDomainRuntime &domain : domains) {
+    if (domain.name.empty() || domain.period == 0 || domain.tickScale == 0 ||
+        (!previous.empty() && previous >= domain.name) ||
+        !candidate.emplace(domain.name, domain).second)
+      return fail("invalid_time_domains",
+                  "time domains must be sorted, unique, and positive");
+    previous = domain.name;
+  }
+  impl_->timeDomains = std::move(candidate);
+  impl_->domainCycles.clear();
+  for (const auto &[name, domain] : impl_->timeDomains)
+    impl_->domainCycles.emplace(name, 0);
+  return true;
+}
+
+bool SimSystem::setDeadlockWindow(std::optional<uint64_t> window) {
+  if (terminated_)
+    return false;
+  if (window && *window == 0)
+    return fail("invalid_runtime_limits",
+                "the deadlock window must be positive");
+  impl_->deadlockWindow = window;
+  impl_->lastProgressTick = epoch_.time;
+  return true;
+}
+
+bool SimSystem::setMaxDomainCycles(
+    const std::map<std::string, uint64_t> &limits) {
+  if (terminated_)
+    return false;
+  for (const auto &[name, maximum] : limits)
+    if (maximum == 0 || !impl_->timeDomains.contains(name))
+      return fail("invalid_runtime_limits",
+                  "domain limits must name configured time domains");
+  impl_->maxDomainCycles = limits;
+  return true;
+}
+
+bool SimSystem::setRuntimeLimits(const RuntimeLimits &limits) {
+  if (terminated_)
+    return false;
+  if (limits.maxTicks && *limits.maxTicks == 0)
+    return fail("invalid_runtime_limits", "runtime limits must be positive");
+  if (!setDeadlockWindow(limits.deadlockWindow) ||
+      !setMaxDomainCycles(limits.maxDomainCycles))
+    return false;
+  maxTicks_ = limits.maxTicks.value_or(UINT64_MAX);
   return true;
 }
 
@@ -275,6 +337,40 @@ bool SimSystem::step() {
   if (stopAtTraceCap())
     return false;
 
+  if (epoch_.time >= maxTicks_) {
+    terminated_ = true;
+    result_.classification = TerminationClass::Incomplete;
+    result_.finalEpoch = epoch_;
+    result_.committedEventCount = impl_->committedEventCount;
+    result_.domainCycles = impl_->domainCycles;
+    result_.terminationCap = maxTicks_;
+    result_.diagnosticCode = "max_ticks_reached";
+    return false;
+  }
+
+  if (epoch_.delta == 0) {
+    for (const auto &[name, domain] : impl_->timeDomains) {
+      if (epoch_.time < domain.phase ||
+          (epoch_.time - domain.phase) % domain.period != 0)
+        continue;
+      uint64_t &cycles = impl_->domainCycles[name];
+      if (auto maximum = impl_->maxDomainCycles.find(name);
+          maximum != impl_->maxDomainCycles.end() &&
+          cycles >= maximum->second) {
+        terminated_ = true;
+        impl_->executingEpoch = false;
+        result_.classification = TerminationClass::Incomplete;
+        result_.finalEpoch = epoch_;
+        result_.committedEventCount = impl_->committedEventCount;
+        result_.terminationCap = maximum->second;
+        result_.domainCycles = impl_->domainCycles;
+        result_.diagnosticCode = "max_domain_cycles_reached";
+        return false;
+      }
+      ++cycles;
+    }
+  }
+
   auto stopAtEventCap = [this] {
     if (impl_->committedEventCount < maxEvents_)
       return false;
@@ -283,19 +379,12 @@ bool SimSystem::step() {
     result_.classification = TerminationClass::Incomplete;
     result_.finalEpoch = epoch_;
     result_.committedEventCount = impl_->committedEventCount;
+    result_.domainCycles = impl_->domainCycles;
     result_.terminationCap = maxEvents_;
     result_.diagnosticCode = "max_events_reached";
     return true;
   };
 
-  if (epoch_.time >= maxTicks_) {
-    terminated_ = true;
-    result_.classification = TerminationClass::Incomplete;
-    result_.finalEpoch = epoch_;
-    result_.terminationCap = maxTicks_;
-    result_.diagnosticCode = "max_ticks_reached";
-    return false;
-  }
   if (stopAtEventCap())
     return false;
 
@@ -313,6 +402,7 @@ bool SimSystem::step() {
     if (!scheduleWork(event->targetId, epoch_))
       return false;
     ++impl_->committedEventCount;
+    impl_->lastProgressTick = epoch_.time;
   }
 
   std::set<ObjectId> currentWork;
@@ -368,6 +458,7 @@ bool SimSystem::step() {
     if (committed) {
       committedSources.push_back(id);
       impl_->lastCommitTick[id] = epoch_.time;
+      impl_->lastProgressTick = epoch_.time;
     }
     if (terminated_)
       return false;
@@ -380,6 +471,7 @@ bool SimSystem::step() {
       return fail("multiple_stateful_commits",
                   "the event queue cannot commit twice in one tick");
     impl_->eventQueueLastCommitTick = epoch_.time;
+    impl_->lastProgressTick = epoch_.time;
   }
   impl_->eventQueue.doXfer(epoch_);
 
@@ -407,37 +499,74 @@ bool SimSystem::step() {
     if (!scheduleWork(event->targetId, epoch_))
       return false;
     ++impl_->committedEventCount;
+    impl_->lastProgressTick = epoch_.time;
   }
   impl_->executingEpoch = false;
 
   std::optional<Epoch> nextEpoch;
+  bool nextEpochIsEvent = false;
   if (!impl_->scheduledWork.empty())
     nextEpoch = impl_->scheduledWork.begin()->first;
   if (auto event = impl_->eventQueue.nextEvent();
-      event && (!nextEpoch || event->readyTime < *nextEpoch))
+      event && (!nextEpoch || event->readyTime <= *nextEpoch)) {
     nextEpoch = event->readyTime;
+    nextEpochIsEvent = true;
+  }
 
   if (!nextEpoch) {
     if (stopAtTraceCap())
       return false;
     refreshRuntimeSummary();
+    if (!impl_->noProgress.blockedObjects.empty() && impl_->deadlockWindow) {
+      const Tick window = *impl_->deadlockWindow;
+      if (impl_->lastProgressTick > std::numeric_limits<Tick>::max() - window)
+        return fail("tick_overflow", "deadlock window exceeds tick range");
+      Tick deadline = impl_->lastProgressTick + window;
+      if (deadline >= maxTicks_) {
+        epoch_ = {maxTicks_, 0};
+        terminated_ = true;
+        result_.classification = TerminationClass::Incomplete;
+        result_.finalEpoch = epoch_;
+        result_.committedEventCount = impl_->committedEventCount;
+        result_.terminationCap = maxTicks_;
+        result_.domainCycles = impl_->domainCycles;
+        result_.diagnosticCode = "max_ticks_reached";
+        return false;
+      }
+      epoch_ = {deadline, 0};
+      return fail("deadlock_window_reached", impl_->noProgress.summary);
+    }
     if (!impl_->noProgress.blockedObjects.empty())
       return fail("no_progress", impl_->noProgress.summary);
     terminated_ = true;
     result_.classification = TerminationClass::Completed;
     result_.finalEpoch = epoch_;
     result_.committedEventCount = impl_->committedEventCount;
+    result_.domainCycles = impl_->domainCycles;
     return false;
   }
   if (*nextEpoch <= epoch_)
     return fail("non_monotonic_epoch",
                 "scheduler failed to advance beyond the committed epoch");
+  if (!nextEpochIsEvent && impl_->deadlockWindow) {
+    const Tick window = *impl_->deadlockWindow;
+    if (impl_->lastProgressTick > std::numeric_limits<Tick>::max() - window)
+      return fail("tick_overflow", "deadlock window exceeds tick range");
+    const Tick deadline = impl_->lastProgressTick + window;
+    if (nextEpoch->time >= deadline) {
+      epoch_ = {deadline, 0};
+      return fail("deadlock_window_reached",
+                  "scheduled work made no declared progress within the "
+                  "deadlock window");
+    }
+  }
   if (nextEpoch->time >= maxTicks_) {
     epoch_ = {maxTicks_, 0};
     terminated_ = true;
     result_.classification = TerminationClass::Incomplete;
     result_.finalEpoch = epoch_;
     result_.committedEventCount = impl_->committedEventCount;
+    result_.domainCycles = impl_->domainCycles;
     result_.terminationCap = maxTicks_;
     result_.diagnosticCode = "max_ticks_reached";
     return false;
@@ -460,6 +589,7 @@ TerminationResult SimSystem::run() {
 
   result_.finalEpoch = epoch_;
   result_.committedEventCount = impl_->committedEventCount;
+  result_.domainCycles = impl_->domainCycles;
   refreshRuntimeSummary();
   return result_;
 }
@@ -478,6 +608,10 @@ void SimSystem::reset() {
   impl_->preflightValidated = false;
   impl_->lastCommitTick.clear();
   impl_->eventQueueLastCommitTick.reset();
+  impl_->lastProgressTick = 0;
+  impl_->domainCycles.clear();
+  for (const auto &[name, domain] : impl_->timeDomains)
+    impl_->domainCycles.emplace(name, 0);
   if (!impl_->dispatch.empty()) {
     for (ObjectId id = 0; id < impl_->dispatch.size(); ++id) {
       const DispatchRow *row = impl_->dispatch.lookup(id);

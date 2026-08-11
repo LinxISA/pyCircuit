@@ -184,7 +184,8 @@ TEST(BuildTest, CompilePlanIsClosedCanonicalAndArgumentVectorBased) {
   EXPECT_TRUE(isValidFingerprint(first->fingerprint));
   EXPECT_EQ(first->fingerprint, second->fingerprint);
   EXPECT_EQ(first->includeRoots,
-            (std::vector<std::string>{"include", "vendor/include"}));
+            (std::vector<std::string>{ACIR_TEST_LLVM_INCLUDE_DIR, "include",
+                                      "vendor/include"}));
   EXPECT_EQ(first->definitions,
             (std::vector<std::string>{"ALPHA=1", "ZETA=1"}));
   ASSERT_EQ(first->compileCommands.size(), 1u);

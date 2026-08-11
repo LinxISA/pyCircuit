@@ -1,4 +1,5 @@
 add_library(gfsim STATIC
+  harness.cpp
   system.cpp
   trace.cpp
 )

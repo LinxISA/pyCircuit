@@ -26,6 +26,8 @@
 // RUN: %not %acir_opt %t/suspend-non-wake.mlir 2>&1 | %FileCheck %s --check-prefix=SUSPEND-WAKE
 // RUN: %not %acir_opt %t/export-ghost.mlir 2>&1 | %FileCheck %s --check-prefix=EXPORT-COVER
 // RUN: %not %acir_opt %t/port-bad-base.mlir 2>&1 | %FileCheck %s --check-prefix=PORT-BASE
+// RUN: %not %acir_opt %t/time-domain-partial.mlir 2>&1 | %FileCheck %s --check-prefix=TIME-DOMAIN-PARTIAL
+// RUN: %not %acir_opt %t/time-domain-wrong-kind.mlir 2>&1 | %FileCheck %s --check-prefix=TIME-DOMAIN-KIND
 
 // GENERIC: error: generic ACIR operation spelling is internal-only
 // EPOCH: contract epoch must be exactly "0.1"
@@ -47,6 +49,46 @@
 // CONTINUE-MISSING: expected attribute value
 // DISPATCH-NEGATIVE: dispatch object ID has no expanded runtime object
 // ACTIVATE-TYPES: invalid kind of type specified
+// TIME-DOMAIN-PARTIAL: time_domain requires exact positive period/tick_scale and non-negative phase i64 metadata
+// TIME-DOMAIN-KIND: runtime domain metadata is legal only for time_domain
+
+//--- time-domain-partial.mlir
+builtin.module attributes {ac.contract_epoch = "0.1"} {
+  acsim.model @m epoch "0.1" root @M construction [] destruction [] fingerprints {
+    frozen_acir = "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    binding_lock = "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    provider = "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    profile = "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    toolchain = "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    schema_set = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+  } {
+    "acsim.type"() <{sym_name = "core", cpp_name = "gfsim::TimeDomainRuntime",
+      kind = "time_domain", fingerprint = "sha256:1000000000000000000000000000000000000000000000000000000000000000",
+      period = 2 : i64}> : () -> ()
+    acsim.module @M interface {ports = [], resources = [], results = []} static [] specialization "sha256:2000000000000000000000000000000000000000000000000000000000000000" exports [] {
+      acsim.return
+    }
+  }
+}
+
+//--- time-domain-wrong-kind.mlir
+builtin.module attributes {ac.contract_epoch = "0.1"} {
+  acsim.model @m epoch "0.1" root @M construction [] destruction [] fingerprints {
+    frozen_acir = "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    binding_lock = "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    provider = "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    profile = "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    toolchain = "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    schema_set = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+  } {
+    "acsim.type"() <{sym_name = "value", cpp_name = "bool", kind = "value",
+      fingerprint = "sha256:1000000000000000000000000000000000000000000000000000000000000000",
+      period = 2 : i64, phase = 0 : i64, tick_scale = 1 : i64}> : () -> ()
+    acsim.module @M interface {ports = [], resources = [], results = []} static [] specialization "sha256:2000000000000000000000000000000000000000000000000000000000000000" exports [] {
+      acsim.return
+    }
+  }
+}
 
 //--- generic-spelling.mlir
 builtin.module attributes {ac.contract_epoch = "0.1"} {

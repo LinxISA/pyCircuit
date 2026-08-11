@@ -326,6 +326,52 @@ TEST(GeneratorTest, EmitsTypedLocalDispatchForMultiBlockProcess) {
   EXPECT_EQ(source->content.find("coroutine"), std::string::npos);
 }
 
+TEST(GeneratorTest, EmitsSortedExactTimeDomainRuntimeMetadata) {
+  mlir::MLIRContext context;
+  auto plan = fixturePlan(context);
+  ASSERT_TRUE(static_cast<bool>(plan));
+  plan->timeDomains = {{"memory", 4, 0, 2}, {"core", 2, 1, 1}};
+  std::sort(plan->timeDomains.begin(), plan->timeDomains.end(),
+            [](const TimeDomainPlan &left, const TimeDomainPlan &right) {
+              return left.name < right.name;
+            });
+
+  auto bundle = generateModelSources(*plan);
+  ASSERT_TRUE(static_cast<bool>(bundle)) << llvm::toString(bundle.takeError());
+  auto header = std::ranges::find(bundle->files, "include/generated/model.h",
+                                  &GeneratedFile::relativePath);
+  ASSERT_NE(header, bundle->files.end());
+  EXPECT_NE(header->content.find("TimeDomainRuntime{\"core\", 2, 1, 1}"),
+            std::string::npos);
+  EXPECT_NE(header->content.find("TimeDomainRuntime{\"memory\", 4, 0, 2}"),
+            std::string::npos);
+}
+
+TEST(GeneratorTest, EmitsManifestAwareMainWithoutPythonOrMlirDependencies) {
+  mlir::MLIRContext context;
+  auto plan = fixturePlan(context);
+  ASSERT_TRUE(static_cast<bool>(plan));
+  auto bundle = generateModelSources(*plan);
+  ASSERT_TRUE(static_cast<bool>(bundle)) << llvm::toString(bundle.takeError());
+
+  auto main = std::ranges::find(bundle->files, "src/generated/main.cpp",
+                                &GeneratedFile::relativePath);
+  auto model = std::ranges::find(bundle->files, "include/generated/model.h",
+                                 &GeneratedFile::relativePath);
+  ASSERT_NE(main, bundle->files.end());
+  ASSERT_NE(model, bundle->files.end());
+  EXPECT_NE(main->content.find("--run-manifest"), std::string::npos);
+  EXPECT_NE(main->content.find("--run-result-stage"), std::string::npos);
+  EXPECT_NE(main->content.find("gfsim::loadRunManifest"), std::string::npos);
+  EXPECT_NE(main->content.find("gfsim::runGeneratedModel"), std::string::npos);
+  EXPECT_NE(model->content.find("void configure(const gfsim::RuntimeLimits"),
+            std::string::npos);
+  EXPECT_NE(model->content.find("gfsim::TerminationResult run()"),
+            std::string::npos);
+  EXPECT_EQ(main->content.find("Python"), std::string::npos);
+  EXPECT_EQ(main->content.find("mlir"), std::string::npos);
+}
+
 TEST(GeneratorTest, RejectsMismatchedMultiBlockSuccessorType) {
   mlir::MLIRContext context;
   auto plan = processControlFlowPlan(context);

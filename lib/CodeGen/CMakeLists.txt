@@ -9,6 +9,10 @@ add_acir_library(ACIRCodeGen SOURCES
   ProcessGenerator.cpp
   Staging.cpp
 )
+list(GET LLVM_INCLUDE_DIRS 0 ACIR_CODEGEN_LLVM_INCLUDE_DIR)
+target_compile_definitions(ACIRCodeGen PRIVATE
+  ACIR_CODEGEN_LLVM_INCLUDE_DIR="${ACIR_CODEGEN_LLVM_INCLUDE_DIR}"
+)
 target_link_libraries(ACIRCodeGen PUBLIC
   ACIRBindings
   ACIRDialect

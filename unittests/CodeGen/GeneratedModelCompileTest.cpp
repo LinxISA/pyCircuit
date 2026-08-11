@@ -32,6 +32,7 @@ ModelPlan makeMinimalRunnablePlan() {
   plan.profileFingerprint = kFingerprint.str();
   plan.toolchainFingerprint = kFingerprint.str();
   plan.schemaSetFingerprint = kFingerprint.str();
+  plan.timeDomains.push_back({"core", 2, 0, 1});
   ModulePlan module{.symbol = "Top",
                     .className = "Top_s0000000000000000",
                     .specializationFingerprint = kFingerprint.str()};
@@ -143,7 +144,7 @@ TEST(GeneratedModelCompileTest,
 
   std::vector<std::string> ownedArguments = {
       ACIR_TEST_CXX_COMPILER, "-std=c++20", "-I" + generatedInclude.str().str(),
-      "-I" ACIR_TEST_SOURCE_DIR "/include"};
+      "-I" ACIR_TEST_SOURCE_DIR "/include", "-I" ACIR_TEST_LLVM_INCLUDE_DIR};
   if (llvm::StringRef(ACIR_TEST_SANITIZER_FLAG).size())
     ownedArguments.push_back(ACIR_TEST_SANITIZER_FLAG);
   for (const GeneratedFile &file : bundle->files) {

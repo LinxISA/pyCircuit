@@ -137,6 +137,14 @@ The generic emitter may dispatch on ACSim operation kind and normalized binding
 metadata. It MUST NOT dispatch on component name, family, provider namespace,
 binding ID, or C++ symbol.
 
+An `acsim.type` of kind exactly `time_domain` MAY additionally carry the exact
+runtime attributes `period`, `phase`, and `tick_scale`, each as signless i64.
+The period and tick scale are positive and the phase is non-negative. A parent
+reference and bridge dictionary are either both absent or both present; the
+bridge dictionary is exactly `{kind = "explicit", owner = @symbol}`. No other
+`acsim.type` kind may carry these attributes. Legacy binding-only time-domain
+identities carry no runtime attributes and do not create runtime domain clocks.
+
 ## Generated realization interfaces
 
 An `acsim.module` is one compiler-generated owner class. Its symbol plus
@@ -429,6 +437,21 @@ only such sources traverse adjacency.
 Hot execution cannot use component names, hierarchy strings, reflection,
 `dynamic_cast`, runtime type discovery, descriptor lookup, unordered
 registration, plugin indirection, or runtime policy selection.
+
+Generated C++ emits runtime time-domain metadata as one symbol-sorted
+`constexpr std::array<gfsim::TimeDomainRuntime, N>`. The harness rejects a run
+manifest whose `max_domain_cycles` names are absent from this array before any
+model work. At global tick `phase + n * period`, the scheduler increments the
+corresponding committed cycle count and stops before Work that would exceed a
+declared domain bound. `max_ticks` and domain bounds terminate as incomplete;
+an elapsed deadlock window without a committed event, transfer, trace advance,
+or other declared progress terminates as failed.
+
+The generated executable embeds its build fingerprint and accepts only the
+default no-argument run, `--build-fingerprint`, or the exact pair
+`--run-manifest PATH --run-result-stage PATH`. Manifest parsing, hash and schema
+preflight, expectation validation, and canonical result publication remain in
+the cold harness path and never enter generated Work/Xfer dispatch.
 
 ## Same-toolchain C++20 source contract
 

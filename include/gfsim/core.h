@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <map>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -71,6 +72,19 @@ enum class TerminationClass : uint8_t {
   Failed,     // Contract violation, assertion, or runtime error
 };
 
+struct TimeDomainRuntime {
+  std::string name;
+  uint64_t period = 1;
+  uint64_t phase = 0;
+  uint64_t tickScale = 1;
+};
+
+struct RuntimeLimits {
+  std::optional<uint64_t> deadlockWindow;
+  std::optional<uint64_t> maxTicks;
+  std::map<std::string, uint64_t> maxDomainCycles;
+};
+
 struct TerminationResult {
   TerminationClass classification = TerminationClass::Incomplete;
   Epoch finalEpoch;
@@ -78,6 +92,7 @@ struct TerminationResult {
   uint64_t tracePosition = 0;
   std::optional<uint64_t> traceLastCommittedSequenceId;
   std::optional<uint64_t> terminationCap;
+  std::map<std::string, uint64_t> domainCycles;
   std::string diagnosticCode;
   std::optional<std::string> message;
 };

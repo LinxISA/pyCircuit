@@ -471,6 +471,7 @@ llvm::Expected<CompilePlan> createCompilePlan(const BuildRequest &request,
 
   CompilePlan plan;
   plan.includeRoots = request.includeRoots;
+  plan.includeRoots.push_back(ACIR_CODEGEN_LLVM_INCLUDE_DIR);
   plan.includeRoots.push_back("include");
   plan.definitions = request.definitions;
   std::sort(plan.includeRoots.begin(), plan.includeRoots.end());

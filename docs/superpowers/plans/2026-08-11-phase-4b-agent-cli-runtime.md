@@ -884,7 +884,7 @@ git commit -m "feat(cli): build with exact frontend provenance"
 - Consumes: exact run/build manifest schemas, ACIR time-domain attributes, gfsim termination/statistics, and generated `Model`.
 - Produces: `RunManifest`, `RuntimeLimits`, `TimeDomainRuntime`, `RunResultDocument`, `loadRunManifest`, `runGeneratedModel`, and manifest-aware generated `main`.
 
-- [ ] **Step 1: Write failing manifest, domain-cap, and result tests**
+- [x] **Step 1: Write failing manifest, domain-cap, and result tests**
 
 ```cpp
 TEST(RuntimeHarnessTest, ExactManifestConfiguresLimitsAndProducesClosedResult) {
@@ -906,13 +906,13 @@ TEST(RuntimeHarnessTest, BuildOrTraceHashMismatchFailsBeforeModelWork) {
 }
 ```
 
-- [ ] **Step 2: Run focused tests and confirm the RED state**
+- [x] **Step 2: Run focused tests and confirm the RED state**
 
 Run: `cmake --build --preset dev-llvm22 --target GfsimTests CodeGenTests && build/dev-llvm22/bin/GfsimTests --gtest_filter='RuntimeHarnessTest.*'`
 
 Expected: compilation fails because the harness does not exist.
 
-- [ ] **Step 3: Define exact typed runtime documents**
+- [x] **Step 3: Define exact typed runtime documents**
 
 ```cpp
 struct TimeDomainRuntime {
@@ -980,7 +980,7 @@ requires requires(Model &value, const RuntimeLimits &limits) {
 Parse with LLVM JSON and require exact fields, constants, uint64 ranges,
 normalized paths, known domain names, and schema-semantic status/reason rules.
 
-- [ ] **Step 4: Preserve time-domain runtime metadata in canonical ACSim**
+- [x] **Step 4: Preserve time-domain runtime metadata in canonical ACSim**
 
 Attach exact `period`, `phase`, `tick_scale`, optional parent, and bridge
 attributes to `acsim.type` when `kind = "time_domain"`; update its verifier,
@@ -996,7 +996,7 @@ struct TimeDomainPlan {
 };
 ```
 
-- [ ] **Step 5: Implement typed limits and termination classification**
+- [x] **Step 5: Implement typed limits and termination classification**
 
 Add `SimSystem::setDeadlockWindow`, `setTimeDomains`, and
 `setMaxDomainCycles`. Count a domain cycle only at a committed global tick
@@ -1012,7 +1012,7 @@ void Model::configure(const gfsim::RuntimeLimits &limits) {
 gfsim::TerminationResult Model::run() { return system_.run(); }
 ```
 
-- [ ] **Step 6: Implement cold-path preflight and atomic result publication**
+- [x] **Step 6: Implement cold-path preflight and atomic result publication**
 
 Verify build manifest hash and embedded fingerprint, trace hash/schema/epoch,
 output containment, limits, and expectation before `Model::run`. Write canonical
@@ -1020,14 +1020,14 @@ stats/events/validation files, hash them, validate the result document, then
 atomically publish. Generated `main` accepts only no arguments,
 `--build-fingerprint`, or `--run-manifest PATH --run-result-stage PATH`.
 
-- [ ] **Step 7: Run runtime, generated-model, and forbidden dependency tests**
+- [x] **Step 7: Run runtime, generated-model, and forbidden dependency tests**
 
 Run: `cmake --build --preset dev-llvm22 --target GfsimTests CodeGenTests acir-cxxgen && build/dev-llvm22/bin/GfsimTests --gtest_filter='RuntimeHarnessTest.*:SimSystem*' && build/dev-llvm22/bin/CodeGenTests --gtest_filter='GeneratorTest.*Main*:GeneratedModelRuntimeTest.*' && lit -v build/dev-llvm22/test/CodeGen`
 
 Expected: PASS; generated executables have no Python dependency and JSON work
 occurs only in harness pre/postflight.
 
-- [ ] **Step 8: Commit runtime harness closure**
+- [x] **Step 8: Commit runtime harness closure**
 
 ```bash
 git add include/gfsim lib/gfsim include/acir/CodeGen lib/CodeGen lib/Conversion docs/specs contracts unittests

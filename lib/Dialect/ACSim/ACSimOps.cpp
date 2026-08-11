@@ -2786,7 +2786,39 @@ LogicalResult TypeOp::verify() {
   if (getCppName().empty() || hasRawCppFragment(getCppName()))
     return emitOpError(
         "C++ spelling must be a non-empty declarative symbol/type spelling");
-  return verifyFingerprint(*this, getFingerprintAttr());
+  if (failed(verifyFingerprint(*this, getFingerprintAttr())))
+    return failure();
+
+  IntegerAttr period = getPeriodAttr();
+  IntegerAttr phase = getPhaseAttr();
+  IntegerAttr tickScale = getTickScaleAttr();
+  FlatSymbolRefAttr parent = getParentAttr();
+  DictionaryAttr bridge = getBridgeAttr();
+  const bool hasRuntimeMetadata =
+      period || phase || tickScale || parent || bridge;
+  if (!hasRuntimeMetadata)
+    return success();
+  if (getKind() != "time_domain")
+    return emitOpError("runtime domain metadata is legal only for time_domain");
+  if (!period || !phase || !tickScale ||
+      !period.getType().isSignlessInteger(64) ||
+      !phase.getType().isSignlessInteger(64) ||
+      !tickScale.getType().isSignlessInteger(64) || period.getInt() <= 0 ||
+      phase.getInt() < 0 || tickScale.getInt() <= 0)
+    return emitOpError(
+        "time_domain requires exact positive period/tick_scale and "
+        "non-negative phase i64 metadata");
+  if (static_cast<bool>(parent) != static_cast<bool>(bridge))
+    return emitOpError("time_domain parent requires exact bridge metadata");
+  if (bridge) {
+    auto kind = bridge.getAs<StringAttr>("kind");
+    auto owner = bridge.getAs<FlatSymbolRefAttr>("owner");
+    if (!hasExactKeys(bridge, {"kind", "owner"}) || !kind ||
+        kind.getValue() != "explicit" || !owner)
+      return emitOpError(
+          "time_domain bridge requires exact explicit kind and owner");
+  }
+  return success();
 }
 
 LogicalResult BindingOp::verify() { return verifyBindingLockShape(*this); }

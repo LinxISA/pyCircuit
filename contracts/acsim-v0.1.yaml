@@ -1,7 +1,10 @@
 # Normative ACSim v0.1 public inventory.
 #
 # This manifest is the contract-side source of truth for the public ACSim
-# surface. scripts/check-ir-coverage.py requires the ODS definitions to
+# surface. The acsim.type inventory includes the closed optional runtime
+# metadata contract for time_domain realizations: period, phase, tick_scale,
+# and paired parent/bridge attributes. scripts/check-ir-coverage.py requires
+# the ODS definitions to
 # match these lists exactly: any added, renamed, or removed public operation
 # or type must be reflected here in the same commit, and every entry must
 # have observable lit coverage.

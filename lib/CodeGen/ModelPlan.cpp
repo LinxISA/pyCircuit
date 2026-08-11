@@ -6,11 +6,13 @@
 
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/Operation.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringSwitch.h"
 #include "llvm/ADT/Twine.h"
 #include "llvm/Support/Error.h"
 
 #include <algorithm>
+#include <cctype>
 #include <limits>
 #include <optional>
 #include <system_error>
@@ -137,6 +139,26 @@ llvm::Error validateModelPlan(const ModelPlan &plan) {
     previousType = type.symbol;
   }
 
+  auto isDomainName = [](llvm::StringRef name) {
+    if (name.empty() ||
+        !(std::isalpha(static_cast<unsigned char>(name.front())) ||
+          name.front() == '_'))
+      return false;
+    return llvm::all_of(name.drop_front(), [](char character) {
+      return std::isalnum(static_cast<unsigned char>(character)) ||
+             character == '_' || character == '.' || character == '-';
+    });
+  };
+  llvm::StringRef previousDomain;
+  for (const TimeDomainPlan &domain : plan.timeDomains) {
+    if (!isDomainName(domain.name) || domain.period == 0 ||
+        domain.tickScale == 0 ||
+        (!previousDomain.empty() && previousDomain >= domain.name))
+      return planError("ACLOWER-TIME-DOMAIN",
+                       "time-domain plans are not canonical and complete");
+    previousDomain = domain.name;
+  }
+
   for (size_t index = 0; index < plan.runtimeObjects.size(); ++index) {
     const RuntimeObjectPlan &object = plan.runtimeObjects[index];
     if (object.objectId != index || object.activationId != index)
@@ -225,6 +247,21 @@ llvm::Expected<ModelPlan> buildModelPlan(mlir::ModuleOp canonicalACSim) {
       plan.types.push_back({type.getSymName().str(), *kind,
                             type.getCppName().str(),
                             type.getFingerprint().str()});
+      if (*kind == TypeKind::TimeDomain) {
+        mlir::IntegerAttr period = type.getPeriodAttr();
+        mlir::IntegerAttr phase = type.getPhaseAttr();
+        mlir::IntegerAttr tickScale = type.getTickScaleAttr();
+        if (period || phase || tickScale) {
+          if (!period || !phase || !tickScale || period.getInt() <= 0 ||
+              phase.getInt() < 0 || tickScale.getInt() <= 0)
+            return planError("ACLOWER-TIME-DOMAIN",
+                             "time-domain runtime metadata is incomplete");
+          plan.timeDomains.push_back(
+              {type.getSymName().str(), static_cast<uint64_t>(period.getInt()),
+               static_cast<uint64_t>(phase.getInt()),
+               static_cast<uint64_t>(tickScale.getInt())});
+        }
+      }
       continue;
     }
 
@@ -280,6 +317,10 @@ llvm::Expected<ModelPlan> buildModelPlan(mlir::ModuleOp canonicalACSim) {
   std::sort(plan.runtimeObjects.begin(), plan.runtimeObjects.end(),
             [](const RuntimeObjectPlan &lhs, const RuntimeObjectPlan &rhs) {
               return lhs.objectId < rhs.objectId;
+            });
+  std::sort(plan.timeDomains.begin(), plan.timeDomains.end(),
+            [](const TimeDomainPlan &lhs, const TimeDomainPlan &rhs) {
+              return lhs.name < rhs.name;
             });
   std::sort(plan.activationEdges.begin(), plan.activationEdges.end());
 

@@ -187,6 +187,12 @@ struct TypeDeclaration {
   std::string cpp;
   std::string kind;
   std::string fingerprint;
+  std::optional<uint64_t> period;
+  uint64_t phase = 0;
+  uint64_t tickScale = 1;
+  std::optional<std::string> parent;
+  std::optional<std::string> bridgeKind;
+  std::optional<std::string> bridgeOwner;
 };
 
 /// Assigns deterministic canonical symbols and fingerprints to every C++
@@ -203,11 +209,11 @@ public:
     auto found = entries.find(identity.str());
     if (found != entries.end()) {
       TypeDeclaration &existing = found->second;
-      if (existing.kind != kind)
+      if (existing.kind != kind || existing.cpp != cpp)
         return lowerError(reporter, "ACLOWER-TYPE-MISMATCH",
                           "realization identity '" + identity +
-                              "' is used with conflicting acsim.type kinds '" +
-                              existing.kind + "' and '" + kind + "'");
+                              "' is used with conflicting acsim.type "
+                              "kind or C++ spelling");
       if (!fingerprint.empty() && existing.fingerprint != fingerprint)
         return lowerError(
             reporter, "ACLOWER-FINGERPRINT",
@@ -223,6 +229,43 @@ public:
                                   ? bindings::sha256Fingerprint(identity)
                                   : fingerprint.str();
     entries.emplace(declaration.identity, std::move(declaration));
+    return mlir::success();
+  }
+
+  mlir::LogicalResult internTimeDomain(ac::TimeDomainOp domain) {
+    llvm::json::Object descriptor{
+        {"name", domain.getSymName()},
+        {"period", static_cast<uint64_t>(domain.getPeriod())},
+        {"phase", static_cast<uint64_t>(domain.getPhase())},
+        {"tick_scale", static_cast<uint64_t>(domain.getTickScale())}};
+    if (auto parent = domain.getParentAttr())
+      descriptor["parent"] = parent.getValue();
+    else
+      descriptor["parent"] = nullptr;
+    if (auto bridge = domain.getBridgeAttr()) {
+      descriptor["bridge"] = llvm::json::Object{
+          {"kind", bridge.getAs<StringAttr>("kind").getValue()},
+          {"owner", bridge.getAs<FlatSymbolRefAttr>("owner").getValue()}};
+    } else {
+      descriptor["bridge"] = nullptr;
+    }
+    std::string fingerprint =
+        fingerprintJson(llvm::json::Value(std::move(descriptor)));
+    if (failed(intern(domain, domain.getSymName(), "time_domain",
+                      "gfsim::TimeDomainRuntime", fingerprint)))
+      return mlir::failure();
+    TypeDeclaration &declaration = entries.at(domain.getSymName().str());
+    declaration.period = static_cast<uint64_t>(domain.getPeriod());
+    declaration.phase = static_cast<uint64_t>(domain.getPhase());
+    declaration.tickScale = static_cast<uint64_t>(domain.getTickScale());
+    if (auto parent = domain.getParentAttr())
+      declaration.parent = parent.getValue().str();
+    if (auto bridge = domain.getBridgeAttr()) {
+      declaration.bridgeKind =
+          bridge.getAs<StringAttr>("kind").getValue().str();
+      declaration.bridgeOwner =
+          bridge.getAs<FlatSymbolRefAttr>("owner").getValue().str();
+    }
     return mlir::success();
   }
 
@@ -538,6 +581,7 @@ private:
   llvm::StringMap<unsigned> moduleIndexByName; // concrete modules
   llvm::StringMap<ac::ModuleExternOp> externByName;
   llvm::SmallVector<ModulePlan, 0> modules; // sorted by name
+  llvm::SmallVector<ac::TimeDomainOp, 0> timeDomains;
   std::optional<bindings::BindingResolutionResult> resolution;
   std::optional<ProcessStatePlanSet> processPlans;
   std::string processPlanBytes;
@@ -694,6 +738,23 @@ std::string ACIRToACSimPass::moduleFingerprint(ac::ModuleOp module) {
           skeleton.push_back(cast<StringAttr>(line).getValue());
       entry["skeleton"] = std::move(skeleton);
       definitions.emplace_back(("process:" + process.getSymName()).str(),
+                               std::move(entry));
+      continue;
+    }
+    if (auto domain = dyn_cast<ac::TimeDomainOp>(operation)) {
+      llvm::json::Object entry{
+          {"kind", "time_domain"},
+          {"name", domain.getSymName()},
+          {"period", static_cast<uint64_t>(domain.getPeriod())},
+          {"phase", static_cast<uint64_t>(domain.getPhase())},
+          {"tick_scale", static_cast<uint64_t>(domain.getTickScale())}};
+      if (auto parent = domain.getParentAttr())
+        entry["parent"] = parent.getValue();
+      if (auto bridge = domain.getBridgeAttr())
+        entry["bridge"] = llvm::json::Object{
+            {"kind", bridge.getAs<StringAttr>("kind").getValue()},
+            {"owner", bridge.getAs<FlatSymbolRefAttr>("owner").getValue()}};
+      definitions.emplace_back(("time_domain:" + domain.getSymName()).str(),
                                std::move(entry));
       continue;
     }
@@ -1037,6 +1098,10 @@ mlir::LogicalResult ACIRToACSimPass::planModule(ac::ModuleOp module,
       processes.push_back(std::move(placement));
       continue;
     }
+    if (auto domain = dyn_cast<ac::TimeDomainOp>(operation)) {
+      timeDomains.push_back(domain);
+      continue;
+    }
     if (auto returnOp = dyn_cast<ac::ReturnOp>(operation)) {
       moduleReturn = returnOp;
       continue;
@@ -1044,8 +1109,8 @@ mlir::LogicalResult ACIRToACSimPass::planModule(ac::ModuleOp module,
     return lowerError(&operation, "ACLOWER-UNSUPPORTED-CONSTRUCT",
                       "operation '" + operation.getName().getStringRef() +
                           "' has no ACSim realization in the v0.1 lowering "
-                          "stage (queues, resources, address maps, time "
-                          "domains, views, and instrumentation are rejected, "
+                          "stage (queues, resources, address maps, views, "
+                          "and instrumentation are rejected, "
                           "never silently dropped)");
   }
 
@@ -1430,6 +1495,12 @@ mlir::LogicalResult ACIRToACSimPass::plan(mlir::ModuleOp input) {
       if (failed(typeSymbols.intern(input, source.kind, "wake", source.kind)))
         return mlir::failure();
   }
+  llvm::sort(timeDomains, [](ac::TimeDomainOp left, ac::TimeDomainOp right) {
+    return left.getSymName() < right.getSymName();
+  });
+  for (ac::TimeDomainOp domain : timeDomains)
+    if (failed(typeSymbols.internTimeDomain(domain)))
+      return mlir::failure();
   if (llvm::any_of(
           modules,
           [](const ModulePlan &module) { return !module.results.empty(); }) &&
@@ -2096,12 +2167,34 @@ ACIRToACSimPass::emit(mlir::ModuleOp input) {
   builder.setInsertionPointToStart(modelBody);
 
   // Rank 0: acsim.type declarations, strictly symbol-sorted.
-  for (const TypeDeclaration *declaration : typeSymbols.declarations())
+  for (const TypeDeclaration *declaration : typeSymbols.declarations()) {
+    IntegerAttr period;
+    IntegerAttr phase;
+    IntegerAttr tickScale;
+    FlatSymbolRefAttr parent;
+    DictionaryAttr bridge;
+    if (declaration->period) {
+      period = builder.getI64IntegerAttr(*declaration->period);
+      phase = builder.getI64IntegerAttr(declaration->phase);
+      tickScale = builder.getI64IntegerAttr(declaration->tickScale);
+    }
+    if (declaration->parent)
+      parent = FlatSymbolRefAttr::get(
+          context, typeSymbols.symbolFor(*declaration->parent));
+    if (declaration->bridgeKind)
+      bridge = builder.getDictionaryAttr(
+          {builder.getNamedAttr(
+               "kind", builder.getStringAttr(*declaration->bridgeKind)),
+           builder.getNamedAttr(
+               "owner",
+               FlatSymbolRefAttr::get(context, *declaration->bridgeOwner))});
     acsim::TypeOp::create(builder, input.getLoc(),
                           builder.getStringAttr(declaration->symbol),
                           builder.getStringAttr(declaration->cpp),
                           builder.getStringAttr(declaration->kind),
-                          builder.getStringAttr(declaration->fingerprint));
+                          builder.getStringAttr(declaration->fingerprint),
+                          period, phase, tickScale, parent, bridge);
+  }
 
   // Rank 1: acsim.binding records, strictly symbol-sorted.
   {

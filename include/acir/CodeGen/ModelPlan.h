@@ -38,6 +38,13 @@ struct TypePlan {
   Fingerprint fingerprint;
 };
 
+struct TimeDomainPlan {
+  std::string name;
+  uint64_t period = 1;
+  uint64_t phase = 0;
+  uint64_t tickScale = 1;
+};
+
 enum class RuntimeObjectKind { External, Process };
 
 struct RuntimeObjectPlan {
@@ -335,6 +342,7 @@ struct ModelPlan {
   std::vector<std::string> constructionOrder;
   std::vector<std::string> destructionOrder;
   std::vector<TypePlan> types;
+  std::vector<TimeDomainPlan> timeDomains;
   std::vector<BindingPlan> bindings;
   std::vector<ModulePlan> modules;
   std::vector<RuntimeObjectPlan> runtimeObjects;

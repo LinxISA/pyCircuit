@@ -16,6 +16,7 @@ builtin.module attributes {ac.contract_epoch = "0.1"} {
       workload @Top::@workload seed {kind = "fixed", value = 7 : i64}
       instrumentation [] results {id = "default", format = "json"} selected true
   ac.module @Top() parameters {} graph {
+    ac.time_domain @core period 2 phase 1 scale 2
     ac.process @workload kind "workload" {
       ac.yield_sim
     }
@@ -30,6 +31,7 @@ builtin.module attributes {ac.contract_epoch = "0.1"} {
 // CHECK-SAME:     fingerprints {binding_lock = "sha256:{{[0-9a-f]+}}", frozen_acir = "sha256:{{[0-9a-f]+}}", profile = "sha256:{{[0-9a-f]+}}", provider = "sha256:{{[0-9a-f]+}}", schema_set = "sha256:{{[0-9a-f]+}}", toolchain = "sha256:{{[0-9a-f]+}}"} {
 // CHECK-NEXT:     acsim.type @acir_impl_wake_next_delta_63cacba5c3eb82976464804b4aeaa17d43b445733efaddfad7c7bec1ab650269 cpp "acir::generated::impl_wake_next_delta_63cacba5c3eb82976464804b4aeaa17d43b445733efaddfad7c7bec1ab650269" kind "implementation" fingerprint "sha256:63cacba5c3eb82976464804b4aeaa17d43b445733efaddfad7c7bec1ab650269"
 // CHECK-NEXT:     acsim.type @acir_wake_next_delta cpp "acir::generated::wake_next_delta" kind "wake" fingerprint "sha256:8cf214054e3ad1f49ca7091e040092971fe7dec32ccfd59554fdef160e889c2a"
+// CHECK-NEXT:     acsim.type @core cpp "gfsim::TimeDomainRuntime" kind "time_domain" fingerprint "sha256:{{[0-9a-f]+}}" {period = 2 : i64, phase = 1 : i64, tick_scale = 2 : i64}
 // CHECK-NEXT:     acsim.module @Top interface {ports = [], resources = [], results = []} static [] specialization "sha256:{{[0-9a-f]+}}" exports [] {
 // CHECK-NEXT:       acsim.process @workload captures() names [] entry @entry pcs [@entry] live [] fairness 2 specialization "sha256:{{[0-9a-f]+}}" {
 // CHECK:              %[[WAKE:.+]] = acsim.invoke @acir_impl_wake_next_delta_63cacba5c3eb82976464804b4aeaa17d43b445733efaddfad7c7bec1ab650269() : () -> !acsim.wake<@acir_wake_next_delta>

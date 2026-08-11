@@ -1,6 +1,7 @@
 #include "gfsim/components.h"
 #include "gfsim/core.h"
 #include "gfsim/dispatch.h"
+#include "gfsim/harness.h"
 #include "gfsim/object.h"
 #include "gfsim/packet.h"
 #include "gfsim/process.h"
@@ -11,10 +12,18 @@
 
 #include "gtest/gtest.h"
 
+#include "acir/Bindings/Binding.h"
+#include "llvm/ADT/SmallString.h"
+#include "llvm/Support/FileSystem.h"
+#include "llvm/Support/MemoryBuffer.h"
+#include "llvm/Support/Path.h"
+#include "llvm/Support/raw_ostream.h"
+
 #include <algorithm>
 #include <array>
 #include <memory>
 #include <random>
+#include <string>
 
 namespace gfsim {
 
@@ -76,6 +85,279 @@ template <> struct PacketTraits<TestPacket> {
 };
 
 namespace {
+
+constexpr std::string_view kHarnessFingerprint =
+    "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+
+class HarnessTempRoot {
+public:
+  HarnessTempRoot() {
+    EXPECT_FALSE(llvm::sys::fs::createUniqueDirectory("gfsim-harness", path_));
+  }
+  ~HarnessTempRoot() { llvm::sys::fs::remove_directories(path_); }
+
+  std::string path() const { return path_.str().str(); }
+
+  void write(std::string_view relativePath, std::string_view bytes) const {
+    llvm::SmallString<256> path(path_);
+    llvm::sys::path::append(path, relativePath);
+    llvm::SmallString<256> parent(path);
+    llvm::sys::path::remove_filename(parent);
+    ASSERT_FALSE(llvm::sys::fs::create_directories(parent));
+    std::error_code error;
+    llvm::raw_fd_ostream output(path, error);
+    ASSERT_FALSE(error);
+    output << bytes;
+  }
+
+  std::string read(std::string_view relativePath) const {
+    llvm::SmallString<256> path(path_);
+    llvm::sys::path::append(path, relativePath);
+    auto buffer = llvm::MemoryBuffer::getFile(path);
+    EXPECT_TRUE(static_cast<bool>(buffer));
+    return buffer ? buffer.get()->getBuffer().str() : std::string();
+  }
+
+private:
+  llvm::SmallString<256> path_;
+};
+
+std::string harnessBuildManifest() {
+  return R"json({"schema":"agentic-circuit-build-manifest","version":"0.1","contract_epoch":"0.1","project":{"name":"project","identity":"project:test"},"system":{"name":"system","identity":"system:test"},"source_files":[],"normalized_acir_sha256":"sha256:0000000000000000000000000000000000000000000000000000000000000000","compiler":{"name":"clang","build_id":"clang test","toolchain_target":"test-target"},"pass_pipeline":["compile","link"],"providers":[],"component_specializations":[],"protocol_identities":[],"artifacts":[],"validation_gates":[],"build_profile":"fast","instrumentation_layers":[],"specialization_inputs":[],"build_fingerprint":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"})json";
+}
+
+std::string harnessTrace() {
+  return R"json({"schema":"pto-trace","version":"0.1","contract_epoch":"0.1","metadata":{"record_count":0},"records":[]})json";
+}
+
+std::string harnessRunManifest(std::string_view buildHash,
+                               std::string_view traceHash) {
+  return "{\"schema\":\"agentic-circuit-run-manifest\",\"version\":\"0.1\","
+         "\"contract_epoch\":\"0.1\",\"build_manifest\":{\"path\":"
+         "\"build-manifest.json\",\"sha256\":\"" +
+         std::string(buildHash) +
+         "\"},\"trace\":{\"path\":\"trace.json\",\"schema\":\"pto-trace\","
+         "\"version\":\"0.1\",\"sha256\":\"" +
+         std::string(traceHash) +
+         "\"},\"seed\":1,\"output_directory\":\"run\",\"deadlock_window\":null,"
+         "\"max_ticks\":100,\"max_domain_cycles\":{\"core\":25},"
+         "\"stats_format\":\"json\",\"event_log\":\"disabled\","
+         "\"termination_expectation\":{\"kind\":\"incomplete\","
+         "\"reason\":\"max_domain_cycles\"}}";
+}
+
+class HarnessModel {
+public:
+  void configure(const RuntimeLimits &limits) { configured = limits; }
+  TerminationResult run() {
+    ++workCount;
+    TerminationResult result;
+    result.classification = TerminationClass::Incomplete;
+    result.finalEpoch = {50, 0};
+    result.committedEventCount = 7;
+    result.tracePosition = 3;
+    result.traceLastCommittedSequenceId = 11;
+    result.diagnosticCode = "max_domain_cycles_reached";
+    result.domainCycles = {{"core", 25}};
+    return result;
+  }
+  std::string_view buildFingerprint() const { return kHarnessFingerprint; }
+  std::span<const TimeDomainRuntime> timeDomains() const { return domains; }
+
+  RuntimeLimits configured;
+  uint64_t workCount = 0;
+
+private:
+  static constexpr std::array<TimeDomainRuntime, 1> domains = {
+      TimeDomainRuntime{"core", 2, 0, 1}};
+};
+
+class DomainClockObject : public SimObject {
+public:
+  DomainClockObject(ObjectId id, SimSystem &system)
+      : SimObject(ObjectKind::Process, "clock", id), system_(system) {}
+
+  void doWork(Epoch epoch) override {
+    ++workCount;
+    ASSERT_TRUE(system_.scheduleEvent({{epoch.time + 1, 0}, id(), 0, 0}));
+  }
+
+  uint64_t workCount = 0;
+
+private:
+  SimSystem &system_;
+};
+
+class NoProgressClockObject : public SimObject {
+public:
+  NoProgressClockObject(ObjectId id, SimSystem &system)
+      : SimObject(ObjectKind::Process, "no_progress", id), system_(system) {}
+
+  void doWork(Epoch epoch) override {
+    ++workCount;
+    ASSERT_TRUE(system_.scheduleWork(id(), {epoch.time + 1, 0}));
+  }
+
+  uint64_t workCount = 0;
+
+private:
+  SimSystem &system_;
+};
+
+TEST(RuntimeHarnessTest, ExactManifestConfiguresLimitsAndProducesClosedResult) {
+  HarnessTempRoot root;
+  const std::string build = harnessBuildManifest();
+  const std::string trace = harnessTrace();
+  root.write("build-manifest.json", build);
+  root.write("trace.json", trace);
+  auto manifest = loadRunManifest(
+      harnessRunManifest(acir::bindings::sha256Fingerprint(build),
+                         acir::bindings::sha256Fingerprint(trace)),
+      root.path());
+  ASSERT_TRUE(static_cast<bool>(manifest))
+      << llvm::toString(manifest.takeError());
+
+  HarnessModel model;
+  llvm::SmallString<256> resultStage(root.path());
+  llvm::sys::path::append(resultStage, "result-stage");
+  auto result = runGeneratedModel(model, *manifest, resultStage);
+  ASSERT_TRUE(static_cast<bool>(result)) << llvm::toString(result.takeError());
+  EXPECT_EQ(result->status, RunStatus::Incomplete);
+  EXPECT_EQ(result->terminationReason, "max_domain_cycles");
+  EXPECT_EQ(result->domainCycles.at("core"), 25u);
+  ASSERT_TRUE(model.configured.maxTicks);
+  EXPECT_EQ(*model.configured.maxTicks, 100u);
+  auto document =
+      acir::bindings::parseIJson(root.read("result-stage/run-result.json"));
+  ASSERT_TRUE(static_cast<bool>(document))
+      << llvm::toString(document.takeError());
+  const llvm::json::Object *object = document->getAsObject();
+  ASSERT_NE(object, nullptr);
+  EXPECT_EQ(object->size(), 12u);
+  EXPECT_EQ(object->getString("status"), "incomplete");
+  EXPECT_EQ(object->getString("termination_reason"), "max_domain_cycles");
+}
+
+TEST(RuntimeHarnessTest, BuildFingerprintMismatchFailsBeforeModelWork) {
+  HarnessTempRoot root;
+  const std::string build = harnessBuildManifest();
+  const std::string trace = harnessTrace();
+  root.write("build-manifest.json", build);
+  root.write("trace.json", trace);
+  auto manifest = loadRunManifest(
+      harnessRunManifest(acir::bindings::sha256Fingerprint(build),
+                         acir::bindings::sha256Fingerprint(trace)),
+      root.path());
+  ASSERT_TRUE(static_cast<bool>(manifest));
+  manifest->buildManifest.sha256 =
+      "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+
+  HarnessModel model;
+  llvm::SmallString<256> resultStage(root.path());
+  llvm::sys::path::append(resultStage, "result-stage");
+  EXPECT_FALSE(runGeneratedModel(model, *manifest, resultStage));
+  EXPECT_EQ(model.workCount, 0u);
+}
+
+TEST(RuntimeHarnessTest, UnknownDomainLimitFailsBeforeModelWork) {
+  HarnessTempRoot root;
+  const std::string build = harnessBuildManifest();
+  const std::string trace = harnessTrace();
+  root.write("build-manifest.json", build);
+  root.write("trace.json", trace);
+  std::string bytes =
+      harnessRunManifest(acir::bindings::sha256Fingerprint(build),
+                         acir::bindings::sha256Fingerprint(trace));
+  const size_t domain = bytes.find("\"core\":25");
+  ASSERT_NE(domain, std::string::npos);
+  bytes.replace(domain, std::string("\"core\":25").size(), "\"unknown\":25");
+  auto manifest = loadRunManifest(bytes, root.path());
+  ASSERT_TRUE(static_cast<bool>(manifest));
+
+  HarnessModel model;
+  llvm::SmallString<256> resultStage(root.path());
+  llvm::sys::path::append(resultStage, "result-stage");
+  EXPECT_FALSE(runGeneratedModel(model, *manifest, resultStage));
+  EXPECT_EQ(model.workCount, 0u);
+}
+
+TEST(RuntimeHarnessTest, UnmetExpectationPublishesFailedValidation) {
+  HarnessTempRoot root;
+  const std::string build = harnessBuildManifest();
+  const std::string trace = harnessTrace();
+  root.write("build-manifest.json", build);
+  root.write("trace.json", trace);
+  std::string bytes =
+      harnessRunManifest(acir::bindings::sha256Fingerprint(build),
+                         acir::bindings::sha256Fingerprint(trace));
+  const size_t reason = bytes.find("\"reason\":\"max_domain_cycles\"");
+  ASSERT_NE(reason, std::string::npos);
+  bytes.replace(reason, std::string("\"reason\":\"max_domain_cycles\"").size(),
+                "\"reason\":\"max_ticks\"");
+  auto manifest = loadRunManifest(bytes, root.path());
+  ASSERT_TRUE(static_cast<bool>(manifest));
+
+  HarnessModel model;
+  llvm::SmallString<256> resultStage(root.path());
+  llvm::sys::path::append(resultStage, "result-stage");
+  auto result = runGeneratedModel(model, *manifest, resultStage);
+  ASSERT_TRUE(static_cast<bool>(result)) << llvm::toString(result.takeError());
+  EXPECT_EQ(result->status, RunStatus::Failed);
+  EXPECT_EQ(result->terminationReason, "invariant_violation");
+  EXPECT_EQ(result->validation.status, "failed");
+  EXPECT_NE(root.read("result-stage/validation-report.json")
+                .find("ACRUN-EXPECTATION-001"),
+            std::string::npos);
+}
+
+TEST(RuntimeHarnessTest, DomainCycleCapStopsBeforeWorkBeyondTheBound) {
+  SimSystem system("test");
+  DomainClockObject object(0, system);
+  std::array rows = {makeDispatchRow(&object)};
+  ASSERT_TRUE(system.setDispatchTable(rows));
+  ASSERT_TRUE(
+      system.setTimeDomains(std::array{TimeDomainRuntime{"core", 2, 1, 1}}));
+  RuntimeLimits limits;
+  limits.maxDomainCycles = {{"core", 2}};
+  ASSERT_TRUE(system.setRuntimeLimits(limits));
+
+  const TerminationResult result = system.run();
+  EXPECT_EQ(result.classification, TerminationClass::Incomplete);
+  EXPECT_EQ(result.diagnosticCode, "max_domain_cycles_reached");
+  EXPECT_EQ(result.domainCycles.at("core"), 2u);
+  EXPECT_EQ(result.finalEpoch, (Epoch{5, 0}));
+  EXPECT_EQ(object.workCount, 5u);
+}
+
+TEST(RuntimeHarnessTest, DeadlockWindowProducesExactFailedEpoch) {
+  SimSystem system("test");
+  Queue<uint64_t> queue("queue", 1, nullptr, 2);
+  queue.setPath("/test/queue");
+  ASSERT_TRUE(queue.proposePush(7));
+  queue.doXfer({0, 0});
+  system.registerObject(&queue);
+  ASSERT_TRUE(system.setDeadlockWindow(3));
+
+  const TerminationResult result = system.run();
+  EXPECT_EQ(result.classification, TerminationClass::Failed);
+  EXPECT_EQ(result.diagnosticCode, "deadlock_window_reached");
+  EXPECT_EQ(result.finalEpoch, (Epoch{3, 0}));
+  EXPECT_EQ(result.terminationCap, std::nullopt);
+}
+
+TEST(RuntimeHarnessTest, DeadlockWindowStopsPollingWithoutDeclaredProgress) {
+  SimSystem system("test");
+  NoProgressClockObject object(0, system);
+  std::array rows = {makeDispatchRow(&object)};
+  ASSERT_TRUE(system.setDispatchTable(rows));
+  ASSERT_TRUE(system.setDeadlockWindow(3));
+
+  const TerminationResult result = system.run();
+  EXPECT_EQ(result.classification, TerminationClass::Failed);
+  EXPECT_EQ(result.diagnosticCode, "deadlock_window_reached");
+  EXPECT_EQ(result.finalEpoch, (Epoch{3, 0}));
+  EXPECT_EQ(object.workCount, 3u);
+}
 
 // ═══════════════════════════════════════════════════════════════════════
 // Core types

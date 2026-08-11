@@ -28,7 +28,12 @@ def ACSim_ModelOp : ACSim_Op<"model", [
 
 def ACSim_TypeOp : ACSim_Op<"type", [Symbol, Pure]> {
   let arguments = (ins SymbolNameAttr:$sym_name, StrAttr:$cpp_name,
-                       StrAttr:$kind, StrAttr:$fingerprint);
+                       StrAttr:$kind, StrAttr:$fingerprint,
+                       OptionalAttr<I64Attr>:$period,
+                       OptionalAttr<I64Attr>:$phase,
+                       OptionalAttr<I64Attr>:$tick_scale,
+                       OptionalAttr<FlatSymbolRefAttr>:$parent,
+                       OptionalAttr<DictionaryAttr>:$bridge);
   let assemblyFormat = [{
     $sym_name `cpp` $cpp_name `kind` $kind `fingerprint` $fingerprint attr-dict
   }];
