@@ -177,16 +177,20 @@ public:
   static constexpr ObjectKind componentKind = ObjectKind::TraceSource;
 
   TraceSource(std::string name, ObjectId id, SimObject *parent,
-              Decoder decoder = {}, SimSystem *system = nullptr)
-      : SimObject(ObjectKind::TraceSource, std::move(name), id, parent),
+              Decoder decoder = {}, SimSystem *system = nullptr,
+              ObservationSink *observations = nullptr)
+      : SimObject(ObjectKind::TraceSource, std::move(name), id, parent,
+                  observations),
         decoder_(std::move(decoder)), system_(system) {
     position_.endOfTrace = true;
   }
 
   TraceSource(std::string name, ObjectId id, SimObject *parent,
               PtoTraceDocument document, Decoder decoder = {},
-              SimSystem *system = nullptr)
-      : SimObject(ObjectKind::TraceSource, std::move(name), id, parent),
+              SimSystem *system = nullptr,
+              ObservationSink *observations = nullptr)
+      : SimObject(ObjectKind::TraceSource, std::move(name), id, parent,
+                  observations),
         document_(std::move(document)), decoder_(std::move(decoder)),
         documentLoaded_(true), system_(system) {
     position_.endOfTrace = document_.records.empty();
@@ -255,6 +259,25 @@ public:
     }
     offerProposal_ = std::move(decoded);
     proposedSequenceId_ = record.sequenceId;
+  }
+
+  void doArbitrate(Epoch) override {
+    if (acceptProposal_ && committedSequenceId_)
+      emitObservation({.category = "transaction",
+                       .name = "accepted",
+                       .phase = TraceEventPhase::Instant,
+                       .rootSequenceId = *committedSequenceId_,
+                       .arguments = {{"trace_position",
+                                      static_cast<uint64_t>(
+                                          position_.nextRecordIndex + 1)}}});
+    if (offerProposal_ && proposedSequenceId_)
+      emitObservation(
+          {.category = "transaction",
+           .name = "offered",
+           .phase = TraceEventPhase::Instant,
+           .rootSequenceId = *proposedSequenceId_,
+           .arguments = {{"trace_position",
+                          static_cast<uint64_t>(position_.nextRecordIndex)}}});
   }
 
   void doXfer(Epoch epoch) override {

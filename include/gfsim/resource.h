@@ -6,7 +6,9 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <limits>
 #include <map>
+#include <optional>
 #include <string>
 #include <tuple>
 #include <utility>
@@ -29,8 +31,9 @@ public:
   };
 
   Resource(std::string name, ObjectId id, SimObject *parent,
-           uint32_t totalCapacity)
-      : SimObject(ObjectKind::Resource, std::move(name), id, parent),
+           uint32_t totalCapacity, ObservationSink *observations = nullptr)
+      : SimObject(ObjectKind::Resource, std::move(name), id, parent,
+                  observations),
         totalCapacity_(totalCapacity) {}
 
   uint32_t totalCapacity() const { return totalCapacity_; }
@@ -109,6 +112,39 @@ public:
       } else {
         proposedRejectedTransactions_.push_back(proposal.transactionId);
       }
+    }
+    for (const Reservation &reservation : acceptedProposals_) {
+      auto start = presentationTime(reservation.issueTime);
+      auto end = presentationTime(reservation.readyTime);
+      if (!start || !end) {
+        setRuntimeFailureCode("observation_time_overflow");
+        continue;
+      }
+      emitObservation(
+          {.category = "resource",
+           .name = "reservation",
+           .phase = TraceEventPhase::Complete,
+           .rootSequenceId = reservation.rootTransactionId,
+           .duration = *end - *start,
+           .arguments = {
+               {"amount", static_cast<uint64_t>(reservation.amount)},
+               {"child_owner_id", static_cast<uint64_t>(reservation.ownerId)},
+               {"transaction_id", reservation.transactionId}}});
+    }
+    for (const Reservation &reservation : proposals_) {
+      if (std::ranges::find(proposedRejectedTransactions_,
+                            reservation.transactionId) ==
+          proposedRejectedTransactions_.end())
+        continue;
+      emitObservation(
+          {.category = "stall",
+           .name = "capacity",
+           .phase = TraceEventPhase::Instant,
+           .rootSequenceId = reservation.rootTransactionId,
+           .arguments = {
+               {"amount", static_cast<uint64_t>(reservation.amount)},
+               {"child_owner_id", static_cast<uint64_t>(reservation.ownerId)},
+               {"transaction_id", reservation.transactionId}}});
     }
   }
 
@@ -238,6 +274,7 @@ public:
     totalReleases_ = 0;
     totalCancellations_ = 0;
     lastUpdate_ = {};
+    clearRuntimeFailureCode();
   }
 
 private:
@@ -253,6 +290,13 @@ private:
            std::tie(right.priority, right.portIndex, right.instanceIndex,
                     right.ownerId, right.rootTransactionId,
                     right.transactionId);
+  }
+
+  static std::optional<uint64_t> presentationTime(Epoch epoch) {
+    if (epoch.time > (std::numeric_limits<uint64_t>::max() - epoch.delta) /
+                         kMaxDeltasPerTick)
+      return std::nullopt;
+    return epoch.time * kMaxDeltasPerTick + epoch.delta;
   }
 
   bool isCancellationPending(uint64_t transactionId) const {

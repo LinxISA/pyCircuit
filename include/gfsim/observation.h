@@ -42,6 +42,13 @@ struct EventProposal {
   bool operator==(const EventProposal &) const = default;
 };
 
+/// Optional non-owning destination for cold-path observation proposals.
+class ObservationSink {
+public:
+  virtual ~ObservationSink() = default;
+  virtual bool proposeObservation(EventProposal proposal) = 0;
+};
+
 struct CommittedEvent {
   Epoch epoch;
   ObjectId ownerId = kInvalidObjectId;
@@ -56,8 +63,8 @@ struct CommittedEvent {
   bool operator==(const CommittedEvent &) const = default;
 };
 
-/// Buffers private Work proposals and publishes them only for an owner whose
-/// functional state commits at the Xfer barrier.
+/// Buffers private pre-commit proposals and publishes them only for an owner
+/// whose functional state commits at the Xfer barrier.
 class ObservationRecorder {
 public:
   bool propose(EventProposal proposal);

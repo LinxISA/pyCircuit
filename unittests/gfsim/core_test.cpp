@@ -2051,6 +2051,228 @@ TEST(GfsimObservationTest, SystemAdmitsOnlyObjectsThatCommitAtXfer) {
   EXPECT_TRUE(system.observations().empty());
 }
 
+const CommittedEvent *findObservation(std::span<const CommittedEvent> events,
+                                      ObjectId owner, std::string_view name,
+                                      size_t occurrence = 0) {
+  for (const CommittedEvent &event : events) {
+    if (event.ownerId == owner && event.name == name) {
+      if (occurrence == 0)
+        return &event;
+      --occurrence;
+    }
+  }
+  return nullptr;
+}
+
+const ObservationValue *findArgument(const CommittedEvent &event,
+                                     std::string_view name) {
+  auto argument =
+      std::ranges::find(event.arguments, name, &ObservationArgument::name);
+  return argument == event.arguments.end() ? nullptr : &argument->value;
+}
+
+TEST(GfsimComponentObservationTest,
+     QueueSchedulerAndResourcePublishAcceptedOutcomesAndOccupancy) {
+  SimSystem system("observed");
+  Queue<uint64_t> queue("queue", 0, nullptr, 2, SIZE_MAX, &system);
+  Scheduler<uint64_t> scheduler("scheduler", 1, nullptr, 1, &system);
+  Resource resource("resource", 2, nullptr, 1, &system);
+  system.registerObject(&queue);
+  system.registerObject(&scheduler);
+  system.registerObject(&resource);
+
+  ASSERT_TRUE(queue.proposePush(5));
+  queue.doXfer({0, 0});
+  ASSERT_TRUE(queue.proposePop().has_value());
+  ASSERT_TRUE(queue.proposePush(10));
+  ASSERT_TRUE(scheduler.proposeSchedule(1, 0, 0, 0, 7, 70));
+  ASSERT_TRUE(scheduler.proposeSchedule(2, 0, 0, 0, 8, 80));
+  ASSERT_TRUE(resource.proposeReserve(9, 1, {1, 0}, 100, {4, 0}, 900));
+  ASSERT_TRUE(resource.proposeReserve(10, 1, {1, 0}, 101, {5, 0}, 901));
+  ASSERT_TRUE(system.scheduleWork(queue.id(), {1, 0}));
+  ASSERT_TRUE(system.scheduleWork(scheduler.id(), {1, 0}));
+  ASSERT_TRUE(system.scheduleWork(resource.id(), {1, 0}));
+
+  system.run();
+  auto events = system.observations();
+  ASSERT_NE(findObservation(events, queue.id(), "accepted", 0), nullptr);
+  ASSERT_NE(findObservation(events, queue.id(), "completed"), nullptr);
+  const CommittedEvent *queueOccupancy =
+      findObservation(events, queue.id(), "occupancy");
+  ASSERT_NE(queueOccupancy, nullptr);
+  EXPECT_EQ(queueOccupancy->phase, TraceEventPhase::Counter);
+  ASSERT_NE(findArgument(*queueOccupancy, "occupancy"), nullptr);
+  EXPECT_EQ(std::get<uint64_t>(*findArgument(*queueOccupancy, "occupancy")),
+            1u);
+
+  const CommittedEvent *scheduled =
+      findObservation(events, scheduler.id(), "accepted");
+  ASSERT_NE(scheduled, nullptr);
+  EXPECT_EQ(scheduled->rootSequenceId, 70u);
+  ASSERT_NE(findArgument(*scheduled, "child_owner_id"), nullptr);
+  EXPECT_EQ(std::get<uint64_t>(*findArgument(*scheduled, "child_owner_id")),
+            7u);
+  const CommittedEvent *schedulerStall =
+      findObservation(events, scheduler.id(), "capacity");
+  ASSERT_NE(schedulerStall, nullptr);
+  EXPECT_EQ(schedulerStall->category, "stall");
+  EXPECT_EQ(schedulerStall->rootSequenceId, 80u);
+
+  const CommittedEvent *reservation =
+      findObservation(events, resource.id(), "reservation");
+  ASSERT_NE(reservation, nullptr);
+  EXPECT_EQ(reservation->phase, TraceEventPhase::Complete);
+  EXPECT_EQ(reservation->duration, 3 * kMaxDeltasPerTick);
+  EXPECT_EQ(reservation->rootSequenceId, 900u);
+  const CommittedEvent *resourceStall =
+      findObservation(events, resource.id(), "capacity");
+  ASSERT_NE(resourceStall, nullptr);
+  EXPECT_EQ(resourceStall->rootSequenceId, 901u);
+}
+
+TEST(GfsimComponentObservationTest,
+     ComputeLinkMemoryAndSinkPublishOnlyCommittedActivity) {
+  SimSystem system("observed");
+  Compute<> compute("compute", 0, nullptr, {}, &system);
+  Link<> link("link", 1, nullptr, &system);
+  Memory<> memory("memory", 2, nullptr, 4, &system);
+  Sink<> sink("sink", 3, nullptr, &system);
+  system.registerObject(&compute);
+  system.registerObject(&link);
+  system.registerObject(&memory);
+  system.registerObject(&sink);
+  compute.setInput(12);
+  link.forward(13);
+  ASSERT_TRUE(memory.proposeWrite(2, 14));
+  sink.receive(15);
+  for (ObjectId id = 0; id != 4; ++id)
+    ASSERT_TRUE(system.scheduleWork(id, {0, 0}));
+
+  TerminationResult result = system.run();
+  EXPECT_EQ(result.classification, TerminationClass::Completed);
+  EXPECT_EQ(compute.output(), 12u);
+  EXPECT_EQ(link.value(), 13u);
+  EXPECT_EQ(memory.read(2), 14u);
+  EXPECT_EQ(sink.received(), (std::vector<uint64_t>{15}));
+  auto events = system.observations();
+  EXPECT_NE(findObservation(events, compute.id(), "completed"), nullptr);
+  EXPECT_NE(findObservation(events, link.id(), "completed"), nullptr);
+  const CommittedEvent *write = findObservation(events, memory.id(), "write");
+  ASSERT_NE(write, nullptr);
+  EXPECT_EQ(std::get<uint64_t>(*findArgument(*write, "address")), 2u);
+  EXPECT_NE(findObservation(events, sink.id(), "accepted"), nullptr);
+}
+
+class ProtocolObservationDriver final : public SimObject {
+public:
+  ProtocolObservationDriver(
+      ObjectId id, ReadyValid<uint64_t> &readyValid,
+      RequestResponse<uint64_t, uint64_t> &requestResponse,
+      TraceSource<> &trace)
+      : SimObject(ObjectKind::Process, "driver", id), readyValid_(readyValid),
+        requestResponse_(requestResponse), trace_(trace) {}
+
+  void doWork(Epoch epoch) override {
+    if (epoch.time == 1) {
+      readyValid_.proposeReady(true);
+      EXPECT_TRUE(requestResponse_.proposePopRequest().has_value());
+      EXPECT_TRUE(trace_.proposeAccept());
+    } else if (epoch.time == 2) {
+      EXPECT_TRUE(requestResponse_.proposeResponse(99, 44));
+    } else if (epoch.time == 3) {
+      EXPECT_TRUE(requestResponse_.proposePopResponse().has_value());
+    }
+  }
+
+private:
+  ReadyValid<uint64_t> &readyValid_;
+  RequestResponse<uint64_t, uint64_t> &requestResponse_;
+  TraceSource<> &trace_;
+};
+
+TEST(GfsimComponentObservationTest,
+     ProtocolBackpressureRequestsResponsesAndTraceCursorAreCommitted) {
+  constexpr std::string_view oneRecord = R"json({
+    "schema":"pto-trace","version":"0.1","contract_epoch":"0.1",
+    "metadata":{"record_count":1},"records":[{
+      "sequence_id":17,"opcode":"pto.done","operands":[],
+      "dependencies":[],"attributes":{}}]})json";
+  TraceLoadResult loaded = parsePtoTrace(oneRecord);
+  ASSERT_TRUE(loaded.succeeded());
+  SimSystem system("observed");
+  ReadyValid<uint64_t> readyValid("ready_valid", 0, nullptr, &system);
+  RequestResponse<uint64_t, uint64_t> requestResponse("request_response", 1,
+                                                      nullptr, 2, &system);
+  TraceSource<> trace("trace", 2, nullptr, std::move(*loaded.document), {},
+                      &system, &system);
+  ProtocolObservationDriver driver(3, readyValid, requestResponse, trace);
+  system.registerObject(&readyValid);
+  system.registerObject(&requestResponse);
+  system.registerObject(&trace);
+  system.registerObject(&driver);
+  ASSERT_TRUE(readyValid.proposeOffer(42));
+  ASSERT_TRUE(requestResponse.proposeRequest(7, 44));
+  ASSERT_TRUE(system.scheduleWork(readyValid.id(), {0, 0}));
+  ASSERT_TRUE(system.scheduleWork(requestResponse.id(), {0, 0}));
+  for (Tick tick = 1; tick <= 3; ++tick) {
+    ASSERT_TRUE(system.scheduleWork(driver.id(), {tick, 0}));
+    ASSERT_TRUE(system.scheduleWork(requestResponse.id(), {tick, 0}));
+  }
+  ASSERT_TRUE(system.scheduleWork(readyValid.id(), {1, 0}));
+  ASSERT_TRUE(system.scheduleWork(trace.id(), {1, 0}));
+
+  TerminationResult result = system.run();
+  EXPECT_EQ(result.classification, TerminationClass::Completed);
+  EXPECT_EQ(result.tracePosition, 1u);
+  EXPECT_EQ(result.traceLastCommittedSequenceId, 17u);
+  auto events = system.observations();
+  EXPECT_NE(findObservation(events, readyValid.id(), "backpressure"), nullptr);
+  EXPECT_NE(findObservation(events, readyValid.id(), "completed"), nullptr);
+  EXPECT_NE(findObservation(events, requestResponse.id(), "accepted"), nullptr);
+  EXPECT_NE(findObservation(events, requestResponse.id(), "request"), nullptr);
+  EXPECT_NE(findObservation(events, requestResponse.id(), "completed"),
+            nullptr);
+  EXPECT_NE(findObservation(events, requestResponse.id(), "response"), nullptr);
+  const CommittedEvent *traceAccepted =
+      findObservation(events, trace.id(), "accepted");
+  ASSERT_NE(traceAccepted, nullptr);
+  EXPECT_EQ(traceAccepted->rootSequenceId, 17u);
+  EXPECT_EQ(std::get<uint64_t>(*findArgument(*traceAccepted, "trace_position")),
+            1u);
+}
+
+TEST(GfsimComponentObservationTest,
+     DisabledAndEnabledObservationProduceEqualFunctionalResults) {
+  auto run = [](bool enabled) {
+    SimSystem system("observed");
+    Compute<uint64_t> compute("compute", 0, nullptr, {},
+                              enabled ? &system : nullptr);
+    system.registerObject(&compute);
+    compute.setInput(23);
+    EXPECT_TRUE(system.scheduleWork(compute.id(), {0, 0}));
+    TerminationResult result = system.run();
+    std::vector<
+        std::tuple<std::string, std::string, StatisticKind, uint64_t, Epoch>>
+        statistics;
+    for (const StatSnapshot &snapshot : system.statistics())
+      statistics.emplace_back(snapshot.objectPath, snapshot.name, snapshot.kind,
+                              snapshot.value, snapshot.lastUpdate);
+    return std::tuple(result.classification, result.finalEpoch,
+                      result.diagnosticCode, compute.output(),
+                      std::move(statistics), system.observations().size());
+  };
+
+  auto disabled = run(false);
+  auto enabled = run(true);
+  EXPECT_EQ(std::get<0>(disabled), std::get<0>(enabled));
+  EXPECT_EQ(std::get<1>(disabled), std::get<1>(enabled));
+  EXPECT_EQ(std::get<2>(disabled), std::get<2>(enabled));
+  EXPECT_EQ(std::get<3>(disabled), std::get<3>(enabled));
+  EXPECT_EQ(std::get<4>(disabled), std::get<4>(enabled));
+  EXPECT_EQ(std::get<5>(disabled), 0u);
+  EXPECT_GT(std::get<5>(enabled), 0u);
+}
+
 TEST(GfsimSystemTest, NonEmptyQueueWithoutWakeFailsWithNoProgressReport) {
   SimSystem system;
   Queue<uint64_t> queue("queue", 1, nullptr, 2);

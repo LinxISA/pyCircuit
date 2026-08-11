@@ -11,6 +11,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace gfsim {
@@ -25,8 +26,10 @@ class Module;
 class SimObject {
 public:
   SimObject(ObjectKind kind, std::string name, ObjectId id,
-            SimObject *parent = nullptr)
-      : kind_(kind), name_(std::move(name)), id_(id), parent_(parent) {}
+            SimObject *parent = nullptr,
+            ObservationSink *observationSink = nullptr)
+      : kind_(kind), name_(std::move(name)), id_(id), parent_(parent),
+        observationSink_(observationSink) {}
 
   virtual ~SimObject() = default;
 
@@ -92,6 +95,15 @@ public:
   virtual const Module *asModule() const { return nullptr; }
 
 protected:
+  bool emitObservation(EventProposal proposal) {
+    if (!observationSink_)
+      return true;
+    proposal.ownerId = id_;
+    if (observationSink_->proposeObservation(std::move(proposal)))
+      return true;
+    setRuntimeFailureCode("observation_proposal_failed");
+    return false;
+  }
   void setRuntimeFailureCode(std::string_view code) {
     runtimeFailureCode_ = code;
   }
@@ -102,6 +114,7 @@ protected:
   ObjectId id_ = kInvalidObjectId;
   std::string path_;
   SimObject *parent_ = nullptr;
+  ObservationSink *observationSink_ = nullptr;
   std::string_view runtimeFailureCode_;
 };
 
@@ -197,7 +210,7 @@ class Resource;
 
 /// The system owns the root module, exact global epoch, event scheduling,
 /// phase barriers, termination state, and deterministic sequencing.
-class SimSystem : public SimObject {
+class SimSystem : public SimObject, public ObservationSink {
 public:
   explicit SimSystem(std::string name = "system");
   ~SimSystem() override;
@@ -240,7 +253,7 @@ public:
   NoProgressReport noProgressReport() const;
   std::vector<StatSnapshot> statistics() const;
   std::span<const CommittedEvent> observations() const;
-  bool proposeObservation(EventProposal proposal);
+  bool proposeObservation(EventProposal proposal) override;
 
   // ── Object registry ─────────────────────────────────────────────────
 

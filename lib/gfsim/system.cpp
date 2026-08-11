@@ -18,7 +18,7 @@ struct SimSystem::Impl {
   ActivationPlan activation;
   uint64_t committedEventCount = 0;
   bool executingEpoch = false;
-  std::optional<ObjectId> activeWorkOwner;
+  std::optional<ObjectId> activeProposalOwner;
   NoProgressReport noProgress;
   size_t traceOwnerCount = 0;
   bool traceEof = true;
@@ -198,12 +198,12 @@ std::span<const CommittedEvent> SimSystem::observations() const {
 }
 
 bool SimSystem::proposeObservation(EventProposal proposal) {
-  if (terminated_ || !impl_->executingEpoch || !impl_->activeWorkOwner)
+  if (terminated_ || !impl_->executingEpoch || !impl_->activeProposalOwner)
     return false;
-  if (proposal.ownerId != *impl_->activeWorkOwner ||
+  if (proposal.ownerId != *impl_->activeProposalOwner ||
       !lookup(proposal.ownerId))
     return fail("invalid_observation_owner",
-                "observation owner must be the active Work object");
+                "observation owner must be the active runtime object");
   if (!impl_->observations.propose(std::move(proposal)))
     return fail("invalid_observation_proposal",
                 std::string(impl_->observations.lastError()));
@@ -433,21 +433,23 @@ bool SimSystem::step() {
 
   impl_->executingEpoch = true;
   for (ObjectId id : currentWork) {
-    impl_->activeWorkOwner = id;
+    impl_->activeProposalOwner = id;
     if (const DispatchRow *row = impl_->dispatch.lookup(id))
       row->work(row->object, epoch_);
     else if (SimObject *object = lookup(id))
       object->doWork(epoch_);
-    impl_->activeWorkOwner.reset();
+    impl_->activeProposalOwner.reset();
     if (terminated_)
       return false;
   }
 
   for (ObjectId id : currentWork) {
+    impl_->activeProposalOwner = id;
     if (const DispatchRow *row = impl_->dispatch.lookup(id))
       row->xfer(row->object, epoch_, XferPhase::Arbitrate);
     else if (SimObject *object = lookup(id))
       object->doArbitrate(epoch_);
+    impl_->activeProposalOwner.reset();
     if (terminated_)
       return false;
   }
@@ -530,7 +532,7 @@ bool SimSystem::step() {
     impl_->lastProgressTick = epoch_.time;
   }
   impl_->executingEpoch = false;
-  impl_->activeWorkOwner.reset();
+  impl_->activeProposalOwner.reset();
 
   std::optional<Epoch> nextEpoch;
   bool nextEpochIsEvent = false;
@@ -631,7 +633,7 @@ void SimSystem::reset() {
   impl_->eventQueue.reset();
   impl_->committedEventCount = 0;
   impl_->executingEpoch = false;
-  impl_->activeWorkOwner.reset();
+  impl_->activeProposalOwner.reset();
   impl_->noProgress = {};
   impl_->observations.reset();
   impl_->traceOwnerCount = 0;
