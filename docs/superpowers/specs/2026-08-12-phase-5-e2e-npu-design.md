@@ -1,6 +1,9 @@
 # Phase 5 End-to-End Models, PTO Trace Import, and NPU Design
 
-**Status:** Approved for implementation
+**Status:** Implemented
+
+**Implementation audit:**
+[`phase-5-audit.md`](../../implementation/phase-5-audit.md)
 
 **Date:** 2026-08-12
 
