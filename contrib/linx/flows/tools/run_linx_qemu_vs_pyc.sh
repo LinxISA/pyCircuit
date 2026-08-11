@@ -46,11 +46,6 @@ find_linxcore_root() {
   return 1
 }
 
-LINXCORE_ROOT="$(find_linxcore_root)" || {
-  echo "error: unable to resolve LinxCore root" >&2
-  exit 2
-}
-
 DEFAULT_SRC=""
 for cand in \
   "/Users/zhoubot/linx-isa/emulator/qemu/tests/linxisa/mcopy_mset_basic.s" \
@@ -160,6 +155,10 @@ PYC_KONATA=0 PYC_EXPECT_EXIT=0 PYC_BOOT_PC=0x10000 PYC_COMMIT_TRACE="$PYC_TRACE"
 if [[ ! -s "$PYC_TRACE" ]]; then
   echo "[pyc] primary flow did not emit commit trace; trying LinxCore fallback"
   FALLBACK_USED=1
+  LINXCORE_ROOT="$(find_linxcore_root)" || {
+    echo "error: unable to resolve LinxCore root for fallback" >&2
+    exit 2
+  }
   MEMH="$WORK/test.memh"
   python3 "$ROOT/flows/tools/linxisa/elf_to_memh.py" \
     "$OBJ" \

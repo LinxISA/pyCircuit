@@ -185,6 +185,7 @@ OP_BSTART_VSEQ = 142
 # --- block header descriptors ---
 OP_B_TEXT = 143
 OP_B_IOT = 144
+OP_B_IOS = 145
 OP_B_IOR = 146
 OP_B_DIM = 148
 
@@ -194,10 +195,10 @@ OP_HL_SSRSET = 150
 
 REG_INVALID = 0x3F
 
-# Accepted PTO ISA 0.57.1 TEPL selectors, encoded as (Mode << 5) | Function.
+# Accepted PTO ISA 0.58 TEPL selectors, encoded as (Mode << 5) | Function.
 # Reserved selectors must remain OP_INVALID even though they share the TEPL
 # family mask/match.
-PTO_TEPL_SELECTORS_V0571 = (
+PTO_TEPL_SELECTORS = (
     0,
     1,
     2,
@@ -211,7 +212,6 @@ PTO_TEPL_SELECTORS_V0571 = (
     11,
     12,
     13,
-    14,
     15,
     16,
     17,
@@ -223,6 +223,7 @@ PTO_TEPL_SELECTORS_V0571 = (
     23,
     26,
     27,
+    28,
     32,
     33,
     34,
@@ -236,7 +237,6 @@ PTO_TEPL_SELECTORS_V0571 = (
     43,
     44,
     45,
-    47,
     58,
     59,
     64,
@@ -268,7 +268,6 @@ PTO_TEPL_SELECTORS_V0571 = (
     92,
     93,
     96,
-    97,
     98,
     99,
     100,
@@ -287,15 +286,34 @@ PTO_TEPL_SELECTORS_V0571 = (
     114,
     115,
     116,
-    117,
-    118,
-    119,
-    120,
-    121,
-    122,
-    123,
-    124,
-    125,
+)
+
+PTO_TLSU_HEADER_MATCHES = (
+    0x00011181,
+    0x00111181,
+    0x00211181,
+    0x00311181,
+    0x00411181,
+    0x00511181,
+    0x00611181,
+    0x00711181,
+    0x00811181,
+    0x00D11181,
+)
+
+PTO_CUBE_HEADER_MATCHES = (
+    0x00031181,
+    0x00131181,
+    0x00231181,
+    0x00431181,
+    0x00531181,
+    0x00631181,
+    0x01031181,
+    0x01131181,
+    0x01231181,
+    0x01431181,
+    0x01531181,
+    0x01631181,
 )
 
 ST_IF = 0

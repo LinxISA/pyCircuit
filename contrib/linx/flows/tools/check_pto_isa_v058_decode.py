@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check Linx pyCircuit example decode tables against PTO ISA 0.57.1 headers."""
+"""Check Linx pyCircuit example decode tables against PTO ISA 0.58 headers."""
 
 from __future__ import annotations
 
@@ -32,7 +32,6 @@ EXPECTED_TEPL_SELECTORS = (
     11,
     12,
     13,
-    14,
     15,
     16,
     17,
@@ -44,6 +43,7 @@ EXPECTED_TEPL_SELECTORS = (
     23,
     26,
     27,
+    28,
     32,
     33,
     34,
@@ -57,7 +57,6 @@ EXPECTED_TEPL_SELECTORS = (
     43,
     44,
     45,
-    47,
     58,
     59,
     64,
@@ -89,7 +88,6 @@ EXPECTED_TEPL_SELECTORS = (
     92,
     93,
     96,
-    97,
     98,
     99,
     100,
@@ -108,26 +106,50 @@ EXPECTED_TEPL_SELECTORS = (
     114,
     115,
     116,
-    117,
-    118,
-    119,
-    120,
-    121,
-    122,
-    123,
-    124,
-    125,
+)
+
+EXPECTED_TLSU_HEADER_MATCHES = (
+    0x00011181,
+    0x00111181,
+    0x00211181,
+    0x00311181,
+    0x00411181,
+    0x00511181,
+    0x00611181,
+    0x00711181,
+    0x00811181,
+    0x00D11181,
+)
+
+EXPECTED_CUBE_HEADER_MATCHES = (
+    0x00031181,
+    0x00131181,
+    0x00231181,
+    0x00431181,
+    0x00531181,
+    0x00631181,
+    0x01031181,
+    0x01131181,
+    0x01231181,
+    0x01431181,
+    0x01531181,
+    0x01631181,
 )
 
 REQUIRED_PATTERNS = (
     ("BSTART.TEPL", "mask=0x000FFFFF, match=0x00019181"),
-    ("BSTART.TLOAD", "mask=0x07FFFFFF, match=0x00011181"),
-    ("BSTART.TMATMUL", "mask=0x07FFFFFF, match=0x00031181"),
+    ("B.IOS", "mask=0xF00871FF, match=0x00001013"),
+    ("B.IOT two-source", "mask=0x0000707F, match=0x00004013"),
+    ("B.IOT one-source", "mask=0xFC00707F, match=0x00005013"),
+    ("B.IOT destination-only", "mask=0xFFF0707F, match=0x00006013"),
 )
 
 FORBIDDEN_PATTERNS = (
     "mask=0x060FFFFF, match=0x00011181",
     "mask=0x060FFFFF, match=0x00031181",
+    "mask=0x0000607F, match=0x00004013",
+    "mask=0xC03FFFFF, match=0x00006013",
+    "PTO_TEPL_SELECTORS_V0571",
 )
 
 FORBIDDEN_REGEXES = (
@@ -135,16 +157,20 @@ FORBIDDEN_REGEXES = (
     re.compile(r"\bBSTART\.CUBE\b"),
 )
 
-DELETED_TILE_OPS = (
-    "TFMA",
-    "TFMOD",
-    "TFMODS",
-    "TADDC",
-    "TSUBC",
-    "TADDSC",
-    "TSUBSC",
-    "TLRELU",
-    "TRANDOM",
+RETIRED_TILE_OPS = (
+    "TPRELU",
+    "TAXPY",
+    "TDEINTERLEAVE",
+    "TINTERLEAVE",
+    "TGATHERB",
+    "TRESHAPE",
+    "TALLOC",
+    "TFREE",
+    "TPUSH",
+    "TPOP",
+    "TPARTARGMAX",
+    "TPARTARGMIN",
+    "ACCCVT",
 )
 
 
@@ -168,27 +194,41 @@ def main() -> int:
                 errors.append(
                     f"{decode_file}: stale 0.56-era generic decode mnemonic remains: {regex.pattern}"
                 )
-        if "tepl_selector_valid" not in text or "PTO_TEPL_SELECTORS_V0571" not in text:
+        if "tepl_selector_valid" not in text or "PTO_TEPL_SELECTORS" not in text:
             errors.append(
                 f"{decode_file}: TEPL family decode is not gated by the exact accepted selector set"
             )
+        if (
+            "PTO_TLSU_HEADER_MATCHES" not in text
+            or "PTO_CUBE_HEADER_MATCHES" not in text
+        ):
+            errors.append(
+                f"{decode_file}: TLSU/CUBE header decode is not gated by the exact named-form sets"
+            )
 
+    expected_constants = {
+        "PTO_TEPL_SELECTORS": EXPECTED_TEPL_SELECTORS,
+        "PTO_TLSU_HEADER_MATCHES": EXPECTED_TLSU_HEADER_MATCHES,
+        "PTO_CUBE_HEADER_MATCHES": EXPECTED_CUBE_HEADER_MATCHES,
+    }
     for isa_file in ISA_FILES:
         tree = ast.parse(isa_file.read_text(encoding="utf-8"), filename=str(isa_file))
-        actual = None
+        actual_constants: dict[str, tuple[int, ...]] = {}
         for node in tree.body:
             if (
                 isinstance(node, ast.Assign)
                 and len(node.targets) == 1
                 and isinstance(node.targets[0], ast.Name)
-                and node.targets[0].id == "PTO_TEPL_SELECTORS_V0571"
+                and node.targets[0].id in expected_constants
             ):
-                actual = tuple(ast.literal_eval(node.value))
-                break
-        if actual != EXPECTED_TEPL_SELECTORS:
-            errors.append(
-                f"{isa_file}: accepted TEPL selectors differ from the exact 98-op PTO map"
-            )
+                actual_constants[node.targets[0].id] = tuple(
+                    ast.literal_eval(node.value)
+                )
+        for name, expected in expected_constants.items():
+            if actual_constants.get(name) != expected:
+                errors.append(
+                    f"{isa_file}: {name} differs from the exact PTO ISA 0.58 map"
+                )
 
     search_roots = (
         ROOT / "contrib/linx/designs/examples/linx_cpu_pyc",
@@ -197,10 +237,10 @@ def main() -> int:
     for search_root in search_roots:
         for path in search_root.rglob("*.py"):
             text = path.read_text(encoding="utf-8")
-            for opname in DELETED_TILE_OPS:
+            for opname in RETIRED_TILE_OPS:
                 if opname in text:
                     errors.append(
-                        f"{path}: deleted PTO ISA 0.57.1 tile op remains: {opname}"
+                        f"{path}: retired PTO ISA 0.58 tile op remains: {opname}"
                     )
 
     if errors:
@@ -208,7 +248,7 @@ def main() -> int:
             logging.error(error)
         return 1
 
-    logging.info("pyCircuit PTO ISA 0.57.1 decode guard: ok")
+    logging.info("pyCircuit PTO ISA 0.58 decode guard: ok")
     return 0
 
 

@@ -6,6 +6,7 @@ from pycircuit import (
     CycleAwareSignal,
     cas,
     mux,
+    u,
     wire_of,
 )
 
@@ -73,14 +74,14 @@ def build(
 
     for i in range(nr_n):
         ra = raddr[i]
-        ra_ext = ra.zext(cmp_w)
+        ra_ext = cas(domain, wire_of(ra) + u(cmp_w, 0), cycle=ra.cycle)
         is_valid = ra_ext < cas(domain, m.const(ptag_n, width=cmp_w), cycle=0)
         is_const = ra_ext < cas(domain, m.const(const_n, width=cmp_w), cycle=0)
 
         if ptag_w > 32:
             const32 = ra[0:32]
         else:
-            const32 = ra.zext(32)
+            const32 = cas(domain, wire_of(ra) + u(32, 0), cycle=ra.cycle)
         const64 = cas(
             domain,
             m.cat(wire_of(const32), wire_of(const32)),

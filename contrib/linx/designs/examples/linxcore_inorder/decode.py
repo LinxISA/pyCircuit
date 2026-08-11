@@ -15,6 +15,7 @@ from .isa import (
     OP_ANDIW,
     OP_ANDW,
     OP_B_IOR,
+    OP_B_IOS,
     OP_B_IOT,
     OP_B_TEXT,
     OP_BSTART_STD_CALL,
@@ -150,7 +151,9 @@ from .isa import (
     OP_XOR,
     OP_XORIW,
     OP_XORW,
-    PTO_TEPL_SELECTORS_V0571,
+    PTO_CUBE_HEADER_MATCHES,
+    PTO_TEPL_SELECTORS,
+    PTO_TLSU_HEADER_MATCHES,
     REG_INVALID,
 )
 from .util import masked_eq
@@ -431,12 +434,12 @@ def decode_window(m: Circuit, window: Wire) -> Decode:
         srcr = rs2_32
         imm = unsigned(srcp_32)
     # Decoupled/tile/vector headers.
-    # PTO ISA 0.57.1 carries TEPL directly as Mode[1:0] + Function[4:0].
+    # PTO ISA 0.58 carries TEPL directly as Mode[1:0] + Function[4:0].
     # The pyc example core still reuses one decoupled-header control path
     # (OP_BSTART_TMA) for all public direct tile/vector header families.
     tepl_selector = unsigned(insn32[20:27])
-    tepl_selector_valid = tepl_selector == PTO_TEPL_SELECTORS_V0571[0]
-    for selector in PTO_TEPL_SELECTORS_V0571[1:]:
+    tepl_selector_valid = tepl_selector == PTO_TEPL_SELECTORS[0]
+    for selector in PTO_TEPL_SELECTORS[1:]:
         tepl_selector_valid = tepl_selector_valid | (tepl_selector == selector)
     cond = (
         in32
@@ -446,9 +449,14 @@ def decode_window(m: Circuit, window: Wire) -> Decode:
     if cond:
         op = OP_BSTART_TMA
         len_bytes = 4
-    cond = in32 & masked_eq(
-        m, insn32, mask=0x07FFFFFF, match=0x00011181
-    )  # BSTART.TLOAD
+    tile_header_valid = masked_eq(
+        m, insn32, mask=0x07FFFFFF, match=PTO_TLSU_HEADER_MATCHES[0]
+    )
+    for header_match in PTO_TLSU_HEADER_MATCHES[1:] + PTO_CUBE_HEADER_MATCHES:
+        tile_header_valid = tile_header_valid | masked_eq(
+            m, insn32, mask=0x07FFFFFF, match=header_match
+        )
+    cond = in32 & tile_header_valid
     if cond:
         op = OP_BSTART_TMA
         len_bytes = 4
@@ -468,12 +476,6 @@ def decode_window(m: Circuit, window: Wire) -> Decode:
     if cond:
         op = OP_BSTART_TMA
         len_bytes = 4
-    cond = in32 & masked_eq(
-        m, insn32, mask=0x07FFFFFF, match=0x00031181
-    )  # BSTART.TMATMUL
-    if cond:
-        op = OP_BSTART_TMA
-        len_bytes = 4
     # Decoupled body pointer: B.TEXT (simm25 in halfwords; target = PC + (simm25 << 1)).
     # QEMU metadata: mask=0x7f, match=0x03.
     cond = in32 & masked_eq(m, insn32, mask=0x0000007F, match=0x00000003)
@@ -481,11 +483,19 @@ def decode_window(m: Circuit, window: Wire) -> Decode:
         op = OP_B_TEXT
         len_bytes = 4
         imm = insn32[7:32].as_signed()
-    cond = in32 & masked_eq(m, insn32, mask=0x0000607F, match=0x00004013)
+    cond = in32 & masked_eq(m, insn32, mask=0xF00871FF, match=0x00001013)
+    if cond:
+        op = OP_B_IOS
+        len_bytes = 4
+    cond = in32 & masked_eq(m, insn32, mask=0x0000707F, match=0x00004013)
     if cond:
         op = OP_B_IOT
         len_bytes = 4
-    cond = in32 & masked_eq(m, insn32, mask=0xC03FFFFF, match=0x00006013)
+    cond = in32 & masked_eq(m, insn32, mask=0xFC00707F, match=0x00005013)
+    if cond:
+        op = OP_B_IOT
+        len_bytes = 4
+    cond = in32 & masked_eq(m, insn32, mask=0xFFF0707F, match=0x00006013)
     if cond:
         op = OP_B_IOT
         len_bytes = 4
