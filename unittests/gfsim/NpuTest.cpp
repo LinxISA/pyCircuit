@@ -119,6 +119,15 @@ void commit(NpuDependencyTracker &tracker, Epoch epoch) {
   tracker.doXfer(epoch);
 }
 
+void commit(NpuExecutionPipeline &pipeline, Epoch epoch) {
+  pipeline.doArbitrate(epoch);
+  pipeline.doXfer(epoch);
+}
+
+NpuIssueEntry issueEntry(NpuInstruction instruction, ObjectId objectId) {
+  return {.instruction = std::move(instruction), .stableObjectId = objectId};
+}
+
 struct RecorderSink final : ObservationSink {
   ObservationRecorder recorder;
   bool proposeObservation(EventProposal proposal) override {
@@ -467,6 +476,262 @@ TEST(NpuDependencyTrackerTest,
   };
 
   EXPECT_EQ(run({0, 1, 2}), run({2, 0, 1}));
+}
+
+TEST(NpuExecutionPipelineTest, FrozenLatenciesCompleteFourEnginesPrecisely) {
+  NpuExecutionPipeline pipeline("execution", 50, nullptr,
+                                {.scalarUnits = 1,
+                                 .vectorUnits = 1,
+                                 .cubeUnits = 1,
+                                 .tmaUnits = 1,
+                                 .memoryRequests = 2,
+                                 .scratchpadTiles = 8});
+  const std::array entries = {
+      issueEntry(tileInstruction("TASSIGN", 1, 0, {}, {"0x10"}), 10),
+      issueEntry(tileInstruction("TADD", 2, 0, {}, {"0x20"}), 11),
+      issueEntry(tileInstruction("TMATMUL", 3, 0, {}, {"0x30"}), 12),
+      issueEntry(tileInstruction("TLOAD", 4, 0, {"0x100"}, {"0x40"}), 13),
+  };
+  for (const NpuIssueEntry &entry : entries)
+    ASSERT_TRUE(pipeline.proposeAdmit(entry.instruction));
+  commit(pipeline, {0, 0});
+  for (const NpuIssueEntry &entry : entries)
+    ASSERT_TRUE(pipeline.proposeExecute(entry, {1, 0}));
+  commit(pipeline, {1, 0});
+
+  EXPECT_EQ(pipeline.completionEpoch(1), (Epoch{2, 0}));
+  EXPECT_EQ(pipeline.completionEpoch(2), (Epoch{3, 0}));
+  EXPECT_EQ(pipeline.completionEpoch(3), (Epoch{5, 0}));
+  EXPECT_EQ(pipeline.completionEpoch(4), (Epoch{4, 0}));
+
+  pipeline.doWork({2, 0});
+  commit(pipeline, {2, 0});
+  ASSERT_EQ(pipeline.completed().size(), 1u);
+  EXPECT_EQ(pipeline.completed().front().instruction.sequenceId, 1u);
+  pipeline.doWork({3, 0});
+  commit(pipeline, {3, 0});
+  ASSERT_EQ(pipeline.completed().size(), 1u);
+  EXPECT_EQ(pipeline.completed().front().instruction.sequenceId, 2u);
+  pipeline.doWork({4, 0});
+  commit(pipeline, {4, 0});
+  ASSERT_EQ(pipeline.completed().size(), 1u);
+  EXPECT_EQ(pipeline.completed().front().instruction.sequenceId, 4u);
+  pipeline.doWork({5, 0});
+  commit(pipeline, {5, 0});
+  ASSERT_EQ(pipeline.completed().size(), 1u);
+  EXPECT_EQ(pipeline.completed().front().instruction.sequenceId, 3u);
+}
+
+TEST(NpuExecutionPipelineTest, UnitPressureRejectsWithoutMutatingIssue) {
+  NpuExecutionPipeline pipeline("execution", 50, nullptr,
+                                {.scalarUnits = 1,
+                                 .vectorUnits = 1,
+                                 .cubeUnits = 1,
+                                 .tmaUnits = 1,
+                                 .memoryRequests = 1,
+                                 .scratchpadTiles = 2});
+  const NpuIssueEntry first =
+      issueEntry(tileInstruction("TADD", 1, 0, {}, {"0x10"}), 10);
+  const NpuIssueEntry blocked =
+      issueEntry(tileInstruction("TADD", 2, 0, {}, {"0x20"}), 11);
+  const NpuIssueEntry original = blocked;
+  ASSERT_TRUE(pipeline.proposeAdmit(first.instruction));
+  ASSERT_TRUE(pipeline.proposeAdmit(blocked.instruction));
+  commit(pipeline, {0, 0});
+
+  EXPECT_TRUE(pipeline.proposeExecute(first, {1, 0}));
+  EXPECT_FALSE(pipeline.proposeExecute(blocked, {1, 0}));
+  EXPECT_EQ(blocked, original);
+  commit(pipeline, {1, 0});
+  EXPECT_EQ(pipeline.activeExecutions(NpuEngineClass::Vector), 1u);
+}
+
+TEST(NpuExecutionPipelineTest, TmaUsesExactAddressAndCorrelation) {
+  NpuExecutionPipeline pipeline("execution", 50, nullptr,
+                                {.scalarUnits = 1,
+                                 .vectorUnits = 1,
+                                 .cubeUnits = 1,
+                                 .tmaUnits = 1,
+                                 .memoryRequests = 1,
+                                 .scratchpadTiles = 2});
+  const NpuIssueEntry load =
+      issueEntry(tileInstruction("TLOAD", 7, 0, {"0x100"}, {"0x0"}), 10);
+  ASSERT_TRUE(pipeline.proposeAdmit(load.instruction));
+  commit(pipeline, {0, 0});
+  ASSERT_TRUE(pipeline.proposeTraceExhausted());
+  ASSERT_TRUE(pipeline.proposeExecute(load, {1, 0}));
+  commit(pipeline, {1, 0});
+
+  ASSERT_EQ(pipeline.memoryRequests().size(), 1u);
+  EXPECT_EQ(pipeline.memoryRequests().front().sequenceId, 7u);
+  EXPECT_EQ(pipeline.memoryRequests().front().correlationId, 7u);
+  EXPECT_EQ(pipeline.memoryRequests().front().address, 0x100u);
+  EXPECT_FALSE(pipeline.memoryRequests().front().write);
+
+  pipeline.doWork({2, 0});
+  commit(pipeline, {2, 0});
+  pipeline.doWork({4, 0});
+  commit(pipeline, {4, 0});
+  ASSERT_EQ(pipeline.memoryResponses().size(), 1u);
+  EXPECT_EQ(pipeline.memoryResponses().front().correlationId, 7u);
+  EXPECT_TRUE(pipeline.scratchpadContains("block/0/tile/0x0"));
+  EXPECT_FALSE(pipeline.complete());
+  pipeline.doWork({5, 0});
+  commit(pipeline, {5, 0});
+  EXPECT_TRUE(pipeline.complete());
+}
+
+TEST(NpuExecutionPipelineTest, StoreUsesScratchpadValueAndGlobalAddress) {
+  NpuExecutionPipeline pipeline("execution", 50, nullptr,
+                                {.scalarUnits = 1,
+                                 .vectorUnits = 1,
+                                 .cubeUnits = 1,
+                                 .tmaUnits = 1,
+                                 .memoryRequests = 1,
+                                 .scratchpadTiles = 2});
+  const NpuIssueEntry produce =
+      issueEntry(tileInstruction("TASSIGN", 1, 0, {}, {"0x0"}), 10);
+  const NpuIssueEntry store =
+      issueEntry(tileInstruction("TSTORE", 2, 0, {"0x0"}, {"0x200"}), 11);
+  ASSERT_TRUE(pipeline.proposeAdmit(produce.instruction));
+  ASSERT_TRUE(pipeline.proposeAdmit(store.instruction));
+  commit(pipeline, {0, 0});
+  ASSERT_TRUE(pipeline.proposeExecute(produce, {1, 0}));
+  commit(pipeline, {1, 0});
+  pipeline.doWork({2, 0});
+  commit(pipeline, {2, 0});
+  ASSERT_TRUE(pipeline.proposeExecute(store, {3, 0}));
+  commit(pipeline, {3, 0});
+
+  ASSERT_EQ(pipeline.memoryRequests().size(), 1u);
+  EXPECT_TRUE(pipeline.memoryRequests().front().write);
+  EXPECT_EQ(pipeline.memoryRequests().front().address, 0x200u);
+  EXPECT_EQ(pipeline.memoryRequests().front().tileIdentity, "block/0/tile/0x0");
+  pipeline.doWork({4, 0});
+  commit(pipeline, {4, 0});
+  EXPECT_EQ(pipeline.completionEpoch(2), (Epoch{7, 0}));
+  pipeline.doWork({7, 0});
+  commit(pipeline, {7, 0});
+  EXPECT_EQ(pipeline.globalMemoryValue(0x200), 1u);
+  EXPECT_FALSE(pipeline.scratchpadContains("block/0/tile/0x200"));
+}
+
+TEST(NpuExecutionPipelineTest, MemoryOrderingIgnoresExecuteProposalOrder) {
+  NpuExecutionPipeline pipeline("execution", 50, nullptr,
+                                {.scalarUnits = 1,
+                                 .vectorUnits = 1,
+                                 .cubeUnits = 1,
+                                 .tmaUnits = 2,
+                                 .memoryRequests = 2,
+                                 .scratchpadTiles = 4});
+  const NpuIssueEntry first =
+      issueEntry(tileInstruction("TLOAD", 1, 0, {"0x100"}, {"0x10"}), 11);
+  const NpuIssueEntry second =
+      issueEntry(tileInstruction("TLOAD", 2, 0, {"0x200"}, {"0x20"}), 10);
+  ASSERT_TRUE(pipeline.proposeAdmit(first.instruction));
+  ASSERT_TRUE(pipeline.proposeAdmit(second.instruction));
+  commit(pipeline, {0, 0});
+  ASSERT_TRUE(pipeline.proposeExecute(second, {1, 0}));
+  ASSERT_TRUE(pipeline.proposeExecute(first, {1, 0}));
+  commit(pipeline, {1, 0});
+
+  ASSERT_EQ(pipeline.memoryRequests().size(), 2u);
+  EXPECT_EQ(pipeline.memoryRequests()[0].correlationId, 1u);
+  EXPECT_EQ(pipeline.memoryRequests()[1].correlationId, 2u);
+  pipeline.doWork({2, 0});
+  commit(pipeline, {2, 0});
+  pipeline.doWork({4, 0});
+  commit(pipeline, {4, 0});
+  ASSERT_EQ(pipeline.memoryResponses().size(), 2u);
+  EXPECT_EQ(pipeline.memoryResponses()[0].correlationId, 1u);
+  EXPECT_EQ(pipeline.memoryResponses()[1].correlationId, 2u);
+}
+
+TEST(NpuExecutionPipelineTest, CompletionIsDrivenByScheduledRuntimeEvent) {
+  SimSystem system;
+  NpuExecutionPipeline pipeline("execution", 50, nullptr,
+                                {.scalarUnits = 1,
+                                 .vectorUnits = 1,
+                                 .cubeUnits = 1,
+                                 .tmaUnits = 1,
+                                 .memoryRequests = 1,
+                                 .scratchpadTiles = 2},
+                                &system);
+  system.registerObject(&pipeline);
+  const NpuIssueEntry entry =
+      issueEntry(tileInstruction("TADD", 1, 0, {}, {"0x10"}), 10);
+  ASSERT_TRUE(pipeline.proposeAdmit(entry.instruction));
+  commit(pipeline, {0, 0});
+  ASSERT_TRUE(pipeline.proposeExecute(entry, {0, 0}));
+  commit(pipeline, {0, 0});
+
+  EXPECT_EQ(system.nextEvent(), std::nullopt);
+  ASSERT_TRUE(system.step());
+  ASSERT_TRUE(system.nextEvent());
+  EXPECT_EQ(system.nextEvent()->readyTime, (Epoch{2, 0}));
+  EXPECT_EQ(system.nextEvent()->targetId, 50u);
+  EXPECT_FALSE(system.step());
+  ASSERT_EQ(pipeline.completed().size(), 1u);
+  EXPECT_EQ(pipeline.completed().front().instruction.sequenceId, 1u);
+}
+
+TEST(NpuExecutionPipelineTest,
+     OutOfOrderCompletionStillRetiresInBlockSequenceOrder) {
+  NpuExecutionPipeline pipeline("execution", 50, nullptr,
+                                {.scalarUnits = 1,
+                                 .vectorUnits = 1,
+                                 .cubeUnits = 1,
+                                 .tmaUnits = 1,
+                                 .memoryRequests = 1,
+                                 .scratchpadTiles = 4});
+  const NpuIssueEntry slow =
+      issueEntry(tileInstruction("TMATMUL", 1, 0, {}, {"0x10"}), 10);
+  const NpuIssueEntry fast =
+      issueEntry(tileInstruction("TASSIGN", 2, 0, {}, {"0x20"}), 11);
+  ASSERT_TRUE(pipeline.proposeAdmit(slow.instruction));
+  ASSERT_TRUE(pipeline.proposeAdmit(fast.instruction));
+  commit(pipeline, {0, 0});
+  ASSERT_TRUE(pipeline.proposeExecute(slow, {1, 0}));
+  ASSERT_TRUE(pipeline.proposeExecute(fast, {1, 0}));
+  commit(pipeline, {1, 0});
+
+  pipeline.doWork({2, 0});
+  commit(pipeline, {2, 0});
+  ASSERT_EQ(pipeline.completed().size(), 1u);
+  EXPECT_EQ(pipeline.completed().front().instruction.sequenceId, 2u);
+  EXPECT_TRUE(pipeline.retired().empty());
+  EXPECT_EQ(pipeline.architecturalResult(), NpuArchitecturalResult{});
+  pipeline.doWork({5, 0});
+  commit(pipeline, {5, 0});
+  ASSERT_EQ(pipeline.retired().size(), 2u);
+  EXPECT_EQ(pipeline.retired()[0].sequenceId, 1u);
+  EXPECT_EQ(pipeline.retired()[1].sequenceId, 2u);
+  EXPECT_EQ(pipeline.retired()[0].timestamps.retired, 5u);
+  EXPECT_EQ(pipeline.retired()[1].timestamps.retired, 5u);
+  EXPECT_EQ(pipeline.architecturalResult().retiredInstructions, 2u);
+  EXPECT_EQ(pipeline.architecturalResult().retiredSequenceIds,
+            (std::vector<uint64_t>{1, 2}));
+}
+
+TEST(NpuExecutionPipelineTest, CompletionNeedsTraceExhaustionAndQuiescence) {
+  NpuExecutionPipeline pipeline("execution", 50, nullptr,
+                                {.scalarUnits = 1,
+                                 .vectorUnits = 1,
+                                 .cubeUnits = 1,
+                                 .tmaUnits = 1,
+                                 .memoryRequests = 1,
+                                 .scratchpadTiles = 2});
+  const NpuIssueEntry entry =
+      issueEntry(tileInstruction("TASSIGN", 1, 0, {}, {"0x10"}), 10);
+  ASSERT_TRUE(pipeline.proposeAdmit(entry.instruction));
+  commit(pipeline, {0, 0});
+  ASSERT_TRUE(pipeline.proposeTraceExhausted());
+  ASSERT_TRUE(pipeline.proposeExecute(entry, {1, 0}));
+  commit(pipeline, {1, 0});
+  EXPECT_FALSE(pipeline.complete());
+  pipeline.doWork({2, 0});
+  commit(pipeline, {2, 0});
+  EXPECT_TRUE(pipeline.complete());
 }
 
 } // namespace

@@ -1,6 +1,9 @@
 #include "gfsim/npu.h"
 
+#include "gfsim/components.h"
+
 #include <array>
+#include <charconv>
 #include <cstddef>
 #include <initializer_list>
 #include <limits>
@@ -225,6 +228,9 @@ bool isScalarValue(const PtoValue &value) {
 
 struct TileAttribute {
   std::string_view address;
+  std::string_view type;
+  std::string_view layout;
+  const PtoValue::Array *shape = nullptr;
 };
 
 std::optional<TileAttribute> parseTile(const PtoValue &value) {
@@ -248,7 +254,10 @@ std::optional<TileAttribute> parseTile(const PtoValue &value) {
   for (const PtoValue &dimension : *dimensions)
     if (!get<int64_t>(dimension) && !get<uint64_t>(dimension))
       return std::nullopt;
-  return TileAttribute{.address = *addressText};
+  return TileAttribute{.address = *addressText,
+                       .type = *dtypeText,
+                       .layout = *layoutText,
+                       .shape = dimensions};
 }
 
 struct ScalarAttribute {
@@ -402,6 +411,13 @@ NpuDecodeResult NpuDecoder::decode(const PtoTraceRecord &record) const {
             "ordered tile operand does not match its imported identity");
       (input ? instruction.inputTiles : instruction.outputTiles)
           .push_back(std::move(identity));
+      (input ? instruction.inputTileDescriptors
+             : instruction.outputTileDescriptors)
+          .push_back({.identity = tileIdentity(*blockId, tile->address),
+                      .address = std::string(tile->address),
+                      .type = std::string(tile->type),
+                      .layout = std::string(tile->layout),
+                      .shape = *tile->shape});
       continue;
     }
     if (*role == "scalar_input") {
@@ -850,6 +866,670 @@ void NpuDependencyTracker::reset() {
   totalIssues_ = 0;
   totalDependencyWakeups_ = 0;
   lastUpdate_ = {};
+  clearRuntimeFailureCode();
+}
+
+struct NpuExecutionPipeline::Impl {
+  struct RobEntry {
+    NpuInstruction instruction;
+    bool completed = false;
+  };
+
+  struct ActiveExecution {
+    NpuIssueEntry entry;
+    Epoch issueEpoch;
+    Epoch readyEpoch;
+    size_t unitIndex = 0;
+    bool memoryDelivered = false;
+    std::optional<NpuMemoryRequest> memoryRequest;
+  };
+
+  explicit Impl(NpuExecutionConfig configuration)
+      : config(configuration),
+        memoryProtocol("memory_protocol", kInvalidObjectId, nullptr,
+                       configuration.memoryRequests),
+        memoryController("memory_controller", kInvalidObjectId, nullptr,
+                         static_cast<uint32_t>(std::min<size_t>(
+                             configuration.memoryRequests,
+                             std::numeric_limits<uint32_t>::max()))) {}
+
+  NpuExecutionConfig config;
+  SimSystem *system = nullptr;
+  RequestResponse<NpuMemoryRequest, NpuMemoryResponse> memoryProtocol;
+  Resource memoryController;
+  std::map<uint64_t, std::vector<RobEntry>> rob;
+  std::map<uint64_t, uint64_t> lastAdmittedSequence;
+  std::vector<NpuInstruction> admissionProposals;
+  std::vector<ActiveExecution> executionProposals;
+  std::map<uint64_t, ActiveExecution> active;
+  std::vector<uint64_t> deliveryProposals;
+  std::vector<uint64_t> completionProposals;
+  bool traceExhaustedProposal = false;
+  bool traceExhausted = false;
+  std::set<uint64_t> executedSequences;
+  std::vector<NpuIssueEntry> completed;
+  std::vector<NpuInstruction> retired;
+  std::vector<NpuMemoryRequest> memoryRequests;
+  std::vector<NpuMemoryResponse> memoryResponses;
+  std::map<std::string, uint64_t> scratchpad;
+  std::map<uint64_t, uint64_t> globalMemory;
+  NpuArchitecturalResult result;
+  std::array<size_t, 4> unitHighWatermarks{};
+  uint64_t totalExecutions = 0;
+  uint64_t totalCompletions = 0;
+  uint64_t totalUnitStalls = 0;
+  uint64_t unitStallProposals = 0;
+  uint64_t totalMemoryRequests = 0;
+  Epoch lastUpdate;
+};
+
+namespace {
+
+constexpr uint32_t kNpuCompletionEvent = 0x4e505501;
+constexpr uint32_t kNpuMemoryServiceEvent = 0x4e505502;
+constexpr uint32_t kNpuMemoryCleanupEvent = 0x4e505503;
+
+size_t configuredUnits(const NpuExecutionConfig &config,
+                       NpuEngineClass engine) {
+  switch (engine) {
+  case NpuEngineClass::Scalar:
+    return config.scalarUnits;
+  case NpuEngineClass::Vector:
+    return config.vectorUnits;
+  case NpuEngineClass::Cube:
+    return config.cubeUnits;
+  case NpuEngineClass::Tma:
+    return config.tmaUnits;
+  }
+  return 0;
+}
+
+std::optional<uint64_t> parseAddress(std::string_view text) {
+  if (text.size() < 3 || !text.starts_with("0x"))
+    return std::nullopt;
+  uint64_t result = 0;
+  auto [position, error] =
+      std::from_chars(text.data() + 2, text.data() + text.size(), result, 16);
+  if (error != std::errc{} || position != text.data() + text.size())
+    return std::nullopt;
+  return result;
+}
+
+void updateDigest(uint64_t &digest, const NpuInstruction &instruction) {
+  constexpr uint64_t kPrime = 1099511628211ULL;
+  auto append = [&](uint8_t byte) {
+    digest ^= byte;
+    digest *= kPrime;
+  };
+  auto appendInteger = [&](uint64_t value) {
+    for (unsigned shift = 0; shift != 64; shift += 8)
+      append(static_cast<uint8_t>(value >> shift));
+  };
+  appendInteger(instruction.sequenceId);
+  appendInteger(instruction.blockId);
+  for (char character : instruction.opcode)
+    append(static_cast<uint8_t>(character));
+  append(0);
+  for (const std::string &tile : instruction.outputTiles) {
+    for (char character : tile)
+      append(static_cast<uint8_t>(character));
+    append(0);
+  }
+}
+
+} // namespace
+
+NpuExecutionPipeline::NpuExecutionPipeline(std::string name, ObjectId id,
+                                           SimObject *parent,
+                                           NpuExecutionConfig config,
+                                           SimSystem *system,
+                                           ObservationSink *observations)
+    : SimObject(ObjectKind::Compute, std::move(name), id, parent, observations),
+      impl_(std::make_unique<Impl>(config)) {
+  impl_->system = system;
+  if (config.memoryRequests > std::numeric_limits<uint32_t>::max())
+    setRuntimeFailureCode("npu_memory_capacity_invalid");
+}
+
+NpuExecutionPipeline::~NpuExecutionPipeline() = default;
+
+bool NpuExecutionPipeline::proposeAdmit(const NpuInstruction &instruction) {
+  auto matches = [&](const NpuInstruction &candidate) {
+    return candidate.sequenceId == instruction.sequenceId;
+  };
+  if (std::ranges::any_of(impl_->admissionProposals, matches))
+    return false;
+  if (auto previous = impl_->lastAdmittedSequence.find(instruction.blockId);
+      previous != impl_->lastAdmittedSequence.end() &&
+      instruction.sequenceId <= previous->second)
+    return false;
+  for (const auto &[blockId, entries] : impl_->rob)
+    if (std::ranges::any_of(entries, [&](const Impl::RobEntry &entry) {
+          return entry.instruction.sequenceId == instruction.sequenceId;
+        }))
+      return false;
+  impl_->admissionProposals.push_back(instruction);
+  return true;
+}
+
+uint64_t
+NpuExecutionPipeline::executionLatency(const NpuInstruction &instruction) {
+  switch (instruction.engine) {
+  case NpuEngineClass::Scalar:
+    return 1;
+  case NpuEngineClass::Vector:
+    if (instruction.opcode == "TEXP" || instruction.opcode == "TLOG" ||
+        instruction.opcode == "TSQRT" || instruction.opcode == "TRSQRT")
+      return 3;
+    return 2;
+  case NpuEngineClass::Cube:
+    if (instruction.opcode.starts_with("TMATMUL_MX"))
+      return 5;
+    return 4;
+  case NpuEngineClass::Tma:
+    if (instruction.opcode == "TSTORE" || instruction.opcode == "TSTORE_FP")
+      return 4;
+    return 3;
+  }
+  return 1;
+}
+
+bool NpuExecutionPipeline::proposeExecute(const NpuIssueEntry &entry,
+                                          Epoch issueEpoch) {
+  const uint64_t sequenceId = entry.instruction.sequenceId;
+  const NpuInstruction *admitted = nullptr;
+  for (const auto &[blockId, entries] : impl_->rob)
+    for (const Impl::RobEntry &rob : entries)
+      if (rob.instruction.sequenceId == sequenceId)
+        admitted = &rob.instruction;
+  if (!admitted || impl_->executedSequences.contains(sequenceId) ||
+      impl_->active.contains(sequenceId) ||
+      std::ranges::any_of(impl_->executionProposals,
+                          [&](const Impl::ActiveExecution &proposal) {
+                            return proposal.entry.instruction.sequenceId ==
+                                   sequenceId;
+                          }))
+    return false;
+  NpuInstruction admittedIdentity = *admitted;
+  NpuInstruction issuedIdentity = entry.instruction;
+  admittedIdentity.timestamps = {};
+  issuedIdentity.timestamps = {};
+  if (admittedIdentity != issuedIdentity) {
+    setRuntimeFailureCode("npu_execution_identity_mismatch");
+    return false;
+  }
+
+  size_t occupied = activeExecutions(entry.instruction.engine);
+  occupied += std::ranges::count_if(
+      impl_->executionProposals, [&](const Impl::ActiveExecution &proposal) {
+        return proposal.entry.instruction.engine == entry.instruction.engine;
+      });
+  if (occupied >= configuredUnits(impl_->config, entry.instruction.engine)) {
+    ++impl_->unitStallProposals;
+    return false;
+  }
+
+  const uint64_t latency = executionLatency(entry.instruction);
+  if (issueEpoch.time > std::numeric_limits<uint64_t>::max() - latency) {
+    setRuntimeFailureCode("npu_execution_time_overflow");
+    return false;
+  }
+  Epoch readyEpoch{issueEpoch.time + latency, 0};
+  size_t unit = 0;
+  auto occupiedUnit = [&](size_t candidate) {
+    return std::ranges::any_of(
+               impl_->active,
+               [&](const auto &active) {
+                 return active.second.entry.instruction.engine ==
+                            entry.instruction.engine &&
+                        active.second.unitIndex == candidate;
+               }) ||
+           std::ranges::any_of(impl_->executionProposals,
+                               [&](const Impl::ActiveExecution &proposal) {
+                                 return proposal.entry.instruction.engine ==
+                                            entry.instruction.engine &&
+                                        proposal.unitIndex == candidate;
+                               });
+  };
+  while (occupiedUnit(unit))
+    ++unit;
+
+  Impl::ActiveExecution proposal{.entry = entry,
+                                 .issueEpoch = issueEpoch,
+                                 .readyEpoch = readyEpoch,
+                                 .unitIndex = unit};
+  const bool store = entry.instruction.opcode.starts_with("TSTORE");
+  std::set<std::string> pendingTiles;
+  for (const auto &[activeSequence, active] : impl_->active)
+    if (!active.entry.instruction.opcode.starts_with("TSTORE"))
+      for (const NpuTileDescriptor &tile :
+           active.entry.instruction.outputTileDescriptors)
+        if (!impl_->scratchpad.contains(tile.identity))
+          pendingTiles.insert(tile.identity);
+  for (const Impl::ActiveExecution &pending : impl_->executionProposals)
+    if (!pending.entry.instruction.opcode.starts_with("TSTORE"))
+      for (const NpuTileDescriptor &tile :
+           pending.entry.instruction.outputTileDescriptors)
+        if (!impl_->scratchpad.contains(tile.identity))
+          pendingTiles.insert(tile.identity);
+  if (!store)
+    for (const NpuTileDescriptor &tile :
+         entry.instruction.outputTileDescriptors)
+      if (!impl_->scratchpad.contains(tile.identity))
+        pendingTiles.insert(tile.identity);
+  if (impl_->scratchpad.size() + pendingTiles.size() >
+      impl_->config.scratchpadTiles) {
+    ++impl_->unitStallProposals;
+    return false;
+  }
+  if (store && (entry.instruction.inputTileDescriptors.empty() ||
+                !impl_->scratchpad.contains(
+                    entry.instruction.inputTileDescriptors.front().identity))) {
+    setRuntimeFailureCode("npu_scratchpad_input_missing");
+    return false;
+  }
+
+  if (entry.instruction.engine == NpuEngineClass::Tma) {
+    size_t memoryOccupied =
+        std::ranges::count_if(impl_->active, [](const auto &active) {
+          return active.second.memoryRequest.has_value();
+        });
+    memoryOccupied += std::ranges::count_if(
+        impl_->executionProposals, [](const Impl::ActiveExecution &pending) {
+          return pending.memoryRequest.has_value();
+        });
+    if (memoryOccupied >= impl_->config.memoryRequests) {
+      ++impl_->unitStallProposals;
+      return false;
+    }
+    const bool write = store;
+    const auto &descriptors = write ? entry.instruction.outputTileDescriptors
+                                    : entry.instruction.inputTileDescriptors;
+    if (descriptors.empty() ||
+        (!write && entry.instruction.outputTileDescriptors.empty())) {
+      setRuntimeFailureCode("npu_memory_descriptor_missing");
+      return false;
+    }
+    std::optional<uint64_t> address = parseAddress(descriptors.front().address);
+    if (!address) {
+      setRuntimeFailureCode("npu_memory_address_invalid");
+      return false;
+    }
+    NpuMemoryRequest request{
+        .sequenceId = sequenceId,
+        .correlationId = sequenceId,
+        .address = *address,
+        .write = write,
+        .tileIdentity =
+            write ? entry.instruction.inputTileDescriptors.front().identity
+                  : entry.instruction.outputTileDescriptors.front().identity};
+    proposal.memoryRequest = request;
+  }
+
+  if (impl_->system) {
+    Epoch wake = entry.instruction.engine == NpuEngineClass::Tma
+                     ? Epoch{issueEpoch.time + 1, 0}
+                     : readyEpoch;
+    uint32_t kind = entry.instruction.engine == NpuEngineClass::Tma
+                        ? kNpuMemoryServiceEvent
+                        : kNpuCompletionEvent;
+    if (!impl_->system->scheduleEvent({wake, id(), kind, sequenceId})) {
+      setRuntimeFailureCode("npu_completion_schedule_failed");
+      return false;
+    }
+  }
+  impl_->executionProposals.push_back(std::move(proposal));
+  return true;
+}
+
+bool NpuExecutionPipeline::proposeTraceExhausted() {
+  if (impl_->traceExhausted || impl_->traceExhaustedProposal)
+    return false;
+  impl_->traceExhaustedProposal = true;
+  return true;
+}
+
+void NpuExecutionPipeline::doWork(Epoch epoch) {
+  while (auto response = impl_->memoryProtocol.proposePopResponse())
+    (void)response;
+
+  while (const auto *request = impl_->memoryProtocol.peekRequest()) {
+    auto active = impl_->active.find(request->correlationId);
+    if (active == impl_->active.end()) {
+      setRuntimeFailureCode("npu_memory_correlation_missing");
+      break;
+    }
+    if (active->second.issueEpoch.time ==
+            std::numeric_limits<uint64_t>::max() ||
+        epoch.time < active->second.issueEpoch.time + 1)
+      break;
+    if (active->second.memoryDelivered) {
+      setRuntimeFailureCode("npu_memory_request_delivered_twice");
+      break;
+    }
+    auto popped = impl_->memoryProtocol.proposePopRequest();
+    if (!popped)
+      break;
+    impl_->deliveryProposals.push_back(popped->correlationId);
+  }
+
+  for (const auto &[sequenceId, active] : impl_->active) {
+    if (active.readyEpoch != epoch ||
+        std::ranges::find(impl_->completionProposals, sequenceId) !=
+            impl_->completionProposals.end())
+      continue;
+    if (active.memoryRequest) {
+      if (!active.memoryDelivered)
+        continue;
+      uint64_t value =
+          active.memoryRequest->write
+              ? impl_->scratchpad.at(active.memoryRequest->tileIdentity)
+              : active.memoryRequest->address ^ sequenceId;
+      if (!impl_->memoryProtocol.proposeResponse(
+              {.correlationId = sequenceId, .value = value}, sequenceId) ||
+          !impl_->memoryController.proposeCancel(id(), sequenceId)) {
+        setRuntimeFailureCode("npu_memory_response_failed");
+        continue;
+      }
+    }
+    impl_->completionProposals.push_back(sequenceId);
+  }
+}
+
+void NpuExecutionPipeline::doArbitrate(Epoch) {
+  std::sort(impl_->admissionProposals.begin(), impl_->admissionProposals.end(),
+            [](const NpuInstruction &left, const NpuInstruction &right) {
+              return std::tie(left.sequenceId, left.blockId) <
+                     std::tie(right.sequenceId, right.blockId);
+            });
+  std::sort(impl_->executionProposals.begin(), impl_->executionProposals.end(),
+            [](const Impl::ActiveExecution &left,
+               const Impl::ActiveExecution &right) {
+              return issueEntryLess(left.entry, right.entry);
+            });
+  for (const Impl::ActiveExecution &execution : impl_->executionProposals)
+    if (execution.memoryRequest &&
+        (!impl_->memoryProtocol.proposeRequest(
+             *execution.memoryRequest,
+             execution.entry.instruction.sequenceId) ||
+         !impl_->memoryController.proposeReserve(
+             id(), 1, execution.issueEpoch,
+             execution.entry.instruction.sequenceId, execution.readyEpoch,
+             execution.entry.instruction.sequenceId)))
+      setRuntimeFailureCode("npu_memory_request_failed");
+  impl_->memoryProtocol.doArbitrate({});
+  impl_->memoryController.doArbitrate({});
+  for (const Impl::ActiveExecution &execution : impl_->executionProposals)
+    emitObservation(
+        {.category = "instruction",
+         .name = "execute",
+         .phase = TraceEventPhase::Complete,
+         .rootSequenceId = execution.entry.instruction.sequenceId,
+         .duration = executionLatency(execution.entry.instruction),
+         .arguments = {
+             {"engine",
+              std::string(toString(execution.entry.instruction.engine))},
+             {"unit_index", static_cast<uint64_t>(execution.unitIndex)}}});
+  for (uint64_t sequenceId : impl_->completionProposals)
+    emitObservation({.category = "instruction",
+                     .name = "complete",
+                     .phase = TraceEventPhase::Instant,
+                     .rootSequenceId = sequenceId});
+}
+
+void NpuExecutionPipeline::doXfer(Epoch epoch) {
+  const bool changed = hasPendingCommit();
+  impl_->completed.clear();
+  impl_->retired.clear();
+  impl_->memoryProtocol.doXfer(epoch);
+  impl_->memoryController.doXfer(epoch);
+
+  for (NpuInstruction &instruction : impl_->admissionProposals) {
+    auto &entries = impl_->rob[instruction.blockId];
+    entries.push_back({.instruction = std::move(instruction)});
+    impl_->lastAdmittedSequence[entries.back().instruction.blockId] =
+        entries.back().instruction.sequenceId;
+    std::sort(entries.begin(), entries.end(),
+              [](const auto &left, const auto &right) {
+                return left.instruction.sequenceId <
+                       right.instruction.sequenceId;
+              });
+  }
+
+  for (Impl::ActiveExecution &execution : impl_->executionProposals) {
+    const uint64_t sequenceId = execution.entry.instruction.sequenceId;
+    impl_->executedSequences.insert(sequenceId);
+    if (execution.memoryRequest) {
+      impl_->memoryRequests.push_back(*execution.memoryRequest);
+      ++impl_->totalMemoryRequests;
+    }
+    impl_->active.emplace(sequenceId, std::move(execution));
+    ++impl_->totalExecutions;
+  }
+
+  for (uint64_t sequenceId : impl_->deliveryProposals) {
+    auto active = impl_->active.find(sequenceId);
+    if (active == impl_->active.end()) {
+      setRuntimeFailureCode("npu_memory_correlation_missing");
+      continue;
+    }
+    active->second.memoryDelivered = true;
+    if (impl_->system &&
+        !impl_->system->scheduleEvent(
+            {active->second.readyEpoch, id(), kNpuCompletionEvent, sequenceId}))
+      setRuntimeFailureCode("npu_completion_schedule_failed");
+  }
+
+  std::sort(impl_->completionProposals.begin(),
+            impl_->completionProposals.end());
+  for (uint64_t sequenceId : impl_->completionProposals) {
+    auto active = impl_->active.find(sequenceId);
+    if (active == impl_->active.end()) {
+      setRuntimeFailureCode("npu_completion_correlation_missing");
+      continue;
+    }
+    active->second.entry.instruction.timestamps.completed = epoch.time;
+    NpuIssueEntry completed = active->second.entry;
+    for (auto &[blockId, entries] : impl_->rob)
+      for (Impl::RobEntry &entry : entries)
+        if (entry.instruction.sequenceId == sequenceId) {
+          entry.instruction = completed.instruction;
+          entry.completed = true;
+        }
+
+    uint64_t value = sequenceId;
+    if (active->second.memoryRequest) {
+      const NpuMemoryRequest &request = *active->second.memoryRequest;
+      value = request.write ? impl_->scratchpad.at(request.tileIdentity)
+                            : request.address ^ sequenceId;
+      if (request.write)
+        impl_->globalMemory[request.address] = value;
+      impl_->memoryResponses.push_back(
+          {.correlationId = request.correlationId, .value = value});
+      if (impl_->system) {
+        if (epoch.time == std::numeric_limits<uint64_t>::max() ||
+            !impl_->system->scheduleEvent({{epoch.time + 1, 0},
+                                           id(),
+                                           kNpuMemoryCleanupEvent,
+                                           sequenceId}))
+          setRuntimeFailureCode("npu_completion_schedule_failed");
+      }
+    }
+    if (!completed.instruction.opcode.starts_with("TSTORE"))
+      for (const NpuTileDescriptor &tile :
+           completed.instruction.outputTileDescriptors)
+        impl_->scratchpad[tile.identity] = value;
+    impl_->completed.push_back(std::move(completed));
+    impl_->active.erase(active);
+    ++impl_->totalCompletions;
+  }
+  std::sort(impl_->completed.begin(), impl_->completed.end(), issueEntryLess);
+
+  for (auto &[blockId, entries] : impl_->rob) {
+    while (!entries.empty() && entries.front().completed) {
+      NpuInstruction instruction = std::move(entries.front().instruction);
+      entries.erase(entries.begin());
+      instruction.timestamps.retired = epoch.time;
+      updateDigest(impl_->result.digest, instruction);
+      ++impl_->result.retiredInstructions;
+      impl_->result.retiredSequenceIds.push_back(instruction.sequenceId);
+      emitObservation({.category = "instruction",
+                       .name = "retire",
+                       .phase = TraceEventPhase::Instant,
+                       .rootSequenceId = instruction.sequenceId});
+      impl_->retired.push_back(std::move(instruction));
+    }
+  }
+  std::sort(impl_->retired.begin(), impl_->retired.end(),
+            [](const NpuInstruction &left, const NpuInstruction &right) {
+              return std::tie(left.blockId, left.sequenceId) <
+                     std::tie(right.blockId, right.sequenceId);
+            });
+
+  impl_->traceExhausted =
+      impl_->traceExhausted || impl_->traceExhaustedProposal;
+  impl_->totalUnitStalls += impl_->unitStallProposals;
+  for (size_t index = 0; index < impl_->unitHighWatermarks.size(); ++index) {
+    NpuEngineClass engine = static_cast<NpuEngineClass>(index);
+    impl_->unitHighWatermarks[index] =
+        std::max(impl_->unitHighWatermarks[index], activeExecutions(engine));
+  }
+  impl_->admissionProposals.clear();
+  impl_->executionProposals.clear();
+  impl_->deliveryProposals.clear();
+  impl_->completionProposals.clear();
+  impl_->traceExhaustedProposal = false;
+  impl_->unitStallProposals = 0;
+  if (changed)
+    impl_->lastUpdate = epoch;
+}
+
+bool NpuExecutionPipeline::hasPendingCommit() const {
+  return !impl_->admissionProposals.empty() ||
+         !impl_->executionProposals.empty() ||
+         !impl_->deliveryProposals.empty() ||
+         !impl_->completionProposals.empty() || impl_->traceExhaustedProposal ||
+         impl_->unitStallProposals != 0 ||
+         impl_->memoryProtocol.hasPendingCommit() ||
+         impl_->memoryController.hasPendingCommit();
+}
+
+bool NpuExecutionPipeline::isRunnable(Epoch epoch) const {
+  if (hasPendingCommit())
+    return true;
+  return std::ranges::any_of(impl_->active, [&](const auto &active) {
+    return active.second.readyEpoch == epoch;
+  });
+}
+
+RuntimeObjectState NpuExecutionPipeline::runtimeState(Epoch epoch) const {
+  RuntimeObjectState state = SimObject::runtimeState(epoch);
+  for (const auto &[blockId, entries] : impl_->rob)
+    state.queueOccupancy += entries.size();
+  state.activeReservations = impl_->active.size();
+  state.pendingOffers = impl_->admissionProposals.size() +
+                        impl_->executionProposals.size() +
+                        impl_->completionProposals.size();
+  state.quiescent =
+      complete() ||
+      (state.queueOccupancy == 0 && state.activeReservations == 0 &&
+       state.pendingOffers == 0 && !hasPendingCommit());
+  if (!state.quiescent)
+    state.reason = state.activeReservations ? "npu_execution_active"
+                                            : "npu_retirement_pending";
+  return state;
+}
+
+void NpuExecutionPipeline::collectStatistics(
+    std::vector<StatSnapshot> &out) const {
+  auto append = [&](std::string name, StatisticKind kind, uint64_t value) {
+    out.push_back({.name = std::move(name),
+                   .objectPath = std::string(path()),
+                   .kind = kind,
+                   .value = value,
+                   .lastUpdate = impl_->lastUpdate});
+  };
+  append("active_executions", StatisticKind::Gauge, impl_->active.size());
+  append("executed_instructions", StatisticKind::Counter,
+         impl_->totalExecutions);
+  append("completed_instructions", StatisticKind::Counter,
+         impl_->totalCompletions);
+  append("retired_instructions", StatisticKind::Counter,
+         impl_->result.retiredInstructions);
+  append("execution_unit_stalls", StatisticKind::Counter,
+         impl_->totalUnitStalls);
+  append("memory_requests", StatisticKind::Counter, impl_->totalMemoryRequests);
+  append("scratchpad_tiles", StatisticKind::Gauge, impl_->scratchpad.size());
+}
+
+void NpuExecutionPipeline::bindSystem(SimSystem *system) {
+  impl_->system = system;
+}
+
+Epoch NpuExecutionPipeline::completionEpoch(uint64_t sequenceId) const {
+  auto active = impl_->active.find(sequenceId);
+  return active == impl_->active.end() ? Epoch{} : active->second.readyEpoch;
+}
+
+size_t NpuExecutionPipeline::activeExecutions(NpuEngineClass engine) const {
+  return std::ranges::count_if(impl_->active, [&](const auto &active) {
+    return active.second.entry.instruction.engine == engine;
+  });
+}
+
+const std::vector<NpuIssueEntry> &NpuExecutionPipeline::completed() const {
+  return impl_->completed;
+}
+
+const std::vector<NpuInstruction> &NpuExecutionPipeline::retired() const {
+  return impl_->retired;
+}
+
+const std::vector<NpuMemoryRequest> &
+NpuExecutionPipeline::memoryRequests() const {
+  return impl_->memoryRequests;
+}
+
+const std::vector<NpuMemoryResponse> &
+NpuExecutionPipeline::memoryResponses() const {
+  return impl_->memoryResponses;
+}
+
+bool NpuExecutionPipeline::scratchpadContains(
+    std::string_view tileIdentity) const {
+  return impl_->scratchpad.contains(std::string(tileIdentity));
+}
+
+std::optional<uint64_t>
+NpuExecutionPipeline::globalMemoryValue(uint64_t address) const {
+  auto value = impl_->globalMemory.find(address);
+  return value == impl_->globalMemory.end()
+             ? std::nullopt
+             : std::optional<uint64_t>(value->second);
+}
+
+const NpuArchitecturalResult &
+NpuExecutionPipeline::architecturalResult() const {
+  return impl_->result;
+}
+
+bool NpuExecutionPipeline::complete() const {
+  if (!impl_->traceExhausted || !impl_->active.empty() ||
+      !impl_->admissionProposals.empty() ||
+      !impl_->executionProposals.empty() || hasPendingCommit())
+    return false;
+  for (const auto &[blockId, entries] : impl_->rob)
+    if (!entries.empty())
+      return false;
+  return impl_->memoryProtocol.runtimeState({}).quiescent &&
+         impl_->memoryController.runtimeState({}).quiescent;
+}
+
+void NpuExecutionPipeline::reset() {
+  NpuExecutionConfig config = impl_->config;
+  SimSystem *system = impl_->system;
+  impl_ = std::make_unique<Impl>(config);
+  impl_->system = system;
   clearRuntimeFailureCode();
 }
 

@@ -8,6 +8,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <map>
+#include <memory>
 #include <optional>
 #include <set>
 #include <string>
@@ -41,6 +42,16 @@ struct NpuScalarImmediate {
   bool operator==(const NpuScalarImmediate &) const = default;
 };
 
+struct NpuTileDescriptor {
+  std::string identity;
+  std::string address;
+  std::string type;
+  std::string layout;
+  PtoValue::Array shape;
+
+  bool operator==(const NpuTileDescriptor &) const = default;
+};
+
 struct NpuInstruction {
   uint64_t sequenceId = 0;
   uint64_t blockId = 0;
@@ -49,6 +60,8 @@ struct NpuInstruction {
   std::vector<PtoTraceOperand> operands;
   std::vector<std::string> inputTiles;
   std::vector<std::string> outputTiles;
+  std::vector<NpuTileDescriptor> inputTileDescriptors;
+  std::vector<NpuTileDescriptor> outputTileDescriptors;
   std::vector<NpuScalarImmediate> scalarInputs;
   NpuEngineClass engine = NpuEngineClass::Scalar;
   NpuTimestamps timestamps;
@@ -177,6 +190,82 @@ private:
   uint64_t totalIssues_ = 0;
   uint64_t totalDependencyWakeups_ = 0;
   Epoch lastUpdate_;
+};
+
+struct NpuExecutionConfig {
+  size_t scalarUnits = 0;
+  size_t vectorUnits = 0;
+  size_t cubeUnits = 0;
+  size_t tmaUnits = 0;
+  size_t memoryRequests = 0;
+  size_t scratchpadTiles = 0;
+};
+
+struct NpuMemoryRequest {
+  uint64_t sequenceId = 0;
+  uint64_t correlationId = 0;
+  uint64_t address = 0;
+  bool write = false;
+  std::string tileIdentity;
+
+  bool operator==(const NpuMemoryRequest &) const = default;
+};
+
+struct NpuMemoryResponse {
+  uint64_t correlationId = 0;
+  uint64_t value = 0;
+
+  bool operator==(const NpuMemoryResponse &) const = default;
+};
+
+struct NpuArchitecturalResult {
+  uint64_t retiredInstructions = 0;
+  uint64_t digest = 14695981039346656037ULL;
+  std::vector<uint64_t> retiredSequenceIds;
+
+  bool operator==(const NpuArchitecturalResult &) const = default;
+};
+
+/// Finite event-driven execution, memory, completion, and retirement state.
+class NpuExecutionPipeline final : public SimObject {
+public:
+  static constexpr std::string_view contractName = "ac.npu.ExecutionPipeline";
+  static constexpr ObjectKind componentKind = ObjectKind::Compute;
+
+  NpuExecutionPipeline(std::string name, ObjectId id, SimObject *parent,
+                       NpuExecutionConfig config, SimSystem *system = nullptr,
+                       ObservationSink *observations = nullptr);
+  ~NpuExecutionPipeline() override;
+
+  bool proposeAdmit(const NpuInstruction &instruction);
+  bool proposeExecute(const NpuIssueEntry &entry, Epoch issueEpoch);
+  bool proposeTraceExhausted();
+
+  void doWork(Epoch epoch) override;
+  void doArbitrate(Epoch epoch) override;
+  void doXfer(Epoch epoch) override;
+  bool hasPendingCommit() const override;
+  bool isRunnable(Epoch epoch) const override;
+  RuntimeObjectState runtimeState(Epoch epoch) const override;
+  void collectStatistics(std::vector<StatSnapshot> &out) const override;
+  void bindSystem(SimSystem *system) override;
+  void reset() override;
+
+  static uint64_t executionLatency(const NpuInstruction &instruction);
+  Epoch completionEpoch(uint64_t sequenceId) const;
+  size_t activeExecutions(NpuEngineClass engine) const;
+  const std::vector<NpuIssueEntry> &completed() const;
+  const std::vector<NpuInstruction> &retired() const;
+  const std::vector<NpuMemoryRequest> &memoryRequests() const;
+  const std::vector<NpuMemoryResponse> &memoryResponses() const;
+  bool scratchpadContains(std::string_view tileIdentity) const;
+  std::optional<uint64_t> globalMemoryValue(uint64_t address) const;
+  const NpuArchitecturalResult &architecturalResult() const;
+  bool complete() const;
+
+private:
+  struct Impl;
+  std::unique_ptr<Impl> impl_;
 };
 
 } // namespace gfsim
