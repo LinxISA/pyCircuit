@@ -313,7 +313,8 @@ llvm::Expected<GeneratedFile> moduleHeader(const ModelPlan &plan,
   for (const ExportPlan &exported : module.exports)
     output << "  decltype(auto) " << exported.symbol << "();\n"
            << "  decltype(auto) " << exported.symbol << "() const;\n";
-  output << "\nprivate:\n  friend struct DispatchAccess;\n";
+  output
+      << "\nprivate:\n  friend class Model;\n  friend struct DispatchAccess;\n";
   for (const PlacementPlan &placement : module.placements) {
     auto type = placementType(plan, placement);
     if (!type)
@@ -726,6 +727,11 @@ llvm::Expected<GeneratedFile> modelSource(const ModelPlan &plan) {
             "dispatch_(DispatchAccess::makeRows(*this)) {\n"
             "  if (!system_.root().attachChild(top_))\n"
             "    throw std::logic_error(\"ACLOWER-OWNERSHIP\");\n"
+            "  for (gfsim::DispatchRow &row : dispatch_) {\n"
+            "    auto *object = static_cast<gfsim::SimObject *>(row.object);\n"
+            "    object->bindSystem(&system_);\n"
+            "    object->setObservationSink(&system_);\n"
+            "  }\n"
             "  if (!system_.setDispatchTable(dispatch_))\n"
             "    throw std::logic_error(\"ACLOWER-DISPATCH\");\n"
             "  if (!system_.setActivationPlan(kActivationOffsets, "

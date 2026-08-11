@@ -5,12 +5,14 @@ from __future__ import annotations
 import json
 import platform
 import shutil
+import subprocess
 import sys
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Literal, NoReturn
 
 from .._diagnostics import Diagnostic
+from .._canonical_json import canonical_json_bytes
 from .._native_api import NativeRequest, native_extension_path, run_native_compiler
 from .._output import OutputSink
 from .._workspace import UserInputError, WorkspaceConfig
@@ -115,6 +117,47 @@ def _runtime_linkage() -> tuple[list[str], list[str]]:
     raise RuntimeError("Agentic Circuit runtime development files are unavailable")
 
 
+def _binding_registry(
+    component_roots: tuple[Path, ...], *, native_target: str | None = None
+) -> bytes:
+    candidates: list[object] = []
+    requests: list[object] = []
+    for root in sorted(component_roots):
+        for path in sorted(root.rglob("*.binding.json")):
+            try:
+                document = json.loads(path.read_text())
+            except (OSError, UnicodeError, json.JSONDecodeError) as error:
+                _fail("ACLOWER-BINDING-OPTIONS", f"cannot load {path}: {error}")
+            if type(document) is not dict or set(document) != {
+                "candidates",
+                "requests",
+            }:
+                _fail(
+                    "ACLOWER-BINDING-OPTIONS",
+                    f"binding registry {path} is not a closed registry",
+                )
+            if type(document["candidates"]) is not list or type(
+                document["requests"]
+            ) is not list:
+                _fail(
+                    "ACLOWER-BINDING-OPTIONS",
+                    f"binding registry {path} arrays are invalid",
+                )
+            for candidate in document["candidates"]:
+                if (
+                    native_target is not None
+                    and type(candidate) is dict
+                    and candidate.get("target") == "native"
+                ):
+                    candidate = dict(candidate)
+                    candidate["target"] = native_target
+                candidates.append(candidate)
+            requests.extend(document["requests"])
+    return canonical_json_bytes(
+        {"candidates": candidates, "requests": requests}
+    )
+
+
 def _logical_diagnostics(
     diagnostics: tuple[Diagnostic, ...],
 ) -> tuple[Diagnostic, ...]:
@@ -181,10 +224,38 @@ def build_publication(
             options.profile,
         )
 
+    try:
+        native_target = subprocess.run(
+            [compiler, "-dumpmachine"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.splitlines()[0].strip()
+    except (OSError, subprocess.CalledProcessError, IndexError) as error:
+        return BuildAttempt(
+            None,
+            (
+                Diagnostic(
+                    stage="cxx",
+                    code="ACBUILD-COMPILER-001",
+                    severity="error",
+                    message=f"cannot query C++ compiler target: {error}",
+                ),
+            ),
+            4,
+            options.profile,
+        )
+
     include_roots, link_inputs = _runtime_linkage()
     native_options: list[tuple[str, object]] = [
         ("profile", options.profile),
         ("binding_lock", b"[]"),
+        (
+            "binding_registry",
+            _binding_registry(
+                workspace.component_roots, native_target=native_target
+            ),
+        ),
         ("frontend_acpy", frontend.acpy),
         ("frontend_acir", frontend.acir),
         (

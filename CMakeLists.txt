@@ -14,6 +14,7 @@ include(AddACIR)
 include(CTest)
 
 if(BUILD_TESTING)
+  find_package(Python3 3.11 REQUIRED COMPONENTS Interpreter)
   find_program(ACIR_LIT_EXECUTABLE NAMES llvm-lit lit
     HINTS "${CMAKE_CURRENT_SOURCE_DIR}/.venv/bin"
     REQUIRED
@@ -103,4 +104,14 @@ add_subdirectory(tools)
 if(BUILD_TESTING)
   add_subdirectory(test)
   add_subdirectory(unittests)
+  add_test(
+    NAME Phase5E2ETests
+    COMMAND "${Python3_EXECUTABLE}" -m unittest tests.e2e.test_phase5_examples -v
+  )
+  set_tests_properties(Phase5E2ETests PROPERTIES
+    WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+    TIMEOUT 300
+    LABELS "e2e;phase5"
+    ENVIRONMENT "AGENTIC_CIRCUIT_TEST_BUILD_DIR=${CMAKE_BINARY_DIR}"
+  )
 endif()

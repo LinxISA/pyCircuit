@@ -91,7 +91,8 @@ const ModulePlan *findModule(const ModelPlan &plan, llvm::StringRef symbol) {
 
 bool isTraceSourceBinding(const ModelPlan &plan, const BindingPlan &binding) {
   if (binding.cppSymbol == "gfsim::TraceSource" ||
-      llvm::StringRef(binding.cppSymbol).starts_with("gfsim::TraceSource<"))
+      llvm::StringRef(binding.cppSymbol).starts_with("gfsim::TraceSource<") ||
+      binding.cppSymbol == "gfsim::Phase5TraceSource")
     return true;
   auto schema = std::find_if(plan.types.begin(), plan.types.end(),
                              [&](const TypePlan &type) {
@@ -107,7 +108,7 @@ bool isTraceOwner(const ModelPlan &plan,
     return false;
   llvm::SmallVector<llvm::StringRef> segments;
   llvm::StringRef(runtimeObject.hierarchyPath).split(segments, '.');
-  if (segments.size() < 2 || segments.front() != plan.rootSymbol)
+  if (segments.size() < 2)
     return false;
   for (size_t index = 1; index < segments.size(); ++index) {
     const llvm::StringRef symbol =

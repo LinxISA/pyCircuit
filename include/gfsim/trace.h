@@ -261,6 +261,8 @@ public:
     proposedSequenceId_ = record.sequenceId;
   }
 
+  void bindSystem(SimSystem *system) override { system_ = system; }
+
   void doArbitrate(Epoch) override {
     if (acceptProposal_ && committedSequenceId_)
       emitObservation({.category = "transaction",

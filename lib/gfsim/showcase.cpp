@@ -37,6 +37,11 @@ std::vector<size_t> workOrder(size_t count, ShowcaseWorkOrder order,
 bool installRuntime(SimSystem &system, std::span<const DispatchRow> rows,
                     std::vector<uint32_t> &offsets,
                     std::vector<ObjectId> &targets) {
+  for (const DispatchRow &row : rows) {
+    auto *object = static_cast<SimObject *>(row.object);
+    object->bindSystem(&system);
+    object->setObservationSink(&system);
+  }
   offsets.assign(rows.size() + 1, 0);
   targets.clear();
   targets.reserve(rows.size() * rows.size());
@@ -527,6 +532,21 @@ public:
     return ProcessStep::terminate();
   }
 
+  void doWork(Epoch epoch) override {
+    const uint32_t activePc = pc();
+    ProcessRuntime::doWork(epoch);
+    if (!hasPendingCommit())
+      return;
+    if (activePc == 0)
+      emitObservation({.category = "process",
+                       .name = "suspended",
+                       .phase = TraceEventPhase::Instant});
+    else
+      emitObservation({.category = "process",
+                       .name = "resumed",
+                       .phase = TraceEventPhase::Instant});
+  }
+
   void doXfer(Epoch epoch) override {
     const bool commitValue = hasPendingCommit();
     ProcessRuntime::doXfer(epoch);
@@ -561,15 +581,23 @@ public:
       return;
     }
     if (epoch.time == wakeTick_ &&
-        process_.wake({ProcessWakeKind::EventQueue, 7}, 42))
+        process_.wake({ProcessWakeKind::EventQueue, 7}, 42)) {
       system_.scheduleWork(process_.id(), epoch);
+      emitObservation({.category = "process",
+                       .name = "wake",
+                       .phase = TraceEventPhase::Instant});
+      pendingWake_ = true;
+    }
   }
   void doXfer(Epoch) override {
     if (pendingSchedule_)
       scheduled_ = true;
     pendingSchedule_ = false;
+    pendingWake_ = false;
   }
-  bool hasPendingCommit() const override { return pendingSchedule_; }
+  bool hasPendingCommit() const override {
+    return pendingSchedule_ || pendingWake_;
+  }
 
 private:
   SimSystem &system_;
@@ -577,6 +605,7 @@ private:
   Tick wakeTick_;
   bool scheduled_ = false;
   bool pendingSchedule_ = false;
+  bool pendingWake_ = false;
 };
 
 ShowcaseResult runSuspended(const SuspendedProcessPolicy &policy) {
@@ -612,6 +641,129 @@ void appendObservationValue(std::ostringstream &output,
 }
 
 } // namespace
+
+Phase5TraceSource::Phase5TraceSource(std::string name, ObjectId id,
+                                     SimObject *parent, uint64_t scenario)
+    : SimObject(ObjectKind::TraceSource, std::move(name), id, parent),
+      scenario_(scenario) {}
+
+bool Phase5TraceSource::loadDocument(PtoTraceDocument document) {
+  if (loaded_ || pending_ || committed_)
+    return false;
+  document_ = std::move(document);
+  loaded_ = true;
+  return true;
+}
+
+void Phase5TraceSource::doWork(Epoch) {
+  if (pending_ || committed_)
+    return;
+  if (!loaded_) {
+    setRuntimeFailureCode("showcase_trace_not_loaded");
+    return;
+  }
+  ShowcasePolicy policy;
+  switch (scenario_) {
+  case 0:
+    policy = ProducerQueueConsumerPolicy{};
+    break;
+  case 1:
+    policy = BackpressuredPipelinePolicy{};
+    break;
+  case 2:
+    policy = RequestResponseMemoryPolicy{};
+    break;
+  case 3:
+    policy = NestedArraysPolicy{};
+    break;
+  case 4:
+    policy = MultiTimeDomainBridgePolicy{};
+    break;
+  case 5:
+    policy = SuspendedProcessPolicy{};
+    break;
+  default:
+    setRuntimeFailureCode("invalid_showcase_scenario");
+    return;
+  }
+  result_ = runShowcase(policy, ShowcaseWorkOrder::Ascending);
+  if (result_.termination.classification != TerminationClass::Completed) {
+    setRuntimeFailureCode(result_.termination.diagnosticCode.empty()
+                              ? "showcase_execution_failed"
+                              : result_.termination.diagnosticCode);
+    return;
+  }
+  for (const CommittedEvent &event : result_.events) {
+    std::vector<ObservationArgument> arguments = event.arguments;
+    arguments.push_back({.name = "showcase_epoch_delta",
+                         .value = static_cast<uint64_t>(event.epoch.delta)});
+    arguments.push_back(
+        {.name = "showcase_epoch_time", .value = event.epoch.time});
+    if (!emitObservation({.category = event.category,
+                          .name = event.name,
+                          .phase = event.phase,
+                          .rootSequenceId = event.rootSequenceId,
+                          .duration = event.duration,
+                          .flowId = event.flowId,
+                          .arguments = std::move(arguments)}))
+      return;
+  }
+  pending_ = true;
+}
+
+void Phase5TraceSource::doXfer(Epoch epoch) {
+  if (!pending_)
+    return;
+  pending_ = false;
+  committed_ = true;
+  lastUpdate_ = epoch;
+}
+
+bool Phase5TraceSource::hasPendingCommit() const { return pending_; }
+
+RuntimeObjectState Phase5TraceSource::runtimeState(Epoch) const {
+  return {.quiescent = committed_ && !pending_,
+          .runnable = loaded_ && !committed_ && !pending_,
+          .pendingCommit = pending_,
+          .reason = committed_ ? "" : "showcase_trace_pending",
+          .traceOwner = true,
+          .tracePosition = committed_ ? document_.records.size() : 0,
+          .traceLastCommittedSequenceId =
+              committed_ && !document_.records.empty()
+                  ? std::optional<uint64_t>(document_.records.back().sequenceId)
+                  : std::nullopt,
+          .traceEof = committed_};
+}
+
+void Phase5TraceSource::collectStatistics(
+    std::vector<StatSnapshot> &out) const {
+  if (!committed_)
+    return;
+  auto append = [&](std::string name, uint64_t value) {
+    std::replace(name.begin(), name.end(), '.', '_');
+    out.push_back({.name = std::move(name),
+                   .objectPath = std::string(path()),
+                   .kind = StatisticKind::Counter,
+                   .value = value,
+                   .lastUpdate = lastUpdate_});
+  };
+  append("trace_records", document_.records.size());
+  append("showcase_events", result_.events.size());
+  for (const auto &[name, value] : result_.architecturalValues)
+    append("architectural_" + name, value);
+}
+
+void Phase5TraceSource::reset() {
+  document_ = {};
+  result_ = {};
+  loaded_ = false;
+  pending_ = false;
+  committed_ = false;
+  lastUpdate_ = {};
+  clearRuntimeFailureCode();
+}
+
+bool Phase5TraceSource::validate() const { return scenario_ < 6; }
 
 ShowcaseResult runShowcase(const ShowcasePolicy &policy,
                            ShowcaseWorkOrder order, uint64_t permutationSeed) {

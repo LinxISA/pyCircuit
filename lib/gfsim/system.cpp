@@ -548,6 +548,34 @@ bool SimSystem::step() {
     if (stopAtTraceCap())
       return false;
     refreshRuntimeSummary();
+    if (impl_->traceOwnerCount == 1 && impl_->traceEof) {
+      std::vector<ObjectId> traceEndProcesses;
+      for (SimObject *object : runtimeObjects())
+        if (object->requestTraceEnd())
+          traceEndProcesses.push_back(object->id());
+      if (!traceEndProcesses.empty()) {
+        if (epoch_.time == std::numeric_limits<Tick>::max())
+          return fail("tick_overflow",
+                      "trace-end process termination exceeds tick range");
+        Epoch shutdownEpoch{epoch_.time + 1, 0};
+        if (shutdownEpoch.time >= maxTicks_) {
+          epoch_ = {maxTicks_, 0};
+          terminated_ = true;
+          result_.classification = TerminationClass::Incomplete;
+          result_.finalEpoch = epoch_;
+          result_.committedEventCount = impl_->committedEventCount;
+          result_.terminationCap = maxTicks_;
+          result_.domainCycles = impl_->domainCycles;
+          result_.diagnosticCode = "max_ticks_reached";
+          return false;
+        }
+        for (ObjectId id : traceEndProcesses)
+          if (!scheduleWork(id, shutdownEpoch))
+            return false;
+        epoch_ = shutdownEpoch;
+        return true;
+      }
+    }
     if (!impl_->noProgress.blockedObjects.empty() && impl_->deadlockWindow) {
       const Tick window = *impl_->deadlockWindow;
       if (impl_->lastProgressTick > std::numeric_limits<Tick>::max() - window)

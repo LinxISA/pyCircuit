@@ -2872,6 +2872,16 @@ public:
   uint64_t stepCount = 0;
 };
 
+class YieldingProcess final : public ProcessRuntime<YieldingProcess> {
+public:
+  YieldingProcess() : ProcessRuntime("yielding", 0, nullptr, 0, 2) {}
+
+  ProcessStep executeProcessStep(uint32_t, Epoch) {
+    return ProcessStep::suspendAt(
+        0, {.kind = ProcessWakeKind::NextDelta, .id = 0}, 1);
+  }
+};
+
 class InvalidContinuationProcess final
     : public ProcessRuntime<InvalidContinuationProcess> {
 public:
@@ -2914,6 +2924,33 @@ TEST(GfsimProcessTest, FairnessCapProducesDeterministicFailure) {
   EXPECT_EQ(process.status(), ProcessStatus::Failed);
   EXPECT_EQ(process.diagnosticCode(), "process_fairness_exceeded");
   EXPECT_FALSE(process.isRunnable({1, 0}));
+}
+
+TEST(GfsimProcessTest, TraceEndTerminatesOnlyVoluntaryYieldSuspension) {
+  {
+    SimSystem system("test");
+    YieldingProcess process;
+    TraceSource<> trace("trace", 1, nullptr);
+    std::array rows = {makeDispatchRow(&process), makeDispatchRow(&trace)};
+    ASSERT_TRUE(system.setDispatchTable(rows));
+
+    const TerminationResult result = system.run();
+    EXPECT_EQ(result.classification, TerminationClass::Completed);
+    EXPECT_EQ(result.finalEpoch, (Epoch{1, 0}));
+    EXPECT_EQ(process.status(), ProcessStatus::Terminated);
+  }
+  {
+    SimSystem system("test");
+    SuspendingProcess process;
+    TraceSource<> trace("trace", 1, nullptr);
+    std::array rows = {makeDispatchRow(&process), makeDispatchRow(&trace)};
+    ASSERT_TRUE(system.setDispatchTable(rows));
+
+    const TerminationResult result = system.run();
+    EXPECT_EQ(result.classification, TerminationClass::Failed);
+    EXPECT_EQ(result.diagnosticCode, "no_progress");
+    EXPECT_EQ(process.status(), ProcessStatus::Suspended);
+  }
 }
 
 TEST(GfsimProcessTest, ResetRestoresEntryState) {

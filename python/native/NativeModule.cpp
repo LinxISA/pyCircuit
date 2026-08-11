@@ -346,10 +346,18 @@ bool parseBuildOptions(PyObject *value, CompilerRequest &request) {
 }
 
 bool parseOptions(PyObject *options, CompilerRequest &request) {
-  static constexpr std::array<llvm::StringRef, 10> keys{
-      "profile",       "binding_lock",    "custom_pipeline",   "dump_before",
-      "dump_after",    "dump_after_each", "verify_after_each", "frontend_acpy",
-      "frontend_acir", "build",
+  static constexpr std::array<llvm::StringRef, 11> keys{
+      "profile",
+      "binding_lock",
+      "binding_registry",
+      "custom_pipeline",
+      "dump_before",
+      "dump_after",
+      "dump_after_each",
+      "verify_after_each",
+      "frontend_acpy",
+      "frontend_acir",
+      "build",
   };
   if (!hasOnlyKeys(options, keys, "native compiler options"))
     return false;
@@ -375,6 +383,12 @@ bool parseOptions(PyObject *options, CompilerRequest &request) {
     if (!bytes)
       return false;
     request.bindingLockBytes = std::move(*bytes);
+  }
+  if (PyObject *value = PyDict_GetItemString(options, "binding_registry")) {
+    auto bytes = pythonBytes(value, "binding_registry");
+    if (!bytes)
+      return false;
+    request.bindingRegistryBytes = std::move(*bytes);
   }
   if (PyObject *value = PyDict_GetItemString(options, "frontend_acpy")) {
     auto bytes = pythonBytes(value, "frontend_acpy");

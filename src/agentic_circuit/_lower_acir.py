@@ -215,6 +215,17 @@ def _component_declarations(program: NormalizedProgram) -> list[str]:
                 else "(" + ", ".join(result_types) + ")"
             )
         )
+        calls = [call for call in program.calls if call.schema.identity == identity]
+        schema_parameters = calls[0].static_arguments if calls else ()
+        parameter_text = _static_arguments(schema_parameters)
+        if schema.external_binding is not None:
+            lines.append(
+                f"  ac.module.extern @{symbol} : ({', '.join(port.acir_type for port in schema.ports)})"
+                f" -> {('()' if not result_types else result_signature.removeprefix(' -> '))} "
+                f"parameters {{{parameter_text}}} implementation "
+                f"{{registry = \"cpp\", name = {json.dumps(schema.external_binding)}}}"
+            )
+            continue
         lines.append(
             f"  ac.module @{symbol}({arguments}){result_signature} parameters {{}} graph {{"
         )

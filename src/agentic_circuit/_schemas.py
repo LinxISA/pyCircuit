@@ -366,6 +366,7 @@ class ComponentSchema:
     parameters: tuple[ParameterSchema, ...]
     availability: Availability
     effect_kind: Literal["pure", "stateful"] = "stateful"
+    external_binding: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -375,7 +376,8 @@ class PendingCall:
 
 
 def _component_schema(
-    record: dict[str, JsonValue], availability: Availability, expected_name: str
+    record: dict[str, JsonValue], availability: Availability, expected_name: str,
+    *, external: bool = False,
 ) -> ComponentSchema:
     _exact_keys(record, _TOP_LEVEL_KEYS, expected_name)
     if (
@@ -506,6 +508,9 @@ def _component_schema(
         parameters=tuple(parameters),
         availability=availability,
         effect_kind=record["effect"]["kind"],
+        external_binding=(
+            expected_name.replace(".", "_") + "_binding" if external else None
+        ),
     )
 
 
@@ -612,6 +617,27 @@ class SchemaRegistry:
                 raise SchemaError(f"catalog fingerprint mismatch for {name}")
             schemas[name] = schema
         return cls(schemas)
+
+    def with_component_roots(self, roots: tuple[Path, ...]) -> "SchemaRegistry":
+        schemas = dict(self._schemas)
+        resolved_roots = sorted(path.resolve() for path in roots)
+        for root in resolved_roots:
+            if not root.exists():
+                continue
+            if not root.is_dir():
+                raise SchemaError(f"component root is not a directory: {root}")
+            for path in sorted(root.rglob("*.component.json")):
+                record = _load_json(path)
+                identity = record.get("canonical_name")
+                if type(identity) is not str:
+                    raise SchemaError(f"component schema {path} has no identity")
+                schema = _component_schema(
+                    record, "available", identity, external=True
+                )
+                if identity in schemas:
+                    raise SchemaError(f"duplicate component schema {identity}")
+                schemas[identity] = schema
+        return SchemaRegistry(schemas)
 
     def schema(self, identity: str) -> ComponentSchema:
         try:

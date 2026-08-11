@@ -64,6 +64,7 @@ struct CompilerDiagnostic {
 struct CompilerRequest {
   std::string acirBytes;
   std::string bindingLockBytes;
+  std::string bindingRegistryBytes;
   CompilerProfile profile = CompilerProfile::Fast;
   std::optional<CompilerStage> stopAfter;
   std::vector<codegen::ArtifactKind> emits;

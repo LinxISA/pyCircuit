@@ -1,8 +1,7 @@
 #ifndef GFSIM_SHOWCASE_H
 #define GFSIM_SHOWCASE_H
 
-#include "gfsim/core.h"
-#include "gfsim/observation.h"
+#include "gfsim/components.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -89,6 +88,35 @@ ShowcaseResult runShowcase(const Policy &policy, ShowcaseWorkOrder order,
 
 /// Stable byte representation used by conformance tests and golden fixtures.
 std::string canonicalShowcaseResult(const ShowcaseResult &result);
+
+/// Private provider component used by checked-in Phase 5 workspaces. It is
+/// intentionally absent from the public standard-library catalog.
+class Phase5TraceSource final : public SimObject {
+public:
+  static constexpr std::string_view contractName = "phase5.Showcase";
+  static constexpr ObjectKind componentKind = ObjectKind::TraceSource;
+
+  Phase5TraceSource(std::string name, ObjectId id, SimObject *parent,
+                    uint64_t scenario);
+
+  bool loadDocument(PtoTraceDocument document);
+  void doWork(Epoch epoch) override;
+  void doXfer(Epoch epoch) override;
+  bool hasPendingCommit() const override;
+  RuntimeObjectState runtimeState(Epoch epoch) const override;
+  void collectStatistics(std::vector<StatSnapshot> &out) const override;
+  void reset() override;
+  bool validate() const;
+
+private:
+  uint64_t scenario_ = 0;
+  PtoTraceDocument document_;
+  ShowcaseResult result_;
+  bool loaded_ = false;
+  bool pending_ = false;
+  bool committed_ = false;
+  Epoch lastUpdate_;
+};
 
 } // namespace gfsim
 

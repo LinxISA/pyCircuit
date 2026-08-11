@@ -202,7 +202,7 @@ class _Normalizer:
             return tuple(item.id for item in target.elts)
         raise ResolutionError("assignment target must be a name or name tuple")
 
-    def _call(self, target: ast.expr, node: ast.Call) -> None:
+    def _call(self, target: ast.expr | None, node: ast.Call) -> None:
         if not isinstance(node.func, ast.Name):
             self._error("ACPY-CALL-001", "call target must be a registered name", node)
             return
@@ -244,11 +244,14 @@ class _Normalizer:
             return
 
         schema, ports, static_arguments, explicit_name = viable[0]
-        try:
-            target_names = self._target_names(target)
-        except ResolutionError as error:
-            self._error("ACPY-CALL-005", str(error), target)
-            return
+        if target is None:
+            target_names = ()
+        else:
+            try:
+                target_names = self._target_names(target)
+            except ResolutionError as error:
+                self._error("ACPY-CALL-005", str(error), target)
+                return
         if len(target_names) != len(schema.results):
             self._error(
                 "ACPY-CALL-005",
@@ -378,6 +381,10 @@ class _Normalizer:
             self._return(statement)
         elif isinstance(statement, ast.With):
             self._with_scope(statement)
+        elif isinstance(statement, ast.Expr) and isinstance(
+            statement.value, ast.Call
+        ):
+            self._call(None, statement.value)
         elif isinstance(statement, ast.Pass):
             return
         else:

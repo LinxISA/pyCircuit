@@ -48,8 +48,15 @@ def run(arguments: object, workspace: WorkspaceConfig, sink: OutputSink) -> int:
         )
         return 2
     if emit == "acir":
+        from .build import _binding_registry
+
         native = run_native_compiler(
-            NativeRequest(acir=data, stop_after="acir-verify", emits=())
+            NativeRequest(
+                acir=data,
+                stop_after="acir-verify",
+                emits=(),
+                options=(("binding_registry", _binding_registry(workspace.component_roots)),),
+            )
         )
         if _has_errors(native.diagnostics):
             sink.diagnostics(native.diagnostics)

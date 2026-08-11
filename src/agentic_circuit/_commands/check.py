@@ -43,6 +43,7 @@ def capture(
                 entry=_entry(arguments, workspace),
                 system=getattr(arguments, "system", None) or workspace.default_system,
                 static_arguments=(),
+                component_roots=workspace.component_roots,
                 private_output=Path(temporary) / "capture",
             )
         )
@@ -71,11 +72,14 @@ def run(arguments: object, workspace: WorkspaceConfig, sink: OutputSink) -> int:
                 )
             )
             return 2
+        from .build import _binding_registry
+
         native = run_native_compiler(
             NativeRequest(
                 acir=frontend.acir,
                 stop_after="acir-verify",
                 emits=(),
+                options=(("binding_registry", _binding_registry(workspace.component_roots)),),
             )
         )
         if _has_errors(native.diagnostics):

@@ -17,6 +17,7 @@
 namespace gfsim {
 
 class Module;
+class SimSystem;
 
 // ── SimObject ─────────────────────────────────────────────────────────
 
@@ -85,6 +86,13 @@ public:
 
   /// Append deterministic snapshots owned by this object.
   virtual void collectStatistics(std::vector<StatSnapshot> &) const {}
+
+  /// Bind generated objects to their owning runtime after construction.
+  virtual void bindSystem(SimSystem *) {}
+  void setObservationSink(ObservationSink *sink) { observationSink_ = sink; }
+
+  /// Request deterministic shutdown at a voluntary trace-end yield point.
+  virtual bool requestTraceEnd() { return false; }
 
   // ── Reset ───────────────────────────────────────────────────────────
 
