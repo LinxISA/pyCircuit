@@ -20,6 +20,7 @@ class ValueVersion:
     category: ValueCategory
     type_key: str
     producer: str | None
+    ownership: Literal["owned", "borrowed", "shared"] = "borrowed"
 
     @property
     def name(self) -> str:

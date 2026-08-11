@@ -21,6 +21,16 @@ from ._static_eval import StaticEnvironment, StaticValue, evaluate_static
 
 
 @dataclass(frozen=True, slots=True)
+class NormalizedScopeRegion:
+    key: str
+    name: str
+    parent: str | None
+    call_keys: tuple[str, ...]
+    value_names: tuple[str, ...]
+    source: SourceSpan
+
+
+@dataclass(frozen=True, slots=True)
 class NormalizedProgram:
     definition: str
     arguments: tuple[ValueVersion, ...]
@@ -28,6 +38,7 @@ class NormalizedProgram:
     calls: tuple[ResolvedCall, ...]
     returns: tuple[ValueVersion, ...]
     diagnostics: tuple[Diagnostic, ...]
+    scopes: tuple[NormalizedScopeRegion, ...] = ()
 
     def value_names(self) -> tuple[str, ...]:
         return tuple(value.name for value in self.values)
@@ -85,6 +96,8 @@ class _Normalizer:
         self._values: list[ValueVersion] = []
         self._calls: list[ResolvedCall] = []
         self._returns: tuple[ValueVersion, ...] = ()
+        self._scopes: list[NormalizedScopeRegion | None] = []
+        self._scope_stack: list[str] = []
         self._names = StableNameAllocator()
         self._static_values = dict(captured.static_arguments)
         arguments: list[ValueVersion] = []
@@ -119,11 +132,18 @@ class _Normalizer:
         )
 
     def _new_value(
-        self, source_name: str, category: ValueCategory, type_key: str, producer: str
+        self,
+        source_name: str,
+        category: ValueCategory,
+        type_key: str,
+        producer: str,
+        ownership: str = "borrowed",
     ) -> ValueVersion:
         version = self._versions.get(source_name, 0)
         self._versions[source_name] = version + 1
-        value = ValueVersion(source_name, version, category, type_key, producer)
+        value = ValueVersion(
+            source_name, version, category, type_key, producer, ownership
+        )
         self._current[source_name] = value
         self._values.append(value)
         return value
@@ -254,6 +274,7 @@ class _Normalizer:
                 _result_category(result.acir_type),
                 result.acir_type,
                 entity_key,
+                result.ownership,
             )
             for target_name, result in zip(target_names, schema.results, strict=True)
         )
@@ -304,20 +325,71 @@ class _Normalizer:
         except ResolutionError as error:
             self._error("ACPY-SYMBOL-001", str(error), statement)
 
+    def _with_scope(self, statement: ast.With) -> None:
+        valid = (
+            len(statement.items) == 1
+            and statement.items[0].optional_vars is None
+            and isinstance(statement.items[0].context_expr, ast.Call)
+            and isinstance(statement.items[0].context_expr.func, ast.Name)
+            and statement.items[0].context_expr.func.id == "scope"
+            and len(statement.items[0].context_expr.args) == 1
+            and not statement.items[0].context_expr.keywords
+        )
+        if not valid:
+            self._error(
+                "ACPY-SCOPE-001", "only with scope(static_name) is supported", statement
+            )
+            return
+        context = statement.items[0].context_expr
+        assert isinstance(context, ast.Call)
+        try:
+            name = self._static(context.args[0])
+        except ValueError as error:
+            self._error("ACPY-SCOPE-001", str(error), context.args[0])
+            return
+        if type(name) is not str or not name:
+            self._error(
+                "ACPY-SCOPE-001", "scope name must be a non-empty static string", context
+            )
+            return
+        key = f"scope:{statement.lineno}:{statement.col_offset + 1}"
+        parent = self._scope_stack[-1] if self._scope_stack else None
+        index = len(self._scopes)
+        self._scopes.append(None)
+        call_start = len(self._calls)
+        value_start = len(self._values)
+        self._scope_stack.append(key)
+        for nested in statement.body:
+            self._statement(nested)
+        self._scope_stack.pop()
+        self._scopes[index] = NormalizedScopeRegion(
+            key=key,
+            name=name,
+            parent=parent,
+            call_keys=tuple(call.entity_key for call in self._calls[call_start:]),
+            value_names=tuple(value.name for value in self._values[value_start:]),
+            source=_span(self._captured.source.path, statement),
+        )
+
+    def _statement(self, statement: ast.stmt) -> None:
+        if isinstance(statement, ast.Assign):
+            self._assignment(statement)
+        elif isinstance(statement, ast.Return):
+            self._return(statement)
+        elif isinstance(statement, ast.With):
+            self._with_scope(statement)
+        elif isinstance(statement, ast.Pass):
+            return
+        else:
+            self._error(
+                "ACPY-SYNTAX-001",
+                f"{type(statement).__name__} normalization is not supported yet",
+                statement,
+            )
+
     def run(self) -> NormalizedProgram:
         for statement in self._node.body:
-            if isinstance(statement, ast.Assign):
-                self._assignment(statement)
-            elif isinstance(statement, ast.Return):
-                self._return(statement)
-            elif isinstance(statement, ast.Pass):
-                continue
-            else:
-                self._error(
-                    "ACPY-SYNTAX-001",
-                    f"{type(statement).__name__} normalization is not supported yet",
-                    statement,
-                )
+            self._statement(statement)
         return NormalizedProgram(
             definition=self._definition,
             arguments=self._arguments,
@@ -325,6 +397,7 @@ class _Normalizer:
             calls=tuple(self._calls),
             returns=self._returns,
             diagnostics=self._diagnostics.freeze(),
+            scopes=tuple(scope for scope in self._scopes if scope is not None),
         )
 
 

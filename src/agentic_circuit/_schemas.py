@@ -345,6 +345,7 @@ class ResultSchema:
     name: str
     acir_type: str
     source_binding: str | None
+    ownership: Literal["owned", "borrowed", "shared"] = "owned"
 
 
 @dataclass(frozen=True, slots=True)
@@ -485,7 +486,14 @@ def _component_schema(
             and type(source_binding) is not str
         ):
             raise SchemaError(f"invalid result in {expected_name}")
-        results.append(ResultSchema(result["name"], result["acir_type"], source_binding))
+        results.append(
+            ResultSchema(
+                result["name"],
+                result["acir_type"],
+                source_binding,
+                result["ownership"],
+            )
+        )
 
     names = [port.name for port in ports] + [parameter.name for parameter in parameters]
     if len(names) != len(set(names)) or "name" in names:
