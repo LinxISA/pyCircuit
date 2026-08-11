@@ -368,6 +368,11 @@ TEST(GeneratorTest, EmitsManifestAwareMainWithoutPythonOrMlirDependencies) {
             std::string::npos);
   EXPECT_NE(model->content.find("gfsim::TerminationResult run()"),
             std::string::npos);
+  EXPECT_NE(model->content.find("std::vector<gfsim::StatSnapshot> statistics"),
+            std::string::npos);
+  EXPECT_NE(model->content.find(
+                "std::span<const gfsim::CommittedEvent> observations"),
+            std::string::npos);
   EXPECT_EQ(main->content.find("Python"), std::string::npos);
   EXPECT_EQ(main->content.find("mlir"), std::string::npos);
 }

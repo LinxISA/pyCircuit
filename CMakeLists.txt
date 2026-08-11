@@ -89,6 +89,12 @@ install(
 # build tree, keeping native compilation independent of source-tree paths.
 file(COPY "${CMAKE_CURRENT_SOURCE_DIR}/include/gfsim"
   DESTINATION "${CMAKE_CURRENT_BINARY_DIR}/include")
+add_custom_target(acir_runtime_headers
+  COMMAND "${CMAKE_COMMAND}" -E copy_directory
+    "${CMAKE_CURRENT_SOURCE_DIR}/include/gfsim"
+    "${CMAKE_CURRENT_BINARY_DIR}/include/gfsim"
+  COMMENT "Synchronizing gfsim runtime headers"
+)
 
 add_subdirectory(include)
 add_subdirectory(lib)

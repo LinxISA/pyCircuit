@@ -16,10 +16,13 @@
 #include <array>
 #include <cctype>
 #include <filesystem>
+#include <limits>
 #include <set>
 #include <string>
 #include <system_error>
+#include <tuple>
 #include <utility>
+#include <variant>
 
 namespace gfsim {
 namespace {
@@ -302,6 +305,140 @@ llvm::Expected<std::string> canonicalResult(const RunResultDocument &result) {
       llvm::json::Value(std::move(document)));
 }
 
+llvm::StringRef statisticKindName(StatisticKind kind) {
+  switch (kind) {
+  case StatisticKind::Counter:
+    return "counter";
+  case StatisticKind::Gauge:
+    return "gauge";
+  case StatisticKind::Histogram:
+    return "histogram";
+  }
+  return "counter";
+}
+
+llvm::Expected<std::string>
+canonicalStatistics(std::span<const StatSnapshot> statistics) {
+  llvm::json::Array output;
+  std::pair<std::string_view, std::string_view> previous;
+  bool hasPrevious = false;
+  for (const StatSnapshot &snapshot : statistics) {
+    const auto key = std::pair(std::string_view(snapshot.objectPath),
+                               std::string_view(snapshot.name));
+    if (snapshot.objectPath.empty() || snapshot.name.empty() ||
+        (hasPrevious && previous >= key))
+      return harnessError("statistics are not in canonical path/name order");
+    previous = key;
+    hasPrevious = true;
+    llvm::json::Array buckets;
+    uint64_t previousBound = 0;
+    bool hasBound = false;
+    for (const HistogramBucket &bucket : snapshot.buckets) {
+      if (hasBound && previousBound >= bucket.upperBound)
+        return harnessError("histogram bounds are not strictly increasing");
+      previousBound = bucket.upperBound;
+      hasBound = true;
+      buckets.push_back(llvm::json::Object{{"upper_bound", bucket.upperBound},
+                                           {"count", bucket.count}});
+    }
+    output.push_back(llvm::json::Object{
+        {"name", snapshot.name},
+        {"object_path", snapshot.objectPath},
+        {"kind", statisticKindName(snapshot.kind)},
+        {"value", snapshot.value},
+        {"count", snapshot.count},
+        {"sum", snapshot.sum},
+        {"minimum", snapshot.minimum},
+        {"maximum", snapshot.maximum},
+        {"buckets", std::move(buckets)},
+        {"last_update",
+         llvm::json::Object{{"time", snapshot.lastUpdate.time},
+                            {"delta", snapshot.lastUpdate.delta}}}});
+  }
+  auto bytes =
+      acir::bindings::canonicalizeJson(llvm::json::Value(std::move(output)));
+  if (bytes)
+    bytes->push_back('\n');
+  return bytes;
+}
+
+llvm::StringRef tracePhaseName(TraceEventPhase phase) {
+  switch (phase) {
+  case TraceEventPhase::Instant:
+    return "i";
+  case TraceEventPhase::Complete:
+    return "X";
+  case TraceEventPhase::Counter:
+    return "C";
+  case TraceEventPhase::FlowStart:
+    return "s";
+  case TraceEventPhase::FlowEnd:
+    return "f";
+  }
+  return "i";
+}
+
+llvm::json::Value observationValue(const ObservationValue &value) {
+  return std::visit([](const auto &item) -> llvm::json::Value { return item; },
+                    value);
+}
+
+llvm::Expected<std::string>
+canonicalEvents(std::span<const CommittedEvent> events) {
+  std::string output;
+  std::optional<std::tuple<Epoch, ObjectId, uint64_t>> previous;
+  for (const CommittedEvent &event : events) {
+    const auto key =
+        std::tuple(event.epoch, event.ownerId, event.localCommittedIndex);
+    if (event.ownerId == kInvalidObjectId ||
+        event.epoch.delta >= kMaxDeltasPerTick ||
+        (previous && *previous >= key))
+      return harnessError("events are not in canonical committed order");
+    previous = key;
+    if (event.epoch.time >
+        (std::numeric_limits<uint64_t>::max() - event.epoch.delta) /
+            kMaxDeltasPerTick)
+      return harnessError("event presentation timestamp overflowed");
+    const uint64_t timestamp =
+        event.epoch.time * kMaxDeltasPerTick + event.epoch.delta;
+    llvm::json::Object arguments{
+        {"gfsim_epoch_time", event.epoch.time},
+        {"gfsim_epoch_delta", event.epoch.delta},
+        {"gfsim_object_id", event.ownerId},
+        {"gfsim_local_committed_index", event.localCommittedIndex},
+    };
+    if (event.rootSequenceId)
+      arguments["gfsim_root_sequence_id"] = *event.rootSequenceId;
+    for (const ObservationArgument &argument : event.arguments) {
+      if (llvm::StringRef(argument.name).starts_with("gfsim_") ||
+          arguments.get(argument.name))
+        return harnessError("event argument collides with runtime metadata");
+      arguments[argument.name] = observationValue(argument.value);
+    }
+    llvm::json::Object encoded{{"name", event.name},
+                               {"cat", event.category},
+                               {"ph", tracePhaseName(event.phase)},
+                               {"ts", timestamp},
+                               {"pid", 0},
+                               {"tid", event.ownerId},
+                               {"args", std::move(arguments)}};
+    if (event.phase == TraceEventPhase::Instant)
+      encoded["s"] = "t";
+    if (event.duration)
+      encoded["dur"] = *event.duration;
+    if (event.flowId)
+      encoded["id"] = *event.flowId;
+    if (event.phase == TraceEventPhase::FlowEnd)
+      encoded["bp"] = "e";
+    auto line =
+        acir::bindings::canonicalizeJson(llvm::json::Value(std::move(encoded)));
+    if (!line)
+      return line.takeError();
+    output.append(*line).push_back('\n');
+  }
+  return output;
+}
+
 } // namespace
 
 llvm::Expected<RunManifest> loadRunManifest(llvm::StringRef bytes,
@@ -529,7 +666,18 @@ RunResultDocument makeRunResult(const RunManifest &manifest,
 
 llvm::Error publishRunResult(const RunManifest &manifest,
                              RunResultDocument &result,
+                             std::span<const StatSnapshot> statistics,
+                             std::span<const CommittedEvent> events,
                              llvm::StringRef resultStage) {
+  auto stats = canonicalStatistics(statistics);
+  if (!stats)
+    return stats.takeError();
+  llvm::Expected<std::string> eventBytes = std::string();
+  if (manifest.eventLog == "jsonl") {
+    eventBytes = canonicalEvents(events);
+    if (!eventBytes)
+      return eventBytes.takeError();
+  }
   if (llvm::sys::fs::exists(resultStage))
     return harnessError("result stage already exists");
   if (std::error_code error = llvm::sys::fs::create_directories(resultStage))
@@ -543,16 +691,16 @@ llvm::Error publishRunResult(const RunManifest &manifest,
     }
   } cleanup{resultStage};
 
-  constexpr llvm::StringLiteral stats = "[]\n";
-  if (llvm::Error error = writeExclusive(resultStage, "stats.json", stats))
+  if (llvm::Error error = writeExclusive(resultStage, "stats.json", *stats))
     return error;
   result.outputs.push_back(
-      {"stats.json", acir::bindings::sha256Fingerprint(stats)});
+      {"stats.json", acir::bindings::sha256Fingerprint(*stats)});
   if (manifest.eventLog == "jsonl") {
-    if (llvm::Error error = writeExclusive(resultStage, "events.jsonl", ""))
+    if (llvm::Error error =
+            writeExclusive(resultStage, "events.jsonl", *eventBytes))
       return error;
     result.outputs.push_back(
-        {"events.jsonl", acir::bindings::sha256Fingerprint("")});
+        {"events.jsonl", acir::bindings::sha256Fingerprint(*eventBytes)});
   }
   const bool expectationPassed =
       expectationMatches(manifest.expectation, result);

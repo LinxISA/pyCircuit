@@ -119,6 +119,12 @@ public:
     return buffer ? buffer.get()->getBuffer().str() : std::string();
   }
 
+  bool exists(std::string_view relativePath) const {
+    llvm::SmallString<256> path(path_);
+    llvm::sys::path::append(path, relativePath);
+    return llvm::sys::fs::exists(path);
+  }
+
 private:
   llvm::SmallString<256> path_;
 };
@@ -132,7 +138,8 @@ std::string harnessTrace() {
 }
 
 std::string harnessRunManifest(std::string_view buildHash,
-                               std::string_view traceHash) {
+                               std::string_view traceHash,
+                               std::string_view eventLog = "disabled") {
   return "{\"schema\":\"agentic-circuit-run-manifest\",\"version\":\"0.1\","
          "\"contract_epoch\":\"0.1\",\"build_manifest\":{\"path\":"
          "\"build-manifest.json\",\"sha256\":\"" +
@@ -142,7 +149,9 @@ std::string harnessRunManifest(std::string_view buildHash,
          std::string(traceHash) +
          "\"},\"seed\":1,\"output_directory\":\"run\",\"deadlock_window\":null,"
          "\"max_ticks\":100,\"max_domain_cycles\":{\"core\":25},"
-         "\"stats_format\":\"json\",\"event_log\":\"disabled\","
+         "\"stats_format\":\"json\",\"event_log\":\"" +
+         std::string(eventLog) +
+         "\","
          "\"termination_expectation\":{\"kind\":\"incomplete\","
          "\"reason\":\"max_domain_cycles\"}}";
 }
@@ -164,9 +173,34 @@ public:
   }
   std::string_view buildFingerprint() const { return kHarnessFingerprint; }
   std::span<const TimeDomainRuntime> timeDomains() const { return domains; }
+  std::vector<StatSnapshot> statistics() const { return snapshots; }
+  std::span<const CommittedEvent> observations() const { return events; }
 
   RuntimeLimits configured;
   uint64_t workCount = 0;
+  std::vector<StatSnapshot> snapshots = {{.name = "accepted_transactions",
+                                          .objectPath = "/generated/root/queue",
+                                          .kind = StatisticKind::Counter,
+                                          .value = 2,
+                                          .lastUpdate = {4, 0}}};
+  std::vector<CommittedEvent> events = {
+      {.epoch = {2, 3},
+       .ownerId = 5,
+       .localCommittedIndex = 0,
+       .category = "transaction",
+       .name = "accepted",
+       .phase = TraceEventPhase::Instant,
+       .rootSequenceId = 11,
+       .arguments = {{"accepted", true}, {"bytes", uint64_t{64}}}},
+      {.epoch = {4, 0},
+       .ownerId = 7,
+       .localCommittedIndex = 0,
+       .category = "execution",
+       .name = "execute",
+       .phase = TraceEventPhase::Complete,
+       .rootSequenceId = 12,
+       .duration = 3,
+       .arguments = {{"engine", std::string("cube")}}}};
 
 private:
   static constexpr std::array<TimeDomainRuntime, 1> domains = {
@@ -237,6 +271,116 @@ TEST(RuntimeHarnessTest, ExactManifestConfiguresLimitsAndProducesClosedResult) {
   EXPECT_EQ(object->size(), 12u);
   EXPECT_EQ(object->getString("status"), "incomplete");
   EXPECT_EQ(object->getString("termination_reason"), "max_domain_cycles");
+  auto statistics =
+      acir::bindings::parseIJson(root.read("result-stage/stats.json"));
+  ASSERT_TRUE(static_cast<bool>(statistics))
+      << llvm::toString(statistics.takeError());
+  const llvm::json::Array *array = statistics->getAsArray();
+  ASSERT_NE(array, nullptr);
+  ASSERT_EQ(array->size(), 1u);
+  const llvm::json::Object *snapshot = array->front().getAsObject();
+  ASSERT_NE(snapshot, nullptr);
+  EXPECT_EQ(snapshot->getString("object_path"), "/generated/root/queue");
+  EXPECT_EQ(snapshot->getString("name"), "accepted_transactions");
+  EXPECT_EQ(snapshot->getString("kind"), "counter");
+  EXPECT_EQ(snapshot->getInteger("value"), 2);
+  EXPECT_FALSE(root.exists("result-stage/events.jsonl"));
+}
+
+TEST(RuntimeHarnessTest, JsonlEventLogContainsCommittedStableKeys) {
+  HarnessTempRoot root;
+  const std::string build = harnessBuildManifest();
+  const std::string trace = harnessTrace();
+  root.write("build-manifest.json", build);
+  root.write("trace.json", trace);
+  auto manifest = loadRunManifest(
+      harnessRunManifest(acir::bindings::sha256Fingerprint(build),
+                         acir::bindings::sha256Fingerprint(trace), "jsonl"),
+      root.path());
+  ASSERT_TRUE(static_cast<bool>(manifest));
+
+  HarnessModel model;
+  llvm::SmallString<256> resultStage(root.path());
+  llvm::sys::path::append(resultStage, "result-stage");
+  auto result = runGeneratedModel(model, *manifest, resultStage);
+  ASSERT_TRUE(static_cast<bool>(result)) << llvm::toString(result.takeError());
+
+  llvm::SmallVector<llvm::StringRef> lines;
+  std::string eventBytes = root.read("result-stage/events.jsonl");
+  llvm::StringRef(eventBytes).split(lines, '\n', -1, false);
+  ASSERT_EQ(lines.size(), 2u);
+  auto first = acir::bindings::parseIJson(lines.front());
+  ASSERT_TRUE(static_cast<bool>(first)) << llvm::toString(first.takeError());
+  const llvm::json::Object *event = first->getAsObject();
+  ASSERT_NE(event, nullptr);
+  EXPECT_EQ(event->getString("name"), "accepted");
+  EXPECT_EQ(event->getString("cat"), "transaction");
+  EXPECT_EQ(event->getString("ph"), "i");
+  EXPECT_EQ(event->getInteger("ts"), 2 * kMaxDeltasPerTick + 3);
+  EXPECT_EQ(event->getInteger("pid"), 0);
+  EXPECT_EQ(event->getInteger("tid"), 5);
+  const llvm::json::Object *arguments = event->getObject("args");
+  ASSERT_NE(arguments, nullptr);
+  EXPECT_EQ(arguments->getInteger("gfsim_epoch_time"), 2);
+  EXPECT_EQ(arguments->getInteger("gfsim_epoch_delta"), 3);
+  EXPECT_EQ(arguments->getInteger("gfsim_object_id"), 5);
+  EXPECT_EQ(arguments->getInteger("gfsim_local_committed_index"), 0);
+  EXPECT_EQ(arguments->getInteger("gfsim_root_sequence_id"), 11);
+  EXPECT_EQ(arguments->getBoolean("accepted"), true);
+  EXPECT_EQ(arguments->getInteger("bytes"), 64);
+
+  auto second = acir::bindings::parseIJson(lines.back());
+  ASSERT_TRUE(static_cast<bool>(second)) << llvm::toString(second.takeError());
+  const llvm::json::Object *complete = second->getAsObject();
+  ASSERT_NE(complete, nullptr);
+  EXPECT_EQ(complete->getString("ph"), "X");
+  EXPECT_EQ(complete->getInteger("dur"), 3);
+  EXPECT_EQ(complete->getInteger("tid"), 7);
+  EXPECT_EQ(complete->getObject("args")->getString("engine"), "cube");
+
+  auto resultDocument =
+      acir::bindings::parseIJson(root.read("result-stage/run-result.json"));
+  ASSERT_TRUE(static_cast<bool>(resultDocument));
+  const llvm::json::Array *outputs =
+      resultDocument->getAsObject()->getArray("outputs");
+  ASSERT_NE(outputs, nullptr);
+  auto eventOutput = std::find_if(
+      outputs->begin(), outputs->end(), [](const llvm::json::Value &value) {
+        const llvm::json::Object *object = value.getAsObject();
+        return object && object->getString("path") == "events.jsonl";
+      });
+  ASSERT_NE(eventOutput, outputs->end());
+  EXPECT_EQ(eventOutput->getAsObject()->getString("sha256"),
+            acir::bindings::sha256Fingerprint(eventBytes));
+}
+
+TEST(RuntimeHarnessTest, RejectsNoncanonicalObservationsBeforePublication) {
+  auto runInvalid = [](bool invalidStatistics) {
+    HarnessTempRoot root;
+    const std::string build = harnessBuildManifest();
+    const std::string trace = harnessTrace();
+    root.write("build-manifest.json", build);
+    root.write("trace.json", trace);
+    auto manifest = loadRunManifest(
+        harnessRunManifest(acir::bindings::sha256Fingerprint(build),
+                           acir::bindings::sha256Fingerprint(trace), "jsonl"),
+        root.path());
+    EXPECT_TRUE(static_cast<bool>(manifest));
+    HarnessModel model;
+    if (invalidStatistics)
+      model.snapshots.push_back({.name = "earlier",
+                                 .objectPath = "/a",
+                                 .kind = StatisticKind::Counter});
+    else
+      std::swap(model.events[0], model.events[1]);
+    llvm::SmallString<256> resultStage(root.path());
+    llvm::sys::path::append(resultStage, "result-stage");
+    EXPECT_FALSE(runGeneratedModel(model, *manifest, resultStage));
+    EXPECT_FALSE(root.exists("result-stage"));
+  };
+
+  runInvalid(true);
+  runInvalid(false);
 }
 
 TEST(RuntimeHarnessTest, BuildFingerprintMismatchFailsBeforeModelWork) {
@@ -1740,6 +1884,8 @@ TEST(GfsimObservationTest, ValidatesNamesArgumentsFlowsAndMonotonicTime) {
   EXPECT_FALSE(recorder.propose(invalid));
   invalid = testObservation(1, "accepted", 1);
   invalid.arguments = {{"z", uint64_t{1}}, {"a", uint64_t{2}}};
+  EXPECT_FALSE(recorder.propose(invalid));
+  invalid.arguments = {{"gfsim_object_id", uint64_t{2}}};
   EXPECT_FALSE(recorder.propose(invalid));
 
   EventProposal start = testObservation(1, "dependency", 1);

@@ -82,6 +82,8 @@ RunResultDocument makeRunResult(const RunManifest &manifest,
 
 llvm::Error publishRunResult(const RunManifest &manifest,
                              RunResultDocument &result,
+                             std::span<const StatSnapshot> statistics,
+                             std::span<const CommittedEvent> events,
                              llvm::StringRef resultStage);
 
 template <typename Model>
@@ -95,6 +97,10 @@ llvm::Expected<RunResultDocument> runGeneratedModel(Model &model,
     {
       value.timeDomains()
     } -> std::convertible_to<std::span<const TimeDomainRuntime>>;
+    { value.statistics() } -> std::same_as<std::vector<StatSnapshot>>;
+    {
+      value.observations()
+    } -> std::convertible_to<std::span<const CommittedEvent>>;
   }
 {
   if (llvm::Error error = preflightRunManifest(
@@ -103,7 +109,10 @@ llvm::Expected<RunResultDocument> runGeneratedModel(Model &model,
     return std::move(error);
   model.configure(manifest.limits);
   RunResultDocument result = makeRunResult(manifest, model.run());
-  if (llvm::Error error = publishRunResult(manifest, result, resultStage))
+  std::vector<StatSnapshot> statistics = model.statistics();
+  std::span<const CommittedEvent> events = model.observations();
+  if (llvm::Error error =
+          publishRunResult(manifest, result, statistics, events, resultStage))
     return std::move(error);
   return result;
 }

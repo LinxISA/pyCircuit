@@ -676,7 +676,7 @@ llvm::Expected<GeneratedFile> modelHeader(const ModelPlan &plan,
       << "#pragma once\n\n#include \"generated/modules/" << root->className
       << ".h\"\n#include \"gfsim/dispatch.h\"\n#include \"gfsim/harness.h\"\n"
          "#include \"gfsim/object.h\"\n\n"
-         "#include <array>\n#include <string_view>\n\n"
+         "#include <array>\n#include <string_view>\n#include <vector>\n\n"
          "namespace acsim_generated {\n\ninline constexpr std::string_view "
          "kBuildFingerprint = \""
       << fingerprint.str()
@@ -695,7 +695,10 @@ llvm::Expected<GeneratedFile> modelHeader(const ModelPlan &plan,
          "&limits);\n  gfsim::TerminationResult run();\n  std::string_view "
          "buildFingerprint() const { return kBuildFingerprint; }\n  "
          "std::span<const gfsim::TimeDomainRuntime> timeDomains() const { "
-         "return kTimeDomains; }\n\nprivate:\n "
+         "return kTimeDomains; }\n  std::vector<gfsim::StatSnapshot> "
+         "statistics() const { return system_.statistics(); }\n  "
+         "std::span<const gfsim::CommittedEvent> observations() const { "
+         "return system_.observations(); }\n\nprivate:\n "
          " "
          "friend struct "
          "DispatchAccess;\n  "

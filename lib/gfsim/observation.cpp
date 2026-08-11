@@ -41,6 +41,7 @@ bool ObservationRecorder::propose(EventProposal proposal) {
   std::string previous;
   for (const ObservationArgument &argument : proposal.arguments) {
     if (!validName(argument.name) ||
+        std::string_view(argument.name).starts_with("gfsim_") ||
         (!previous.empty() && previous >= argument.name))
       return reject("observation arguments must be sorted and unique");
     previous = argument.name;
