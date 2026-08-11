@@ -1,6 +1,6 @@
 # Phase 4 ACPy, Python Frontend, and Agent-First CLI Design
 
-**Status:** Draft for written review
+**Status:** Approved for implementation
 
 **Date:** 2026-08-11
 
@@ -438,11 +438,12 @@ never corrupt structured stdout.
 
 Python and C++ use one logical diagnostic model matching
 `schemas/diagnostic.schema.json`. A diagnostic contains the exact schema and
-epoch identity, stable code, severity, message, optional source span, hierarchy
-path, notes, and safe repair information allowed by the schema.
+epoch identity, stable code, logical stage, severity, message, optional source
+start location, optional object path, expected and actual values, related
+locations, and safe repair messages in `fixits`.
 
-Diagnostics are sorted by normalized source path, start position, hierarchy
-path, code, and message. A diagnostic generated without a source position sorts
+Diagnostics are sorted by normalized source path, start position, object path,
+code, and message. A diagnostic generated without a source position sorts
 after positioned diagnostics in the same phase. Parallel or subprocess
 completion order never affects presentation.
 
