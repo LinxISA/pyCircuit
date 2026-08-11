@@ -407,6 +407,7 @@ TEST(NpuDependencyTrackerTest, FiniteCapacityRejectsWithoutMutatingOffer) {
   tracker.setPath("/npu/dependencies");
   const NpuInstruction first = tileInstruction("TADD", 1, 0, {}, {"0x10"});
   const NpuInstruction blocked = tileInstruction("TADD", 2, 0, {}, {"0x20"});
+  // NOLINTNEXTLINE(performance-unnecessary-copy-initialization)
   const NpuInstruction original = blocked;
 
   ASSERT_TRUE(tracker.proposeDispatch(first, 1));
@@ -539,6 +540,7 @@ TEST(NpuExecutionPipelineTest, UnitPressureRejectsWithoutMutatingIssue) {
       issueEntry(tileInstruction("TADD", 1, 0, {}, {"0x10"}), 10);
   const NpuIssueEntry blocked =
       issueEntry(tileInstruction("TADD", 2, 0, {}, {"0x20"}), 11);
+  // NOLINTNEXTLINE(performance-unnecessary-copy-initialization)
   const NpuIssueEntry original = blocked;
   ASSERT_TRUE(pipeline.proposeAdmit(first.instruction));
   ASSERT_TRUE(pipeline.proposeAdmit(blocked.instruction));

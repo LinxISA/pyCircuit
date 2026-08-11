@@ -101,7 +101,7 @@ optionalPositiveUInt64(const llvm::json::Object &object, llvm::StringRef key) {
   auto integer = value->getAsUINT64();
   if (!integer || *integer == 0)
     return harnessError("field '" + key + "' must be null or positive");
-  return std::optional<uint64_t>{*integer};
+  return integer;
 }
 
 llvm::Expected<HarnessFileHash> parseFileHash(const llvm::json::Value *value,
