@@ -93,6 +93,20 @@ def assert_exact_ci_cache_commands(test_case, workflow):
 
 
 class RepositoryContractsTest(unittest.TestCase):
+    def test_minimal_acpy_fixture_matches_the_public_schema(self):
+        self.assertIsNotNone(importlib.util.find_spec("jsonschema"))
+        from jsonschema.validators import Draft202012Validator
+
+        schema = json.loads((ROOT / "schemas/acpy.schema.json").read_text())
+        fixture = json.loads(
+            (
+                ROOT
+                / "tests/python_frontend/fixtures/acpy/minimal.acpy.json"
+            ).read_text()
+        )
+
+        Draft202012Validator(schema).validate(fixture)
+
     def test_ci_runs_address_and_undefined_sanitizer_presets(self):
         workflow = (ROOT / ".github/workflows/ci.yml").read_text()
         sanitizer_job = re.search(r"(?ms)^  sanitizers:\n.*\Z", workflow)
