@@ -18,6 +18,8 @@
 namespace gfsim {
 namespace {
 
+constexpr uint64_t kMaxPortableJsonInteger = 9007199254740991ULL;
+
 // Frozen from davincioo@e73633301cabed0d871ea5ff66e76a91df870aeb
 // model/include/davincioo/model/pto_inst.hpp.
 constexpr auto kTmaOpcodes = std::to_array<std::string_view>({
@@ -205,6 +207,14 @@ template <typename T> const T *get(const PtoValue &value) {
   return std::get_if<T>(&value.value);
 }
 
+std::optional<uint64_t> unsignedInteger(const PtoValue &value) {
+  if (const auto *integer = get<uint64_t>(value))
+    return *integer;
+  if (const auto *integer = get<int64_t>(value); integer && *integer >= 0)
+    return static_cast<uint64_t>(*integer);
+  return std::nullopt;
+}
+
 const PtoValue *find(const PtoValue::Object &object, std::string_view key) {
   auto iterator = object.find(std::string(key));
   return iterator == object.end() ? nullptr : &iterator->second;
@@ -314,7 +324,7 @@ uint64_t dependencyFlowId(uint64_t blockId, uint64_t producerSequenceId,
   appendInteger(consumerSequenceId);
   for (char character : tileIdentity)
     appendByte(static_cast<uint8_t>(character));
-  return hash;
+  return hash % kMaxPortableJsonInteger + 1;
 }
 
 bool issueEntryLess(const NpuIssueEntry &left, const NpuIssueEntry &right) {
@@ -364,7 +374,7 @@ NpuDecodeResult NpuDecoder::decode(const PtoTraceRecord &record) const {
     return reject("npu_invalid_davincioo_attributes",
                   "attributes.davincioo is incomplete");
 
-  const auto *blockId = get<uint64_t>(*blockValue);
+  std::optional<uint64_t> blockId = unsignedInteger(*blockValue);
   const auto *inputs = get<PtoValue::Array>(*inputValue);
   const auto *roles = get<PtoValue::Array>(*roleValue);
   const auto *outputs = get<PtoValue::Array>(*outputValue);
@@ -589,12 +599,12 @@ void NpuDependencyTracker::doArbitrate(Epoch) {
       uint64_t flow =
           dependencyFlowId(entry.instruction.blockId, producer->second,
                            entry.instruction.sequenceId, tile);
-      while (shadowFlowIds.contains(flow)) {
-        if (flow == std::numeric_limits<uint64_t>::max()) {
+      for (size_t attempts = 0; shadowFlowIds.contains(flow); ++attempts) {
+        if (attempts >= shadowFlowIds.size()) {
           setRuntimeFailureCode("npu_dependency_flow_id_exhausted");
           break;
         }
-        ++flow;
+        flow = flow == kMaxPortableJsonInteger ? 1 : flow + 1;
       }
       if (!runtimeFailureCode().empty())
         break;
@@ -1471,6 +1481,27 @@ Epoch NpuExecutionPipeline::completionEpoch(uint64_t sequenceId) const {
   return active == impl_->active.end() ? Epoch{} : active->second.readyEpoch;
 }
 
+bool NpuExecutionPipeline::canAccept(NpuEngineClass engine) const {
+  size_t occupied = activeExecutions(engine);
+  occupied += std::ranges::count_if(
+      impl_->executionProposals, [&](const Impl::ActiveExecution &proposal) {
+        return proposal.entry.instruction.engine == engine;
+      });
+  if (occupied >= configuredUnits(impl_->config, engine))
+    return false;
+  if (engine != NpuEngineClass::Tma)
+    return true;
+  size_t memoryOccupied =
+      std::ranges::count_if(impl_->active, [](const auto &active) {
+        return active.second.memoryRequest.has_value();
+      });
+  memoryOccupied += std::ranges::count_if(
+      impl_->executionProposals, [](const Impl::ActiveExecution &proposal) {
+        return proposal.memoryRequest.has_value();
+      });
+  return memoryOccupied < impl_->config.memoryRequests;
+}
+
 size_t NpuExecutionPipeline::activeExecutions(NpuEngineClass engine) const {
   return std::ranges::count_if(impl_->active, [&](const auto &active) {
     return active.second.entry.instruction.engine == engine;
@@ -1532,5 +1563,222 @@ void NpuExecutionPipeline::reset() {
   impl_->system = system;
   clearRuntimeFailureCode();
 }
+
+Phase5NpuTraceSource::Phase5NpuTraceSource(std::string name, ObjectId id,
+                                           SimObject *parent,
+                                           ObservationSink *observations)
+    : SimObject(ObjectKind::TraceSource, std::move(name), id, parent,
+                observations) {}
+
+bool Phase5NpuTraceSource::loadDocument(PtoTraceDocument document) {
+  if (loaded_ || pending_ || committed_)
+    return false;
+  document_ = std::move(document);
+  loaded_ = true;
+  return true;
+}
+
+void Phase5NpuTraceSource::doWork(Epoch) {
+  if (pending_ || committed_)
+    return;
+  if (!loaded_) {
+    setRuntimeFailureCode("npu_trace_not_loaded");
+    return;
+  }
+
+  struct LocalSink final : ObservationSink {
+    ObservationRecorder recorder;
+    bool proposeObservation(EventProposal proposal) override {
+      return recorder.propose(std::move(proposal));
+    }
+  } sink;
+
+  const size_t queueCapacity = std::max<size_t>(document_.records.size(), 1);
+  NpuDependencyTracker tracker(
+      "dependencies", 10, nullptr,
+      {queueCapacity, queueCapacity, queueCapacity, queueCapacity}, &sink);
+  NpuExecutionPipeline execution(
+      "execution", 11, nullptr,
+      {.scalarUnits = 1,
+       .vectorUnits = 2,
+       .cubeUnits = 1,
+       .tmaUnits = 1,
+       .memoryRequests = 2,
+       .scratchpadTiles = std::max<size_t>(document_.records.size() * 2, 8)},
+      nullptr, &sink);
+
+  auto commitTracker = [&](Epoch epoch) {
+    tracker.doArbitrate(epoch);
+    tracker.doXfer(epoch);
+    return sink.recorder.commitOwner(tracker.id(), epoch);
+  };
+  auto commitExecution = [&](Epoch epoch) {
+    execution.doArbitrate(epoch);
+    execution.doXfer(epoch);
+    return sink.recorder.commitOwner(execution.id(), epoch);
+  };
+
+  NpuDecoder decoder;
+  uint64_t tick = 0;
+  for (const PtoTraceRecord &record : document_.records) {
+    NpuDecodeResult decoded = decoder.decode(record);
+    if (!decoded.succeeded()) {
+      setRuntimeFailureCode("npu_decode_failed");
+      return;
+    }
+    NpuInstruction instruction = std::move(*decoded.instruction);
+    ObjectId stableObjectId =
+        static_cast<ObjectId>(20 + static_cast<uint8_t>(instruction.engine));
+    if (!tracker.proposeDispatch(instruction, stableObjectId) ||
+        !execution.proposeAdmit(instruction) || !commitTracker({tick, 0}) ||
+        !tracker.dispatchAccepted(record.sequenceId) ||
+        !commitExecution({tick, 0})) {
+      setRuntimeFailureCode("npu_dispatch_failed");
+      return;
+    }
+    if (!tracker.runtimeFailureCode().empty() ||
+        !execution.runtimeFailureCode().empty()) {
+      setRuntimeFailureCode("npu_dispatch_runtime_failed");
+      return;
+    }
+    ++tick;
+  }
+
+  if (!execution.proposeTraceExhausted()) {
+    setRuntimeFailureCode("npu_trace_exhaustion_failed");
+    return;
+  }
+
+  std::vector<NpuIssueEntry> pendingIssues;
+  constexpr std::array engines = {NpuEngineClass::Scalar,
+                                  NpuEngineClass::Vector, NpuEngineClass::Cube,
+                                  NpuEngineClass::Tma};
+  const uint64_t maximumTicks =
+      std::max<uint64_t>(128, document_.records.size() * 32);
+  bool finished = false;
+  for (uint64_t iteration = 0; iteration < maximumTicks; ++iteration, ++tick) {
+    Epoch epoch{tick, 0};
+    for (const NpuIssueEntry &issue : pendingIssues)
+      if (!execution.proposeExecute(issue, epoch)) {
+        setRuntimeFailureCode("npu_execution_admission_failed");
+        return;
+      }
+    pendingIssues.clear();
+
+    execution.doWork(epoch);
+    if (!commitExecution(epoch)) {
+      setRuntimeFailureCode("npu_execution_observation_failed");
+      return;
+    }
+    if (!execution.runtimeFailureCode().empty()) {
+      setRuntimeFailureCode("npu_execution_runtime_failed");
+      return;
+    }
+    for (const NpuIssueEntry &completed : execution.completed())
+      if (!tracker.proposeComplete(completed.instruction.sequenceId)) {
+        setRuntimeFailureCode("npu_completion_broadcast_failed");
+        return;
+      }
+    for (NpuEngineClass engine : engines)
+      if (execution.canAccept(engine))
+        tracker.proposeIssue(engine);
+    if (!commitTracker(epoch)) {
+      setRuntimeFailureCode("npu_dependency_observation_failed");
+      return;
+    }
+    if (!tracker.runtimeFailureCode().empty()) {
+      setRuntimeFailureCode("npu_dependency_runtime_failed");
+      return;
+    }
+    pendingIssues.assign(tracker.issued().begin(), tracker.issued().end());
+
+    if (execution.complete() && pendingIssues.empty() &&
+        tracker.runtimeState(epoch).quiescent) {
+      finished = true;
+      break;
+    }
+  }
+  if (!finished) {
+    setRuntimeFailureCode("npu_execution_limit_reached");
+    return;
+  }
+
+  result_ = execution.architecturalResult();
+  eventCount_ = sink.recorder.events().size();
+  for (const CommittedEvent &event : sink.recorder.events()) {
+    std::vector<ObservationArgument> arguments = event.arguments;
+    arguments.push_back(
+        {.name = "npu_epoch_delta", .value = uint64_t{event.epoch.delta}});
+    arguments.push_back({.name = "npu_epoch_time", .value = event.epoch.time});
+    std::sort(
+        arguments.begin(), arguments.end(),
+        [](const ObservationArgument &left, const ObservationArgument &right) {
+          return left.name < right.name;
+        });
+    if (!emitObservation({.category = event.category,
+                          .name = event.name,
+                          .phase = event.phase,
+                          .rootSequenceId = event.rootSequenceId,
+                          .duration = event.duration,
+                          .flowId = event.flowId,
+                          .arguments = std::move(arguments)}))
+      return;
+  }
+  pending_ = true;
+}
+
+void Phase5NpuTraceSource::doXfer(Epoch epoch) {
+  if (!pending_)
+    return;
+  pending_ = false;
+  committed_ = true;
+  lastUpdate_ = epoch;
+}
+
+bool Phase5NpuTraceSource::hasPendingCommit() const { return pending_; }
+
+RuntimeObjectState Phase5NpuTraceSource::runtimeState(Epoch) const {
+  return {.quiescent = committed_ && !pending_,
+          .runnable = loaded_ && !committed_ && !pending_,
+          .pendingCommit = pending_,
+          .reason = committed_ ? "" : "npu_trace_pending",
+          .traceOwner = true,
+          .tracePosition = committed_ ? document_.records.size() : 0,
+          .traceLastCommittedSequenceId =
+              committed_ && !document_.records.empty()
+                  ? std::optional<uint64_t>(document_.records.back().sequenceId)
+                  : std::nullopt,
+          .traceEof = committed_};
+}
+
+void Phase5NpuTraceSource::collectStatistics(
+    std::vector<StatSnapshot> &out) const {
+  if (!committed_)
+    return;
+  auto append = [&](std::string name, uint64_t value) {
+    out.push_back({.name = std::move(name),
+                   .objectPath = std::string(path()),
+                   .kind = StatisticKind::Counter,
+                   .value = value,
+                   .lastUpdate = lastUpdate_});
+  };
+  append("trace_records", document_.records.size());
+  append("npu_events", eventCount_);
+  append("architectural_retired_instructions", result_.retiredInstructions);
+  append("architectural_digest", result_.digest);
+}
+
+void Phase5NpuTraceSource::reset() {
+  document_ = {};
+  result_ = {};
+  eventCount_ = 0;
+  loaded_ = false;
+  pending_ = false;
+  committed_ = false;
+  lastUpdate_ = {};
+  clearRuntimeFailureCode();
+}
+
+bool Phase5NpuTraceSource::validate() const { return true; }
 
 } // namespace gfsim

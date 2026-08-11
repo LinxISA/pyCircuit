@@ -1,6 +1,7 @@
 #ifndef GFSIM_NPU_H
 #define GFSIM_NPU_H
 
+#include "gfsim/components.h"
 #include "gfsim/observation.h"
 #include "gfsim/trace.h"
 
@@ -253,6 +254,7 @@ public:
 
   static uint64_t executionLatency(const NpuInstruction &instruction);
   Epoch completionEpoch(uint64_t sequenceId) const;
+  bool canAccept(NpuEngineClass engine) const;
   size_t activeExecutions(NpuEngineClass engine) const;
   const std::vector<NpuIssueEntry> &completed() const;
   const std::vector<NpuInstruction> &retired() const;
@@ -266,6 +268,49 @@ public:
 private:
   struct Impl;
   std::unique_ptr<Impl> impl_;
+};
+
+/// Trace-owning provider component for the checked-in hierarchical NPU model.
+class Phase5NpuTraceSource final : public SimObject {
+public:
+  static constexpr std::string_view contractName = "phase5.Npu";
+  static constexpr ObjectKind componentKind = ObjectKind::TraceSource;
+
+  Phase5NpuTraceSource(std::string name, ObjectId id, SimObject *parent,
+                       ObservationSink *observations = nullptr);
+
+  bool loadDocument(PtoTraceDocument document);
+  void doWork(Epoch epoch) override;
+  void doXfer(Epoch epoch) override;
+  bool hasPendingCommit() const override;
+  RuntimeObjectState runtimeState(Epoch epoch) const override;
+  void collectStatistics(std::vector<StatSnapshot> &out) const override;
+  void reset() override;
+  bool validate() const;
+
+private:
+  PtoTraceDocument document_;
+  NpuArchitecturalResult result_;
+  uint64_t eventCount_ = 0;
+  bool loaded_ = false;
+  bool pending_ = false;
+  bool committed_ = false;
+  Epoch lastUpdate_;
+};
+
+/// Quiescent structural marker used to preserve the generated NPU hierarchy.
+class Phase5NpuNode final : public SimObject {
+public:
+  static constexpr std::string_view contractName = "phase5.NpuNode";
+  static constexpr ObjectKind componentKind = ObjectKind::Compute;
+
+  Phase5NpuNode(std::string name, ObjectId id, SimObject *parent)
+      : SimObject(ObjectKind::Compute, std::move(name), id, parent) {}
+
+  RuntimeObjectState runtimeState(Epoch) const override {
+    return {.quiescent = true};
+  }
+  bool validate() const { return true; }
 };
 
 } // namespace gfsim

@@ -1,0 +1,196 @@
+{
+  "candidates": [
+    {
+      "available": true,
+      "profile": "fast",
+      "target": "unknown-unknown",
+      "record": {
+        "activation_sources": [],
+        "availability": "available",
+        "binding": "phase5_Npu_binding",
+        "binding_schema": "acsim-binding-0.1",
+        "component_schema": "phase5.Npu",
+        "component_schema_fingerprint": "sha256:009f25d7ac0cc25b5edd395659e6d048c39aae97be16f469574fbfb4c59166e0",
+        "construction": {"arguments": [], "kind": "constructor"},
+        "contract_epoch": "0.1",
+        "cpp": {
+          "concept": "gfsim::Component",
+          "entry_points": {
+            "pure": "",
+            "reset": "gfsim::phase5_npu_reset",
+            "validate": "gfsim::phase5_npu_validate",
+            "work": "gfsim::phase5_npu_work",
+            "xfer": "gfsim::phase5_npu_xfer"
+          },
+          "header": "gfsim/npu.h",
+          "symbol": "gfsim::Phase5NpuTraceSource",
+          "target": "gfsim"
+        },
+        "cpp_type": "phase5_npu_type",
+        "effect": "stateful",
+        "fingerprint": "sha256:1a01df33375106cad886f569a08abd1a72af7dbf61c8b615f088400c40a6dcb2",
+        "implementation": "gfsim.Phase5NpuTraceSource",
+        "ownership": {"kind": "unique", "placement": "member_or_array"},
+        "parameters": [],
+        "ports": [],
+        "provider": "phase5_npu_source",
+        "provider_implementation_fingerprint": "sha256:8888888888888888888888888888888888888888888888888888888888888888",
+        "resources": [],
+        "results": []
+      }
+    },
+    {
+      "available": true,
+      "profile": "fast",
+      "target": "native",
+      "record": {
+        "activation_sources": [],
+        "availability": "available",
+        "binding": "phase5_Npu_binding",
+        "binding_schema": "acsim-binding-0.1",
+        "component_schema": "phase5.Npu",
+        "component_schema_fingerprint": "sha256:009f25d7ac0cc25b5edd395659e6d048c39aae97be16f469574fbfb4c59166e0",
+        "construction": {"arguments": [], "kind": "constructor"},
+        "contract_epoch": "0.1",
+        "cpp": {
+          "concept": "gfsim::Component",
+          "entry_points": {
+            "pure": "",
+            "reset": "gfsim::phase5_npu_reset",
+            "validate": "gfsim::phase5_npu_validate",
+            "work": "gfsim::phase5_npu_work",
+            "xfer": "gfsim::phase5_npu_xfer"
+          },
+          "header": "gfsim/npu.h",
+          "symbol": "gfsim::Phase5NpuTraceSource",
+          "target": "gfsim"
+        },
+        "cpp_type": "phase5_npu_type",
+        "effect": "stateful",
+        "fingerprint": "sha256:1a01df33375106cad886f569a08abd1a72af7dbf61c8b615f088400c40a6dcb2",
+        "implementation": "gfsim.Phase5NpuTraceSource",
+        "ownership": {"kind": "unique", "placement": "member_or_array"},
+        "parameters": [],
+        "ports": [],
+        "provider": "phase5_npu_source",
+        "provider_implementation_fingerprint": "sha256:8888888888888888888888888888888888888888888888888888888888888888",
+        "resources": [],
+        "results": []
+      }
+    },
+    {
+      "available": true,
+      "profile": "fast",
+      "target": "unknown-unknown",
+      "record": {
+        "activation_sources": [],
+        "availability": "available",
+        "binding": "phase5_NpuNode_binding",
+        "binding_schema": "acsim-binding-0.1",
+        "component_schema": "phase5.NpuNode",
+        "component_schema_fingerprint": "sha256:f21ac0875386764303060d218875f0b91582848836e70d478591ea146ef1963e",
+        "construction": {"arguments": [], "kind": "constructor"},
+        "contract_epoch": "0.1",
+        "cpp": {
+          "concept": "gfsim::Component",
+          "entry_points": {
+            "pure": "",
+            "reset": "gfsim::phase5_npu_node_reset",
+            "validate": "gfsim::phase5_npu_node_validate",
+            "work": "gfsim::phase5_npu_node_work",
+            "xfer": "gfsim::phase5_npu_node_xfer"
+          },
+          "header": "gfsim/npu.h",
+          "symbol": "gfsim::Phase5NpuNode",
+          "target": "gfsim"
+        },
+        "cpp_type": "phase5_npu_node_type",
+        "effect": "stateful",
+        "fingerprint": "sha256:4c999251003f9f30d83deea694e060b53beb781a881d2450394c04dd7d1b5700",
+        "implementation": "gfsim.Phase5NpuNode",
+        "ownership": {"kind": "unique", "placement": "member_or_array"},
+        "parameters": [],
+        "ports": [],
+        "provider": "phase5_npu_node",
+        "provider_implementation_fingerprint": "sha256:9999999999999999999999999999999999999999999999999999999999999999",
+        "resources": [],
+        "results": []
+      }
+    },
+    {
+      "available": true,
+      "profile": "fast",
+      "target": "native",
+      "record": {
+        "activation_sources": [],
+        "availability": "available",
+        "binding": "phase5_NpuNode_binding",
+        "binding_schema": "acsim-binding-0.1",
+        "component_schema": "phase5.NpuNode",
+        "component_schema_fingerprint": "sha256:f21ac0875386764303060d218875f0b91582848836e70d478591ea146ef1963e",
+        "construction": {"arguments": [], "kind": "constructor"},
+        "contract_epoch": "0.1",
+        "cpp": {
+          "concept": "gfsim::Component",
+          "entry_points": {
+            "pure": "",
+            "reset": "gfsim::phase5_npu_node_reset",
+            "validate": "gfsim::phase5_npu_node_validate",
+            "work": "gfsim::phase5_npu_node_work",
+            "xfer": "gfsim::phase5_npu_node_xfer"
+          },
+          "header": "gfsim/npu.h",
+          "symbol": "gfsim::Phase5NpuNode",
+          "target": "gfsim"
+        },
+        "cpp_type": "phase5_npu_node_type",
+        "effect": "stateful",
+        "fingerprint": "sha256:4c999251003f9f30d83deea694e060b53beb781a881d2450394c04dd7d1b5700",
+        "implementation": "gfsim.Phase5NpuNode",
+        "ownership": {"kind": "unique", "placement": "member_or_array"},
+        "parameters": [],
+        "ports": [],
+        "provider": "phase5_npu_node",
+        "provider_implementation_fingerprint": "sha256:9999999999999999999999999999999999999999999999999999999999999999",
+        "resources": [],
+        "results": []
+      }
+    }
+  ],
+  "requests": [
+    {
+      "activation_sources": [],
+      "binding": "phase5_Npu_binding",
+      "binding_schema": "acsim-binding-0.1",
+      "component_schema": "phase5.Npu",
+      "component_schema_fingerprint": "sha256:009f25d7ac0cc25b5edd395659e6d048c39aae97be16f469574fbfb4c59166e0",
+      "contract_epoch": "0.1",
+      "effect": "stateful",
+      "function_type": "() -> ()",
+      "parameters": [],
+      "ports": [],
+      "provider": "phase5_npu_source",
+      "provider_implementation_fingerprint": "sha256:8888888888888888888888888888888888888888888888888888888888888888",
+      "resolution_key": "@Npu",
+      "resources": [],
+      "results": []
+    },
+    {
+      "activation_sources": [],
+      "binding": "phase5_NpuNode_binding",
+      "binding_schema": "acsim-binding-0.1",
+      "component_schema": "phase5.NpuNode",
+      "component_schema_fingerprint": "sha256:f21ac0875386764303060d218875f0b91582848836e70d478591ea146ef1963e",
+      "contract_epoch": "0.1",
+      "effect": "stateful",
+      "function_type": "() -> ()",
+      "parameters": [],
+      "ports": [],
+      "provider": "phase5_npu_node",
+      "provider_implementation_fingerprint": "sha256:9999999999999999999999999999999999999999999999999999999999999999",
+      "resolution_key": "@NpuNode",
+      "resources": [],
+      "results": []
+    }
+  ]
+}

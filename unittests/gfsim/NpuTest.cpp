@@ -4,6 +4,8 @@
 
 #include <algorithm>
 #include <array>
+#include <fstream>
+#include <iterator>
 #include <string>
 #include <utility>
 
@@ -305,8 +307,11 @@ TEST(NpuDependencyTrackerTest, RawDependencyWakesOnlyAtCompletionXfer) {
 
   std::vector<TraceEventPhase> dependencyPhases;
   for (const CommittedEvent &event : sink.recorder.events())
-    if (event.category == "dependency" && event.name == "tile")
+    if (event.category == "dependency" && event.name == "tile") {
       dependencyPhases.push_back(event.phase);
+      ASSERT_TRUE(event.flowId);
+      EXPECT_LE(*event.flowId, 9007199254740991ULL);
+    }
   EXPECT_EQ(dependencyPhases,
             (std::vector<TraceEventPhase>{TraceEventPhase::FlowStart,
                                           TraceEventPhase::FlowEnd}));
@@ -732,6 +737,106 @@ TEST(NpuExecutionPipelineTest, CompletionNeedsTraceExhaustionAndQuiescence) {
   pipeline.doWork({2, 0});
   commit(pipeline, {2, 0});
   EXPECT_TRUE(pipeline.complete());
+}
+
+TEST(Phase5NpuTraceSourceTest,
+     ExecutesFourEnginesWithDependenciesAndCommitsArchitecturalState) {
+  PtoTraceDocument document;
+  document.records.push_back(record(
+      "TLOAD", 0, 0, {tile("0x100")}, {}, {tile("0x0")},
+      {"input_tile", "output_tile"},
+      {tileOperand("block/0/tile/0x100"), tileOperand("block/0/tile/0x0")}));
+  document.records.push_back(
+      record("TASSIGN", 1, 0, {}, {scalar("uint64", "7")}, {tile("0x10")},
+             {"scalar_input", "output_tile"},
+             {scalarOperand("uint64", "7"), tileOperand("block/0/tile/0x10")}));
+  document.records.push_back(
+      record("TADD", 2, 0, {tile("0x0"), tile("0x10")}, {}, {tile("0x20")},
+             {"input_tile", "input_tile", "output_tile"},
+             {tileOperand("block/0/tile/0x0"), tileOperand("block/0/tile/0x10"),
+              tileOperand("block/0/tile/0x20")}));
+  document.records.push_back(record(
+      "TMATMUL", 3, 0, {tile("0x20")}, {}, {tile("0x40")},
+      {"input_tile", "output_tile"},
+      {tileOperand("block/0/tile/0x20"), tileOperand("block/0/tile/0x40")}));
+  document.records.push_back(record("TADD", 4, 0, {}, {}, {tile("0x50")},
+                                    {"output_tile"},
+                                    {tileOperand("block/0/tile/0x50")}));
+  document.records.push_back(record(
+      "TSTORE", 5, 0, {tile("0x40")}, {}, {tile("0x200")},
+      {"input_tile", "output_tile"},
+      {tileOperand("block/0/tile/0x40"), tileOperand("block/0/tile/0x200")}));
+
+  RecorderSink sink;
+  Phase5NpuTraceSource provider("trace_source", 7, nullptr, &sink);
+  ASSERT_TRUE(provider.loadDocument(std::move(document)));
+  provider.doWork({0, 0});
+  ASSERT_TRUE(provider.runtimeFailureCode().empty())
+      << provider.runtimeFailureCode();
+  ASSERT_TRUE(provider.hasPendingCommit());
+  provider.doXfer({0, 0});
+  ASSERT_TRUE(sink.recorder.commitOwner(provider.id(), {0, 0}));
+
+  RuntimeObjectState state = provider.runtimeState({0, 0});
+  EXPECT_TRUE(state.quiescent);
+  EXPECT_TRUE(state.traceEof);
+  EXPECT_EQ(state.tracePosition, 6u);
+  std::vector<StatSnapshot> statistics;
+  provider.collectStatistics(statistics);
+  auto statistic = [&](std::string_view name) {
+    return std::ranges::find(statistics, name, &StatSnapshot::name);
+  };
+  ASSERT_NE(statistic("architectural_retired_instructions"), statistics.end());
+  EXPECT_EQ(statistic("architectural_retired_instructions")->value, 6u);
+  ASSERT_NE(statistic("architectural_digest"), statistics.end());
+  EXPECT_NE(statistic("architectural_digest")->value,
+            NpuArchitecturalResult{}.digest);
+  EXPECT_GT(sink.recorder.events().size(), 24u);
+}
+
+TEST(Phase5NpuTraceSourceTest, RejectsUnsupportedOpcodeWithoutCommit) {
+  PtoTraceDocument document;
+  document.records.push_back(representative("TUNSUPPORTED"));
+  Phase5NpuTraceSource provider("trace_source", 7, nullptr);
+  ASSERT_TRUE(provider.loadDocument(std::move(document)));
+  provider.doWork({0, 0});
+  EXPECT_EQ(provider.runtimeFailureCode(), "npu_decode_failed");
+  EXPECT_FALSE(provider.hasPendingCommit());
+  EXPECT_FALSE(provider.runtimeState({0, 0}).traceEof);
+}
+
+TEST(Phase5NpuTraceSourceTest, RunsAsTheSingleSystemTraceOwner) {
+  PtoTraceDocument document;
+  document.records.push_back(representative("TASSIGN"));
+  SimSystem system;
+  Phase5NpuTraceSource provider("trace_source", 7, &system.root());
+  provider.setObservationSink(&system);
+  system.registerObject(&provider);
+  ASSERT_TRUE(provider.loadDocument(std::move(document)));
+
+  TerminationResult result = system.run();
+  EXPECT_EQ(result.classification, TerminationClass::Completed)
+      << result.diagnosticCode << ": " << result.message.value_or("");
+  EXPECT_EQ(result.tracePosition, 1u);
+  EXPECT_FALSE(system.observations().empty());
+}
+
+TEST(Phase5NpuTraceSourceTest, DecodesTheCheckedInDavinciOOFixture) {
+  std::ifstream input(std::string(ACIR_TEST_SOURCE_DIR) +
+                          "/examples/phase5/npu/traces/pto-trace.json",
+                      std::ios::binary);
+  ASSERT_TRUE(input);
+  std::string bytes((std::istreambuf_iterator<char>(input)),
+                    std::istreambuf_iterator<char>());
+  TraceLoadResult loaded = parsePtoTrace(bytes);
+  ASSERT_TRUE(loaded.succeeded()) << loaded.primaryDiagnostic();
+  ASSERT_TRUE(loaded.document);
+  EXPECT_EQ(loaded.document->records.size(), 6u);
+  for (const PtoTraceRecord &source : loaded.document->records) {
+    SCOPED_TRACE(source.sequenceId);
+    NpuDecodeResult decoded = NpuDecoder{}.decode(source);
+    EXPECT_TRUE(decoded.succeeded()) << decoded.primaryDiagnostic();
+  }
 }
 
 } // namespace
