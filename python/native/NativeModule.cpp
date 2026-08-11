@@ -492,8 +492,9 @@ PyObject *capabilities(PyObject *, PyObject *) {
   OwnedPy result(PyDict_New());
   if (!result ||
       !setItem(result.get(), "compiler_build_id",
-               pyString("agentic-circuit-0.1.0")) ||
-      !setItem(result.get(), "runtime_build_id", pyString("gfsim-0.1.0")) ||
+               pyString("agentic-circuit-0.1.0+llvm-22.1.8")) ||
+      !setItem(result.get(), "runtime_build_id",
+               pyString("gfsim-0.1.0+cxx20")) ||
       !setItem(result.get(), "items", OwnedPy(PyTuple_New(0))))
     return nullptr;
   return result.release();

@@ -93,6 +93,35 @@ def assert_exact_ci_cache_commands(test_case, workflow):
 
 
 class RepositoryContractsTest(unittest.TestCase):
+    def test_diagnostic_explanation_catalog_is_closed_and_versioned(self):
+        path = ROOT / "resources/diagnostics-v0.1.json"
+        self.assertTrue(path.is_file())
+        document = json.loads(path.read_text())
+        self.assertEqual(
+            {"schema", "version", "contract_epoch", "entries"}, set(document)
+        )
+        self.assertEqual("agentic-circuit-diagnostic-catalog", document["schema"])
+        self.assertEqual("0.1", document["version"])
+        self.assertEqual(CONTRACT_EPOCH, document["contract_epoch"])
+        codes = []
+        for entry in document["entries"]:
+            self.assertEqual(
+                {"code", "title", "rule", "causes", "examples", "repairs"},
+                set(entry),
+            )
+            self.assertRegex(
+                entry["code"],
+                r"^AC(PY|ELAB|IR-[A-Z]+|LOWER|BUILD|TRACE|RUN)-[A-Z0-9-]+$",
+            )
+            for key in ("causes", "examples", "repairs"):
+                self.assertTrue(entry[key])
+                self.assertTrue(
+                    all(isinstance(item, str) and item for item in entry[key])
+                )
+            codes.append(entry["code"])
+        self.assertEqual(sorted(codes), codes)
+        self.assertEqual(len(codes), len(set(codes)))
+
     def test_minimal_acpy_fixture_matches_the_public_schema(self):
         self.assertIsNotNone(importlib.util.find_spec("jsonschema"))
         from jsonschema.validators import Draft202012Validator

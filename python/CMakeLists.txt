@@ -15,3 +15,11 @@ install(
   PATTERN "__pycache__" EXCLUDE
   PATTERN "*.pyc" EXCLUDE
 )
+install(
+  DIRECTORY "${PROJECT_SOURCE_DIR}/schemas"
+  DESTINATION "${ACIR_PYTHON_INSTALL_DIR}/agentic_circuit/_data"
+)
+install(
+  FILES "${PROJECT_SOURCE_DIR}/resources/diagnostics-v0.1.json"
+  DESTINATION "${ACIR_PYTHON_INSTALL_DIR}/agentic_circuit/_data"
+)

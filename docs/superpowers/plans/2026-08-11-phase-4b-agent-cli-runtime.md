@@ -465,7 +465,7 @@ git commit -m "feat(cli): add workspace parser and output policy"
 - Consumes: packaged schemas/catalog, native capabilities, output policy, and diagnostics.
 - Produces: `CapabilityDocument`, `schema_command`, `explain_command`, and `doctor_command`.
 
-- [ ] **Step 1: Write failing no-project-execution discovery tests**
+- [x] **Step 1: Write failing no-project-execution discovery tests**
 
 ```python
 class DiscoveryCommandTest(unittest.TestCase):
@@ -482,13 +482,13 @@ class DiscoveryCommandTest(unittest.TestCase):
         self.assertEqual(before, snapshot_tree(WORKSPACE))
 ```
 
-- [ ] **Step 2: Run the focused test and confirm the RED state**
+- [x] **Step 2: Run the focused test and confirm the RED state**
 
 Run: `PYTHONPATH=src .venv/bin/python -m unittest tests.cli.test_discovery_commands -v`
 
 Expected: FAIL because discovery commands are absent.
 
-- [ ] **Step 3: Build the exact capability document**
+- [x] **Step 3: Build the exact capability document**
 
 ```python
 def capability_document(catalog: Catalog,
@@ -507,7 +507,7 @@ def capability_document(catalog: Catalog,
 Represent known missing implementations as `declared_unavailable`; include no
 version range; validate every result against `capabilities.schema.json`.
 
-- [ ] **Step 4: Implement packaged schema/explanation and read-only doctor checks**
+- [x] **Step 4: Implement packaged schema/explanation and read-only doctor checks**
 
 `schema` resolves only known packaged versioned resources. `explain` validates
 the code and returns rule, causes, examples, and repairs from a closed catalog.
@@ -530,13 +530,13 @@ class DoctorCheck:
     diagnostic_code: str | None
 ```
 
-- [ ] **Step 5: Run discovery and repository contract tests**
+- [x] **Step 5: Run discovery and repository contract tests**
 
 Run: `PYTHONPATH=src:build/dev-llvm22/python .venv/bin/python -m unittest tests.cli.test_discovery_commands -v && .venv/bin/python -m unittest tests.contracts.test_contracts -v`
 
 Expected: PASS.
 
-- [ ] **Step 6: Commit discovery commands**
+- [x] **Step 6: Commit discovery commands**
 
 ```bash
 git add src/agentic_circuit resources tests/cli tests/contracts

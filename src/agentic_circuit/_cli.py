@@ -8,6 +8,9 @@ from pathlib import Path
 from typing import Sequence
 
 from ._commands import init as init_command
+from ._commands import doctor as doctor_command
+from ._commands import explain as explain_command
+from ._commands import schema as schema_command
 from ._diagnostics import Diagnostic
 from ._output import OutputSink
 from ._workspace import UserInputError, discover_workspace, load_workspace
@@ -219,12 +222,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         if arguments.command == "init":
             return init_command.run(arguments, sink)
-        if arguments.command in ("schema", "explain", "doctor"):
-            sink.result(
-                _placeholder_result(arguments, ""),
-                human=f"{arguments.command} command accepted",
-            )
-            return ExitCode.SUCCESS
+        if arguments.command == "schema":
+            return schema_command.run(arguments, sink)
+        if arguments.command == "explain":
+            return explain_command.run(arguments, sink)
+        if arguments.command == "doctor":
+            return doctor_command.run(arguments, sink)
         workspace = (
             load_workspace(arguments.project)
             if arguments.project is not None
