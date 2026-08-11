@@ -1168,7 +1168,7 @@ git commit -m "feat(cli): run and replay immutable manifests"
 - Consumes: ACPy, canonical ACIR, build artifacts/manifests, and workspace selection.
 - Produces: `InspectionKind`, `InspectionRequest`, `InspectionResult`, JSON/DOT graph renderers, and `inspect_command`.
 
-- [ ] **Step 1: Write failing inspection-kind and path tests**
+- [x] **Step 1: Write failing inspection-kind and path tests**
 
 ```python
 class InspectCommandTest(unittest.TestCase):
@@ -1186,13 +1186,13 @@ class InspectCommandTest(unittest.TestCase):
         self.assertEqual(2, run_cli("inspect", "ports", "--path", "missing").returncode)
 ```
 
-- [ ] **Step 2: Run the focused test and confirm the RED state**
+- [x] **Step 2: Run the focused test and confirm the RED state**
 
 Run: `PYTHONPATH=src:build/dev-llvm22/python .venv/bin/python -m unittest tests.cli.test_inspect_command -v`
 
 Expected: FAIL because inspect is absent.
 
-- [ ] **Step 3: Implement one immutable inspection model**
+- [x] **Step 3: Implement one immutable inspection model**
 
 ```python
 InspectionKind = Literal[
@@ -1212,19 +1212,19 @@ Derive frontend views from verified ACPy/normalized semantics and artifact views
 from verified immutable manifests. Never infer from console output or mutate a
 build/run.
 
-- [ ] **Step 4: Implement exact renderers and Graphviz DOT**
+- [x] **Step 4: Implement exact renderers and Graphviz DOT**
 
 Sort graph nodes by canonical hierarchy path and edges by source/target/port.
 JSON is normative. DOT quotes identifiers and contains no host path or timestamp.
 Human hierarchy preserves canonical indexed object paths.
 
-- [ ] **Step 5: Run inspection and frontend determinism tests**
+- [x] **Step 5: Run inspection and frontend determinism tests**
 
 Run: `PYTHONPATH=src:build/dev-llvm22/python .venv/bin/python -m unittest tests.cli.test_inspect_command tests.python_frontend.test_determinism -v`
 
 Expected: PASS.
 
-- [ ] **Step 6: Commit inspection**
+- [x] **Step 6: Commit inspection**
 
 ```bash
 git add src/agentic_circuit tests/cli

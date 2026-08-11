@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Callable, Sequence
 
 from ._commands import init as init_command
+from ._commands import inspect as inspect_command
 from ._commands import doctor as doctor_command
 from ._commands import check as check_command
 from ._commands import build as build_command
@@ -224,6 +225,9 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     inspect.add_argument("--path", action=_OnceValue)
+    inspect.add_argument(
+        "--format", choices=("json", "dot", "text"), action=_OnceValue
+    )
     _add_workspace_options(inspect)
     _add_output_options(inspect)
 
@@ -293,6 +297,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return build_command.run(arguments, workspace, sink)
         if arguments.command == "run":
             return run_command.run(arguments, workspace, sink)
+        if arguments.command == "inspect":
+            return inspect_command.run(arguments, workspace, sink)
         sink.result(
             _placeholder_result(arguments, workspace.project_name),
             human=f"{arguments.command} accepted for {workspace.project_name}",
