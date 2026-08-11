@@ -75,7 +75,7 @@
 - Consumes: ACIR/ACSim dialect registration, transforms, binding resolver, ACIR-to-ACSim, and `acir::codegen::buildGeneratedModel`.
 - Produces: `CompilerStage`, `CompilerProfile`, `CompilerRequest`, `CompilerArtifact`, `CompilerDiagnostic`, `CompilerResult`, and `runCompiler`.
 
-- [ ] **Step 1: Write the failing stage and diagnostic tests**
+- [x] **Step 1: Write the failing stage and diagnostic tests**
 
 ```cpp
 TEST(CompilerDriverTest, StandardPipelineProducesVerifiedStageArtifacts) {
@@ -98,13 +98,13 @@ TEST(CompilerDriverTest, ParseFailureReturnsStableStructuredDiagnostic) {
 }
 ```
 
-- [ ] **Step 2: Run the focused test and confirm the RED state**
+- [x] **Step 2: Run the focused test and confirm the RED state**
 
 Run: `cmake --build --preset dev-llvm22 --target CompilerTests`
 
 Expected: configure/build fails because the compiler façade does not exist.
 
-- [ ] **Step 3: Define the closed façade types**
+- [x] **Step 3: Define the closed façade types**
 
 ```cpp
 enum class CompilerStage {
@@ -164,7 +164,7 @@ struct CompilerResult {
 llvm::Expected<CompilerResult> runCompiler(const CompilerRequest &request);
 ```
 
-- [ ] **Step 4: Implement one explicit stage machine**
+- [x] **Step 4: Implement one explicit stage machine**
 
 ```cpp
 for (CompilerStage stage : selectedPipeline(request)) {
@@ -183,13 +183,13 @@ with normalized locations, validate legal stage/emission combinations, require
 an explicit pipeline for `custom`, and call the Phase 3 library directly for
 build stages.
 
-- [ ] **Step 5: Run façade, conversion, and code-generation tests**
+- [x] **Step 5: Run façade, conversion, and code-generation tests**
 
 Run: `cmake --build --preset dev-llvm22 --target CompilerTests CodeGenTests && ctest --test-dir build/dev-llvm22 -R '^(CompilerTests|ConversionTests|CodeGenTests)$' --output-on-failure`
 
 Expected: PASS.
 
-- [ ] **Step 6: Commit the façade**
+- [x] **Step 6: Commit the façade**
 
 ```bash
 git add CMakeLists.txt include/acir/Compiler lib/Compiler unittests/Compiler unittests/CMakeLists.txt lib/CMakeLists.txt

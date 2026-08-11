@@ -16,6 +16,7 @@ add_subdirectory(Bindings)
 add_subdirectory(Transforms)
 add_subdirectory(Conversion)
 add_subdirectory(CodeGen)
+add_subdirectory(Compiler)
 
 # Install every library that owns symbols declared by the installed public
 # headers. The gfsim runtime remains a separate build-tree surface.
@@ -28,6 +29,7 @@ install(
     ACIRTransforms
     ACIRToACSim
     ACIRCodeGen
+    ACIRCompiler
   EXPORT AgenticCircuitTargets
   ARCHIVE DESTINATION lib
   LIBRARY DESTINATION lib
