@@ -1,10 +1,14 @@
 from __future__ import annotations
 
-from pycircuit import Circuit, ct, module, const, u
+from pycircuit import Circuit, const, ct, module, u
+
+from designs.examples.linx_cpu_pyc.icall_contract import build_icall_contract
 
 
 @const
-def _layout_cfg(m: Circuit, *, mem_bytes: int, icache_bytes: int, dcache_bytes: int) -> tuple[int, int, int]:
+def _layout_cfg(
+    m: Circuit, *, mem_bytes: int, icache_bytes: int, dcache_bytes: int
+) -> tuple[int, int, int]:
     _ = m
     mem = ct.pow2_ceil(max(1, int(mem_bytes)))
     icache = ct.align_up(max(64, int(icache_bytes)), 64)
@@ -84,6 +88,15 @@ def build(
     m.output("a1", u(64, 0))
     m.output("ra", u(64, 0))
     m.output("sp", boot_sp)
+
+    icall_contract = build_icall_contract(m, clk=clk, rst=rst, cycle=cycles.out())
+    m.output("icall_contract_valid", icall_contract["icall_contract_valid"])
+    m.output("icall_contract_target", icall_contract["icall_contract_target"])
+    m.output("icall_contract_ra", icall_contract["icall_contract_ra"])
+    m.output(
+        "icall_contract_raw_3000_invalid",
+        icall_contract["icall_contract_raw_3000_invalid"],
+    )
 
 
 build.__pycircuit_name__ = "linx_cpu_pyc"

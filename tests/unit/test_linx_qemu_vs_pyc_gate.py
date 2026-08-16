@@ -8,7 +8,7 @@ import pytest
 
 
 @pytest.mark.unit
-def test_qemu_vs_pyc_gate_does_not_require_linxcore_before_fallback(
+def test_qemu_vs_pyc_gate_does_not_require_linxcore_for_primary_flow(
     tmp_path: Path,
 ) -> None:
     root = Path(__file__).resolve().parents[2]
@@ -38,3 +38,15 @@ def test_qemu_vs_pyc_gate_does_not_require_linxcore_before_fallback(
     assert result.returncode == 2
     assert "llvm-mc not found" in result.stderr
     assert "unable to resolve LinxCore root" not in result.stderr
+
+
+@pytest.mark.unit
+def test_qemu_vs_pyc_gate_has_no_short_prefix_promotion_fallback() -> None:
+    root = Path(__file__).resolve().parents[2]
+    script = root / "contrib/linx/flows/tools/run_linx_qemu_vs_pyc.sh"
+    text = script.read_text(encoding="utf-8")
+
+    assert "trying LinxCore fallback" not in text
+    assert "fallback-prefix mode" not in text
+    assert "LINX_QEMU_VS_PYC_FALLBACK_PREFIX" not in text
+    assert 'DIFF_ARGS+=(--limit "$PREFIX_LIMIT")' not in text

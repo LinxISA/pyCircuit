@@ -14,6 +14,7 @@ from .isa import (
     OP_ANDI,
     OP_ANDIW,
     OP_ANDW,
+    OP_B_FPATR,
     OP_B_IOR,
     OP_B_IOS,
     OP_B_IOT,
@@ -22,6 +23,7 @@ from .isa import (
     OP_BSTART_STD_COND,
     OP_BSTART_STD_DIRECT,
     OP_BSTART_STD_FALL,
+    OP_BSTART_STD_ICALL,
     OP_BSTART_TMA,
     OP_BXS,
     OP_BXU,
@@ -151,7 +153,11 @@ from .isa import (
     OP_XOR,
     OP_XORIW,
     OP_XORW,
+    PTO_C_BSTART_STD_BRTYPES,
     PTO_CUBE_HEADER_MATCHES,
+    PTO_FPATR_GROUP_N_CODES,
+    PTO_FPATR_PREQUANT_MODES,
+    PTO_FPATR_RELU_MODES,
     PTO_TEPL_SELECTORS,
     PTO_TLSU_HEADER_MATCHES,
     REG_INVALID,
@@ -374,7 +380,10 @@ def decode_window(m: Circuit, window: Wire) -> Decode:
         op = OP_C_BSTART_STD
         len_bytes = 2
         imm = 0
-    cond = in16 & masked_eq(m, insn16, mask=51199, match=0)
+    c_bstart_std_brtype_valid = brtype == PTO_C_BSTART_STD_BRTYPES[0]
+    for selector in PTO_C_BSTART_STD_BRTYPES:
+        c_bstart_std_brtype_valid = c_bstart_std_brtype_valid | (brtype == selector)
+    cond = in16 & masked_eq(m, insn16, mask=51199, match=0) & c_bstart_std_brtype_valid
     if cond:
         op = OP_C_BSTART_STD
         len_bytes = 2
@@ -439,7 +448,7 @@ def decode_window(m: Circuit, window: Wire) -> Decode:
     # (OP_BSTART_TMA) for all public direct tile/vector header families.
     tepl_selector = unsigned(insn32[20:27])
     tepl_selector_valid = tepl_selector == PTO_TEPL_SELECTORS[0]
-    for selector in PTO_TEPL_SELECTORS[1:]:
+    for selector in PTO_TEPL_SELECTORS:
         tepl_selector_valid = tepl_selector_valid | (tepl_selector == selector)
     cond = (
         in32
@@ -452,7 +461,11 @@ def decode_window(m: Circuit, window: Wire) -> Decode:
     tile_header_valid = masked_eq(
         m, insn32, mask=0x07FFFFFF, match=PTO_TLSU_HEADER_MATCHES[0]
     )
-    for header_match in PTO_TLSU_HEADER_MATCHES[1:] + PTO_CUBE_HEADER_MATCHES:
+    for header_match in PTO_TLSU_HEADER_MATCHES:
+        tile_header_valid = tile_header_valid | masked_eq(
+            m, insn32, mask=0x07FFFFFF, match=header_match
+        )
+    for header_match in PTO_CUBE_HEADER_MATCHES:
         tile_header_valid = tile_header_valid | masked_eq(
             m, insn32, mask=0x07FFFFFF, match=header_match
         )
@@ -502,6 +515,28 @@ def decode_window(m: Circuit, window: Wire) -> Decode:
     cond = in32 & masked_eq(m, insn32, mask=0x0600707F, match=0x00000013)
     if cond:
         op = OP_B_IOR
+        len_bytes = 4
+    fpatr_prequant = unsigned(insn32[26:32])
+    fpatr_prequant_valid = fpatr_prequant == PTO_FPATR_PREQUANT_MODES[0]
+    for selector in PTO_FPATR_PREQUANT_MODES:
+        fpatr_prequant_valid = fpatr_prequant_valid | (fpatr_prequant == selector)
+    fpatr_relu = unsigned(insn32[23:26])
+    fpatr_relu_valid = fpatr_relu == PTO_FPATR_RELU_MODES[0]
+    for selector in PTO_FPATR_RELU_MODES:
+        fpatr_relu_valid = fpatr_relu_valid | (fpatr_relu == selector)
+    fpatr_group_n = unsigned(insn32[19:23])
+    fpatr_group_n_valid = fpatr_group_n == PTO_FPATR_GROUP_N_CODES[0]
+    for selector in PTO_FPATR_GROUP_N_CODES:
+        fpatr_group_n_valid = fpatr_group_n_valid | (fpatr_group_n == selector)
+    cond = (
+        in32
+        & masked_eq(m, insn32, mask=0x00007FFF, match=0x00002023)
+        & fpatr_prequant_valid
+        & fpatr_relu_valid
+        & fpatr_group_n_valid
+    )
+    if cond:
+        op = OP_B_FPATR
         len_bytes = 4
     cond = in32 & masked_eq(m, insn32, mask=127, match=23)
     if cond:
@@ -1045,11 +1080,6 @@ def decode_window(m: Circuit, window: Wire) -> Decode:
         op = OP_C_BSTART_STD
         len_bytes = 4
         imm = 5
-    cond = in32 & masked_eq(m, insn32, mask=32767, match=24577)
-    if cond:
-        op = OP_C_BSTART_STD
-        len_bytes = 4
-        imm = 6
     cond = in32 & masked_eq(m, insn32, mask=32767, match=28673)
     if cond:
         op = OP_C_BSTART_STD
@@ -1258,6 +1288,11 @@ def decode_window(m: Circuit, window: Wire) -> Decode:
         op = OP_BSTART_STD_CALL
         len_bytes = 4
         imm = simm17_s64.shl(amount=1)
+    cond = in32 & masked_eq(m, insn32, mask=0xF83FFFFF, match=0x50166001)
+    if cond:
+        op = OP_BSTART_STD_ICALL
+        len_bytes = 4
+        imm = unsigned(insn32[22:27]).shl(amount=1) + 2
     hl_bstart_hi12 = unsigned(pfx16[4:16])
     hl_bstart_lo17 = unsigned(insn48[31:48])
     hl_bstart_simm_hw = cat(hl_bstart_hi12, hl_bstart_lo17, c(0, width=1)).as_signed()

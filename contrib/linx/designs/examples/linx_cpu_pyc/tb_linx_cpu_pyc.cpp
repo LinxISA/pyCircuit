@@ -30,6 +30,23 @@ int main(int argc, char **argv) {
     tb.runCyclesAuto(1);
   }
 
+  if (!dut.icall_contract_valid.toBool()) {
+    std::cerr << "error: production ICALL contract path did not retire\n";
+    return 1;
+  }
+  if (dut.icall_contract_target.value() != 0x8800ull) {
+    std::cerr << "error: production ICALL path lost retiring SETC.TGT\n";
+    return 1;
+  }
+  if (dut.icall_contract_ra.value() != 0x4002ull) {
+    std::cerr << "error: production ICALL path computed wrong independent RA\n";
+    return 1;
+  }
+  if (!dut.icall_contract_raw_3000_invalid.toBool()) {
+    std::cerr << "error: raw 0x3000 revived retired compressed ICALL\n";
+    return 1;
+  }
+
   std::cout << "ok: linx_cpu_pyc smoke cycles=" << dut.cycles.value() << "\n";
   return 0;
 }

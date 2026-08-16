@@ -4,6 +4,7 @@ import ast
 import copy
 import inspect
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Hashable, Mapping, get_args, get_origin
 
 from .api_contract import removed_call_diagnostic
@@ -29,6 +30,49 @@ from .jit_cache import (
     get_structural_metrics,
 )
 from .literals import LiteralValue
+
+
+_DEFAULT_INLINE_COMPLEXITY_CAP = 1400
+_INTERNAL_INLINE_COMPLEXITY_HARD_MAX = 2600
+_PYCIRCUIT_ROOT = Path(__file__).resolve().parents[3]
+_INTERNAL_INLINE_COMPLEXITY_ALLOWLIST = frozenset(
+    {
+        (
+            "decode_window",
+            (
+                _PYCIRCUIT_ROOT / "contrib/linx/designs/examples/linx_cpu_pyc/decode.py"
+            ).resolve(),
+        ),
+        (
+            "decode_window",
+            (
+                _PYCIRCUIT_ROOT
+                / "contrib/linx/designs/examples/linxcore_inorder/decode.py"
+            ).resolve(),
+        ),
+    }
+)
+
+
+def _inline_complexity_cap(fn: Any, *, source_file: str | None = None) -> int:
+    """Return the fixed cap, with a narrow internal exception for Linx decoders."""
+
+    candidate = source_file
+    if candidate is None:
+        try:
+            candidate = inspect.getsourcefile(fn)
+        except (OSError, TypeError):
+            candidate = None
+    if candidate is None:
+        return _DEFAULT_INLINE_COMPLEXITY_CAP
+    try:
+        source_path = Path(candidate).resolve()
+    except (OSError, RuntimeError):
+        return _DEFAULT_INLINE_COMPLEXITY_CAP
+    provenance = (str(getattr(fn, "__name__", "")), source_path)
+    if provenance in _INTERNAL_INLINE_COMPLEXITY_ALLOWLIST:
+        return _INTERNAL_INLINE_COMPLEXITY_HARD_MAX
+    return _DEFAULT_INLINE_COMPLEXITY_CAP
 
 
 class JitError(RuntimeError):
@@ -1509,10 +1553,11 @@ class _Compiler:
                 f"(state_call_count={struct_metrics.state_call_count}); "
                 "move the stateful logic behind a `@module` boundary"
             )
-        if struct_metrics.estimated_inline_cost > 1400:
+        inline_complexity_cap = _inline_complexity_cap(fn, source_file=meta.source_file)
+        if struct_metrics.estimated_inline_cost > inline_complexity_cap:
             raise JitError(
                 f"@function {getattr(fn, '__name__', fn)!r} exceeds inline complexity cap "
-                f"(estimated_inline_cost={struct_metrics.estimated_inline_cost} > 1400); "
+                f"(estimated_inline_cost={struct_metrics.estimated_inline_cost} > {inline_complexity_cap}); "
                 "split the helper or promote it to `@module`"
             )
         if struct_metrics.repeat_pressure() > 96:

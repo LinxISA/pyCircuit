@@ -192,8 +192,45 @@ OP_B_DIM = 148
 # --- system register ops (bring-up no-op semantics in the pyc core model) ---
 OP_SSRSET = 149
 OP_HL_SSRSET = 150
+OP_B_FPATR = 151
+OP_BSTART_STD_ICALL = 152
 
 REG_INVALID = 0x3F
+
+# Exact allowed B.FPATR selectors from the PTO ISA 0.58.1 catalog. Values not
+# present in these sets are reserved and must remain OP_INVALID.
+PTO_FPATR_PREQUANT_MODES = (
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    12,
+    13,
+    16,
+    17,
+    18,
+    19,
+    20,
+    23,
+    24,
+    25,
+    26,
+    27,
+    28,
+    32,
+    33,
+    34,
+    35,
+    36,
+    37,
+    38,
+    39,
+)
+PTO_FPATR_RELU_MODES = (0, 1, 2, 3)
+PTO_FPATR_GROUP_N_CODES = (0, 1, 2, 3, 4, 5, 6, 7, 8, 9)
+PTO_C_BSTART_STD_BRTYPES = (1, 5, 7)
 
 # Accepted PTO ISA 0.58 TEPL selectors, encoded as (Mode << 5) | Function.
 # Reserved selectors must remain OP_INVALID even though they share the TEPL
