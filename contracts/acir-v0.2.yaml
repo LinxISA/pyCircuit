@@ -55,6 +55,7 @@ operations:
   - ac.transform.yield
   - ac.source
   - ac.sink
+  - ac.broadcast
   - ac.scope
   - ac.scope.yield
   - ac.firing

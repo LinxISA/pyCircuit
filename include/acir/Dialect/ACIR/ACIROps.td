@@ -172,6 +172,18 @@ def ACIR_SinkOp : ACIR_Op<"sink", [
   let assemblyFormat = "$input attr-dict `:` qualified(type($input))";
 }
 
+def ACIR_BroadcastOp : ACIR_Op<"broadcast"> {
+  let arguments = (ins ACIR_QueueType:$input,
+                       DenseI64ArrayAttr:$output_depths,
+                       DenseI64ArrayAttr:$output_latencies);
+  let results = (outs Variadic<ACIR_QueueType>:$outputs);
+  let hasVerifier = 1;
+  let assemblyFormat = [{
+    $input `depths` $output_depths `latencies` $output_latencies attr-dict
+    `:` qualified(type($input)) `->` `(` type($outputs) `)`
+  }];
+}
+
 def ACIR_ScopeOp : ACIR_Op<"scope", [SingleBlock, RecursiveMemoryEffects]> {
   let arguments = (ins SymbolNameAttr:$sym_name,
                        Variadic<ACIR_QueueType>:$inputs);
