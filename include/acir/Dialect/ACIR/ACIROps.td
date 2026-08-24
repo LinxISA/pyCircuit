@@ -172,6 +172,25 @@ def ACIR_SinkOp : ACIR_Op<"sink", [
   let assemblyFormat = "$input attr-dict `:` qualified(type($input))";
 }
 
+def ACIR_ScopeOp : ACIR_Op<"scope", [SingleBlock, RecursiveMemoryEffects]> {
+  let arguments = (ins SymbolNameAttr:$sym_name,
+                       Variadic<ACIR_QueueType>:$inputs);
+  let results = (outs Variadic<ACIR_QueueType>:$outputs);
+  let regions = (region SizedRegion<1>:$body);
+  let hasVerifier = 1;
+  let assemblyFormat = [{
+    $sym_name `(` $inputs `)` $body attr-dict `:`
+    functional-type($inputs, $outputs)
+  }];
+}
+
+def ACIR_ScopeYieldOp : ACIR_Op<"scope.yield", [
+    Pure, Terminator, HasParent<"ScopeOp">
+  ]> {
+  let arguments = (ins Variadic<ACIR_QueueType>:$queues);
+  let assemblyFormat = "attr-dict ($queues^ `:` type($queues))?";
+}
+
 def ACIR_FiringOp : ACIR_Op<"firing", [
     SingleBlock, RecursiveMemoryEffects
   ]> {

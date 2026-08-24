@@ -55,6 +55,8 @@ operations:
   - ac.transform.yield
   - ac.source
   - ac.sink
+  - ac.scope
+  - ac.scope.yield
   - ac.firing
   - ac.firing.yield
   - ac.queue.peek

@@ -91,6 +91,26 @@ LogicalResult SourceOp::verify() {
   return success();
 }
 
+LogicalResult ScopeOp::verify() {
+  Block &block = getBody().front();
+  if (block.getNumArguments() != getInputs().size())
+    return emitOpError("body argument count must match input queue count");
+  for (size_t index = 0; index < getInputs().size(); ++index)
+    if (block.getArgument(index).getType() != getInputs()[index].getType())
+      return emitOpError() << "body argument " << index
+                           << " must match input queue type";
+  auto yield = dyn_cast<ScopeYieldOp>(block.getTerminator());
+  if (!yield)
+    return emitOpError("body must terminate with ac.scope.yield");
+  if (yield.getQueues().size() != getOutputs().size())
+    return emitOpError("yielded queue count must match result count");
+  for (size_t index = 0; index < getOutputs().size(); ++index)
+    if (yield.getQueues()[index].getType() != getOutputs()[index].getType())
+      return emitOpError() << "yielded queue " << index
+                           << " must match result type";
+  return success();
+}
+
 LogicalResult QueuePeekOp::verify() {
   auto queue = cast<QueueType>(getQueue().getType());
   Type expected = VarType::get(getContext(), queue.getElementType());
