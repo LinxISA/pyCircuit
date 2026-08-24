@@ -95,6 +95,33 @@ def pipeline() -> None:
     sink(right)
 """
 
+COLLECTION_SOURCE = """
+import agentic_circuit as ac
+
+@ac.system
+def pipeline() -> None:
+    lanes = ac.array(2, lambda lane: ac.source(int, depth=lane + 1))
+    named = ac.map({"right": lanes[1], "left": lanes[0]})
+    active = ac.set({named["right"], named["left"]})
+    for lane in active:
+        ac.sink(lane)
+"""
+
+NESTED_COLLECTION_SOURCE = """
+import agentic_circuit as ac
+
+@ac.system
+def pipeline() -> None:
+    grid = ac.array(
+        2,
+        lambda row: ac.array(
+            2,
+            lambda column: ac.source(int, depth=row + column + 1),
+        ),
+    )
+    ac.sink(grid[1][0])
+"""
+
 
 class QueueFrontendV02Test(unittest.TestCase):
     def test_simple_serial_python_lowers_to_typed_queue_graph(self) -> None:
@@ -183,6 +210,53 @@ class QueueFrontendV02Test(unittest.TestCase):
         self.assertIn("ac.route.yield", lowered)
         self.assertIn("ac.sink %left", lowered)
         self.assertIn("ac.sink %right", lowered)
+
+    def test_static_queue_collections_flatten_in_canonical_order(self) -> None:
+        from agentic_circuit._queue_frontend import lower_queue_source
+
+        lowered = lower_queue_source(COLLECTION_SOURCE, "pipeline")
+        self.assertIn("%lanes__0 = ac.source depth 1", lowered)
+        self.assertIn("%lanes__1 = ac.source depth 2", lowered)
+        self.assertLess(
+            lowered.index("ac.sink %lanes__0"),
+            lowered.index("ac.sink %lanes__1"),
+        )
+        self.assertNotIn("dynamic", lowered)
+        reordered = COLLECTION_SOURCE.replace(
+            '{named["right"], named["left"]}',
+            '{named["left"], named["right"]}',
+        )
+        self.assertEqual(lowered, lower_queue_source(reordered, "pipeline"))
+
+    def test_dynamic_or_duplicate_collection_shape_is_rejected(self) -> None:
+        from agentic_circuit._queue_frontend import (
+            QueueFrontendError,
+            lower_queue_source,
+        )
+
+        with self.assertRaisesRegex(QueueFrontendError, "positive compile-time extent"):
+            lower_queue_source(
+                COLLECTION_SOURCE.replace("ac.array(2", "ac.array(runtime"),
+                "pipeline",
+            )
+        with self.assertRaisesRegex(QueueFrontendError, "members must be unique"):
+            lower_queue_source(
+                COLLECTION_SOURCE.replace(
+                    '{named["right"], named["left"]}',
+                    '{named["left"], named["left"]}',
+                ),
+                "pipeline",
+            )
+
+    def test_nested_collection_shape_is_statically_flattened(self) -> None:
+        from agentic_circuit._queue_frontend import lower_queue_source
+
+        lowered = lower_queue_source(NESTED_COLLECTION_SOURCE, "pipeline")
+        self.assertIn("%grid__0__0 = ac.source depth 1", lowered)
+        self.assertIn("%grid__0__1 = ac.source depth 2", lowered)
+        self.assertIn("%grid__1__0 = ac.source depth 2", lowered)
+        self.assertIn("%grid__1__1 = ac.source depth 3", lowered)
+        self.assertIn("ac.sink %grid__1__0", lowered)
 
     def test_latency_zero_and_unsupported_lambda_are_rejected(self) -> None:
         from agentic_circuit._queue_frontend import (

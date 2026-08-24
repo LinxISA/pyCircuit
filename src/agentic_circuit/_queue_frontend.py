@@ -61,6 +61,14 @@ class RouteBinding:
 
 
 @dataclass(frozen=True, slots=True)
+class StaticQueueCollection:
+    kind: str
+    members: tuple[
+        tuple[str | int, str | StaticQueueCollection], ...
+    ]
+
+
+@dataclass(frozen=True, slots=True)
 class QueueProgram:
     system: str
     payloads: tuple[Payload, ...]
@@ -114,18 +122,48 @@ def _payloads(tree: ast.Module) -> tuple[Payload, ...]:
     return tuple(result)
 
 
-def _positive_int(call: ast.Call, name: str, default: int) -> int:
+def _static_int(node: ast.expr, values: dict[str, int]) -> int | None:
+    if isinstance(node, ast.Constant) and type(node.value) is int:
+        return node.value
+    if isinstance(node, ast.Name):
+        return values.get(node.id)
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.UAdd, ast.USub)):
+        operand = _static_int(node.operand, values)
+        if operand is None:
+            return None
+        return operand if isinstance(node.op, ast.UAdd) else -operand
+    if isinstance(node, ast.BinOp) and isinstance(
+        node.op, (ast.Add, ast.Sub, ast.Mult)
+    ):
+        left = _static_int(node.left, values)
+        right = _static_int(node.right, values)
+        if left is None or right is None:
+            return None
+        if isinstance(node.op, ast.Add):
+            return left + right
+        if isinstance(node.op, ast.Sub):
+            return left - right
+        return left * right
+    return None
+
+
+def _positive_int(
+    call: ast.Call,
+    name: str,
+    default: int,
+    static_values: dict[str, int] | None = None,
+) -> int:
     matches = [keyword for keyword in call.keywords if keyword.arg == name]
     if len(matches) > 1:
         raise QueueFrontendError(f"ACPY-QUEUE-001: repeated {name!r}")
     if not matches:
         return default
-    value = matches[0].value
-    if not isinstance(value, ast.Constant) or type(value.value) is not int:
+    value = _static_int(matches[0].value, static_values or {})
+    if value is None:
         raise QueueFrontendError(f"ACPY-QUEUE-001: {name} must be a compile-time integer")
-    if value.value <= 0:
+    if value <= 0:
         raise QueueFrontendError(f"ACPY-QUEUE-001: {name} must be positive")
-    return value.value
+    return value
 
 
 def _payload(node: ast.expr, payloads: dict[str, Payload]) -> str:
@@ -165,10 +203,214 @@ def parse_queue_program(text: str, system: str) -> QueueProgram:
     routes: list[RouteBinding] = []
     sinks: list[SinkBinding] = []
     by_name: dict[str, QueueBinding] = {}
+    collections: dict[str, StaticQueueCollection] = {}
     order = 0
 
-    def visit(statements: list[ast.stmt], scope_path: tuple[str, ...]) -> None:
+    def call_name(call: ast.Call) -> str:
+        return _decorator_name(call.func).rsplit(".", 1)[-1]
+
+    def static_reference(
+        node: ast.expr,
+        aliases: dict[str, str | StaticQueueCollection],
+    ) -> str | StaticQueueCollection:
+        if isinstance(node, ast.Name):
+            if node.id in aliases:
+                return aliases[node.id]
+            if node.id in by_name:
+                return node.id
+            if node.id in collections:
+                return collections[node.id]
+        if (
+            isinstance(node, ast.Subscript)
+            and isinstance(node.slice, ast.Constant)
+            and type(node.slice.value) in {str, int}
+        ):
+            collection = static_reference(node.value, aliases)
+            if not isinstance(collection, StaticQueueCollection):
+                raise QueueFrontendError(
+                    "ACPY-QUEUE-005: static indexing requires a collection"
+                )
+            for key, value in collection.members:
+                if type(key) is type(node.slice.value) and key == node.slice.value:
+                    return value
+            raise QueueFrontendError(
+                f"ACPY-QUEUE-005: collection has no key {node.slice.value!r}"
+            )
+        raise QueueFrontendError(
+            "ACPY-QUEUE-005: collection reference must be statically resolvable"
+        )
+
+    def queue_reference(
+        node: ast.expr,
+        aliases: dict[str, str | StaticQueueCollection],
+    ) -> str:
+        value = static_reference(node, aliases)
+        if isinstance(value, str):
+            return value
+        raise QueueFrontendError(
+            "ACPY-QUEUE-005: a collection cannot be used as one Queue"
+        )
+
+    def collection_signature(
+        value: str | StaticQueueCollection,
+    ) -> tuple[object, ...]:
+        if isinstance(value, str):
+            return ("queue", by_name[value].payload)
+        keys = tuple(key for key, _ in value.members)
+        members = tuple(collection_signature(member) for _, member in value.members)
+        return (value.kind, keys, members)
+
+    def stable_collection_identity(value: str | StaticQueueCollection) -> str:
+        if isinstance(value, str):
+            return value
+        return value.kind + "(" + ",".join(
+            f"{key}:{stable_collection_identity(member)}"
+            for key, member in value.members
+        ) + ")"
+
+    def source_binding(
+        name: str,
+        call: ast.Call,
+        scope_path: tuple[str, ...],
+        current_order: int,
+        static_values: dict[str, int] | None = None,
+    ) -> QueueBinding:
+        if call_name(call) != "source" or len(call.args) != 1:
+            raise QueueFrontendError(
+                "ACPY-QUEUE-005: collection elements must be Queue sources"
+            )
+        return QueueBinding(
+            name,
+            _payload(call.args[0], payload_map),
+            _positive_int(call, "depth", 1, static_values),
+            _positive_int(call, "latency", 1, static_values),
+            None,
+            scope=scope_path,
+            order=current_order,
+        )
+
+    def collection_binding(
+        name: str,
+        call: ast.Call,
+        scope_path: tuple[str, ...],
+        current_order: int,
+        aliases: dict[str, str | StaticQueueCollection],
+        static_values: dict[str, int] | None = None,
+    ) -> StaticQueueCollection | None:
+        static_values = {} if static_values is None else static_values
+        kind = call_name(call)
+        if kind == "array":
+            extent = (
+                _static_int(call.args[0], static_values)
+                if len(call.args) == 2
+                else None
+            )
+            if (
+                len(call.args) != 2
+                or extent is None
+                or extent <= 0
+            ):
+                raise QueueFrontendError(
+                    "ACPY-QUEUE-005: array requires a positive compile-time extent"
+                )
+            argument, body = _lambda(call.args[1])
+            members: list[
+                tuple[str | int, str | StaticQueueCollection]
+            ] = []
+            for index in range(extent):
+                if not isinstance(body, ast.Call):
+                    raise QueueFrontendError(
+                        "ACPY-QUEUE-005: array generator must produce a Queue"
+                    )
+                leaf = f"{name}__{index}"
+                values = {**static_values, argument: index}
+                if call_name(body) == "source":
+                    binding = source_binding(
+                        leaf, body, scope_path, current_order, values
+                    )
+                    queues.append(binding)
+                    by_name[leaf] = binding
+                    member: str | StaticQueueCollection = leaf
+                else:
+                    nested = collection_binding(
+                        leaf,
+                        body,
+                        scope_path,
+                        current_order,
+                        aliases,
+                        values,
+                    )
+                    if nested is None:
+                        raise QueueFrontendError(
+                            "ACPY-QUEUE-005: array generator must produce a Queue "
+                            "or static collection"
+                        )
+                    member = nested
+                members.append((index, member))
+            signatures = {collection_signature(member) for _, member in members}
+            if len(signatures) != 1:
+                raise QueueFrontendError(
+                    "ACPY-QUEUE-005: array elements must have one static shape"
+                )
+            return StaticQueueCollection("array", tuple(members))
+        if kind == "map":
+            if len(call.args) != 1 or not isinstance(call.args[0], ast.Dict):
+                raise QueueFrontendError(
+                    "ACPY-QUEUE-005: map requires one compile-time dictionary"
+                )
+            entries: list[
+                tuple[str, str | StaticQueueCollection]
+            ] = []
+            for key, value in zip(call.args[0].keys, call.args[0].values, strict=True):
+                if (
+                    not isinstance(key, ast.Constant)
+                    or type(key.value) is not str
+                    or not key.value
+                ):
+                    raise QueueFrontendError(
+                        "ACPY-QUEUE-005: map keys must be non-empty compile-time strings"
+                    )
+                entries.append((key.value, static_reference(value, aliases)))
+            entries.sort(key=lambda item: item[0])
+            if not entries or len({key for key, _ in entries}) != len(entries):
+                raise QueueFrontendError(
+                    "ACPY-QUEUE-005: map keys must be unique and non-empty"
+                )
+            if len({collection_signature(value) for _, value in entries}) != 1:
+                raise QueueFrontendError(
+                    "ACPY-QUEUE-005: map values must have one static shape"
+                )
+            return StaticQueueCollection("map", tuple(entries))
+        if kind == "set":
+            if len(call.args) != 1 or not isinstance(
+                call.args[0], (ast.Set, ast.List, ast.Tuple)
+            ):
+                raise QueueFrontendError(
+                    "ACPY-QUEUE-005: set requires one compile-time collection"
+                )
+            members = [static_reference(item, aliases) for item in call.args[0].elts]
+            identities = [stable_collection_identity(member) for member in members]
+            if not members or len(set(identities)) != len(members):
+                raise QueueFrontendError(
+                    "ACPY-QUEUE-005: set members must be unique and non-empty"
+                )
+            members.sort(key=stable_collection_identity)
+            if len({collection_signature(member) for member in members}) != 1:
+                raise QueueFrontendError(
+                    "ACPY-QUEUE-005: set members must have one static shape"
+                )
+            return StaticQueueCollection(
+                "set", tuple((index, member) for index, member in enumerate(members))
+            )
+        return None
+
+    def visit(
+        statements: list[ast.stmt],
+        scope_path: tuple[str, ...],
+        aliases: dict[str, str | StaticQueueCollection] | None = None,
+    ) -> None:
         nonlocal order
+        aliases = {} if aliases is None else aliases
         for statement in statements:
             current_order = order
             order += 1
@@ -189,14 +431,53 @@ def parse_queue_program(text: str, system: str) -> QueueProgram:
                     if any(existing.path == path for existing in scopes):
                         raise QueueFrontendError("ACPY-QUEUE-004: duplicate scope path")
                     scopes.append(ScopeBinding(call.args[0].value, path, current_order))
-                    visit(statement.body, path)
+                    visit(statement.body, path, aliases)
                     continue
+            if (
+                isinstance(statement, ast.Assign)
+                and len(statement.targets) == 1
+                and isinstance(statement.targets[0], ast.Name)
+                and isinstance(statement.value, ast.Call)
+                and call_name(statement.value) in {"array", "map", "set"}
+            ):
+                name = statement.targets[0].id
+                if name in by_name or name in collections:
+                    raise QueueFrontendError(
+                        "ACPY-QUEUE-005: collection assignment requires one fresh name"
+                    )
+                collection = collection_binding(
+                    name,
+                    statement.value,
+                    scope_path,
+                    current_order,
+                    aliases,
+                )
+                assert collection is not None
+                collections[name] = collection
+                continue
+            if (
+                isinstance(statement, ast.For)
+                and isinstance(statement.target, ast.Name)
+                and not statement.orelse
+            ):
+                collection = static_reference(statement.iter, aliases)
+                if not isinstance(collection, StaticQueueCollection):
+                    raise QueueFrontendError(
+                        "ACPY-QUEUE-005: compile-time for requires a static collection"
+                    )
+                for _, member in collection.members:
+                    visit(
+                        statement.body,
+                        scope_path,
+                        {**aliases, statement.target.id: member},
+                    )
+                continue
             if isinstance(statement, ast.Assign) and len(statement.targets) == 1 and isinstance(statement.targets[0], ast.Name) and isinstance(statement.value, ast.Call):
                 name, call = statement.targets[0].id, statement.value
-                if name in by_name:
+                if name in by_name or name in collections:
                     raise QueueFrontendError("ACPY-QUEUE-001: queue assignment requires one fresh name")
-                if isinstance(call.func, ast.Name) and call.func.id == "source" and len(call.args) == 1:
-                    binding = QueueBinding(name, _payload(call.args[0], payload_map), _positive_int(call, "depth", 1), _positive_int(call, "latency", 1), None, scope=scope_path, order=current_order)
+                if call_name(call) == "source" and len(call.args) == 1:
+                    binding = source_binding(name, call, scope_path, current_order)
                 elif isinstance(call.func, ast.Attribute) and call.func.attr == "apply" and isinstance(call.func.value, ast.Name) and len(call.args) == 1:
                     input_name = call.func.value.id
                     incoming = by_name.get(input_name)
@@ -242,10 +523,13 @@ def parse_queue_program(text: str, system: str) -> QueueProgram:
                     by_name[name] = output
                 routes.append(RouteBinding(input_name, names, argument, selector, depth, latency, scope_path, current_order))
                 continue
-            if isinstance(statement, ast.Expr) and isinstance(statement.value, ast.Call) and isinstance(statement.value.func, ast.Name) and statement.value.func.id == "sink" and len(statement.value.args) == 1 and isinstance(statement.value.args[0], ast.Name):
-                name = statement.value.args[0].id
-                if name not in by_name:
-                    raise QueueFrontendError(f"ACPY-QUEUE-001: sink queue {name!r} is unbound")
+            if (
+                isinstance(statement, ast.Expr)
+                and isinstance(statement.value, ast.Call)
+                and call_name(statement.value) == "sink"
+                and len(statement.value.args) == 1
+            ):
+                name = queue_reference(statement.value.args[0], aliases)
                 sinks.append(SinkBinding(name, scope_path, current_order))
                 continue
             if isinstance(statement, ast.Return) and statement.value is None:
