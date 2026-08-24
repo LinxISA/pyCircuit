@@ -60,6 +60,20 @@ def pipeline() -> None:
     sink(right)
 """
 
+CROSS_SCOPE_BROADCAST_SOURCE = """
+from agentic_circuit import scope, sink, source, system
+
+@system
+def pipeline() -> None:
+    input_queue = source(int)
+    with scope("left"):
+        left = input_queue.apply(lambda item: item + 1)
+    with scope("right"):
+        right = input_queue.apply(lambda item: item * 2)
+    sink(left)
+    sink(right)
+"""
+
 
 class QueueFrontendV02Test(unittest.TestCase):
     def test_simple_serial_python_lowers_to_typed_queue_graph(self) -> None:
@@ -124,6 +138,19 @@ class QueueFrontendV02Test(unittest.TestCase):
         )
         self.assertIn("ac.transform %input_queue__fanout0", lowered)
         self.assertIn("ac.transform %input_queue__fanout1", lowered)
+
+    def test_cross_scope_broadcast_is_placed_at_lexical_lca(self) -> None:
+        from agentic_circuit._queue_frontend import lower_queue_source
+
+        lowered = lower_queue_source(CROSS_SCOPE_BROADCAST_SOURCE, "pipeline")
+        broadcast = lowered.index("ac.broadcast %input_queue")
+        left_scope = lowered.index("ac.scope @left(%input_queue__fanout0)")
+        right_scope = lowered.index("ac.scope @right(%input_queue__fanout1)")
+        self.assertLess(broadcast, left_scope)
+        self.assertLess(broadcast, right_scope)
+        self.assertIn(
+            "^body(%input_queue__fanout0__in: !ac.queue<i64>):", lowered
+        )
 
     def test_latency_zero_and_unsupported_lambda_are_rejected(self) -> None:
         from agentic_circuit._queue_frontend import (

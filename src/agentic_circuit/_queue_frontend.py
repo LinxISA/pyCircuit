@@ -295,44 +295,65 @@ def lower_queue_program(program: QueueProgram) -> str:
             )
         lines.append("  } {dlti.dl_spec = #dlti.dl_spec<" + ", ".join(layouts) + ">}")
     by_name = {item.name: item for item in program.queues}
-    uses: dict[str, list[tuple[str, ...]]] = {name: [] for name in by_name}
-    for queue in program.queues:
-        if queue.input_name is not None:
-            uses[queue.input_name].append(queue.scope)
-    for sink_binding in program.sinks:
-        uses[sink_binding.queue].append(sink_binding.scope)
-
     consumers: dict[str, list[QueueBinding]] = {}
     for queue in program.queues:
         if queue.input_name is not None:
             consumers.setdefault(queue.input_name, []).append(queue)
     fanouts: dict[str, tuple[tuple[str, ...], tuple[QueueBinding, ...]]] = {}
+
+    def common_scope(scopes: list[tuple[str, ...]]) -> tuple[str, ...]:
+        common: list[str] = []
+        for parts in zip(*scopes, strict=False):
+            if len(set(parts)) != 1:
+                break
+            common.append(parts[0])
+        return tuple(common)
+
     for source_name, group in consumers.items():
         if len(group) < 2:
             continue
-        scopes = {consumer.scope for consumer in group}
-        if len(scopes) != 1:
-            raise QueueFrontendError(
-                "ACPY-QUEUE-005: multi-scope broadcast placement is not frozen"
-            )
-        fanouts[source_name] = (next(iter(scopes)), tuple(group))
-    consumer_inputs: dict[str, str] = {}
+        fanouts[source_name] = (
+            common_scope([consumer.scope for consumer in group]),
+            tuple(group),
+        )
+    payload_by_queue = {name: queue.payload for name, queue in by_name.items()}
+    queue_scope = {name: queue.scope for name, queue in by_name.items()}
+    effective_input: dict[str, str] = {}
+    for source_name, (fanout_scope, group) in fanouts.items():
+        for index, consumer in enumerate(group):
+            synthetic = f"{source_name}__fanout{index}"
+            effective_input[consumer.name] = synthetic
+            payload_by_queue[synthetic] = by_name[source_name].payload
+            queue_scope[synthetic] = fanout_scope
+
+    uses: dict[str, list[tuple[str, ...]]] = {
+        name: [] for name in payload_by_queue
+    }
+    for queue in program.queues:
+        if queue.input_name is None:
+            continue
+        selected = effective_input.get(queue.name, queue.input_name)
+        uses[selected].append(queue.scope)
+    for source_name, (fanout_scope, _) in fanouts.items():
+        uses[source_name].append(fanout_scope)
+    for sink_binding in program.sinks:
+        uses[sink_binding.queue].append(sink_binding.scope)
 
     def inside(container: tuple[str, ...], candidate: tuple[str, ...]) -> bool:
         return candidate[: len(container)] == container
 
     def scope_io(path: tuple[str, ...]) -> tuple[list[str], list[str]]:
         inputs = [
-            queue.name
-            for queue in program.queues
-            if not inside(path, queue.scope)
-            and any(inside(path, use) for use in uses[queue.name])
+            name
+            for name, producer_scope in queue_scope.items()
+            if not inside(path, producer_scope)
+            and any(inside(path, use) for use in uses[name])
         ]
         outputs = [
-            queue.name
-            for queue in program.queues
-            if inside(path, queue.scope)
-            and any(not inside(path, use) for use in uses[queue.name])
+            name
+            for name, producer_scope in queue_scope.items()
+            if inside(path, producer_scope)
+            and any(not inside(path, use) for use in uses[name])
         ]
         return inputs, outputs
 
@@ -356,7 +377,8 @@ def lower_queue_program(program: QueueProgram) -> str:
             raise QueueFrontendError(
                 "ACPY-QUEUE-003: lambda result must preserve Queue payload type"
             )
-        input_ssa = consumer_inputs.get(queue.name, mapping[queue.input_name])
+        input_name = effective_input.get(queue.name, queue.input_name)
+        input_ssa = mapping[input_name]
         lines.append(
             f"{indent}%{output_ssa} = ac.transform %{input_ssa} "
             f"depths [{queue.depth}] latencies [{queue.latency}] {{"
@@ -375,6 +397,12 @@ def lower_queue_program(program: QueueProgram) -> str:
     def render_items(
         path: tuple[str, ...], mapping: dict[str, str], indent: str
     ) -> None:
+        def visible_order(consumer: QueueBinding) -> int:
+            if consumer.scope == path:
+                return consumer.order
+            child_path = (*path, consumer.scope[len(path)])
+            return next(scope.order for scope in program.scopes if scope.path == child_path)
+
         events: list[tuple[float, str, object]] = []
         events.extend(
             (queue.order, "queue", queue)
@@ -382,7 +410,7 @@ def lower_queue_program(program: QueueProgram) -> str:
             if queue.scope == path
         )
         events.extend(
-            (min(consumer.order for consumer in group) - 0.5, "broadcast", source)
+            (min(visible_order(consumer) for consumer in group) - 0.5, "broadcast", source)
             for source, (fanout_scope, group) in fanouts.items()
             if fanout_scope == path
         )
@@ -413,7 +441,7 @@ def lower_queue_program(program: QueueProgram) -> str:
                 outputs = [f"{source}__fanout{index}" for index in range(len(group))]
                 lhs = ", ".join(f"%{name}" for name in outputs)
                 depths = ", ".join("1" for _ in outputs)
-                payload = by_name[source].payload
+                payload = payload_by_queue[source]
                 output_types = ", ".join(f"!ac.queue<{payload}>" for _ in outputs)
                 lines.append(
                     f"{indent}{lhs} = ac.broadcast %{mapping[source]} depths "
@@ -421,7 +449,7 @@ def lower_queue_program(program: QueueProgram) -> str:
                     f"({output_types})"
                 )
                 for consumer, output in zip(group, outputs, strict=True):
-                    consumer_inputs[consumer.name] = output
+                    mapping[effective_input[consumer.name]] = output
             else:
                 sink_binding = item
                 assert isinstance(sink_binding, SinkBinding)
@@ -440,13 +468,13 @@ def lower_queue_program(program: QueueProgram) -> str:
         ]
         lhs = "" if not result_names else ", ".join(f"%{name}" for name in result_names) + " = "
         operands = ", ".join(f"%{parent_mapping[name]}" for name in inputs)
-        input_types = ", ".join(f"!ac.queue<{by_name[name].payload}>" for name in inputs)
-        output_types = ", ".join(f"!ac.queue<{by_name[name].payload}>" for name in outputs)
+        input_types = ", ".join(f"!ac.queue<{payload_by_queue[name]}>" for name in inputs)
+        output_types = ", ".join(f"!ac.queue<{payload_by_queue[name]}>" for name in outputs)
         lines.append(f"{indent}{lhs}ac.scope @{scope.name}({operands}) {{")
         local_mapping = dict(parent_mapping)
         if inputs:
             args = ", ".join(
-                f"%{name}__in: !ac.queue<{by_name[name].payload}>" for name in inputs
+                f"%{name}__in: !ac.queue<{payload_by_queue[name]}>" for name in inputs
             )
             lines.append(f"{indent}^body({args}):")
             for name in inputs:
@@ -455,7 +483,7 @@ def lower_queue_program(program: QueueProgram) -> str:
             lines.append(f"{indent}^body:")
         render_items(scope.path, local_mapping, indent + "  ")
         yielded = ", ".join(f"%{local_mapping[name]}" for name in outputs)
-        yield_types = ", ".join(f"!ac.queue<{by_name[name].payload}>" for name in outputs)
+        yield_types = ", ".join(f"!ac.queue<{payload_by_queue[name]}>" for name in outputs)
         lines.append(
             f"{indent}  ac.scope.yield"
             + (f" {yielded} : {yield_types}" if outputs else "")
