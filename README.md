@@ -25,6 +25,7 @@ in `toolchains/llvm.lock.json`.
 
 Normative specifications:
 
+- [Specification index](docs/specs/README.md)
 - [Interface Evolution v0.1](docs/specs/interface-evolution-v0.1.md)
 - [ACIR Core v0.1](docs/specs/acir-core-v0.1.md)
 - [Python-to-ACIR Lowering v0.1](docs/specs/python-to-acir-lowering-v0.1.md)
@@ -37,6 +38,7 @@ Normative specifications:
 
 Proposed future contract:
 
+- [Agentic Circuit Queue/Var v0.2 Specification Manual](docs/specs/agentic-circuit-v0.2.md)
 - [Agentic Circuit Queue/Var Architecture v0.2 Proposal Manual](docs/specs/agentic-circuit-queue-var-v0.2-proposal.md)
 
 Canonical machine-readable schemas:

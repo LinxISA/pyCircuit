@@ -4,7 +4,7 @@
 | --- | --- |
 | Specification | Queue/Var authoring, ACIR, gfsim, and PYC refinement proposal |
 | Target version | `0.2` |
-| Status | Proposed; not implemented and not currently normative |
+| Status | Design proposal; implementation is in progress and specified separately |
 | Current active contract | `0.1` |
 | Primary namespace | `ac` |
 | Python frontend tracking | [Issue #9](https://github.com/PTO-ISA/agentic-circuit/issues/9) |
@@ -12,6 +12,11 @@
 | PYC and Verilog tracking | [Issue #11](https://github.com/PTO-ISA/agentic-circuit/issues/11) |
 
 ## Status and authority
+
+The executable candidate contract now lives in the
+[Queue/Var v0.2 Specification Manual](agentic-circuit-v0.2.md). This proposal
+remains the design rationale and future inventory. Where the two differ, the
+implementation specification and its machine-readable sources take precedence.
 
 This document records the proposed Agentic Circuit `0.2` programming and
 lowering model for design review and implementation planning. It does not

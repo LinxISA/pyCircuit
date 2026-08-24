@@ -1,5 +1,9 @@
 # Queue/Var DavinciOO-like model
 
+The [Queue/Var v0.2 Specification Manual](../../docs/specs/agentic-circuit-v0.2.md)
+defines the authoring, ACIR, runtime, backend, and refinement contracts exercised
+by these examples.
+
 `davincioo_queue_model.py` is the first executable v0.2 topology generated
 from serial Python. It uses only repository-owned common building blocks:
 `ac.transform`, `ac.route`, `ac.merge`, `ac.queue`, and `ac.sink`.
