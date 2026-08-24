@@ -341,6 +341,9 @@ TEST(GeneratorTest, EmitsSortedExactTimeDomainRuntimeMetadata) {
   auto header = std::ranges::find(bundle->files, "include/generated/model.h",
                                   &GeneratedFile::relativePath);
   ASSERT_NE(header, bundle->files.end());
+  EXPECT_NE(
+      header->content.find("inline const std::array<gfsim::TimeDomainRuntime"),
+      std::string::npos);
   EXPECT_NE(header->content.find("TimeDomainRuntime{\"core\", 2, 1, 1}"),
             std::string::npos);
   EXPECT_NE(header->content.find("TimeDomainRuntime{\"memory\", 4, 0, 2}"),
