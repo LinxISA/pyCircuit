@@ -40,6 +40,7 @@ Historical v0.1 specifications:
 Queue/Var v0.2 candidate contract:
 
 - [Agentic Circuit Queue/Var v0.2 Specification Manual](docs/specs/agentic-circuit-v0.2.md)
+- [Agentic Circuit v0.2 团队 Specification 手册](docs/specs/agentic-circuit-v0.2-team-manual.zh-CN.md)
 - [Agentic Circuit Queue/Var Architecture v0.2 Proposal Manual](docs/specs/agentic-circuit-queue-var-v0.2-proposal.md)
 
 Canonical machine-readable schemas:
