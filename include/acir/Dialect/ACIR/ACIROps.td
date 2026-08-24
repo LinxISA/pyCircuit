@@ -268,17 +268,19 @@ def ACIR_ReorderYieldOp : ACIR_Op<"reorder.yield", [
 
 def ACIR_DependencyOp : ACIR_Op<"dependency", [SingleBlock]> {
   let arguments = (ins ACIR_QueueType:$input, I64Attr:$capacity,
-                       I64Attr:$no_dependency, I64Attr:$depth,
-                       I64Attr:$latency);
+                       I64Attr:$resources, I64Attr:$no_dependency,
+                       I64Attr:$depth, I64Attr:$latency);
   let results = (outs ACIR_QueueType:$output);
   let regions = (region SizedRegion<1>:$key,
                         SizedRegion<1>:$waits_for,
+                        SizedRegion<1>:$resource,
                         SizedRegion<1>:$cost);
   let hasVerifier = 1;
   let assemblyFormat = [{
-    $input `capacity` $capacity `no_dependency` $no_dependency
+    $input `capacity` $capacity `resources` $resources
+    `no_dependency` $no_dependency
     `depth` $depth `latency` $latency `key` $key
-    `waits_for` $waits_for `cost` $cost attr-dict `:`
+    `waits_for` $waits_for `resource` $resource `cost` $cost attr-dict `:`
     qualified(type($input)) `->` qualified(type($output))
   }];
 }

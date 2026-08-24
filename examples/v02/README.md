@@ -45,9 +45,10 @@ records opcode identities, engine routes, reference execution costs, explicit
 predecessors, fixed boundary-cycle compensation, out-of-order completion order,
 in-order retirement, architectural values, and the 453-cycle oracle.
 
-The generated model uses the official bounded `ac.dependency` window,
-round-robin merge, committed observations, and the official `ac.reorder` block.
-The same serial Python and frozen ACIR now pass all of these gates:
+The generated model uses the official bounded `ac.dependency` window with four
+reserved resource classes, round-robin merge, committed observations, and the
+official `ac.reorder` block. The same serial Python and frozen ACIR now pass all
+of these gates:
 
 - typed gfsim consumes all 15 projected records and finishes in 453 cycles;
 - opcode counts and completion/retirement order match the reference projection;
@@ -61,7 +62,7 @@ predecessor completion explicitly and counts the reference execution cost. The
 projection applies only a documented 5-cycle ingress and 4-cycle drain
 compensation for the different Queue boundaries. It does not yet claim that the
 generated topology exposes the reference model's internal rename tables,
-resource reservation, issue queues, or ROB occupancy.
+per-unit issue queues, or ROB occupancy counters.
 
 ## PYC and Verilog slice
 

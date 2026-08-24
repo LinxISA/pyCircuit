@@ -64,6 +64,7 @@ struct SignedSequenceKey {
 struct DependencyValue {
   uint64_t sequence = 0;
   uint64_t predecessor = 255;
+  uint64_t resource = 0;
   uint64_t cycles = 1;
 
   bool operator==(const DependencyValue &) const = default;
@@ -84,6 +85,12 @@ struct DependencyPredecessor {
 struct DependencyCost {
   uint64_t operator()(const DependencyValue &value) const {
     return value.cycles;
+  }
+};
+
+struct DependencyResource {
+  uint64_t operator()(const DependencyValue &value) const {
+    return value.resource;
   }
 };
 
@@ -247,12 +254,13 @@ TEST(QueueBlocksTest, DependencyCompletesReadyTokensOutOfOrder) {
   SimQueue<DependencyValue> input("input", 1, nullptr, 4);
   SimQueue<DependencyValue> output("output", 2, nullptr, 4);
   QueueDependency<DependencyValue, DependencyKey, DependencyPredecessor,
-                  DependencyCost>
-      dependency("dependency", 3, nullptr, input, output, 4, 255);
+                  DependencyResource, DependencyCost>
+      dependency("dependency", 3, nullptr, input, output, 4, 2, 255);
   QueueSink<DependencyValue> sink("sink", 4, nullptr, output);
-  ASSERT_TRUE(input.proposePush({0, 255, 3}));
-  ASSERT_TRUE(input.proposePush({1, 255, 1}));
-  ASSERT_TRUE(input.proposePush({2, 0, 1}));
+  ASSERT_TRUE(input.proposePush({0, 255, 0, 4}));
+  ASSERT_TRUE(input.proposePush({1, 255, 0, 1}));
+  ASSERT_TRUE(input.proposePush({2, 255, 1, 1}));
+  ASSERT_TRUE(input.proposePush({3, 0, 1, 1}));
   input.doXfer({0, 0});
 
   for (uint64_t tick = 1; tick < 16; ++tick) {
@@ -265,22 +273,38 @@ TEST(QueueBlocksTest, DependencyCompletesReadyTokensOutOfOrder) {
     sink.doXfer(epoch);
   }
 
-  ASSERT_EQ(sink.received().size(), 3u);
-  EXPECT_EQ(sink.received()[0].sequence, 1u);
+  ASSERT_EQ(sink.received().size(), 4u);
+  EXPECT_EQ(sink.received()[0].sequence, 2u);
   EXPECT_EQ(sink.received()[1].sequence, 0u);
-  EXPECT_EQ(sink.received()[2].sequence, 2u);
+  EXPECT_EQ(sink.received()[2].sequence, 1u);
+  EXPECT_EQ(sink.received()[3].sequence, 3u);
 }
 
 TEST(QueueBlocksTest, DependencyRejectsZeroExecutionCost) {
   SimQueue<DependencyValue> input("input", 1, nullptr, 1);
   SimQueue<DependencyValue> output("output", 2, nullptr, 1);
   QueueDependency<DependencyValue, DependencyKey, DependencyPredecessor,
-                  DependencyCost>
-      dependency("dependency", 3, nullptr, input, output, 1, 255);
-  ASSERT_TRUE(input.proposePush({0, 255, 0}));
+                  DependencyResource, DependencyCost>
+      dependency("dependency", 3, nullptr, input, output, 1, 1, 255);
+  ASSERT_TRUE(input.proposePush({0, 255, 0, 0}));
   input.doXfer({0, 0});
   dependency.doWork({1, 0});
   EXPECT_EQ(dependency.runtimeFailureCode(), "dependency_nonpositive_cost");
+  EXPECT_FALSE(dependency.hasPendingCommit());
+  EXPECT_TRUE(output.isEmpty());
+}
+
+TEST(QueueBlocksTest, DependencyRejectsOutOfRangeResource) {
+  SimQueue<DependencyValue> input("input", 1, nullptr, 1);
+  SimQueue<DependencyValue> output("output", 2, nullptr, 1);
+  QueueDependency<DependencyValue, DependencyKey, DependencyPredecessor,
+                  DependencyResource, DependencyCost>
+      dependency("dependency", 3, nullptr, input, output, 1, 1, 255);
+  ASSERT_TRUE(input.proposePush({0, 255, 1, 1}));
+  input.doXfer({0, 0});
+  dependency.doWork({1, 0});
+  EXPECT_EQ(dependency.runtimeFailureCode(),
+            "dependency_resource_out_of_range");
   EXPECT_FALSE(dependency.hasPendingCommit());
   EXPECT_TRUE(output.isEmpty());
 }

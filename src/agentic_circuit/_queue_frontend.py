@@ -131,8 +131,10 @@ class DependencyBinding:
     argument: str
     key: ast.expr
     waits_for: ast.expr
+    resource: ast.expr
     cost: ast.expr
     capacity: int
+    resources: int
     no_dependency: int
     depth: int
     latency: int
@@ -1120,8 +1122,10 @@ def parse_queue_program(text: str, system: str) -> QueueProgram:
                 allowed_keywords = {
                     "key",
                     "waits_for",
+                    "resource",
                     "cost",
                     "capacity",
+                    "resources",
                     "no_dependency",
                     "depth",
                     "latency",
@@ -1134,7 +1138,7 @@ def parse_queue_program(text: str, system: str) -> QueueProgram:
                         "ACPY-QUEUE-014: dependency has an unsupported keyword"
                     )
                 policies: dict[str, ast.expr] = {}
-                for policy in ("key", "waits_for", "cost"):
+                for policy in ("key", "waits_for", "resource", "cost"):
                     values = [
                         keyword.value
                         for keyword in call.keywords
@@ -1147,12 +1151,21 @@ def parse_queue_program(text: str, system: str) -> QueueProgram:
                     policies[policy] = values[0]
                 key_argument, key = _lambda(policies["key"])
                 waits_argument, waits_for = _lambda(policies["waits_for"])
+                resource_argument, resource = _lambda(policies["resource"])
                 cost_argument, cost = _lambda(policies["cost"])
-                if len({key_argument, waits_argument, cost_argument}) != 1:
+                if len(
+                    {
+                        key_argument,
+                        waits_argument,
+                        resource_argument,
+                        cost_argument,
+                    }
+                ) != 1:
                     raise QueueFrontendError(
                         "ACPY-QUEUE-014: dependency lambdas require one argument name"
                     )
                 capacity = _positive_int(call, "capacity", 16)
+                resources = _positive_int(call, "resources", 1)
                 no_dependency = _nonnegative_int(call, "no_dependency", 255)
                 depth = _positive_int(call, "depth", 1)
                 latency = _positive_int(call, "latency", 1)
@@ -1175,8 +1188,10 @@ def parse_queue_program(text: str, system: str) -> QueueProgram:
                         key_argument,
                         key,
                         waits_for,
+                        resource,
                         cost,
                         capacity,
+                        resources,
                         no_dependency,
                         depth,
                         latency,
@@ -1833,6 +1848,7 @@ def lower_queue_program(program: QueueProgram) -> str:
                 policies = (
                     ("key", dependency.key),
                     ("waits_for", dependency.waits_for),
+                    ("resource", dependency.resource),
                     ("cost", dependency.cost),
                 )
                 emitted: list[tuple[str, str, list[str]]] = []
@@ -1858,11 +1874,14 @@ def lower_queue_program(program: QueueProgram) -> str:
                 lines.append(
                     f"{indent}%{output} = ac.dependency "
                     f"%{mapping[dependency.input_name]} capacity "
-                    f"{dependency.capacity} no_dependency "
+                    f"{dependency.capacity} resources {dependency.resources} "
+                    f"no_dependency "
                     f"{dependency.no_dependency} depth {dependency.depth} "
                     f"latency {dependency.latency} key {{"
                 )
-                for index, policy_name in enumerate(("key", "waits_for", "cost")):
+                for index, policy_name in enumerate(
+                    ("key", "waits_for", "resource", "cost")
+                ):
                     if index:
                         lines.append(f"{indent}}} {policy_name} {{")
                     lines.append(

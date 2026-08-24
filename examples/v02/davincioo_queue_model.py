@@ -26,8 +26,10 @@ def davincioo_queue_model() -> None:
         scheduled = prepared.depend(
             key=lambda item: item.sequence_id,
             waits_for=lambda item: item.waits_for,
+            resource=lambda item: item.route,
             cost=lambda item: item.cycles,
             capacity=8,
+            resources=4,
             no_dependency=255,
             depth=16,
             latency=1,

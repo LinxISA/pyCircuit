@@ -50,13 +50,14 @@ counts, out-of-order completion, in-order retirement, architectural values and
 the 453-cycle completion contract. The same frozen ACIR also lowers through
 PYC C++ and Verilog, where cycle-level equivalence is checked independently.
 
-The generated model now uses explicit `ac.dependency` predecessor tracking and
-execution countdown; dependency-wait time is not folded into token latency.
+The generated model now uses explicit `ac.dependency` predecessor tracking,
+per-resource reservation, and execution countdown; dependency-wait time is not
+folded into token latency.
 The projection retains a fixed 5-cycle ingress and 4-cycle drain compensation
 for the different Queue boundaries. It therefore proves contract-equivalent
-committed behavior for this bounded trace, not internal resource/issue/ROB
-occupancy equivalence. Later milestones may add reservation and memory blocks
-without changing the trace or output contract. Byte-identical C++ is not
+committed behavior for this bounded trace, not internal per-unit issue/ROB
+occupancy equivalence. Later milestones may add memory and credit blocks without
+changing the trace or output contract. Byte-identical C++ is not
 required; contract-equivalent committed output is the acceptance criterion.
 
 The imported source is frozen by [`UPSTREAM_FILES.sha256`](UPSTREAM_FILES.sha256),

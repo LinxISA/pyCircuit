@@ -54,6 +54,7 @@ struct QueueBlockPlan {
   uint64_t capacity = 0;
   uint64_t start = 0;
   uint64_t noDependency = 0;
+  uint64_t resources = 0;
 };
 
 struct QueueGraphPlan {

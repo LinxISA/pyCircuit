@@ -380,6 +380,7 @@ llvm::Expected<std::string> generateQueueGraphPyc(const QueueGraphPlan &plan) {
     std::string phase;
     std::string key;
     std::string predecessor;
+    std::string resource;
     std::string remaining;
     std::string cost;
     std::string data;
@@ -390,6 +391,7 @@ llvm::Expected<std::string> generateQueueGraphPyc(const QueueGraphPlan &plan) {
     std::vector<DependencySlotState> slots;
     std::string inputKey;
     std::string inputPredecessor;
+    std::string inputResource;
     std::string inputCost;
     std::string anyFree;
     std::string freeIndex;
@@ -398,10 +400,12 @@ llvm::Expected<std::string> generateQueueGraphPyc(const QueueGraphPlan &plan) {
     std::string doneIndex;
     std::string safeAdmission;
     std::string keyType;
+    std::string resourceType;
     std::string costType;
     std::string dataType;
     std::string slotType;
     uint64_t noDependency = 0;
+    uint64_t resources = 0;
   };
   std::vector<const QueueBlockPlan *> sources;
   std::vector<const QueueBlockPlan *> sinks;
@@ -459,7 +463,8 @@ llvm::Expected<std::string> generateQueueGraphPyc(const QueueGraphPlan &plan) {
       reorderByOutput[block.outputs.front()] = &block;
     } else if (block.kind == "dependency") {
       if (block.inputs.size() != 1 || block.outputs.size() != 1 ||
-          block.yields.size() != 3 || block.capacity == 0)
+          block.yields.size() != 4 || block.capacity == 0 ||
+          block.resources == 0)
         return pycError("dependency contract is unsupported");
       dependencyByOutput[block.outputs.front()] = &block;
     } else if (block.kind == "feedback") {
@@ -859,24 +864,32 @@ llvm::Expected<std::string> generateQueueGraphPyc(const QueueGraphPlan &plan) {
         if (policyWidths[1] < 64 &&
             dependency.noDependency >= (uint64_t{1} << policyWidths[1]))
           return pycError("dependency sentinel does not fit predecessor type");
+        if (policyWidths[2] < 64 &&
+            dependency.resources > (uint64_t{1} << policyWidths[2]))
+          return pycError("dependency resources do not fit resource type");
 
         DependencyState state;
         state.inputKey = policyValues[0];
         state.inputPredecessor = policyValues[1];
-        state.inputCost = policyValues[2];
+        state.inputResource = policyValues[2];
+        state.inputCost = policyValues[3];
         state.keyType = policyTypes[0];
-        state.costType = policyTypes[2];
+        state.resourceType = policyTypes[2];
+        state.costType = policyTypes[3];
         state.dataType = *dataType;
         state.noDependency = dependency.noDependency;
-        const uint64_t slotWidth =
-            1 + 2 + 2 * policyWidths[0] + 2 * policyWidths[2] + *dataWidth;
+        state.resources = dependency.resources;
+        const uint64_t slotWidth = 1 + 2 + 2 * policyWidths[0] +
+                                   policyWidths[2] + 2 * policyWidths[3] +
+                                   *dataWidth;
         state.slotType = "i" + std::to_string(slotWidth);
         std::string zeroSlot = emitConstant(0, state.slotType);
         std::string donePhase = emitConstant(2, "i2");
 
         const uint64_t costLsb = *dataWidth;
-        const uint64_t remainingLsb = costLsb + policyWidths[2];
-        const uint64_t predecessorLsb = remainingLsb + policyWidths[2];
+        const uint64_t remainingLsb = costLsb + policyWidths[3];
+        const uint64_t resourceLsb = remainingLsb + policyWidths[3];
+        const uint64_t predecessorLsb = resourceLsb + policyWidths[2];
         const uint64_t keyLsb = predecessorLsb + policyWidths[0];
         const uint64_t phaseLsb = keyLsb + policyWidths[0];
         const uint64_t validLsb = phaseLsb + 2;
@@ -901,6 +914,8 @@ llvm::Expected<std::string> generateQueueGraphPyc(const QueueGraphPlan &plan) {
               emitExtract(slot.state, keyLsb, state.slotType, state.keyType);
           slot.predecessor = emitExtract(slot.state, predecessorLsb,
                                          state.slotType, state.keyType);
+          slot.resource = emitExtract(slot.state, resourceLsb, state.slotType,
+                                      state.resourceType);
           slot.remaining = emitExtract(slot.state, remainingLsb, state.slotType,
                                        state.costType);
           slot.cost =
@@ -943,8 +958,18 @@ llvm::Expected<std::string> generateQueueGraphPyc(const QueueGraphPlan &plan) {
         std::string zeroCost = emitConstant(0, state.costType);
         std::string costIsZero =
             emitBinary("eq", state.inputCost, zeroCost, state.costType);
+        std::string resourceInvalid = emitConstant(0, "i1");
+        if (policyWidths[2] == 64 ||
+            dependency.resources < (uint64_t{1} << policyWidths[2])) {
+          std::string resourceLimit =
+              emitConstant(dependency.resources, state.resourceType);
+          std::string resourceValid = emitBinary(
+              "ult", state.inputResource, resourceLimit, state.resourceType);
+          resourceInvalid = emitNot(resourceValid);
+        }
         std::string invalidInput =
             emitBinary("or", duplicate, costIsZero, "i1");
+        invalidInput = emitBinary("or", invalidInput, resourceInvalid, "i1");
         std::string invalidAdmission =
             emitBinary("and", inputValidValue->getValue(), invalidInput, "i1");
         state.safeAdmission = emitNot(invalidAdmission);
@@ -1336,11 +1361,14 @@ llvm::Expected<std::string> generateQueueGraphPyc(const QueueGraphPlan &plan) {
 
       std::vector<std::string> freeGrants;
       std::vector<std::string> doneGrants;
+      std::vector<std::string> indexValues;
       freeGrants.reserve(state->getValue().slots.size());
       doneGrants.reserve(state->getValue().slots.size());
+      indexValues.reserve(state->getValue().slots.size());
       for (size_t index = 0; index < state->getValue().slots.size(); ++index) {
         std::string indexValue =
             emitConstant(index, state->getValue().freeIndexType);
+        indexValues.push_back(indexValue);
         freeGrants.push_back(emitBinary("eq", state->getValue().freeIndex,
                                         indexValue,
                                         state->getValue().freeIndexType));
@@ -1349,17 +1377,20 @@ llvm::Expected<std::string> generateQueueGraphPyc(const QueueGraphPlan &plan) {
                                         state->getValue().freeIndexType));
       }
 
-      for (auto [index, slot] : llvm::enumerate(state->getValue().slots)) {
-        std::string admitSlot =
-            emitBinary("and", admit, freeGrants[index], "i1");
-        std::string retireSlot =
-            emitBinary("and", retire, doneGrants[index], "i1");
+      std::vector<std::string> waitingValues;
+      std::vector<std::string> executingValues;
+      std::vector<std::string> completeValues;
+      std::vector<std::string> decrementValues;
+      std::vector<std::string> decrementedValues;
+      std::vector<std::string> dependencyReadyValues;
+      for (const DependencySlotState &slot : state->getValue().slots) {
         std::string isWaiting =
             emitBinary("eq", slot.phase, waitingPhase, "i2");
-        isWaiting = emitBinary("and", slot.valid, isWaiting, "i1");
+        waitingValues.push_back(emitBinary("and", slot.valid, isWaiting, "i1"));
         std::string isExecuting =
             emitBinary("eq", slot.phase, executingPhase, "i2");
         isExecuting = emitBinary("and", slot.valid, isExecuting, "i1");
+        executingValues.push_back(isExecuting);
         std::string sentinel = emitBinary("eq", slot.predecessor, noDependency,
                                           state->getValue().keyType);
         std::vector<std::string> predecessorMatches;
@@ -1372,16 +1403,68 @@ llvm::Expected<std::string> generateQueueGraphPyc(const QueueGraphPlan &plan) {
         }
         std::string predecessorDone =
             reduceBalanced("or", predecessorMatches, "i1");
-        std::string dependencyReady =
-            emitBinary("or", sentinel, predecessorDone, "i1");
-        std::string issue = emitBinary("and", isWaiting, dependencyReady, "i1");
+        dependencyReadyValues.push_back(
+            emitBinary("or", sentinel, predecessorDone, "i1"));
         std::string atOne = emitBinary("eq", slot.remaining, oneCost,
                                        state->getValue().costType);
-        std::string complete = emitBinary("and", isExecuting, atOne, "i1");
+        completeValues.push_back(emitBinary("and", isExecuting, atOne, "i1"));
         std::string notAtOne = emitNot(atOne);
-        std::string decrement = emitBinary("and", isExecuting, notAtOne, "i1");
-        std::string decremented = emitBinary("sub", slot.remaining, oneCost,
-                                             state->getValue().costType);
+        decrementValues.push_back(
+            emitBinary("and", isExecuting, notAtOne, "i1"));
+        decrementedValues.push_back(emitBinary("sub", slot.remaining, oneCost,
+                                               state->getValue().costType));
+      }
+
+      std::string noIssue = emitConstant(0, "i1");
+      std::vector<std::string> issueValues(state->getValue().slots.size(),
+                                           noIssue);
+      for (uint64_t resource = 0; resource < state->getValue().resources;
+           ++resource) {
+        std::string resourceValue =
+            emitConstant(resource, state->getValue().resourceType);
+        std::vector<std::string> candidates;
+        std::vector<std::string> blockers;
+        candidates.reserve(state->getValue().slots.size());
+        blockers.reserve(state->getValue().slots.size());
+        for (auto [index, slot] : llvm::enumerate(state->getValue().slots)) {
+          std::string sameResource =
+              emitBinary("eq", slot.resource, resourceValue,
+                         state->getValue().resourceType);
+          std::string ready = emitBinary("and", waitingValues[index],
+                                         dependencyReadyValues[index], "i1");
+          candidates.push_back(emitBinary("and", ready, sameResource, "i1"));
+          std::string stillExecuting =
+              emitBinary("and", executingValues[index],
+                         emitNot(completeValues[index]), "i1");
+          blockers.push_back(
+              emitBinary("and", stillExecuting, sameResource, "i1"));
+        }
+        auto selected = selectBalanced(candidates, indexValues,
+                                       state->getValue().freeIndexType);
+        std::string resourceBusy = reduceBalanced("or", blockers, "i1");
+        std::string resourceCanIssue =
+            emitBinary("and", selected.first, emitNot(resourceBusy), "i1");
+        for (size_t index = 0; index < state->getValue().slots.size();
+             ++index) {
+          std::string selectedSlot =
+              emitBinary("eq", selected.second, indexValues[index],
+                         state->getValue().freeIndexType);
+          std::string issue =
+              emitBinary("and", resourceCanIssue, selectedSlot, "i1");
+          issueValues[index] =
+              emitBinary("or", issueValues[index], issue, "i1");
+        }
+      }
+
+      for (auto [index, slot] : llvm::enumerate(state->getValue().slots)) {
+        std::string admitSlot =
+            emitBinary("and", admit, freeGrants[index], "i1");
+        std::string retireSlot =
+            emitBinary("and", retire, doneGrants[index], "i1");
+        const std::string &issue = issueValues[index];
+        const std::string &complete = completeValues[index];
+        const std::string &decrement = decrementValues[index];
+        const std::string &decremented = decrementedValues[index];
 
         std::string nextValid =
             emitMux(retireSlot, zeroValid, slot.valid, "i1");
@@ -1402,6 +1485,9 @@ llvm::Expected<std::string> generateQueueGraphPyc(const QueueGraphPlan &plan) {
         std::string nextPredecessor =
             emitMux(admitSlot, state->getValue().inputPredecessor,
                     slot.predecessor, state->getValue().keyType);
+        std::string nextResource =
+            emitMux(admitSlot, state->getValue().inputResource, slot.resource,
+                    state->getValue().resourceType);
         std::string nextCost = emitMux(admitSlot, state->getValue().inputCost,
                                        slot.cost, state->getValue().costType);
         std::string nextData = emitMux(admitSlot, inputDataValue->getValue(),
@@ -1409,11 +1495,12 @@ llvm::Expected<std::string> generateQueueGraphPyc(const QueueGraphPlan &plan) {
         std::string nextState = newValue();
         body << "    " << nextState << " = pyc.concat(" << nextValid << ", "
              << nextPhase << ", " << nextKey << ", " << nextPredecessor << ", "
-             << nextRemaining << ", " << nextCost << ", " << nextData
-             << ") : (i1, i2, " << state->getValue().keyType << ", "
-             << state->getValue().keyType << ", " << state->getValue().costType
-             << ", " << state->getValue().costType << ", "
-             << state->getValue().dataType << ") -> "
+             << nextResource << ", " << nextRemaining << ", " << nextCost
+             << ", " << nextData << ") : (i1, i2, " << state->getValue().keyType
+             << ", " << state->getValue().keyType << ", "
+             << state->getValue().resourceType << ", "
+             << state->getValue().costType << ", " << state->getValue().costType
+             << ", " << state->getValue().dataType << ") -> "
              << state->getValue().slotType << "\n";
         std::vector<std::string> changes = {admitSlot, retireSlot, issue,
                                             complete, decrement};

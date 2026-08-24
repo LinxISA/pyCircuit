@@ -280,6 +280,7 @@ import agentic_circuit as ac
 class Token:
     sequence: ac.u8
     waits_for: ac.u8
+    resource: ac.u2
     cycles: ac.u16
 
 @ac.system
@@ -288,8 +289,10 @@ def pipeline() -> None:
     completed = issued.depend(
         key=lambda item: item.sequence,
         waits_for=lambda item: item.waits_for,
+        resource=lambda item: item.resource,
         cost=lambda item: item.cycles,
         capacity=16,
+        resources=4,
         no_dependency=255,
         depth=8,
         latency=1,
@@ -299,7 +302,7 @@ def pipeline() -> None:
 
 
 class QueueFrontendV02Test(unittest.TestCase):
-    def test_dependency_lowers_three_pure_policies(self) -> None:
+    def test_dependency_lowers_four_pure_policies(self) -> None:
         from agentic_circuit._queue_frontend import (
             QueueFrontendError,
             lower_queue_source,
@@ -307,13 +310,14 @@ class QueueFrontendV02Test(unittest.TestCase):
 
         lowered = lower_queue_source(DEPENDENCY_SOURCE, "pipeline")
         self.assertIn(
-            "%completed = ac.dependency %issued capacity 16 "
+            "%completed = ac.dependency %issued capacity 16 resources 4 "
             "no_dependency 255 depth 8 latency 1 key",
             lowered,
         )
         self.assertIn("} waits_for {", lowered)
+        self.assertIn("} resource {", lowered)
         self.assertIn("} cost {", lowered)
-        self.assertEqual(3, lowered.count("ac.dependency.yield"))
+        self.assertEqual(4, lowered.count("ac.dependency.yield"))
         with self.assertRaisesRegex(QueueFrontendError, "requires one cost lambda"):
             lower_queue_source(
                 DEPENDENCY_SOURCE.replace("cost=lambda item: item.cycles,", ""),

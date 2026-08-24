@@ -213,8 +213,10 @@ LogicalResult ReorderOp::verify() {
 LogicalResult DependencyOp::verify() {
   if (getInput().getType() != getOutput().getType())
     return emitOpError("output queue must match input queue type");
-  if (getCapacity() <= 0 || getDepth() <= 0 || getLatency() <= 0)
-    return emitOpError("capacity, depth, and latency must be positive");
+  if (getCapacity() <= 0 || getResources() <= 0 || getDepth() <= 0 ||
+      getLatency() <= 0)
+    return emitOpError(
+        "capacity, resources, depth, and latency must be positive");
   if (getNoDependency() < 0)
     return emitOpError("no_dependency must be non-negative");
 
@@ -251,8 +253,9 @@ LogicalResult DependencyOp::verify() {
 
   FailureOr<IntegerType> key = verifyPolicy(getKey(), "key");
   FailureOr<IntegerType> dependency = verifyPolicy(getWaitsFor(), "waits_for");
+  FailureOr<IntegerType> resource = verifyPolicy(getResource(), "resource");
   FailureOr<IntegerType> cost = verifyPolicy(getCost(), "cost");
-  if (failed(key) || failed(dependency) || failed(cost))
+  if (failed(key) || failed(dependency) || failed(resource) || failed(cost))
     return failure();
   if (*key != *dependency)
     return emitOpError("key and waits_for must use the same integer Var type");
@@ -260,6 +263,9 @@ LogicalResult DependencyOp::verify() {
       static_cast<uint64_t>(getNoDependency()) >=
           (uint64_t{1} << dependency->getWidth()))
     return emitOpError("no_dependency must fit dependency width");
+  if (resource->getWidth() < 64 && static_cast<uint64_t>(getResources()) >
+                                       (uint64_t{1} << resource->getWidth()))
+    return emitOpError("resources must fit resource width");
   return success();
 }
 

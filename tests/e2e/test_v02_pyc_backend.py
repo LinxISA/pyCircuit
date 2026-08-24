@@ -554,15 +554,15 @@ int main() {{
 int main() {
   pyc::gen::pyc_dependency_pipeline dut;
   const std::array<std::uint64_t, 3> input{
-      (0ULL << 24) | (15ULL << 20) | (3ULL << 16) | 10,
-      (1ULL << 24) | (15ULL << 20) | (1ULL << 16) | 20,
-      (2ULL << 24) | (0ULL << 20) | (1ULL << 16) | 30};
+      (0ULL << 25) | (15ULL << 21) | (0ULL << 20) | (4ULL << 16) | 10,
+      (1ULL << 25) | (15ULL << 21) | (0ULL << 20) | (1ULL << 16) | 20,
+      (2ULL << 25) | (15ULL << 21) | (1ULL << 20) | (1ULL << 16) | 30};
   std::size_t cursor = 0;
   for (std::uint64_t cycle = 0; cycle < 24; ++cycle) {
     const bool offering = cycle != 0 && cursor < input.size();
     dut.rst = pyc::cpp::Wire<1>(cycle == 0 ? 1 : 0);
     dut.in_valid = pyc::cpp::Wire<1>(offering ? 1 : 0);
-    dut.in_data = pyc::cpp::Wire<28>(offering ? input[cursor] : 0);
+    dut.in_data = pyc::cpp::Wire<29>(offering ? input[cursor] : 0);
     dut.out_ready = pyc::cpp::Wire<1>(1);
     dut.clk = pyc::cpp::Wire<1>(0);
     dut.step();
@@ -616,9 +616,9 @@ int main() {
 int main() {
   Vpyc_dependency_pipeline dut;
   const std::array<std::uint64_t, 3> input{
-      (0ULL << 24) | (15ULL << 20) | (3ULL << 16) | 10,
-      (1ULL << 24) | (15ULL << 20) | (1ULL << 16) | 20,
-      (2ULL << 24) | (0ULL << 20) | (1ULL << 16) | 30};
+      (0ULL << 25) | (15ULL << 21) | (0ULL << 20) | (4ULL << 16) | 10,
+      (1ULL << 25) | (15ULL << 21) | (0ULL << 20) | (1ULL << 16) | 20,
+      (2ULL << 25) | (15ULL << 21) | (1ULL << 20) | (1ULL << 16) | 30};
   std::size_t cursor = 0;
   for (std::uint64_t cycle = 0; cycle < 24; ++cycle) {
     const bool offering = cycle != 0 && cursor < input.size();
@@ -677,9 +677,9 @@ int main() {
             ]
             self.assertEqual(
                 [
-                    (1 << 24) | (15 << 20) | (1 << 16) | 20,
-                    (0 << 24) | (15 << 20) | (3 << 16) | 10,
-                    (2 << 24) | (0 << 20) | (1 << 16) | 30,
+                    (2 << 25) | (15 << 21) | (1 << 20) | (1 << 16) | 30,
+                    (0 << 25) | (15 << 21) | (0 << 20) | (4 << 16) | 10,
+                    (1 << 25) | (15 << 21) | (0 << 20) | (1 << 16) | 20,
                 ],
                 transactions,
             )

@@ -195,7 +195,8 @@ llvm::Expected<std::string> generateQueueGraphCpp(const QueueGraphPlan &plan) {
       return generatorError("reorder contract is unsupported");
     if (block.kind == "dependency" &&
         (block.inputs.size() != 1 || block.outputs.size() != 1 ||
-         block.yields.size() != 3 || block.capacity == 0))
+         block.yields.size() != 4 || block.capacity == 0 ||
+         block.resources == 0))
       return generatorError("dependency contract is unsupported");
   }
 
@@ -289,7 +290,7 @@ llvm::Expected<std::string> generateQueueGraphCpp(const QueueGraphPlan &plan) {
       if (!inputType)
         return inputType.takeError();
       constexpr llvm::StringLiteral policyNames[] = {"key", "dependency",
-                                                     "cost"};
+                                                     "resource", "cost"};
       for (auto [policyIndex, policyName] : llvm::enumerate(policyNames)) {
         llvm::StringRef resultType = input->payloadType;
         if (block->yields[policyIndex] != "item") {
@@ -561,6 +562,7 @@ llvm::Expected<std::string> generateQueueGraphCpp(const QueueGraphPlan &plan) {
                              ", " + queueMembers[block->inputs[0]] + ", " +
                              queueMembers[block->outputs[0]] + ", " +
                              std::to_string(block->capacity) + ", " +
+                             std::to_string(block->resources) + ", " +
                              std::to_string(block->noDependency) + ")");
     } else if (block->kind == "feedback") {
       initializers.push_back(member + "(\"" + block->name + "\", " +
@@ -779,7 +781,8 @@ llvm::Expected<std::string> generateQueueGraphCpp(const QueueGraphPlan &plan) {
         return type.takeError();
       output << "  gfsim::QueueDependency<" << *type << ", block_" << index
              << "_key_policy, block_" << index << "_dependency_policy, block_"
-             << index << "_cost_policy> block_" << index << "_;\n";
+             << index << "_resource_policy, block_" << index
+             << "_cost_policy> block_" << index << "_;\n";
     } else if (block->kind == "feedback") {
       const QueuePlan *input = findQueue(plan, block->inputs[0]);
       auto type = input ? cppType(input->payloadType)

@@ -461,11 +461,12 @@ private:
                                  {uint64_t(dependency.getLatency())}};
         blockPlan.capacity = dependency.getCapacity();
         blockPlan.noDependency = dependency.getNoDependency();
+        blockPlan.resources = dependency.getResources();
         blockPlan.region = printRegion(dependency.getKey());
         std::vector<std::string> policyYields;
         for (mlir::Region *policy :
              {&dependency.getKey(), &dependency.getWaitsFor(),
-              &dependency.getCost()}) {
+              &dependency.getResource(), &dependency.getCost()}) {
           if (auto error = extractExpressions(*policy, blockPlan))
             return error;
           if (blockPlan.yields.size() != 1)
@@ -643,6 +644,7 @@ llvm::Expected<std::string> QueueGraphPlan::canonicalJson() const {
                            {"outputs", std::move(outputs)},
                            {"policy", block.policy},
                            {"region", block.region},
+                           {"resources", block.resources},
                            {"scope", block.scope},
                            {"start", block.start},
                            {"yields", std::move(yields)}});

@@ -243,10 +243,12 @@ TEST(QueueGraphPlanTest, EmitsTypedDependencyForBothBackends) {
                             {"output"},   {4},      {1}};
   dependency.expressions = {
       {"v0", "constant", "i8", {}, "", "", "255 : i8"},
-      {"v1", "constant", "i8", {}, "", "", "1 : i8"},
+      {"v1", "constant", "i1", {}, "", "", "0 : i1"},
+      {"v2", "constant", "i8", {}, "", "", "1 : i8"},
   };
-  dependency.yields = {"item", "v0", "v1"};
+  dependency.yields = {"item", "v0", "v1", "v2"};
   dependency.capacity = 4;
+  dependency.resources = 2;
   dependency.noDependency = 255;
   plan.blocks.push_back(std::move(dependency));
   plan.blocks.push_back({"sink", "sink_0", "/", {"output"}, {}});
@@ -255,7 +257,7 @@ TEST(QueueGraphPlanTest, EmitsTypedDependencyForBothBackends) {
   ASSERT_TRUE(bool(cpp)) << llvm::toString(cpp.takeError());
   EXPECT_NE(cpp->find("gfsim::QueueDependency<std::uint8_t"),
             std::string::npos);
-  EXPECT_NE(cpp->find(", input_, output_, 4, 255)"), std::string::npos);
+  EXPECT_NE(cpp->find(", input_, output_, 4, 2, 255)"), std::string::npos);
 
   auto pyc = generateQueueGraphPyc(plan);
   ASSERT_TRUE(bool(pyc)) << llvm::toString(pyc.takeError());
