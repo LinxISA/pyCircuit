@@ -6,4 +6,8 @@ if(NOT LLVM_ENABLE_RTTI)
 endif()
 
 add_subdirectory(acir-cxxgen)
+add_subdirectory(acir-opcode-catalog)
+add_subdirectory(acir-queue-cxxgen)
+add_subdirectory(acir-queue-plan)
+add_subdirectory(acir-queue-pycgen)
 add_subdirectory(acir-opt)

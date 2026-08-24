@@ -7,13 +7,13 @@
 // RUN: %not %acir_opt %t/unknown-ac-op.mlir 2>&1 | %FileCheck %s --check-prefix=UNKNOWN-AC
 
 // DIALECTS: Available Dialects: ac,acsim,arith,builtin,cf,dlti,func,index,scf
-// CANONICAL: module attributes {ac.contract_epoch = "0.1"}
-// MISSING: error: expected top-level 'ac.contract_epoch' string attribute equal to "0.1"
-// WRONG: error: expected top-level 'ac.contract_epoch' string attribute equal to "0.1"
+// CANONICAL: module attributes {ac.contract_epoch = "0.2"}
+// MISSING: error: expected top-level 'ac.contract_epoch' string attribute equal to "0.2"
+// WRONG: error: expected top-level 'ac.contract_epoch' string attribute equal to "0.2"
 // UNKNOWN-AC: error: unregistered operation 'ac.unknown'
 
 //--- canonical.mlir
-builtin.module attributes {ac.contract_epoch = "0.1"} {
+builtin.module attributes {ac.contract_epoch = "0.2"} {
 }
 
 //--- missing-epoch.mlir
@@ -21,10 +21,10 @@ builtin.module {
 }
 
 //--- wrong-epoch.mlir
-builtin.module attributes {ac.contract_epoch = "0.2"} {
+builtin.module attributes {ac.contract_epoch = "0.1"} {
 }
 
 //--- unknown-ac-op.mlir
-builtin.module attributes {ac.contract_epoch = "0.1"} {
+builtin.module attributes {ac.contract_epoch = "0.2"} {
   "ac.unknown"() : () -> ()
 }

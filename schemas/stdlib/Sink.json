@@ -1,10 +1,10 @@
 {
   "schema_kind": "agentic-circuit-component",
   "schema_version": "0.1",
-  "contract_epoch": "0.1",
-  "canonical_name": "ac.std.Sink",
+  "contract_epoch": "0.2",
+  "canonical_name": "ac.Sink",
   "family": "workload",
-  "provider_namespace": "ac.std",
+  "provider_namespace": "ac",
   "stability": "provisional",
   "cpp_binding": {
     "header": "gfsim/components.h",
@@ -17,10 +17,10 @@
   "static_parameters": [
     {
       "name": "T",
-      "acir_type": "!ac.static_type<ac.std.T>",
+      "acir_type": "!ac.static_type<ac.T>",
       "required": true,
       "default": null,
-      "constraint": "ac.std.Packet",
+      "constraint": "ac.Packet",
       "cpp_mapping": "template_argument"
     }
   ],
@@ -28,7 +28,7 @@
     {
       "name": "input",
       "binding_kind": "endpoint",
-      "acir_type": "!ac.endpoint<!ac.interface<ac.std.Stream<!ac.packet<ac.std.Transaction>,ac.std.ready_valid>>,consumer>",
+      "acir_type": "!ac.endpoint<!ac.interface<ac.Stream<!ac.packet<ac.Transaction>,ac.ready_valid>>,consumer>",
       "direction": "in",
       "role": "consumer",
       "cardinality": 1,
@@ -50,7 +50,7 @@
   },
   "protocol_contracts": [
     {
-      "protocol": "ac.std.ready_valid",
+      "protocol": "ac.ready_valid",
       "role": "consumer",
       "ordering": "fifo",
       "delivery": "exactly_once_on_transfer",
@@ -90,5 +90,5 @@
     "gauges": [],
     "histograms": []
   },
-  "schema_fingerprint": "sha256:fddb7689fbddb1dccc8cb730d5b00336a9b91e11a2a68ee463a871e44c3a8383"
+  "schema_fingerprint": "sha256:c61afbff6e1afc953e467a3d7a59b900fa5fcd87be0b740125244b47c8b0d21e"
 }

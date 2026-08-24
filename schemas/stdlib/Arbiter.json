@@ -1,10 +1,10 @@
 {
   "schema_kind": "agentic-circuit-component",
   "schema_version": "0.1",
-  "contract_epoch": "0.1",
-  "canonical_name": "ac.std.Arbiter",
+  "contract_epoch": "0.2",
+  "canonical_name": "ac.Arbiter",
   "family": "control",
-  "provider_namespace": "ac.std",
+  "provider_namespace": "ac",
   "stability": "provisional",
   "cpp_binding": {
     "header": "gfsim/components.h",
@@ -17,10 +17,10 @@
   "static_parameters": [
     {
       "name": "Transaction",
-      "acir_type": "!ac.static_type<ac.std.Transaction>",
+      "acir_type": "!ac.static_type<ac.Transaction>",
       "required": true,
       "default": null,
-      "constraint": "ac.std.Packet",
+      "constraint": "ac.Packet",
       "cpp_mapping": "template_argument"
     }
   ],
@@ -28,7 +28,7 @@
     {
       "name": "input",
       "binding_kind": "endpoint",
-      "acir_type": "!ac.endpoint<!ac.interface<ac.std.Stream<!ac.packet<ac.std.Transaction>,ac.std.ready_valid>>,consumer>",
+      "acir_type": "!ac.endpoint<!ac.interface<ac.Stream<!ac.packet<ac.Transaction>,ac.ready_valid>>,consumer>",
       "direction": "in",
       "role": "consumer",
       "cardinality": 1,
@@ -40,7 +40,7 @@
     {
       "name": "output",
       "binding_kind": "endpoint",
-      "acir_type": "!ac.endpoint<!ac.interface<ac.std.Stream<!ac.packet<ac.std.Transaction>,ac.std.ready_valid>>,producer>",
+      "acir_type": "!ac.endpoint<!ac.interface<ac.Stream<!ac.packet<ac.Transaction>,ac.ready_valid>>,producer>",
       "direction": "out",
       "role": "producer",
       "cardinality": 1,
@@ -62,7 +62,7 @@
   },
   "protocol_contracts": [
     {
-      "protocol": "ac.std.ready_valid",
+      "protocol": "ac.ready_valid",
       "role": "consumer",
       "ordering": "fifo",
       "delivery": "exactly_once_on_transfer",
@@ -71,7 +71,7 @@
       "failure": "protocol_violation"
     },
     {
-      "protocol": "ac.std.ready_valid",
+      "protocol": "ac.ready_valid",
       "role": "producer",
       "ordering": "fifo",
       "delivery": "exactly_once_on_transfer",
@@ -115,5 +115,5 @@
     "gauges": [],
     "histograms": []
   },
-  "schema_fingerprint": "sha256:e40b8bea7942e4334c26bed1f5ff777e80ebd15e87c315431679cf4d4c19fa45"
+  "schema_fingerprint": "sha256:4c43b5f2b10a6632f9738d0769817c76e4281cf33b770917e833cfd0345d71a6"
 }

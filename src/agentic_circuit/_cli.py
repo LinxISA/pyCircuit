@@ -138,6 +138,7 @@ def build_parser() -> argparse.ArgumentParser:
         "kind",
         choices=(
             "component",
+            "opcode",
             "protocol",
             "interface",
             "packet",
@@ -258,7 +259,7 @@ def _placeholder_result(
     return {
         "schema": "agentic-circuit-command-result",
         "version": "0.1",
-        "contract_epoch": "0.1",
+        "contract_epoch": "0.2",
         "command": arguments.command,
         "project": project,
         "status": "accepted",

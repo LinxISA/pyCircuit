@@ -99,7 +99,7 @@ bool isTraceSourceBinding(const ModelPlan &plan, const BindingPlan &binding) {
                              [&](const TypePlan &type) {
                                return type.symbol == binding.componentSchema;
                              });
-  return schema != plan.types.end() && schema->cppType == "ac.std.TraceSource";
+  return schema != plan.types.end() && schema->cppType == "ac.TraceSource";
 }
 
 bool isTraceOwner(const ModelPlan &plan,
@@ -169,8 +169,8 @@ llvm::Error validateModelPlan(const ModelPlan &plan) {
   if (plan.modelSymbol.empty() || plan.rootSymbol.empty())
     return planError("ACLOWER-FINGERPRINT",
                      "model and root symbols must be non-empty");
-  if (plan.contractEpoch != "0.1")
-    return planError("ACLOWER-FINGERPRINT", "model contract epoch must be 0.1");
+  if (plan.contractEpoch != "0.2")
+    return planError("ACLOWER-FINGERPRINT", "model contract epoch must be 0.2");
   for (const Fingerprint *fingerprint :
        {&plan.frozenAcirFingerprint, &plan.bindingLockFingerprint,
         &plan.providerFingerprint, &plan.profileFingerprint,

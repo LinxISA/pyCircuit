@@ -16,7 +16,7 @@
 // DESERIALIZE-ID: error: {{.*}}packet.deserialize result identity does not match serialization contract
 
 //--- missing-field.mlir
-builtin.module attributes {ac.contract_epoch = "0.1"} {
+builtin.module attributes {ac.contract_epoch = "0.2"} {
   "ac.type_scope"() <{sym_name = "types"}> ({
     "ac.transaction"() <{sym_name = "Pair", fields = [{name = "x", type = i8}, {name = "y", type = i8}]}> : () -> ()
   }) : () -> ()
@@ -25,7 +25,7 @@ builtin.module attributes {ac.contract_epoch = "0.1"} {
 }
 
 //--- create-type.mlir
-builtin.module attributes {ac.contract_epoch = "0.1"} {
+builtin.module attributes {ac.contract_epoch = "0.2"} {
   "ac.type_scope"() <{sym_name = "types"}> ({
     "ac.transaction"() <{sym_name = "One", fields = [{name = "x", type = i8}]}> : () -> ()
   }) : () -> ()
@@ -34,7 +34,7 @@ builtin.module attributes {ac.contract_epoch = "0.1"} {
 }
 
 //--- get-type.mlir
-builtin.module attributes {ac.contract_epoch = "0.1"} {
+builtin.module attributes {ac.contract_epoch = "0.2"} {
   "ac.type_scope"() <{sym_name = "types"}> ({
     "ac.transaction"() <{sym_name = "One", fields = [{name = "x", type = i8}]}> : () -> ()
   }) : () -> ()
@@ -43,7 +43,7 @@ builtin.module attributes {ac.contract_epoch = "0.1"} {
 }
 
 //--- with-identity.mlir
-builtin.module attributes {ac.contract_epoch = "0.1"} {
+builtin.module attributes {ac.contract_epoch = "0.2"} {
   "ac.type_scope"() <{sym_name = "types"}> ({
     "ac.transaction"() <{sym_name = "A", fields = [{name = "x", type = i8}]}> : () -> ()
     "ac.transaction"() <{sym_name = "B", fields = [{name = "x", type = i8}]}> : () -> ()
@@ -54,7 +54,7 @@ builtin.module attributes {ac.contract_epoch = "0.1"} {
 }
 
 //--- serialize-kind.mlir
-builtin.module attributes {ac.contract_epoch = "0.1"} {
+builtin.module attributes {ac.contract_epoch = "0.2"} {
   "ac.type_scope"() <{sym_name = "types"}> ({
     "ac.transaction"() <{sym_name = "T", fields = []}> : () -> ()
   }) : () -> ()
@@ -63,7 +63,7 @@ builtin.module attributes {ac.contract_epoch = "0.1"} {
 }
 
 //--- serialize-width.mlir
-builtin.module attributes {ac.contract_epoch = "0.1"} {
+builtin.module attributes {ac.contract_epoch = "0.2"} {
   "ac.type_scope"() <{sym_name = "types"}> ({
     "ac.packet"() <{sym_name = "P", fields = []}> : () -> ()
   }) {dlti.dl_spec = #dlti.dl_spec<!ac.packet<@types::@P> = {abi_alignment = 1 : i64, endianness = "little", preferred_alignment = 1 : i64, serialization_width = 4 : i64, size = 8 : i64}>} : () -> ()
@@ -72,7 +72,7 @@ builtin.module attributes {ac.contract_epoch = "0.1"} {
 }
 
 //--- deserialize-identity.mlir
-builtin.module attributes {ac.contract_epoch = "0.1"} {
+builtin.module attributes {ac.contract_epoch = "0.2"} {
   "ac.type_scope"() <{sym_name = "types"}> ({
     "ac.packet"() <{sym_name = "P", fields = []}> : () -> ()
     "ac.packet"() <{sym_name = "Q", fields = []}> : () -> ()

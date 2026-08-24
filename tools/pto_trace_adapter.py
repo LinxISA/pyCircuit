@@ -287,8 +287,11 @@ def _record(value: object, limits: AdapterLimits, line: int) -> dict[str, JsonVa
             pointer="/opcode",
         )
 
-    parse_tile = lambda item, **where: _tile(item, limits, **where)
-    parse_scalar = lambda item, **where: _scalar(item, limits, **where)
+    def parse_tile(item, **where):
+        return _tile(item, limits, **where)
+
+    def parse_scalar(item, **where):
+        return _scalar(item, limits, **where)
     input_tiles = _array(
         source["input_tiles"],
         maximum=limits.max_tiles_per_record,
@@ -428,7 +431,7 @@ def _validate_target(document: dict[str, JsonValue]) -> None:
     if (
         document["schema"] != "pto-trace"
         or document["version"] != "0.1"
-        or document["contract_epoch"] != "0.1"
+        or document["contract_epoch"] != "0.2"
         or type(document["metadata"]) is not dict
         or type(document["records"]) is not list
     ):
@@ -474,7 +477,7 @@ def convert_davincioo_trace(
     document: dict[str, JsonValue] = {
         "schema": "pto-trace",
         "version": "0.1",
-        "contract_epoch": "0.1",
+        "contract_epoch": "0.2",
         "metadata": {
             "producer": DAVINCIOO_PRODUCER,
             "pto_identity": PTO_IDENTITY,

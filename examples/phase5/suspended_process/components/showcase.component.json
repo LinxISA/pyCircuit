@@ -1,7 +1,7 @@
 {
   "schema_kind": "agentic-circuit-component",
   "schema_version": "0.1",
-  "contract_epoch": "0.1",
+  "contract_epoch": "0.2",
   "canonical_name": "phase5.Showcase",
   "family": "source",
   "provider_namespace": "phase5.provider",
@@ -46,5 +46,5 @@
     "gauges": [],
     "histograms": []
   },
-  "schema_fingerprint": "sha256:09fbf51cbee77c2081a9b1266ee4b3d0d0c70f3bf1826e33a9e408874168b5c9"
+  "schema_fingerprint": "sha256:0fc0626924debbf545826bad7c14bd2a33bf0aa222ca02aaca8551f29e8f37d8"
 }

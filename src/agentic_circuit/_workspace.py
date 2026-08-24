@@ -143,8 +143,8 @@ def load_workspace(manifest: Path) -> WorkspaceConfig:
         _fail("ACPY-CONFIG-002", f"workspace is missing {missing[0]!r}")
 
     epoch = document["contract_epoch"]
-    if epoch != "0.1":
-        _fail("ACPY-CONFIG-005", "contract_epoch must equal 0.1")
+    if epoch != "0.2":
+        _fail("ACPY-CONFIG-005", "contract_epoch must equal 0.2")
     root = manifest.parent.resolve()
 
     project = _closed_table(
@@ -169,7 +169,7 @@ def load_workspace(manifest: Path) -> WorkspaceConfig:
         required=frozenset({"standard_library"}),
     )
     provider_names = _string_list(providers, "standard_library", "providers")
-    if any(name != "ac.std" for name in provider_names):
+    if any(name != "ac" for name in provider_names):
         _fail("ACPY-CONFIG-006", "unknown standard-library provider")
 
     build = _closed_table(
@@ -253,7 +253,7 @@ def load_workspace(manifest: Path) -> WorkspaceConfig:
         root=root,
         project_name=project_name,
         project_version=project_version,
-        contract_epoch="0.1",
+        contract_epoch="0.2",
         architecture=architecture,
         default_system=default_system,
         standard_library_providers=provider_names,

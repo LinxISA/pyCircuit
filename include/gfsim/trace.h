@@ -173,7 +173,7 @@ template <typename Transaction = PtoTraceRecord,
   requires TraceDecoder<Decoder, Transaction>
 class TraceSource final : public SimObject {
 public:
-  static constexpr std::string_view contractName = "ac.std.TraceSource";
+  static constexpr std::string_view contractName = "ac.TraceSource";
   static constexpr ObjectKind componentKind = ObjectKind::TraceSource;
 
   TraceSource(std::string name, ObjectId id, SimObject *parent,

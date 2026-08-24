@@ -109,6 +109,9 @@ _NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _QUALIFIED_NAME = re.compile(
     r"^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)+$"
 )
+_NAMESPACE_NAME = re.compile(
+    r"^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*$"
+)
 
 
 class SchemaError(ValueError):
@@ -195,7 +198,12 @@ def _positive_integer(value: object, context: str, *, allow_zero: bool = False) 
 def _validate_component_fields(record: dict[str, JsonValue], name: str) -> None:
     _string(record["canonical_name"], f"{name}.canonical_name", qualified=True)
     _string(record["family"], f"{name}.family")
-    _string(record["provider_namespace"], f"{name}.provider_namespace", qualified=True)
+    provider_namespace = record["provider_namespace"]
+    if (
+        type(provider_namespace) is not str
+        or not _NAMESPACE_NAME.fullmatch(provider_namespace)
+    ):
+        raise SchemaError(f"{name}.provider_namespace is invalid")
     _enum(record["stability"], {"experimental", "provisional", "stable"}, f"{name}.stability")
 
     cpp_binding = record["cpp_binding"]
@@ -383,7 +391,7 @@ def _component_schema(
     if (
         record["schema_kind"] != "agentic-circuit-component"
         or record["schema_version"] != "0.1"
-        or record["contract_epoch"] != "0.1"
+        or record["contract_epoch"] != "0.2"
         or record["canonical_name"] != expected_name
     ):
         raise SchemaError(f"component identity mismatch for {expected_name}")
@@ -582,11 +590,11 @@ class SchemaRegistry:
             "stdlib catalog",
         )
         if (
-            catalog["catalog"] != "ac.std"
+            catalog["catalog"] != "ac"
             or catalog["version"] != "0.1"
-            or catalog["contract_epoch"] != "0.1"
+            or catalog["contract_epoch"] != "0.2"
         ):
-            raise SchemaError("stdlib catalog identity must be ac.std@0.1")
+            raise SchemaError("stdlib catalog identity must be ac@0.1")
         entries = _record_list(
             catalog["entries"],
             {"canonical_name", "availability", "schema_path", "schema_fingerprint"},

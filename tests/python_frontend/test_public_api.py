@@ -18,6 +18,8 @@ PUBLIC = {
     "process",
     "scope",
     "array",
+    "map",
+    "set",
     "instances",
     "view",
     "queue",
@@ -27,6 +29,22 @@ PUBLIC = {
     "Static",
     "Flow",
     "Endpoint",
+    "source",
+    "sink",
+    "observe",
+    "expect",
+    "atomic",
+    "u1",
+    "u2",
+    "u4",
+    "u8",
+    "u16",
+    "u32",
+    "u64",
+    "s8",
+    "s16",
+    "s32",
+    "s64",
 }
 
 
@@ -97,8 +115,17 @@ class PublicApiTest(unittest.TestCase):
         operations = (
             lambda: api.scope("nested"),
             lambda: api.array(1, 2),
+            lambda: api.map({"a": object()}),
+            lambda: api.set({object()}),
             lambda: api.instances(1, 2),
             lambda: api.view(object(), "field"),
+            lambda: api.source(int),
+            lambda: api.sink(object()),
+            lambda: api.observe(object()),
+            lambda: api.expect(
+                object(), predicate=lambda value: True, message="expected"
+            ),
+            lambda: api.atomic(),
         )
         for operation in operations:
             with self.subTest(operation=operation):

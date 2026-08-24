@@ -18,6 +18,7 @@ EXACT_CONTRACT_IDENTITIES: dict[str, str] = {
     "acsim": "acsim@0.1",
     "cli": "agentic-circuit-cli@0.1",
     "component_schema": "agentic-circuit-component@0.1",
+    "opcode_catalog": "agentic-circuit-opcode-catalog@0.2",
     "cxx_source_contract": "gfsim-cxx20@0.1",
     "pto_trace": "pto-trace@0.1",
     "diagnostic": "agentic-circuit-diagnostic@0.1",
@@ -32,7 +33,7 @@ def schema_root() -> Path:
 
 
 def diagnostics_catalog_path() -> Path:
-    return resource_directory("resources") / "diagnostics-v0.1.json"
+    return resource_directory("resources") / "diagnostics-v0.2.json"
 
 
 def load_json(path: Path) -> dict[str, JsonValue]:
@@ -44,6 +45,10 @@ def load_json(path: Path) -> dict[str, JsonValue]:
 
 def standard_library_catalog() -> dict[str, JsonValue]:
     return load_json(schema_root() / "stdlib" / "catalog.json")
+
+
+def opcode_catalog() -> dict[str, JsonValue]:
+    return load_json(schema_root() / "opcodes-v0.2.json")
 
 
 def diagnostic_catalog() -> dict[str, JsonValue]:
@@ -61,7 +66,7 @@ class CapabilityDocument:
         return {
             "schema": "agentic-circuit-capabilities",
             "version": "0.1",
-            "contract_epoch": "0.1",
+            "contract_epoch": "0.2",
             "contract_identities": dict(self.contract_identities),
             "items": [dict(item) for item in self.items],
             "compiler_build_id": self.compiler_build_id,
@@ -73,7 +78,9 @@ def _synthetic_fingerprint(kind: str, name: str) -> str:
     return sha256_bytes(f"{kind}:{name}@0.1".encode("utf-8"))
 
 
-def _base_items(catalog: dict[str, JsonValue]) -> list[dict[str, JsonValue]]:
+def _base_items(
+    catalog: dict[str, JsonValue], opcodes: dict[str, JsonValue]
+) -> list[dict[str, JsonValue]]:
     entries = catalog.get("entries")
     if type(entries) is not list:
         raise ValueError("standard-library catalog entries are invalid")
@@ -102,12 +109,27 @@ def _base_items(catalog: dict[str, JsonValue]) -> list[dict[str, JsonValue]]:
     items.append(
         {
             "kind": "provider",
-            "name": "ac.std",
+            "name": "ac",
             "availability": "available",
             "schema_fingerprint": catalog_fingerprint,
             "implementation_fingerprint": None,
         }
     )
+    opcode_entries = opcodes.get("entries")
+    if type(opcode_entries) is not list:
+        raise ValueError("official opcode catalog entries are invalid")
+    for entry in opcode_entries:
+        if type(entry) is not dict or type(entry.get("operation")) is not str:
+            raise ValueError("official opcode catalog entry is invalid")
+        items.append(
+            {
+                "kind": "opcode",
+                "name": entry["operation"],
+                "availability": "available",
+                "schema_fingerprint": sha256_bytes(canonical_json_bytes(entry)),
+                "implementation_fingerprint": None,
+            }
+        )
     for profile in ("custom", "fast", "validated"):
         items.append(
             {
@@ -121,10 +143,10 @@ def _base_items(catalog: dict[str, JsonValue]) -> list[dict[str, JsonValue]]:
     items.append(
         {
             "kind": "interface",
-            "name": "ac.std.Stream",
+            "name": "ac.Stream",
             "availability": "available",
             "schema_fingerprint": _synthetic_fingerprint(
-                "interface", "ac.std.Stream"
+                "interface", "ac.Stream"
             ),
             "implementation_fingerprint": None,
         }
@@ -148,8 +170,9 @@ def capability_document(
     native: NativeCapabilities | None = None,
 ) -> CapabilityDocument:
     catalog = standard_library_catalog()
+    opcodes = opcode_catalog()
     native = native or native_capabilities()
-    items = _base_items(catalog)
+    items = _base_items(catalog, opcodes)
     native_items = {
         (item.get("kind"), item.get("name")): item for item in native.items
     }

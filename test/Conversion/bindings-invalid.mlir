@@ -16,7 +16,7 @@
 // exact ACLOWER-* codes.
 
 //--- extern.mlir
-builtin.module attributes {ac.contract_epoch = "0.1"} {
+builtin.module attributes {ac.contract_epoch = "0.2"} {
   ac.system @soc root @Top as "root" tick 0 "cycle"
       workload @Top::@workload seed {kind = "fixed", value = 0 : i64}
       instrumentation [] results {id = "default", format = "json"} selected true
@@ -31,7 +31,7 @@ builtin.module attributes {ac.contract_epoch = "0.1"} {
 }
 
 //--- sort-order.mlir
-builtin.module attributes {ac.contract_epoch = "0.1"} {
+builtin.module attributes {ac.contract_epoch = "0.2"} {
   ac.system @soc root @Top as "root" tick 0 "cycle"
       workload @Top::@workload seed {kind = "fixed", value = 0 : i64}
       instrumentation [] results {id = "default", format = "json"} selected true
@@ -46,7 +46,7 @@ builtin.module attributes {ac.contract_epoch = "0.1"} {
 }
 
 //--- heterogeneous-array.mlir
-builtin.module attributes {ac.contract_epoch = "0.1"} {
+builtin.module attributes {ac.contract_epoch = "0.2"} {
   ac.system @soc root @Top as "root" tick 0 "cycle"
       workload @Top::@workload seed {kind = "fixed", value = 0 : i64}
       instrumentation [] results {id = "default", format = "json"} selected true
@@ -62,7 +62,7 @@ builtin.module attributes {ac.contract_epoch = "0.1"} {
 }
 
 //--- time-domain.mlir
-builtin.module attributes {ac.contract_epoch = "0.1"} {
+builtin.module attributes {ac.contract_epoch = "0.2"} {
   ac.system @soc root @Top as "root" tick 0 "cycle"
       workload @Top::@workload seed {kind = "fixed", value = 0 : i64}
       instrumentation [] results {id = "default", format = "json"} selected true
@@ -77,7 +77,7 @@ builtin.module attributes {ac.contract_epoch = "0.1"} {
 // PURE-NOT: acsim.dispatch @Top::@leaf
 // SORT: acsim.module @Zebra
 // SORT: acsim.module @Top
-// ARRAY: error: ACLOWER-ARRAY: differently specialized array elements are outside the v0.1 lowering stage; lower them as ordered named members instead
+// ARRAY: error: ACLOWER-ARRAY: differently specialized array elements are outside the v0.2 lowering stage; lower them as ordered named members instead
 // TD: acsim.type @global cpp "gfsim::TimeDomainRuntime" kind "time_domain" fingerprint "sha256:{{[0-9a-f]+}}" {period = 1 : i64, phase = 0 : i64, tick_scale = 1 : i64}
 // REGISTRY: error: ACLOWER-BINDING-REGISTRY: registry must contain exactly candidates and requests arrays
 // METADATA: error: ACLOWER-BINDING-METADATA: binding effect requires exact executable entry points

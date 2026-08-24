@@ -50,7 +50,7 @@ def run(arguments: object, sink: OutputSink) -> int:
     checks.append(
         _check("python", sys.version_info >= (3, 11), python_version, ">=3.11")
     )
-    checks.append(_check("contract_epoch", True, "0.1", "0.1"))
+    checks.append(_check("contract_epoch", True, "0.2", "0.2"))
 
     try:
         native = capabilities()
@@ -91,25 +91,25 @@ def run(arguments: object, sink: OutputSink) -> int:
     checks.append(
         _check(
             "standard_library",
-            catalog_identity == "ac.std@0.1",
+            catalog_identity == "ac@0.1",
             catalog_identity,
-            "ac.std@0.1",
+            "ac@0.1",
         )
     )
-    canonical = canonical_json_bytes({"epoch": "0.1"})
+    canonical = canonical_json_bytes({"epoch": "0.2"})
     checks.append(
         _check(
             "canonical_json",
-            canonical == b'{"epoch":"0.1"}',
+            canonical == b'{"epoch":"0.2"}',
             canonical.decode("utf-8"),
-            'RFC 8785 {"epoch":"0.1"}',
+            'RFC 8785 {"epoch":"0.2"}',
         )
     )
     passed = all(check.status == "passed" for check in checks)
     document = {
         "schema": "agentic-circuit-doctor-result",
         "version": "0.1",
-        "contract_epoch": "0.1",
+        "contract_epoch": "0.2",
         "status": "passed" if passed else "failed",
         "checks": [check.to_json() for check in checks],
     }

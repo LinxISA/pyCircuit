@@ -76,18 +76,34 @@ class DiscoveryCommandTest(unittest.TestCase):
     def test_component_protocol_and_list_queries_are_exact(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            component = run_cli("schema", "component", "Queue", "--json", cwd=root)
+            component = run_cli(
+                "schema", "component", "ac.Queue", "--json", cwd=root
+            )
             protocol = run_cli(
-                "schema", "protocol", "ready_valid", "--json", cwd=root
+                "schema", "protocol", "ac.ready_valid", "--json", cwd=root
             )
             listing = run_cli("schema", "component", "--json", cwd=root)
+            opcode = run_cli(
+                "schema", "opcode", "ac.reorder", "--json", cwd=root
+            )
+            opcode_listing = run_cli("schema", "opcode", "--json", cwd=root)
 
-        self.assertEqual("ac.std.Queue", json.loads(component.stdout)["canonical_name"])
+        self.assertEqual("ac.Queue", json.loads(component.stdout)["canonical_name"])
         self.assertEqual(
-            "ac.std.ready_valid", json.loads(protocol.stdout)["canonical_name"]
+            "ac.ready_valid", json.loads(protocol.stdout)["canonical_name"]
         )
         names = json.loads(listing.stdout)["items"]
         self.assertEqual(sorted(names), names)
+        reorder = json.loads(opcode.stdout)
+        self.assertEqual("ac.reorder", reorder["operation"])
+        self.assertEqual("design", reorder["role"])
+        self.assertTrue(reorder["gfsim"]["available"])
+        self.assertTrue(reorder["pyc"]["available"])
+        opcode_names = json.loads(opcode_listing.stdout)["items"]
+        self.assertEqual(sorted(opcode_names), opcode_names)
+        self.assertIn("ac.dependency", opcode_names)
+        self.assertIn("ac.reorder", opcode_names)
+        self.assertIn("ac.transform", opcode_names)
 
     def test_unknown_schema_name_is_a_structured_user_error(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

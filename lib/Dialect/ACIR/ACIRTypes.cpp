@@ -34,9 +34,12 @@ bool isTimeUnit(Unit unit) {
 
 LogicalResult verifyValueElement(function_ref<InFlightDiagnostic()> emitError,
                                  Type elementType) {
-  if (!containsChannelType(elementType))
-    return success();
-  return emitError() << "channel types cannot be nested inside value types";
+  if (containsChannelType(elementType))
+    return emitError() << "channel types cannot be nested inside value types";
+  if (containsQueueOrVarType(elementType))
+    return emitError()
+           << "queue and var types cannot be nested inside value types";
+  return success();
 }
 
 DictionaryAttr findLayoutEntry(Type type, DataLayoutEntryListRef entries) {
@@ -94,11 +97,54 @@ LogicalResult verifyNamedLayoutEntries(DataLayoutEntryListRef entries,
   return success();
 }
 
+bool isStaticCollectionElementType(Type type) {
+  return isa<QueueType, VarType, ArrayType, MapType, SetType>(type);
+}
+
+LogicalResult
+verifyStaticCollectionElement(function_ref<InFlightDiagnostic()> emitError,
+                              Type elementType, StringRef collection) {
+  if (isStaticCollectionElementType(elementType))
+    return success();
+  return emitError() << collection
+                     << " element must be a queue, var, or static collection";
+}
+
 } // namespace
 
 bool containsChannelType(Type type) {
   return type.walk([](ChannelType) { return WalkResult::interrupt(); })
       .wasInterrupted();
+}
+
+bool containsQueueOrVarType(Type type) {
+  return type
+      .walk([](Type nested) {
+        return isa<QueueType, VarType>(nested) ? WalkResult::interrupt()
+                                               : WalkResult::advance();
+      })
+      .wasInterrupted();
+}
+
+bool isImmutablePayloadType(Type type) {
+  if (isa<IntegerType, FloatType, IndexType, StructType, PacketType,
+          TransactionType, EnumType, UnionType>(type))
+    return true;
+  if (auto optional = dyn_cast<OptionalType>(type))
+    return isImmutablePayloadType(optional.getElementType());
+  if (auto vector = dyn_cast<VectorType>(type))
+    return isImmutablePayloadType(vector.getElementType());
+  if (auto vector = dyn_cast<mlir::VectorType>(type))
+    return isImmutablePayloadType(vector.getElementType());
+  return false;
+}
+
+bool isNormativePayloadType(Type type) {
+  if (isImmutablePayloadType(type))
+    return true;
+  if (auto list = dyn_cast<ListType>(type))
+    return isNormativePayloadType(list.getElementType());
+  return false;
 }
 
 LogicalResult
@@ -140,6 +186,51 @@ LogicalResult VectorType::verify(function_ref<InFlightDiagnostic()> emitError,
   if (length <= 0)
     return emitError() << "vector length must be positive";
   return verifyValueElement(emitError, elementType);
+}
+
+LogicalResult VarType::verify(function_ref<InFlightDiagnostic()> emitError,
+                              Type elementType) {
+  if (isImmutablePayloadType(elementType))
+    return success();
+  return emitError() << "var payload must be an immutable ACIR value type";
+}
+
+LogicalResult QueueType::verify(function_ref<InFlightDiagnostic()> emitError,
+                                Type elementType) {
+  if (isImmutablePayloadType(elementType))
+    return success();
+  return emitError() << "queue payload must be an immutable ACIR value type";
+}
+
+LogicalResult ArrayType::verify(function_ref<InFlightDiagnostic()> emitError,
+                                int64_t length, Type elementType) {
+  if (length <= 0)
+    return emitError() << "array length must be positive";
+  return verifyStaticCollectionElement(emitError, elementType, "array");
+}
+
+LogicalResult MapType::verify(function_ref<InFlightDiagnostic()> emitError,
+                              ArrayAttr keys, Type elementType) {
+  if (keys.empty())
+    return emitError()
+           << "map keys must be non-empty and strictly lexicographic";
+  StringRef previous;
+  for (Attribute rawKey : keys) {
+    auto key = dyn_cast<StringAttr>(rawKey);
+    if (!key || key.getValue().empty() ||
+        (!previous.empty() && previous >= key.getValue()))
+      return emitError()
+             << "map keys must be non-empty and strictly lexicographic";
+    previous = key.getValue();
+  }
+  return verifyStaticCollectionElement(emitError, elementType, "map");
+}
+
+LogicalResult SetType::verify(function_ref<InFlightDiagnostic()> emitError,
+                              int64_t length, Type elementType) {
+  if (length <= 0)
+    return emitError() << "set length must be positive";
+  return verifyStaticCollectionElement(emitError, elementType, "set");
 }
 
 LogicalResult FlowType::verify(function_ref<InFlightDiagnostic()> emitError,

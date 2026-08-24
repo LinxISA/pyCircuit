@@ -123,12 +123,12 @@ class SchemaCallableTest(unittest.TestCase):
             canonical_json_bytes(digest_record)
         )
         catalog = {
-            "catalog": "ac.std",
+            "catalog": "ac",
             "version": "0.1",
-            "contract_epoch": "0.1",
+            "contract_epoch": "0.2",
             "entries": [
                 {
-                    "canonical_name": "ac.std.Queue",
+                    "canonical_name": "ac.Queue",
                     "availability": "available",
                     "schema_path": "schemas/stdlib/Queue.json",
                     "schema_fingerprint": record["schema_fingerprint"],
@@ -146,11 +146,11 @@ class SchemaCallableTest(unittest.TestCase):
                 SchemaRegistry.from_catalog(stdlib / "catalog.json", root)
 
     def test_queue_signature_is_derived_from_the_closed_schema(self) -> None:
-        queue = stdlib_registry().callable("ac.std.Queue")
+        queue = stdlib_registry().callable("ac.Queue")
 
         signature = inspect.signature(queue)
 
-        self.assertEqual("ComponentCallable('ac.std.Queue')", repr(queue))
+        self.assertEqual("ComponentCallable('ac.Queue')", repr(queue))
         self.assertEqual(
             ["input", "output", "T", "capacity", "byteCapacity", "name"],
             list(signature.parameters),
@@ -170,7 +170,7 @@ class SchemaCallableTest(unittest.TestCase):
     def test_callable_rejects_undocumented_keyword(self) -> None:
         from agentic_circuit._types import _test_symbolic
 
-        queue = stdlib_registry().callable("ac.std.Queue")
+        queue = stdlib_registry().callable("ac.Queue")
         input_value = _test_symbolic("input", object())
         output_value = _test_symbolic("output", object())
 
@@ -186,7 +186,7 @@ class SchemaCallableTest(unittest.TestCase):
     def test_valid_call_records_schema_defaults_in_signature_order(self) -> None:
         from agentic_circuit._types import _test_symbolic
 
-        queue = stdlib_registry().callable("ac.std.Queue")
+        queue = stdlib_registry().callable("ac.Queue")
         call = queue(
             _test_symbolic("input", object()),
             _test_symbolic("output", object()),
@@ -194,7 +194,7 @@ class SchemaCallableTest(unittest.TestCase):
             capacity=4,
         )
 
-        self.assertEqual("ac.std.Queue", call.schema.identity)
+        self.assertEqual("ac.Queue", call.schema.identity)
         self.assertEqual(
             ["input", "output", "T", "capacity", "byteCapacity", "name"],
             [name for name, _ in call.arguments],
@@ -206,7 +206,7 @@ class SchemaCallableTest(unittest.TestCase):
         registry = stdlib_registry()
 
         with self.assertRaisesRegex(LookupError, "declared unavailable"):
-            registry.callable("ac.std.Arbiter")
+            registry.callable("ac.Arbiter")
 
 
 if __name__ == "__main__":

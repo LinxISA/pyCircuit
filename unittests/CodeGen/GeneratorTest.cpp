@@ -499,7 +499,7 @@ TEST(GeneratorTest, ResolvesStaticTypeTemplateArgumentsThroughTypePlan) {
   binding.cppSymbol = "gfsim::FifoTemplate";
   binding.parameters.push_back(
       {.name = "T",
-       .acirType = "!ac.static_type<ac.std.T>",
+       .acirType = "!ac.static_type<ac.T>",
        .cppType = "cpp_bool",
        .canonicalValue = "cpp_bool",
        .ordinal = 0,

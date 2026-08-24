@@ -9,6 +9,8 @@
 #include <optional>
 #include <queue>
 #include <set>
+#include <stdexcept>
+#include <utility>
 #include <vector>
 
 namespace gfsim {
@@ -22,14 +24,20 @@ template <typename T> class SimQueue : public SimObject {
 public:
   SimQueue(std::string name, ObjectId id, SimObject *parent,
            size_t entryCapacity, size_t byteCapacity = SIZE_MAX,
-           ObservationSink *observations = nullptr)
+           ObservationSink *observations = nullptr, size_t latency = 1)
       : SimObject(ObjectKind::Queue, std::move(name), id, parent, observations),
-        entryCapacity_(entryCapacity), byteCapacity_(byteCapacity) {}
+        entryCapacity_(entryCapacity), byteCapacity_(byteCapacity),
+        latency_(latency) {
+    if (entryCapacity_ == 0 || latency_ == 0)
+      throw std::invalid_argument(
+          "SimQueue capacity and latency must be positive");
+  }
 
   // ── Capacity ────────────────────────────────────────────────────────
 
   size_t entryCapacity() const { return entryCapacity_; }
   size_t byteCapacity() const { return byteCapacity_; }
+  size_t latency() const { return latency_; }
 
   size_t committedSize() const { return committed_.size(); }
   size_t committedBytes() const {
@@ -37,18 +45,33 @@ public:
       return 0;
     return committed_.size() * PacketTraits<T>::serializedSize;
   }
-  bool isFull() const {
-    return committedSize() >= entryCapacity_ ||
-           exceedsByteCapacity(committedSize() + 1);
-  }
+  bool isFull() const { return !canProposePush(); }
   bool isEmpty() const { return committed_.empty(); }
+  bool canProposePush(size_t count = 1) const {
+    return canProposePushWithAdditionalPops(count, 0);
+  }
+  bool canProposePushAfterPop(size_t count = 1) const {
+    return canProposePop() && canProposePushWithAdditionalPops(count, 1);
+  }
+  bool canProposePop() const { return popProposalCount_ < committed_.size(); }
 
+private:
+  bool canProposePushWithAdditionalPops(size_t count,
+                                        size_t additionalPops) const {
+    const size_t pops =
+        std::min(committed_.size(), popProposalCount_ + additionalPops);
+    const size_t occupied =
+        committed_.size() - pops + delayed_.size() + pushProposals_.size();
+    return count <= entryCapacity_ && occupied <= entryCapacity_ - count &&
+           !exceedsByteCapacity(occupied + count);
+  }
+
+public:
   // ── Proposal interface ──────────────────────────────────────────────
 
   /// Propose to enqueue an element. Returns false if capacity exceeded.
   bool proposePush(T element) {
-    size_t occupied = pushProposals_.size() + committedSize();
-    if (occupied >= entryCapacity_ || exceedsByteCapacity(occupied + 1))
+    if (!canProposePush())
       return false;
     pushProposals_.push_back(std::move(element));
     return true;
@@ -74,7 +97,7 @@ public:
     // Deterministic local arbitration: FIFO order.
     // Push proposals are appended in order.
     // Pop proposals are served from the front.
-    // In v0.1, arbitration is simple FIFO.
+    // In v0.2, arbitration is simple FIFO.
     for (size_t index = 0; index < pushProposals_.size(); ++index)
       emitObservation({.category = "transaction",
                        .name = "accepted",
@@ -97,10 +120,22 @@ public:
 
   void doXfer(Epoch epoch) override {
     bool changed = hasPendingCommit();
-    // Commit push proposals
-    for (auto &elem : pushProposals_) {
-      committed_.push_back(std::move(elem));
+    for (auto iterator = delayed_.begin(); iterator != delayed_.end();) {
+      if (iterator->first > epoch.time) {
+        ++iterator;
+        continue;
+      }
+      committed_.push_back(std::move(iterator->second));
+      iterator = delayed_.erase(iterator);
       ++totalPushes_;
+    }
+    for (auto &elem : pushProposals_) {
+      if (latency_ == 1) {
+        committed_.push_back(std::move(elem));
+        ++totalPushes_;
+      } else {
+        delayed_.emplace_back(epoch.time + latency_ - 1, std::move(elem));
+      }
     }
     pushProposals_.clear();
 
@@ -119,13 +154,14 @@ public:
   }
 
   bool hasPendingCommit() const override {
-    return !pushProposals_.empty() || popProposalCount_ != 0;
+    return !pushProposals_.empty() || !delayed_.empty() ||
+           popProposalCount_ != 0;
   }
 
   RuntimeObjectState runtimeState(Epoch epoch) const override {
     RuntimeObjectState state = SimObject::runtimeState(epoch);
     state.queueOccupancy = committedSize();
-    state.pendingOffers = pushProposals_.size();
+    state.pendingOffers = pushProposals_.size() + delayed_.size();
     state.quiescent = committed_.empty() && !hasPendingCommit();
     if (!state.quiescent)
       state.reason = hasPendingCommit() ? "pending_commit" : "queue_not_empty";
@@ -154,6 +190,7 @@ public:
 
   void reset() override {
     committed_.clear();
+    delayed_.clear();
     pushProposals_.clear();
     popProposalCount_ = 0;
     highWatermark_ = 0;
@@ -172,7 +209,9 @@ private:
 
   size_t entryCapacity_;
   size_t byteCapacity_;
+  size_t latency_;
   std::vector<T> committed_;
+  std::vector<std::pair<uint64_t, T>> delayed_;
   std::vector<T> pushProposals_;
   size_t popProposalCount_ = 0;
   size_t highWatermark_ = 0;
@@ -185,7 +224,7 @@ private:
 /// component contract; SimQueue remains the underlying runtime primitive.
 template <typename T> class Queue final : public SimQueue<T> {
 public:
-  static constexpr std::string_view contractName = "ac.std.Queue";
+  static constexpr std::string_view contractName = "ac.Queue";
   static constexpr ObjectKind componentKind = ObjectKind::Queue;
   using SimQueue<T>::SimQueue;
 };

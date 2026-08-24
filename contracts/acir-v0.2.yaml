@@ -1,4 +1,4 @@
-# Normative ACIR v0.1 public inventory.
+# Proposed ACIR v0.2 public inventory under active implementation.
 #
 # This manifest is the contract-side source of truth for the public ACIR
 # surface. scripts/check-ir-coverage.py requires the ODS definitions to
@@ -6,7 +6,7 @@
 # or type must be reflected here in the same commit, and every entry must
 # have observable lit coverage.
 schema: acir-ir-inventory
-contract_epoch: "0.1"
+contract_epoch: "0.2"
 dialect: acir
 operations:
   - ac.system
@@ -43,8 +43,47 @@ operations:
   - ac.record.create
   - ac.record.get
   - ac.record.with
+  - ac.var.constant
+  - ac.var.add
+  - ac.var.sub
+  - ac.var.mul
+  - ac.var.cmp
+  - ac.var.get
+  - ac.var.with
   - ac.packet.serialize
   - ac.packet.deserialize
+  - ac.transform
+  - ac.transform.yield
+  - ac.source
+  - ac.sink
+  - ac.observe
+  - ac.expect
+  - ac.expect.yield
+  - ac.broadcast
+  - ac.fork
+  - ac.route
+  - ac.route.yield
+  - ac.select
+  - ac.select.yield
+  - ac.merge
+  - ac.barrier
+  - ac.credit
+  - ac.credit.yield
+  - ac.dependency
+  - ac.dependency.yield
+  - ac.memory
+  - ac.memory.yield
+  - ac.reorder
+  - ac.reorder.yield
+  - ac.feedback
+  - ac.feedback.yield
+  - ac.scope
+  - ac.scope.yield
+  - ac.firing
+  - ac.firing.yield
+  - ac.queue.peek
+  - ac.queue.pop
+  - ac.queue.push
   - ac.try_send
   - ac.try_recv
   - ac.schedule
@@ -73,6 +112,11 @@ types:
   - optional
   - list
   - vector
+  - var
+  - queue
+  - array
+  - map
+  - set
   - flow
   - endpoint
   - resource_ref

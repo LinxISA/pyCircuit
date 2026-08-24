@@ -114,8 +114,8 @@ std::string scalableModel(unsigned extraTypes) {
   std::string source;
   llvm::raw_string_ostream os(source);
   os << R"mlir(
-builtin.module attributes {ac.contract_epoch = "0.1"} {
-  acsim.model @scale epoch "0.1" root @Top construction [] destruction []
+builtin.module attributes {ac.contract_epoch = "0.2"} {
+  acsim.model @scale epoch "0.2" root @Top construction [] destruction []
       fingerprints {
         frozen_acir = "sha256:0000000000000000000000000000000000000000000000000000000000000000",
         binding_lock = "sha256:0000000000000000000000000000000000000000000000000000000000000000",
@@ -1731,35 +1731,35 @@ TEST(ACSimOpsTest, CapabilityPreflightUsesExactPrivateLimits) {
 
   detail::ModelVerificationLimits nodeLimits;
   nodeLimits.maxNodes = 8;
-  checkLimit(nodeLimits, "model node count exceeds ACSim v0.1 capability 8");
+  checkLimit(nodeLimits, "model node count exceeds ACSim v0.2 capability 8");
 
   detail::ModelVerificationLimits depthLimits;
   depthLimits.maxRegionDepth = 1;
-  checkLimit(depthLimits, "region nesting exceeds ACSim v0.1 capability 1");
+  checkLimit(depthLimits, "region nesting exceeds ACSim v0.2 capability 1");
 
   detail::ModelVerificationLimits expansionLimits;
   expansionLimits.maxExpandedObjects = 1;
   checkLimit(expansionLimits,
-             "expanded array volume exceeds ACSim v0.1 capability 1");
+             "expanded array volume exceeds ACSim v0.2 capability 1");
 
   detail::ModelVerificationLimits edgeLimits;
   edgeLimits.maxEdges = 0;
-  checkLimit(edgeLimits, "model edge count exceeds ACSim v0.1 capability 0");
+  checkLimit(edgeLimits, "model edge count exceeds ACSim v0.2 capability 0");
 
   detail::ModelVerificationLimits attributeLimits;
   attributeLimits.maxAttributeElements = 8;
   checkLimit(attributeLimits,
-             "attribute element count exceeds ACSim v0.1 capability");
+             "attribute element count exceeds ACSim v0.2 capability");
 
   detail::ModelVerificationLimits stringLimits;
   stringLimits.maxAttributeStringBytes = 8;
   checkLimit(stringLimits,
-             "attribute string bytes exceed ACSim v0.1 capability");
+             "attribute string bytes exceed ACSim v0.2 capability");
 
   detail::ModelVerificationLimits dependencyLimits;
   dependencyLimits.maxDependencyNodes = 4;
   checkLimit(dependencyLimits,
-             "dependency graph exceeds ACSim v0.1 capability 4");
+             "dependency graph exceeds ACSim v0.2 capability 4");
 }
 
 TEST(ACSimOpsTest, CyclicSsaDependencyFailsExplicitlyWithoutRecursion) {
@@ -1833,7 +1833,7 @@ TEST(ACSimOpsTest, ReusableExpansionCycleAndTotalCapFailExplicitly) {
   std::string capDiagnostic = expectVerificationFailure(*capFile);
   EXPECT_TRUE(
       llvm::StringRef(capDiagnostic)
-          .contains("expanded hierarchy exceeds ACSim v0.1 capability 3"))
+          .contains("expanded hierarchy exceeds ACSim v0.2 capability 3"))
       << capDiagnostic;
 }
 

@@ -1,10 +1,10 @@
 {
   "schema_kind": "agentic-circuit-component",
   "schema_version": "0.1",
-  "contract_epoch": "0.1",
-  "canonical_name": "ac.std.request_response",
+  "contract_epoch": "0.2",
+  "canonical_name": "ac.request_response",
   "family": "protocol",
-  "provider_namespace": "ac.std",
+  "provider_namespace": "ac",
   "stability": "provisional",
   "cpp_binding": {
     "header": "gfsim/components.h",
@@ -17,18 +17,18 @@
   "static_parameters": [
     {
       "name": "Req",
-      "acir_type": "!ac.static_type<ac.std.Req>",
+      "acir_type": "!ac.static_type<ac.Req>",
       "required": true,
       "default": null,
-      "constraint": "ac.std.Packet",
+      "constraint": "ac.Packet",
       "cpp_mapping": "template_argument"
     },
     {
       "name": "Resp",
-      "acir_type": "!ac.static_type<ac.std.Resp>",
+      "acir_type": "!ac.static_type<ac.Resp>",
       "required": true,
       "default": null,
-      "constraint": "ac.std.Packet",
+      "constraint": "ac.Packet",
       "cpp_mapping": "template_argument"
     },
     {
@@ -44,7 +44,7 @@
     {
       "name": "request",
       "binding_kind": "endpoint",
-      "acir_type": "!ac.endpoint<!ac.interface<ac.std.Stream<!ac.packet<ac.std.Transaction>,ac.std.ready_valid>>,responder>",
+      "acir_type": "!ac.endpoint<!ac.interface<ac.Stream<!ac.packet<ac.Transaction>,ac.ready_valid>>,responder>",
       "direction": "in",
       "role": "responder",
       "cardinality": 1,
@@ -56,7 +56,7 @@
     {
       "name": "response",
       "binding_kind": "endpoint",
-      "acir_type": "!ac.endpoint<!ac.interface<ac.std.Stream<!ac.packet<ac.std.Transaction>,ac.std.ready_valid>>,responder>",
+      "acir_type": "!ac.endpoint<!ac.interface<ac.Stream<!ac.packet<ac.Transaction>,ac.ready_valid>>,responder>",
       "direction": "out",
       "role": "responder",
       "cardinality": 1,
@@ -78,7 +78,7 @@
   },
   "protocol_contracts": [
     {
-      "protocol": "ac.std.ready_valid",
+      "protocol": "ac.ready_valid",
       "role": "responder",
       "ordering": "fifo",
       "delivery": "exactly_once_on_transfer",
@@ -87,7 +87,7 @@
       "failure": "protocol_violation"
     },
     {
-      "protocol": "ac.std.ready_valid",
+      "protocol": "ac.ready_valid",
       "role": "responder",
       "ordering": "fifo",
       "delivery": "exactly_once_on_transfer",
@@ -132,5 +132,5 @@
     ],
     "histograms": []
   },
-  "schema_fingerprint": "sha256:6aa60e66f252fa38c66dfd55823c50217f6b91320247ff124ea009c3d152a9de"
+  "schema_fingerprint": "sha256:e482b094b9c8dea94e08832255f6a7cc53bec6a6623f4be30e2476a78ddfc6f2"
 }

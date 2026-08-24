@@ -24,6 +24,7 @@ def ACIR_TypeScopeOp : ACIR_Op<"type_scope", [
                         $_builder.getStringAttr(name));
     $_state.addRegion();
   }]>];
+  let assemblyFormat = "$sym_name $body attr-dict";
 }
 
 def ACIR_TypeAliasOp : ACIR_Op<"type_alias", [Symbol]> {
@@ -35,6 +36,7 @@ class ACIR_RecordDeclarationOp<string mnemonic>
     : ACIR_Op<mnemonic, [Symbol, ACIR_RecordLike]> {
   let arguments = (ins SymbolNameAttr:$sym_name, ArrayAttr:$fields);
   let hasVerifier = 1;
+  let assemblyFormat = "$sym_name `fields` $fields attr-dict";
 }
 
 def ACIR_StructOp : ACIR_RecordDeclarationOp<"struct">;
@@ -75,6 +77,63 @@ def ACIR_RecordWithOp : ACIR_Op<"record.with", [Pure]> {
   let hasVerifier = 1;
 }
 
+def ACIR_VarConstantOp : ACIR_Op<"var.constant", [Pure]> {
+  let arguments = (ins AnyAttr:$value);
+  let results = (outs ACIR_VarType:$result);
+  let hasVerifier = 1;
+  let assemblyFormat = "$value attr-dict `as` qualified(type($result))";
+}
+
+class ACIR_VarBinaryOp<string mnemonic> : ACIR_Op<mnemonic, [
+    Pure, AllTypesMatch<["lhs", "rhs", "result"]>
+  ]> {
+  let arguments = (ins ACIR_VarType:$lhs, ACIR_VarType:$rhs);
+  let results = (outs ACIR_VarType:$result);
+  let hasVerifier = 1;
+  let assemblyFormat = [{
+    $lhs `,` $rhs attr-dict `:` qualified(type($result))
+  }];
+}
+
+def ACIR_VarAddOp : ACIR_VarBinaryOp<"var.add">;
+def ACIR_VarSubOp : ACIR_VarBinaryOp<"var.sub">;
+def ACIR_VarMulOp : ACIR_VarBinaryOp<"var.mul">;
+
+def ACIR_VarCmpOp : ACIR_Op<"var.cmp", [
+    Pure, AllTypesMatch<["lhs", "rhs"]>
+  ]> {
+  let arguments = (ins StrAttr:$predicate, ACIR_VarType:$lhs,
+                       ACIR_VarType:$rhs);
+  let results = (outs ACIR_VarType:$result);
+  let hasVerifier = 1;
+  let assemblyFormat = [{
+    $predicate $lhs `,` $rhs attr-dict `:` qualified(type($lhs)) `->`
+    qualified(type($result))
+  }];
+}
+
+def ACIR_VarGetOp : ACIR_Op<"var.get", [Pure]> {
+  let arguments = (ins ACIR_VarType:$record, StrAttr:$field);
+  let results = (outs ACIR_VarType:$result);
+  let hasVerifier = 1;
+  let assemblyFormat = [{
+    $record `field` $field attr-dict `:` qualified(type($record)) `->`
+    qualified(type($result))
+  }];
+}
+
+def ACIR_VarWithOp : ACIR_Op<"var.with", [Pure]> {
+  let arguments = (ins ACIR_VarType:$record, ACIR_VarType:$value,
+                       StrAttr:$field);
+  let results = (outs ACIR_VarType:$result);
+  let hasVerifier = 1;
+  let assemblyFormat = [{
+    $record `,` $value `field` $field attr-dict `:`
+    qualified(type($record)) `,` qualified(type($value)) `->`
+    qualified(type($result))
+  }];
+}
+
 def ACIR_PacketSerializeOp : ACIR_Op<"packet.serialize", [Pure]> {
   let arguments = (ins AnyType:$packet_value, SymbolRefAttr:$packet);
   let results = (outs AnyType:$bytes);
@@ -85,6 +144,336 @@ def ACIR_PacketDeserializeOp : ACIR_Op<"packet.deserialize", [Pure]> {
   let arguments = (ins AnyType:$bytes, SymbolRefAttr:$packet);
   let results = (outs AnyType:$packet_value);
   let hasVerifier = 1;
+}
+
+def ACIR_TransformOp : ACIR_Op<"transform", [SingleBlock]> {
+  let arguments = (ins Variadic<ACIR_QueueType>:$inputs,
+                       DenseI64ArrayAttr:$output_depths,
+                       DenseI64ArrayAttr:$output_latencies);
+  let results = (outs Variadic<ACIR_QueueType>:$outputs);
+  let regions = (region SizedRegion<1>:$body);
+  let hasVerifier = 1;
+  let assemblyFormat = [{
+    $inputs `depths` $output_depths `latencies` $output_latencies
+    $body attr-dict `:` functional-type($inputs, $outputs)
+  }];
+}
+
+def ACIR_TransformYieldOp : ACIR_Op<"transform.yield", [
+    Pure, Terminator, HasParent<"TransformOp">
+  ]> {
+  let arguments = (ins Variadic<ACIR_VarType>:$values);
+  let assemblyFormat = "attr-dict ($values^ `:` type($values))?";
+}
+
+def ACIR_SourceOp : ACIR_Op<"source", [
+    DeclareOpInterfaceMethods<MemoryEffectsOpInterface>
+  ]> {
+  let arguments = (ins I64Attr:$depth, I64Attr:$latency);
+  let results = (outs ACIR_QueueType:$output);
+  let hasVerifier = 1;
+  let assemblyFormat = [{
+    `depth` $depth `latency` $latency attr-dict `:`
+    qualified(type($output))
+  }];
+}
+
+def ACIR_SinkOp : ACIR_Op<"sink", [
+    DeclareOpInterfaceMethods<MemoryEffectsOpInterface>
+  ]> {
+  let arguments = (ins ACIR_QueueType:$input);
+  let assemblyFormat = "$input attr-dict `:` qualified(type($input))";
+}
+
+def ACIR_ObserveOp : ACIR_Op<"observe"> {
+  let arguments = (ins ACIR_QueueType:$input, StrAttr:$name);
+  let hasVerifier = 1;
+  let assemblyFormat = "$input `name` $name attr-dict `:` qualified(type($input))";
+}
+
+def ACIR_ExpectOp : ACIR_Op<"expect", [SingleBlock]> {
+  let arguments = (ins ACIR_QueueType:$input, StrAttr:$message);
+  let regions = (region SizedRegion<1>:$predicate);
+  let hasVerifier = 1;
+  let assemblyFormat = [{
+    $input `message` $message $predicate attr-dict `:` qualified(type($input))
+  }];
+}
+
+def ACIR_ExpectYieldOp : ACIR_Op<"expect.yield", [
+    Pure, Terminator, HasParent<"ExpectOp">
+  ]> {
+  let arguments = (ins ACIR_VarType:$condition);
+  let assemblyFormat = "$condition attr-dict `:` qualified(type($condition))";
+}
+
+def ACIR_BroadcastOp : ACIR_Op<"broadcast"> {
+  let arguments = (ins ACIR_QueueType:$input,
+                       DenseI64ArrayAttr:$output_depths,
+                       DenseI64ArrayAttr:$output_latencies);
+  let results = (outs Variadic<ACIR_QueueType>:$outputs);
+  let hasVerifier = 1;
+  let assemblyFormat = [{
+    $input `depths` $output_depths `latencies` $output_latencies attr-dict
+    `:` qualified(type($input)) `->` `(` type($outputs) `)`
+  }];
+}
+
+def ACIR_ForkOp : ACIR_Op<"fork"> {
+  let arguments = (ins ACIR_QueueType:$input,
+                       DenseI64ArrayAttr:$output_depths,
+                       DenseI64ArrayAttr:$output_latencies);
+  let results = (outs Variadic<ACIR_QueueType>:$outputs);
+  let hasVerifier = 1;
+  let assemblyFormat = [{
+    $input `depths` $output_depths `latencies` $output_latencies attr-dict
+    `:` qualified(type($input)) `->` `(` type($outputs) `)`
+  }];
+}
+
+def ACIR_RouteOp : ACIR_Op<"route", [SingleBlock]> {
+  let arguments = (ins ACIR_QueueType:$input,
+                       DenseI64ArrayAttr:$output_depths,
+                       DenseI64ArrayAttr:$output_latencies);
+  let results = (outs Variadic<ACIR_QueueType>:$outputs);
+  let regions = (region SizedRegion<1>:$selector);
+  let hasVerifier = 1;
+  let assemblyFormat = [{
+    $input `depths` $output_depths `latencies` $output_latencies $selector
+    attr-dict `:` qualified(type($input)) `->` `(` type($outputs) `)`
+  }];
+}
+
+def ACIR_RouteYieldOp : ACIR_Op<"route.yield", [
+    Pure, Terminator, HasParent<"RouteOp">
+  ]> {
+  let arguments = (ins ACIR_VarType:$selector);
+  let assemblyFormat = "$selector attr-dict `:` qualified(type($selector))";
+}
+
+def ACIR_SelectOp : ACIR_Op<"select", [SingleBlock]> {
+  let arguments = (ins Variadic<ACIR_QueueType>:$inputs,
+                       I64Attr:$depth, I64Attr:$latency);
+  let results = (outs ACIR_QueueType:$output);
+  let regions = (region SizedRegion<1>:$key);
+  let hasVerifier = 1;
+  let assemblyFormat = [{
+    $inputs `depth` $depth `latency` $latency `key` $key attr-dict `:`
+    functional-type($inputs, $output)
+  }];
+}
+
+def ACIR_SelectYieldOp : ACIR_Op<"select.yield", [
+    Pure, Terminator, HasParent<"SelectOp">
+  ]> {
+  let arguments = (ins ACIR_VarType:$selector);
+  let assemblyFormat = "$selector attr-dict `:` qualified(type($selector))";
+}
+
+def ACIR_MergeOp : ACIR_Op<"merge"> {
+  let arguments = (ins Variadic<ACIR_QueueType>:$inputs, StrAttr:$policy,
+                       I64Attr:$depth, I64Attr:$latency);
+  let results = (outs ACIR_QueueType:$output);
+  let hasVerifier = 1;
+  let assemblyFormat = [{
+    $inputs `policy` $policy `depth` $depth `latency` $latency attr-dict
+    `:` functional-type($inputs, $output)
+  }];
+}
+
+def ACIR_BarrierOp : ACIR_Op<"barrier"> {
+  let arguments = (ins Variadic<ACIR_QueueType>:$inputs,
+                       DenseI64ArrayAttr:$output_depths,
+                       DenseI64ArrayAttr:$output_latencies);
+  let results = (outs Variadic<ACIR_QueueType>:$outputs);
+  let hasVerifier = 1;
+  let assemblyFormat = [{
+    $inputs `depths` $output_depths `latencies` $output_latencies attr-dict
+    `:` functional-type($inputs, $outputs)
+  }];
+}
+
+def ACIR_ReorderOp : ACIR_Op<"reorder", [SingleBlock]> {
+  let arguments = (ins ACIR_QueueType:$input, I64Attr:$capacity,
+                       I64Attr:$start, I64Attr:$depth, I64Attr:$latency);
+  let results = (outs ACIR_QueueType:$output);
+  let regions = (region SizedRegion<1>:$key);
+  let hasVerifier = 1;
+  let assemblyFormat = [{
+    $input `capacity` $capacity `start` $start `depth` $depth
+    `latency` $latency $key attr-dict `:` qualified(type($input)) `->`
+    qualified(type($output))
+  }];
+}
+
+def ACIR_ReorderYieldOp : ACIR_Op<"reorder.yield", [
+    Pure, Terminator, HasParent<"ReorderOp">
+  ]> {
+  let arguments = (ins ACIR_VarType:$key);
+  let assemblyFormat = "$key attr-dict `:` qualified(type($key))";
+}
+
+def ACIR_DependencyOp : ACIR_Op<"dependency", [SingleBlock]> {
+  let arguments = (ins ACIR_QueueType:$input, I64Attr:$capacity,
+                       I64Attr:$resources, I64Attr:$no_dependency,
+                       I64Attr:$depth, I64Attr:$latency);
+  let results = (outs ACIR_QueueType:$output);
+  let regions = (region SizedRegion<1>:$key,
+                        SizedRegion<1>:$waits_for,
+                        SizedRegion<1>:$resource,
+                        SizedRegion<1>:$cost);
+  let hasVerifier = 1;
+  let assemblyFormat = [{
+    $input `capacity` $capacity `resources` $resources
+    `no_dependency` $no_dependency
+    `depth` $depth `latency` $latency `key` $key
+    `waits_for` $waits_for `resource` $resource `cost` $cost attr-dict `:`
+    qualified(type($input)) `->` qualified(type($output))
+  }];
+}
+
+def ACIR_DependencyYieldOp : ACIR_Op<"dependency.yield", [
+    Pure, Terminator, HasParent<"DependencyOp">
+  ]> {
+  let arguments = (ins ACIR_VarType:$value);
+  let assemblyFormat = "$value attr-dict `:` qualified(type($value))";
+}
+
+def ACIR_CreditOp : ACIR_Op<"credit", [SingleBlock]> {
+  let arguments = (ins ACIR_QueueType:$input, I64Attr:$credits,
+                       I64Attr:$depth, I64Attr:$latency);
+  let results = (outs ACIR_QueueType:$output);
+  let regions = (region SizedRegion<1>:$cost);
+  let hasVerifier = 1;
+  let assemblyFormat = [{
+    $input `credits` $credits `depth` $depth `latency` $latency `cost` $cost
+    attr-dict `:` qualified(type($input)) `->` qualified(type($output))
+  }];
+}
+
+def ACIR_CreditYieldOp : ACIR_Op<"credit.yield", [
+    Pure, Terminator, HasParent<"CreditOp">
+  ]> {
+  let arguments = (ins ACIR_VarType:$cost);
+  let assemblyFormat = "$cost attr-dict `:` qualified(type($cost))";
+}
+
+def ACIR_MemoryOp : ACIR_Op<"memory", [SingleBlock]> {
+  let arguments = (ins ACIR_QueueType:$input, I64Attr:$entries,
+                       I64Attr:$init, StrAttr:$result_field,
+                       I64Attr:$depth, I64Attr:$latency);
+  let results = (outs ACIR_QueueType:$output);
+  let regions = (region SizedRegion<1>:$address,
+                        SizedRegion<1>:$write,
+                        SizedRegion<1>:$data);
+  let hasVerifier = 1;
+  let assemblyFormat = [{
+    $input `entries` $entries `init` $init `result_field` $result_field
+    `depth` $depth `latency` $latency `address` $address
+    `write` $write `data` $data attr-dict `:` qualified(type($input)) `->`
+    qualified(type($output))
+  }];
+}
+
+def ACIR_MemoryYieldOp : ACIR_Op<"memory.yield", [
+    Pure, Terminator, HasParent<"MemoryOp">
+  ]> {
+  let arguments = (ins ACIR_VarType:$value);
+  let assemblyFormat = "$value attr-dict `:` qualified(type($value))";
+}
+
+def ACIR_FeedbackOp : ACIR_Op<"feedback", [SingleBlock]> {
+  let arguments = (ins ACIR_QueueType:$input, I64Attr:$depth,
+                       I64Attr:$latency, I64Attr:$max_iterations);
+  let results = (outs ACIR_QueueType:$output);
+  let regions = (region SizedRegion<1>:$body);
+  let hasVerifier = 1;
+  let assemblyFormat = [{
+    $input `depth` $depth `latency` $latency
+    `max_iterations` $max_iterations $body attr-dict `:`
+    qualified(type($input)) `->` qualified(type($output))
+  }];
+}
+
+def ACIR_FeedbackYieldOp : ACIR_Op<"feedback.yield", [
+    Pure, Terminator, HasParent<"FeedbackOp">
+  ]> {
+  let arguments = (ins ACIR_VarType:$value, ACIR_VarType:$continue_value);
+  let assemblyFormat = [{
+    $value `continue` $continue_value attr-dict `:`
+    qualified(type($value)) `,` qualified(type($continue_value))
+  }];
+}
+
+def ACIR_ScopeOp : ACIR_Op<"scope", [SingleBlock, RecursiveMemoryEffects]> {
+  let arguments = (ins SymbolNameAttr:$sym_name,
+                       Variadic<ACIR_QueueType>:$inputs);
+  let results = (outs Variadic<ACIR_QueueType>:$outputs);
+  let regions = (region SizedRegion<1>:$body);
+  let hasVerifier = 1;
+  let assemblyFormat = [{
+    $sym_name `(` $inputs `)` $body attr-dict `:`
+    functional-type($inputs, $outputs)
+  }];
+}
+
+def ACIR_ScopeYieldOp : ACIR_Op<"scope.yield", [
+    Pure, Terminator, HasParent<"ScopeOp">
+  ]> {
+  let arguments = (ins Variadic<ACIR_QueueType>:$queues);
+  let assemblyFormat = "attr-dict ($queues^ `:` type($queues))?";
+}
+
+def ACIR_FiringOp : ACIR_Op<"firing", [
+    SingleBlock, RecursiveMemoryEffects
+  ]> {
+  let arguments = (ins Variadic<ACIR_QueueType>:$queues);
+  let regions = (region SizedRegion<1>:$body);
+  let hasVerifier = 1;
+  let assemblyFormat = [{
+    `(` $queues `)` $body attr-dict `:` `(` type($queues) `)`
+  }];
+}
+
+def ACIR_FiringYieldOp : ACIR_Op<"firing.yield", [
+    Pure, Terminator, HasParent<"FiringOp">
+  ]> {
+  let assemblyFormat = "attr-dict";
+}
+
+class ACIR_QueueEffectOp<string mnemonic>
+    : ACIR_Op<mnemonic, [
+        HasParent<"FiringOp">,
+        DeclareOpInterfaceMethods<MemoryEffectsOpInterface>
+      ]>;
+
+def ACIR_QueuePeekOp : ACIR_QueueEffectOp<"queue.peek"> {
+  let arguments = (ins ACIR_QueueType:$queue);
+  let results = (outs ACIR_VarType:$value);
+  let hasVerifier = 1;
+  let assemblyFormat = [{
+    $queue attr-dict `:` qualified(type($queue)) `->`
+    qualified(type($value))
+  }];
+}
+
+def ACIR_QueuePopOp : ACIR_QueueEffectOp<"queue.pop"> {
+  let arguments = (ins ACIR_QueueType:$queue);
+  let results = (outs ACIR_VarType:$value);
+  let hasVerifier = 1;
+  let assemblyFormat = [{
+    $queue attr-dict `:` qualified(type($queue)) `->`
+    qualified(type($value))
+  }];
+}
+
+def ACIR_QueuePushOp : ACIR_QueueEffectOp<"queue.push"> {
+  let arguments = (ins ACIR_QueueType:$queue, ACIR_VarType:$value);
+  let hasVerifier = 1;
+  let assemblyFormat = [{
+    $queue `,` $value attr-dict `:` qualified(type($queue)) `,`
+    qualified(type($value))
+  }];
 }
 
 def ACIR_InterfaceOp : ACIR_Op<"interface", [

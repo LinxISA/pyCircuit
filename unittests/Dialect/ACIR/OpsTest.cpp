@@ -92,6 +92,57 @@ TEST(ACIROpsTest, PublicBuildersConstructEveryTaskFourOperation) {
   EXPECT_TRUE(mlir::isMemoryEffectFree(deserialize.getOperation()));
 }
 
+TEST(ACIROpsTest, V02QueueEffectsAreAttachedToExactSSAQueueHandles) {
+  mlir::MLIRContext context;
+  context.loadDialect<ACIRDialect>();
+  auto module = mlir::parseSourceString<mlir::ModuleOp>(R"mlir(
+    module attributes {ac.contract_epoch = "0.2"} {
+      %input = ac.source depth 4 latency 1 : !ac.queue<i32>
+      %output = ac.source depth 4 latency 1 : !ac.queue<i32>
+      ac.firing(%input, %output) {
+        %peeked = ac.queue.peek %input : !ac.queue<i32> -> !ac.var<i32>
+        %popped = ac.queue.pop %input : !ac.queue<i32> -> !ac.var<i32>
+        ac.queue.push %output, %popped : !ac.queue<i32>, !ac.var<i32>
+        ac.firing.yield
+      } : (!ac.queue<i32>, !ac.queue<i32>)
+      ac.sink %output : !ac.queue<i32>
+    }
+  )mlir",
+                                                        &context);
+  ASSERT_TRUE(module);
+
+  auto checkEffect = [&](mlir::Operation *operation, mlir::Value queue,
+                         mlir::MemoryEffects::Effect *expected) {
+    llvm::SmallVector<mlir::MemoryEffects::EffectInstance> effects;
+    mlir::cast<mlir::MemoryEffectOpInterface>(operation).getEffects(effects);
+    ASSERT_EQ(effects.size(), 1u);
+    EXPECT_EQ(effects.front().getEffect(), expected);
+    EXPECT_EQ(effects.front().getValue(), queue);
+    EXPECT_EQ(effects.front().getResource(), QueueStateResource::get());
+  };
+
+  module->walk([&](QueuePeekOp operation) {
+    checkEffect(operation, operation.getQueue(),
+                mlir::MemoryEffects::Read::get());
+  });
+  module->walk([&](QueuePopOp operation) {
+    checkEffect(operation, operation.getQueue(),
+                mlir::MemoryEffects::Write::get());
+  });
+  module->walk([&](QueuePushOp operation) {
+    checkEffect(operation, operation.getQueue(),
+                mlir::MemoryEffects::Write::get());
+  });
+  module->walk([&](SourceOp operation) {
+    checkEffect(operation, operation.getOutput(),
+                mlir::MemoryEffects::Write::get());
+  });
+  module->walk([&](SinkOp operation) {
+    checkEffect(operation, operation.getInput(),
+                mlir::MemoryEffects::Write::get());
+  });
+}
+
 TEST(ACIROpsTest, LayoutAndEffectsAreDeclaredThroughMLIRInterfaces) {
   mlir::MLIRContext context;
   context.loadDialect<ACIRDialect>();
@@ -241,7 +292,7 @@ TEST(ACIROpsTest, PublicBuildersConstructEveryTaskFiveOperation) {
   EXPECT_TRUE(mlir::succeeded(mlir::verify(module)));
 }
 
-TEST(ACIROpsTest, TaskFiveRegistryContainsExactlyTheRequiredNewOperations) {
+TEST(ACIROpsTest, RegistryContainsExactV02QueueVarOperations) {
   mlir::MLIRContext context;
   context.loadDialect<ACIRDialect>();
   const std::array<llvm::StringLiteral, 8> names = {
@@ -264,10 +315,23 @@ TEST(ACIROpsTest, TaskFiveRegistryContainsExactlyTheRequiredNewOperations) {
       "ac.address_map",
       "ac.address_space",
       "ac.assert",
+      "ac.barrier",
+      "ac.broadcast",
+      "ac.credit",
+      "ac.credit.yield",
+      "ac.dependency",
+      "ac.dependency.yield",
       "ac.enum",
       "ac.ensure",
       "ac.event",
       "ac.event_queue",
+      "ac.expect",
+      "ac.expect.yield",
+      "ac.feedback",
+      "ac.feedback.yield",
+      "ac.firing",
+      "ac.firing.yield",
+      "ac.fork",
       "ac.guarantee",
       "ac.interface",
       "ac.instance",
@@ -276,6 +340,12 @@ TEST(ACIROpsTest, TaskFiveRegistryContainsExactlyTheRequiredNewOperations) {
       "ac.module",
       "ac.module.extern",
       "ac.module.generated",
+      "ac.merge",
+      "ac.memory",
+      "ac.memory.yield",
+      "ac.reorder",
+      "ac.reorder.yield",
+      "ac.observe",
       "ac.packet",
       "ac.packet.deserialize",
       "ac.packet.serialize",
@@ -284,13 +354,31 @@ TEST(ACIROpsTest, TaskFiveRegistryContainsExactlyTheRequiredNewOperations) {
       "ac.process",
       "ac.protocol",
       "ac.queue",
+      "ac.queue.peek",
+      "ac.queue.pop",
+      "ac.queue.push",
       "ac.record.create",
       "ac.record.get",
       "ac.record.with",
+      "ac.var.add",
+      "ac.var.constant",
+      "ac.var.cmp",
+      "ac.var.get",
+      "ac.var.mul",
+      "ac.var.sub",
+      "ac.var.with",
       "ac.require",
       "ac.return",
       "ac.resource",
+      "ac.route",
+      "ac.route.yield",
       "ac.role",
+      "ac.scope",
+      "ac.scope.yield",
+      "ac.select",
+      "ac.select.yield",
+      "ac.sink",
+      "ac.source",
       "ac.state",
       "ac.stat",
       "ac.stat.add",
@@ -299,6 +387,8 @@ TEST(ACIROpsTest, TaskFiveRegistryContainsExactlyTheRequiredNewOperations) {
       "ac.time_domain",
       "ac.transaction",
       "ac.transition",
+      "ac.transform",
+      "ac.transform.yield",
       "ac.trace.decode",
       "ac.trace.eof",
       "ac.trace.next",
@@ -328,7 +418,7 @@ TEST(ACIROpsTest, PublicBuildersConstructEveryTaskSixOperation) {
   mlir::OpBuilder builder(&context);
   auto loc = builder.getUnknownLoc();
   auto file = mlir::ModuleOp::create(loc);
-  file->setAttr("ac.contract_epoch", builder.getStringAttr("0.1"));
+  file->setAttr("ac.contract_epoch", builder.getStringAttr("0.2"));
   builder.setInsertionPointToStart(file.getBody());
 
   auto emptyType = builder.getFunctionType({}, {});
@@ -423,7 +513,7 @@ TEST(ACIROpsTest, PublicBuildersConstructEveryTaskEightOperation) {
   mlir::OpBuilder builder(&context);
   auto loc = builder.getUnknownLoc();
   auto file = mlir::parseSourceString<mlir::ModuleOp>(R"mlir(
-    builtin.module attributes {ac.contract_epoch = "0.1"} {
+    builtin.module attributes {ac.contract_epoch = "0.2"} {
       ac.protocol @fifo {
         ac.role @sender dual @receiver cardinality "exclusive"
         ac.role @receiver dual @sender cardinality "exclusive"
@@ -658,7 +748,7 @@ TEST(ACIROpsTest, UnresolvedRuntimeReferencesDoNotInventEffects) {
   EXPECT_TRUE(effects.empty());
 }
 
-TEST(ACIROpsTest, TaskEightRegistryDeltaIsExactlyTwentyOperations) {
+TEST(ACIROpsTest, RuntimeAndV02QueueVarRegistryIsExact) {
   mlir::MLIRContext context;
   context.loadDialect<ACIRDialect>();
   const std::array<llvm::StringLiteral, 20> names = {
@@ -675,7 +765,51 @@ TEST(ACIROpsTest, TaskEightRegistryDeltaIsExactlyTwentyOperations) {
         << name.str();
   EXPECT_FALSE(mlir::OperationName("ac.try_issue", &context).isRegistered());
   EXPECT_FALSE(mlir::OperationName("ac.connect", &context).isRegistered());
-  EXPECT_EQ(context.getRegisteredOperationsByDialect("ac").size(), 55u);
+  const std::array<llvm::StringLiteral, 39> v02Names = {
+      "ac.transform",
+      "ac.transform.yield",
+      "ac.firing",
+      "ac.firing.yield",
+      "ac.queue.peek",
+      "ac.queue.pop",
+      "ac.queue.push",
+      "ac.source",
+      "ac.sink",
+      "ac.var.constant",
+      "ac.var.add",
+      "ac.var.sub",
+      "ac.var.mul",
+      "ac.var.get",
+      "ac.var.with",
+      "ac.scope",
+      "ac.scope.yield",
+      "ac.broadcast",
+      "ac.route",
+      "ac.route.yield",
+      "ac.select",
+      "ac.select.yield",
+      "ac.fork",
+      "ac.merge",
+      "ac.barrier",
+      "ac.dependency",
+      "ac.dependency.yield",
+      "ac.credit",
+      "ac.credit.yield",
+      "ac.memory",
+      "ac.memory.yield",
+      "ac.reorder",
+      "ac.reorder.yield",
+      "ac.feedback",
+      "ac.feedback.yield",
+      "ac.observe",
+      "ac.expect",
+      "ac.expect.yield",
+      "ac.var.cmp",
+  };
+  for (llvm::StringLiteral name : v02Names)
+    EXPECT_TRUE(mlir::OperationName(name, &context).isRegistered())
+        << name.str();
+  EXPECT_EQ(context.getRegisteredOperationsByDialect("ac").size(), 94u);
 }
 
 TEST(ACIROpsTest, ProcessLinearLivenessDoesNotRescanBlockPerValue) {
@@ -686,7 +820,7 @@ TEST(ACIROpsTest, ProcessLinearLivenessDoesNotRescanBlockPerValue) {
   auto buildProcess = [&](unsigned valueCount) {
     std::string source;
     llvm::raw_string_ostream os(source);
-    os << "builtin.module attributes {ac.contract_epoch = \"0.1\"} {\n"
+    os << "builtin.module attributes {ac.contract_epoch = \"0.2\"} {\n"
           "  ac.module @Scale() parameters {} graph {\n"
           "    ac.process @worker kind \"control\" {\n";
     for (unsigned index = 0; index != valueCount; ++index)
@@ -1214,7 +1348,7 @@ TEST(ACIROpsTest, TraceSourcesHaveOneOwnerAcrossElaboratedHierarchy) {
   mlir::MLIRContext context;
   context.loadDialect<ACIRDialect>();
   auto singleOwner = mlir::parseSourceString<mlir::ModuleOp>(R"mlir(
-    builtin.module attributes {ac.contract_epoch = "0.1"} {
+    builtin.module attributes {ac.contract_epoch = "0.2"} {
       ac.module @Top() parameters {} graph {
         ac.process @workload kind "workload" {
           %cursor = ac.trace.open source "pto"
@@ -1254,7 +1388,7 @@ TEST(ACIROpsTest, TraceSourcesHaveOneOwnerAcrossElaboratedHierarchy) {
   };
 
   expectDuplicate(R"mlir(
-    builtin.module attributes {ac.contract_epoch = "0.1"} {
+    builtin.module attributes {ac.contract_epoch = "0.2"} {
       ac.module @Left() parameters {} graph {
         ac.process @workload kind "workload" {
           %cursor = ac.trace.open source "pto"
@@ -1281,7 +1415,7 @@ TEST(ACIROpsTest, TraceSourcesHaveOneOwnerAcrossElaboratedHierarchy) {
   )mlir");
 
   expectDuplicate(R"mlir(
-    builtin.module attributes {ac.contract_epoch = "0.1"} {
+    builtin.module attributes {ac.contract_epoch = "0.2"} {
       ac.module @Leaf() parameters {} graph {
         ac.process @workload kind "workload" {
           %cursor = ac.trace.open source "pto"
@@ -1370,7 +1504,7 @@ TEST(ACIROpsTest, StaticContractsUseFreezePhaseModuleEffects) {
   mlir::MLIRContext context;
   context.loadDialect<ACIRDialect>();
   auto file = mlir::parseSourceString<mlir::ModuleOp>(R"mlir(
-    builtin.module attributes {ac.contract_epoch = "0.1"} {
+    builtin.module attributes {ac.contract_epoch = "0.2"} {
       ac.module @M(i1) parameters {} graph {
       ^bb0(%condition : i1):
         ac.require %condition, "capacity"
@@ -2202,7 +2336,7 @@ TEST(ACIRResourcesTest,
   EXPECT_EQ(forward.second, reverse.second);
   EXPECT_NE(
       forward.second.find(
-          "general mixed interleave analysis exceeds ACIR v0.1 limit 256"),
+          "general mixed interleave analysis exceeds ACIR v0.2 limit 256"),
       std::string::npos);
 }
 
@@ -2428,7 +2562,7 @@ TEST(ACIRFreezeEffectsTest, FrozenEffectsUseElaboratedAbsoluteOwnerSets) {
   acir::registerAllDialects(registry);
   mlir::MLIRContext context(registry);
   auto file = mlir::parseSourceString<mlir::ModuleOp>(R"mlir(
-    builtin.module attributes {ac.contract_epoch = "0.1"} {
+    builtin.module attributes {ac.contract_epoch = "0.2"} {
       ac.system @soc root @Top as "root" tick 0 "cycle"
           workload @Top::@workload seed {kind = "fixed", value = 0 : i64}
           instrumentation [] results {id = "default", format = "json"}

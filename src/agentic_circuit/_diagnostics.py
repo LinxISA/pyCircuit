@@ -89,15 +89,15 @@ class Diagnostic:
     fixits: tuple[FixIt, ...] = ()
     schema: str = "agentic-circuit-diagnostic"
     version: str = "0.1"
-    contract_epoch: str = "0.1"
+    contract_epoch: str = "0.2"
 
     def __post_init__(self) -> None:
         if (
             self.schema,
             self.version,
             self.contract_epoch,
-        ) != ("agentic-circuit-diagnostic", "0.1", "0.1"):
-            raise ValueError("diagnostic schema identity is fixed at epoch 0.1")
+        ) != ("agentic-circuit-diagnostic", "0.1", "0.2"):
+            raise ValueError("diagnostic schema identity is fixed at epoch 0.2")
         if not self.stage:
             raise ValueError("diagnostic stage must not be empty")
         if not _CODE.fullmatch(self.code):

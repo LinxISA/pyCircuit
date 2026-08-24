@@ -10,7 +10,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[2]
-CONTRACT_EPOCH = "0.1"
+CONTRACT_EPOCH = "0.2"
 LLVM_LOCK = {
     "release": "22.1.8",
     "upstream_commit": "ca7933e47d3a3451d81e72ac174dcb5aa28b59d1",
@@ -94,8 +94,65 @@ def assert_exact_ci_cache_commands(test_case, workflow):
 
 
 class RepositoryContractsTest(unittest.TestCase):
+    def test_official_opcode_catalog_is_closed_backend_complete_and_standard(self):
+        from jsonschema import Draft202012Validator
+
+        schema = json.loads(
+            (ROOT / "schemas/opcode-catalog.schema.json").read_text()
+        )
+        catalog = json.loads((ROOT / "schemas/opcodes-v0.2.json").read_text())
+        Draft202012Validator(schema).validate(catalog)
+        expected = {
+            "ac.barrier",
+            "ac.broadcast",
+            "ac.credit",
+            "ac.dependency",
+            "ac.expect",
+            "ac.feedback",
+            "ac.fork",
+            "ac.merge",
+            "ac.memory",
+            "ac.observe",
+            "ac.reorder",
+            "ac.route",
+            "ac.scope",
+            "ac.select",
+            "ac.sink",
+            "ac.source",
+            "ac.transform",
+        }
+        operations = [entry["operation"] for entry in catalog["entries"]]
+        self.assertEqual(sorted(expected), operations)
+        self.assertEqual(len(operations), len(set(operations)))
+        forbidden = {"decode", "dispatch", "rename", "retire"}
+        for entry in catalog["entries"]:
+            self.assertEqual(entry["kind"], entry["operation"].removeprefix("ac."))
+            self.assertTrue(entry["gfsim"]["available"])
+            if entry["role"] == "design":
+                self.assertTrue(entry["pyc"]["available"])
+            self.assertTrue(entry["gfsim"]["realization"])
+            self.assertTrue(entry["pyc"]["realization"])
+            self.assertTrue(entry["refinement_observations"])
+            self.assertNotIn(entry["kind"], forbidden)
+            maximum_inputs = entry["inputs"]["max"]
+            maximum_outputs = entry["outputs"]["max"]
+            if maximum_inputs is not None:
+                self.assertGreaterEqual(maximum_inputs, entry["inputs"]["min"])
+            if maximum_outputs is not None:
+                self.assertGreaterEqual(maximum_outputs, entry["outputs"]["min"])
+        roles = {entry["operation"]: entry["role"] for entry in catalog["entries"]}
+        self.assertEqual("observation", roles["ac.observe"])
+        self.assertEqual("verification", roles["ac.expect"])
+        self.assertTrue(
+            all(
+                role == "design"
+                for operation, role in roles.items()
+                if operation not in {"ac.observe", "ac.expect"}
+            )
+        )
+
     def test_diagnostic_explanation_catalog_is_closed_and_versioned(self):
-        path = ROOT / "resources/diagnostics-v0.1.json"
+        path = ROOT / "resources/diagnostics-v0.2.json"
         self.assertTrue(path.is_file())
         document = json.loads(path.read_text())
         self.assertEqual(
@@ -355,7 +412,7 @@ class RepositoryContractsTest(unittest.TestCase):
             r'^contract-epoch\s*=\s*"([^"]+)"\s*$', pyproject, re.MULTILINE
         )
 
-        self.assertEqual(10, len(schema_epochs))
+        self.assertEqual(11, len(schema_epochs))
         self.assertEqual(
             {CONTRACT_EPOCH}, set(schema_epochs.values()), schema_epochs
         )
@@ -379,7 +436,7 @@ class RepositoryContractsTest(unittest.TestCase):
             )
             Draft202012Validator.check_schema(document)
             checked.append(path.name)
-        self.assertEqual(10, len(checked), checked)
+        self.assertEqual(11, len(checked), checked)
 
     def test_trace_source_decoder_uses_the_runtime_decoder_concept(self):
         record = json.loads((ROOT / "schemas/stdlib/TraceSource.json").read_text())
@@ -408,9 +465,9 @@ class RepositoryContractsTest(unittest.TestCase):
             "operation_path": "@Top::@workload/r0/b0/o0",
         }
         descriptor = {
-            "cpp": "acir::generated::impl_wake_next_delta_63cacba5c3eb82976464804b4aeaa17d43b445733efaddfad7c7bec1ab650269",
+            "cpp": "acir::generated::impl_wake_next_delta_b3f0bab001a46eed926ddd600009b72841434b84d2c733fd8a612bc30e396a16",
             "effect": "stateful",
-            "fingerprint": "sha256:63cacba5c3eb82976464804b4aeaa17d43b445733efaddfad7c7bec1ab650269",
+            "fingerprint": "sha256:b3f0bab001a46eed926ddd600009b72841434b84d2c733fd8a612bc30e396a16",
             "inputs": [],
             "kind": "implementation",
             "ordinal": 0,
@@ -418,11 +475,11 @@ class RepositoryContractsTest(unittest.TestCase):
             "results": ["@acir_wake_next_delta"],
             "role": "wake_next_delta",
             "source_paths": [],
-            "symbol": "@acir_impl_wake_next_delta_63cacba5c3eb82976464804b4aeaa17d43b445733efaddfad7c7bec1ab650269",
+            "symbol": "@acir_impl_wake_next_delta_b3f0bab001a46eed926ddd600009b72841434b84d2c733fd8a612bc30e396a16",
         }
         fixture = {
             "callees": [descriptor],
-            "contract_epoch": "0.1",
+            "contract_epoch": "0.2",
             "processes": [{
                 "blocks": [{"actions": [], "cost": 2, "edge": {"kind": "suspend", "transition": 0}, "frames": [], "loads": [], "ordinal": 0, "path": "@Top::@workload/plan/pc/entry/b00000000", "pc": 0}],
                 "captures": [], "definition_key": "@Top::@workload", "entry_pc": 0,
@@ -627,8 +684,8 @@ class RepositoryContractsTest(unittest.TestCase):
             "placement": "member_or_array",
         }
         stateful_duplicate_name["activation_sources"] = [
-            {"kind": "ac.std.Clock", "name": "wake"},
-            {"kind": "ac.std.Reset", "name": "wake"},
+            {"kind": "ac.Clock", "name": "wake"},
+            {"kind": "ac.Reset", "name": "wake"},
         ]
         # Draft 2020-12 cannot state unique-by-name. The schema accepts this
         # structurally; BindingRecord semantic validation rejects it.
@@ -666,7 +723,7 @@ class RepositoryContractsTest(unittest.TestCase):
         unavailable["availability"] = "unavailable"
         mutations.append(unavailable)
         wrong_epoch = dict(record)
-        wrong_epoch["contract_epoch"] = "0.2"
+        wrong_epoch["contract_epoch"] = "0.1"
         mutations.append(wrong_epoch)
         wrong_schema = dict(record)
         wrong_schema["binding_schema"] = "acsim-binding-0.2"

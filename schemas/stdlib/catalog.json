@@ -1,223 +1,223 @@
 {
-  "catalog": "ac.std",
+  "catalog": "ac",
   "version": "0.1",
-  "contract_epoch": "0.1",
+  "contract_epoch": "0.2",
   "entries": [
     {
-      "canonical_name": "ac.std.AddressTranslator",
+      "canonical_name": "ac.AddressTranslator",
       "availability": "declared_unavailable",
       "schema_path": "schemas/stdlib/AddressTranslator.json",
-      "schema_fingerprint": "sha256:ee57666d0858dcb018f133bdab878e534fe69105292e61a9cc927dda4ddb1c6a"
+      "schema_fingerprint": "sha256:c0176e22a330c973c42f1b1d6c981477ea3c5fbf4f42100b38a573b08e3f7834"
     },
     {
-      "canonical_name": "ac.std.Arbiter",
+      "canonical_name": "ac.Arbiter",
       "availability": "declared_unavailable",
       "schema_path": "schemas/stdlib/Arbiter.json",
-      "schema_fingerprint": "sha256:e40b8bea7942e4334c26bed1f5ff777e80ebd15e87c315431679cf4d4c19fa45"
+      "schema_fingerprint": "sha256:4c43b5f2b10a6632f9738d0769817c76e4281cf33b770917e833cfd0345d71a6"
     },
     {
-      "canonical_name": "ac.std.Barrier",
+      "canonical_name": "ac.Barrier",
       "availability": "declared_unavailable",
       "schema_path": "schemas/stdlib/Barrier.json",
-      "schema_fingerprint": "sha256:9283e6021f29c1ced201d38308d23c7866efac2bc44593c270f5cc46232b0c54"
+      "schema_fingerprint": "sha256:9049a29ffdb6fb456a1546df3b008c58616482e01d8e2af5cfc2e3c30d272ec5"
     },
     {
-      "canonical_name": "ac.std.Broadcast",
+      "canonical_name": "ac.Broadcast",
       "availability": "declared_unavailable",
       "schema_path": "schemas/stdlib/Broadcast.json",
-      "schema_fingerprint": "sha256:1384d541ae11923ae1071fced18213bc512a4820e8433eb692c24101ecce2459"
+      "schema_fingerprint": "sha256:e8374abbc24b327d019bd38c6825b6161d2a3e5d3c13ff7256cd09ba071ca9a2"
     },
     {
-      "canonical_name": "ac.std.Bus",
+      "canonical_name": "ac.Bus",
       "availability": "declared_unavailable",
       "schema_path": "schemas/stdlib/Bus.json",
-      "schema_fingerprint": "sha256:ecfcd58082792c3667c3b414dc3ba3f4256d4d31312546df7b1a01c770cf0b46"
+      "schema_fingerprint": "sha256:246580c627a0c897874d3d1cb2aa31606700c6e916db82a3ab21158ee9f4e150"
     },
     {
-      "canonical_name": "ac.std.Cache",
+      "canonical_name": "ac.Cache",
       "availability": "declared_unavailable",
       "schema_path": "schemas/stdlib/Cache.json",
-      "schema_fingerprint": "sha256:b64f03634607e98e25fb0d141ba0f5df821c109bce772ed7a1039ba1bdd9f19e"
+      "schema_fingerprint": "sha256:9e49f5295abdb3fc1badff2bbbfa15030b1558bd5129adef63a7d12a0a4dae60"
     },
     {
-      "canonical_name": "ac.std.Compute",
+      "canonical_name": "ac.Compute",
       "availability": "available",
       "schema_path": "schemas/stdlib/Compute.json",
-      "schema_fingerprint": "sha256:8ddfc69b751016688f6a434a6c9ea15c6557c017a7775b62bb927d0fc1429d1e"
+      "schema_fingerprint": "sha256:8b6d278dcc3951d8cf14005dfa375c81b41755ba43d23137474787440ad492e1"
     },
     {
-      "canonical_name": "ac.std.Crossbar",
+      "canonical_name": "ac.Crossbar",
       "availability": "declared_unavailable",
       "schema_path": "schemas/stdlib/Crossbar.json",
-      "schema_fingerprint": "sha256:8885a0186f8fb4d51483775bc3b5300e09af142e299ca57bdcca56b8345dddfd"
+      "schema_fingerprint": "sha256:aa7fdf02c80230d33a52ef51f6745a61a6f66b39a4da0e793a06aeefe01e3ed3"
     },
     {
-      "canonical_name": "ac.std.DependencyTracker",
+      "canonical_name": "ac.DependencyTracker",
       "availability": "declared_unavailable",
       "schema_path": "schemas/stdlib/DependencyTracker.json",
-      "schema_fingerprint": "sha256:2fb2d11f2263ff8b9730aaec203f2cf22bbe9f6122ecf4575fa2154d3a8a04c0"
+      "schema_fingerprint": "sha256:12e224a4a5a998d960eb6e5da8620e9a69452f1a5f4fc349e2469763a6fa07fd"
     },
     {
-      "canonical_name": "ac.std.Dispatcher",
+      "canonical_name": "ac.Dispatcher",
       "availability": "declared_unavailable",
       "schema_path": "schemas/stdlib/Dispatcher.json",
-      "schema_fingerprint": "sha256:ff2f7476d8aa0effa330d13e2e1fa8ab4acc30710788b6e1ffda721de597d6c6"
+      "schema_fingerprint": "sha256:1ae82b2114e8fcb55bac66616a818d86060ea7a60e6b03e5ee310d14038e7f3a"
     },
     {
-      "canonical_name": "ac.std.Dma",
+      "canonical_name": "ac.Dma",
       "availability": "declared_unavailable",
       "schema_path": "schemas/stdlib/Dma.json",
-      "schema_fingerprint": "sha256:65ea4e8578ae5673320ba8aa43ae7a9b93e73166adb8cf682a535e9d02d389f3"
+      "schema_fingerprint": "sha256:f89b68b2dffab771be6ae6a971120bb74af36d347bbd878a7f981772ef42dbe4"
     },
     {
-      "canonical_name": "ac.std.Fork",
+      "canonical_name": "ac.Fork",
       "availability": "declared_unavailable",
       "schema_path": "schemas/stdlib/Fork.json",
-      "schema_fingerprint": "sha256:9dad31c95fcf5245da8b08217638a2729d1903c32437cb859edbac9ba0a48029"
+      "schema_fingerprint": "sha256:0cd5256eac6c0f299eb97667ee8d61cc892ab450cb32ef40b4b1262c2971a86f"
     },
     {
-      "canonical_name": "ac.std.Join",
+      "canonical_name": "ac.Join",
       "availability": "declared_unavailable",
       "schema_path": "schemas/stdlib/Join.json",
-      "schema_fingerprint": "sha256:93e1ffee76ea92a5dc0a6b882674ce0db484be63ffc24ab01d2cd9191160a913"
+      "schema_fingerprint": "sha256:317045e62a94b4d8942a37a0394c688a8539e9735cd868af9f080ccf4dc9ee5d"
     },
     {
-      "canonical_name": "ac.std.Link",
+      "canonical_name": "ac.Link",
       "availability": "available",
       "schema_path": "schemas/stdlib/Link.json",
-      "schema_fingerprint": "sha256:a64fe6d1afea7d7f283bd54a4132b044f40349897cc798539110dd25d2113ca6"
+      "schema_fingerprint": "sha256:6983c79ba87efba6dcada2b8d3eb426156e21bd6db66200bc44a98f9709505f9"
     },
     {
-      "canonical_name": "ac.std.LoadStore",
+      "canonical_name": "ac.LoadStore",
       "availability": "declared_unavailable",
       "schema_path": "schemas/stdlib/LoadStore.json",
-      "schema_fingerprint": "sha256:fe38921d99e035bf27e009c22bc364ad5654ef02ac7fc4a604508538e747a47a"
+      "schema_fingerprint": "sha256:5088041b9e50df70db34f8f7120de0d5c4ebe6617f7c5a9875892a24b76db82f"
     },
     {
-      "canonical_name": "ac.std.Memory",
+      "canonical_name": "ac.Memory",
       "availability": "available",
       "schema_path": "schemas/stdlib/Memory.json",
-      "schema_fingerprint": "sha256:285c66a9426b51102ae2979522bbba601af9b8d89964a4aab8b1eb74db17a9e0"
+      "schema_fingerprint": "sha256:c1e0e06138871ea846dc723360536189311308e3a88cd5b8504da62739958295"
     },
     {
-      "canonical_name": "ac.std.MemoryController",
+      "canonical_name": "ac.MemoryController",
       "availability": "declared_unavailable",
       "schema_path": "schemas/stdlib/MemoryController.json",
-      "schema_fingerprint": "sha256:187d0d5dfb110e14bcf021196e30d4583b16752856a4dc2222771ad32e3e0c25"
+      "schema_fingerprint": "sha256:8233c8c9619a9dfb806ed408249c40fcfad2dea9c92a2e77669aefb7f09a8ee5"
     },
     {
-      "canonical_name": "ac.std.MemoryManagement",
+      "canonical_name": "ac.MemoryManagement",
       "availability": "declared_unavailable",
       "schema_path": "schemas/stdlib/MemoryManagement.json",
-      "schema_fingerprint": "sha256:54b610ee3c551e6dd835d1d792e047407e8eaa64b576cd50376db725984df523"
+      "schema_fingerprint": "sha256:7d347021b6babb2fddf4866c57e17405d7342f121940b12a18ab338f10b70c64"
     },
     {
-      "canonical_name": "ac.std.Packetizer",
+      "canonical_name": "ac.Packetizer",
       "availability": "declared_unavailable",
       "schema_path": "schemas/stdlib/Packetizer.json",
-      "schema_fingerprint": "sha256:fb9cdb47c759c5100ed84d0ca65ee51a2f2da055061ceb0dabeddf778bf42d2a"
+      "schema_fingerprint": "sha256:f6f7219a6d950ae5b3d95aa808c23735a8b9a08198d4972397024710941a4c87"
     },
     {
-      "canonical_name": "ac.std.ProtocolAdapter",
+      "canonical_name": "ac.ProtocolAdapter",
       "availability": "declared_unavailable",
       "schema_path": "schemas/stdlib/ProtocolAdapter.json",
-      "schema_fingerprint": "sha256:f3c5d3e7549283dfc03ca406b0581a5879abb10ae56fad5d22e42d33e6e409da"
+      "schema_fingerprint": "sha256:5acefd82911d8f276232dd7dfdf93afa3c038e1ba671e690d6e3db57386bbe5e"
     },
     {
-      "canonical_name": "ac.std.Queue",
+      "canonical_name": "ac.Queue",
       "availability": "available",
       "schema_path": "schemas/stdlib/Queue.json",
-      "schema_fingerprint": "sha256:768b2ef2642e5f933c680802413a3360c0ccaaf8d4b76a3a79f4c25bcafd8426"
+      "schema_fingerprint": "sha256:9955fedd08d5c72852fbfd9e514eaa8b34598ba6eb6d4baab797d1819a711caa"
     },
     {
-      "canonical_name": "ac.std.Reassembler",
+      "canonical_name": "ac.Reassembler",
       "availability": "declared_unavailable",
       "schema_path": "schemas/stdlib/Reassembler.json",
-      "schema_fingerprint": "sha256:b3648bed3423f60fb23fa4798ca1a0498dda512c442a0a7867f92627e7ec9887"
+      "schema_fingerprint": "sha256:4cf037d2877b74afbb093aeb54c274021e647633468e462a1a7f4854757ed921"
     },
     {
-      "canonical_name": "ac.std.RegisterFile",
+      "canonical_name": "ac.RegisterFile",
       "availability": "declared_unavailable",
       "schema_path": "schemas/stdlib/RegisterFile.json",
-      "schema_fingerprint": "sha256:f45b160456563349e3e4e7e47d886d0faf27f64d5da7ada08407575b12678ab2"
+      "schema_fingerprint": "sha256:ca73624956c7e62aedb1e673667abd8b0802d4b081201902e1a70f1e18181ae4"
     },
     {
-      "canonical_name": "ac.std.Router",
+      "canonical_name": "ac.Router",
       "availability": "declared_unavailable",
       "schema_path": "schemas/stdlib/Router.json",
-      "schema_fingerprint": "sha256:5e52d8333e27bd345132d4798cdfd574bab93905944a962472cee5ec5755b39a"
+      "schema_fingerprint": "sha256:9b9a4d48b4c301a8036f659f89012dff842934bc35f7d412be078e76a20e376e"
     },
     {
-      "canonical_name": "ac.std.Scheduler",
+      "canonical_name": "ac.Scheduler",
       "availability": "available",
       "schema_path": "schemas/stdlib/Scheduler.json",
-      "schema_fingerprint": "sha256:ee7ae59ef0c5305594e06cd2fa173e46c747853d5ccab4c48ac7f65ab7ab8a17"
+      "schema_fingerprint": "sha256:800da587c84140429e9ee02b7dc171c1e4d3a47bb03e6e3007d4d9910ae0692d"
     },
     {
-      "canonical_name": "ac.std.Scoreboard",
+      "canonical_name": "ac.Scoreboard",
       "availability": "declared_unavailable",
       "schema_path": "schemas/stdlib/Scoreboard.json",
-      "schema_fingerprint": "sha256:e16533524996f56679d2dbfd6374c95388e569fbfeb1257cbffd8ef92e2878b8"
+      "schema_fingerprint": "sha256:bd125a8a16e51c090b5ceb89771b7143edfdc6e16eb4e0030d40e4ea280795ab"
     },
     {
-      "canonical_name": "ac.std.Scratchpad",
+      "canonical_name": "ac.Scratchpad",
       "availability": "declared_unavailable",
       "schema_path": "schemas/stdlib/Scratchpad.json",
-      "schema_fingerprint": "sha256:999cf684eee989137c98a940e7a1cd855c298b018adbf38029f2bb27039627e7"
+      "schema_fingerprint": "sha256:dbf22a802535a6cca1d22af2fa4f477ade8af9f086068c04648547cd23c5976e"
     },
     {
-      "canonical_name": "ac.std.Sink",
+      "canonical_name": "ac.Sink",
       "availability": "available",
       "schema_path": "schemas/stdlib/Sink.json",
-      "schema_fingerprint": "sha256:fddb7689fbddb1dccc8cb730d5b00336a9b91e11a2a68ee463a871e44c3a8383"
+      "schema_fingerprint": "sha256:c61afbff6e1afc953e467a3d7a59b900fa5fcd87be0b740125244b47c8b0d21e"
     },
     {
-      "canonical_name": "ac.std.Switch",
+      "canonical_name": "ac.Switch",
       "availability": "declared_unavailable",
       "schema_path": "schemas/stdlib/Switch.json",
-      "schema_fingerprint": "sha256:dcca4d0f1972e3e0dc0b0d6efffd52ed19f9f60252a5bfc2b0aeaa78b85f69a6"
+      "schema_fingerprint": "sha256:1ee33185fa739e64df4ecd3c4abb21851b806413513dfde9695f7523233da4d9"
     },
     {
-      "canonical_name": "ac.std.TimeDomainBridge",
+      "canonical_name": "ac.TimeDomainBridge",
       "availability": "declared_unavailable",
       "schema_path": "schemas/stdlib/TimeDomainBridge.json",
-      "schema_fingerprint": "sha256:73374f48585cace5450a704a12bb002021e1df89f88c8eadb36bfc0805e90b52"
+      "schema_fingerprint": "sha256:1dd4277d628cc341f5e02b5405ee87ee6d3e9f8de121f7d8df80678569a9e50b"
     },
     {
-      "canonical_name": "ac.std.Tlb",
+      "canonical_name": "ac.Tlb",
       "availability": "declared_unavailable",
       "schema_path": "schemas/stdlib/Tlb.json",
-      "schema_fingerprint": "sha256:b93f7f0c6cf24c0159a73d8adf1414031a56ab1c67dc90d7e6031d77e63c0839"
+      "schema_fingerprint": "sha256:ed41a90003807c98bb713b67e213aa48055d8205f1dcd4af812fbdb113b7d6c6"
     },
     {
-      "canonical_name": "ac.std.TraceSource",
+      "canonical_name": "ac.TraceSource",
       "availability": "available",
       "schema_path": "schemas/stdlib/TraceSource.json",
-      "schema_fingerprint": "sha256:4e80c2e6e35a638347397233cea96f25754feb8bf8aedd5c9bf6e5531dddaa2c"
+      "schema_fingerprint": "sha256:8bb0e5dfa3a7798478901b9e001b0aed528ba79f89160b27cb81cccef66b070b"
     },
     {
-      "canonical_name": "ac.std.TrafficSource",
+      "canonical_name": "ac.TrafficSource",
       "availability": "declared_unavailable",
       "schema_path": "schemas/stdlib/TrafficSource.json",
-      "schema_fingerprint": "sha256:2c38b59d80d82d10a9a4948b77bb0c1dda0016106af0637ba3fdb827e3c447f4"
+      "schema_fingerprint": "sha256:9016d03e6fe637c8feaf2ab9f7dd90cbbb6754079065ed57533806dccbf3dc04"
     },
     {
-      "canonical_name": "ac.std.WidthAdapter",
+      "canonical_name": "ac.WidthAdapter",
       "availability": "declared_unavailable",
       "schema_path": "schemas/stdlib/WidthAdapter.json",
-      "schema_fingerprint": "sha256:b777be770e5b7ab1c886d019d7345d9a85d092639b37d61bff4a351ac0f8bbd2"
+      "schema_fingerprint": "sha256:718422dd3cb3e042decf5b101db364c3c487f45410e25282016934181229c368"
     },
     {
-      "canonical_name": "ac.std.ready_valid",
+      "canonical_name": "ac.ready_valid",
       "availability": "available",
       "schema_path": "schemas/stdlib/ready_valid.json",
-      "schema_fingerprint": "sha256:8978a0f9b781bc812705fcd1dbcb87e47c91d1c76bb2dd7ef9f57b7beb08d439"
+      "schema_fingerprint": "sha256:b4d7c3c1bd1c20ddf1c167f5cd8461047c11bbebe30c768606415bb7120ea803"
     },
     {
-      "canonical_name": "ac.std.request_response",
+      "canonical_name": "ac.request_response",
       "availability": "available",
       "schema_path": "schemas/stdlib/request_response.json",
-      "schema_fingerprint": "sha256:6aa60e66f252fa38c66dfd55823c50217f6b91320247ff124ea009c3d152a9de"
+      "schema_fingerprint": "sha256:e482b094b9c8dea94e08832255f6a7cc53bec6a6623f4be30e2476a78ddfc6f2"
     }
   ]
 }

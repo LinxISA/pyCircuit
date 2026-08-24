@@ -10,14 +10,14 @@
         "binding": "phase5_Showcase_binding",
         "binding_schema": "acsim-binding-0.1",
         "component_schema": "phase5.Showcase",
-        "component_schema_fingerprint": "sha256:09fbf51cbee77c2081a9b1266ee4b3d0d0c70f3bf1826e33a9e408874168b5c9",
+        "component_schema_fingerprint": "sha256:0fc0626924debbf545826bad7c14bd2a33bf0aa222ca02aaca8551f29e8f37d8",
         "construction": {
           "arguments": [
             3
           ],
           "kind": "constructor"
         },
-        "contract_epoch": "0.1",
+        "contract_epoch": "0.2",
         "cpp": {
           "concept": "gfsim::Component",
           "entry_points": {
@@ -33,7 +33,7 @@
         },
         "cpp_type": "phase5_showcase_type",
         "effect": "stateful",
-        "fingerprint": "sha256:80ee6818bb080ab0e5232434ce7407e293feb9557c6af4fa5901048fd669deb8",
+        "fingerprint": "sha256:d4d1555e5c9f423b4b87a3c8181a22f491c34dfb1d22bf1a295d40a1ac0c8e12",
         "implementation": "gfsim.Phase5TraceSource",
         "ownership": {
           "kind": "unique",
@@ -66,14 +66,14 @@
         "binding": "phase5_Showcase_binding",
         "binding_schema": "acsim-binding-0.1",
         "component_schema": "phase5.Showcase",
-        "component_schema_fingerprint": "sha256:09fbf51cbee77c2081a9b1266ee4b3d0d0c70f3bf1826e33a9e408874168b5c9",
+        "component_schema_fingerprint": "sha256:0fc0626924debbf545826bad7c14bd2a33bf0aa222ca02aaca8551f29e8f37d8",
         "construction": {
           "arguments": [
             3
           ],
           "kind": "constructor"
         },
-        "contract_epoch": "0.1",
+        "contract_epoch": "0.2",
         "cpp": {
           "concept": "gfsim::Component",
           "entry_points": {
@@ -89,7 +89,7 @@
         },
         "cpp_type": "phase5_showcase_type",
         "effect": "stateful",
-        "fingerprint": "sha256:80ee6818bb080ab0e5232434ce7407e293feb9557c6af4fa5901048fd669deb8",
+        "fingerprint": "sha256:d4d1555e5c9f423b4b87a3c8181a22f491c34dfb1d22bf1a295d40a1ac0c8e12",
         "implementation": "gfsim.Phase5TraceSource",
         "ownership": {
           "kind": "unique",
@@ -119,8 +119,8 @@
       "binding": "phase5_Showcase_binding",
       "binding_schema": "acsim-binding-0.1",
       "component_schema": "phase5.Showcase",
-      "component_schema_fingerprint": "sha256:09fbf51cbee77c2081a9b1266ee4b3d0d0c70f3bf1826e33a9e408874168b5c9",
-      "contract_epoch": "0.1",
+      "component_schema_fingerprint": "sha256:0fc0626924debbf545826bad7c14bd2a33bf0aa222ca02aaca8551f29e8f37d8",
+      "contract_epoch": "0.2",
       "effect": "stateful",
       "function_type": "() -> ()",
       "parameters": [

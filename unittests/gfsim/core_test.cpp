@@ -130,22 +130,22 @@ private:
 };
 
 std::string harnessBuildManifest() {
-  return R"json({"schema":"agentic-circuit-build-manifest","version":"0.1","contract_epoch":"0.1","project":{"name":"project","identity":"project:test"},"system":{"name":"system","identity":"system:test"},"source_files":[],"normalized_acir_sha256":"sha256:0000000000000000000000000000000000000000000000000000000000000000","compiler":{"name":"clang","build_id":"clang test","toolchain_target":"test-target"},"pass_pipeline":["compile","link"],"providers":[],"component_specializations":[],"protocol_identities":[],"artifacts":[],"validation_gates":[],"build_profile":"fast","instrumentation_layers":[],"specialization_inputs":[],"build_fingerprint":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"})json";
+  return R"json({"schema":"agentic-circuit-build-manifest","version":"0.1","contract_epoch":"0.2","project":{"name":"project","identity":"project:test"},"system":{"name":"system","identity":"system:test"},"source_files":[],"normalized_acir_sha256":"sha256:0000000000000000000000000000000000000000000000000000000000000000","compiler":{"name":"clang","build_id":"clang test","toolchain_target":"test-target"},"pass_pipeline":["compile","link"],"providers":[],"component_specializations":[],"protocol_identities":[],"artifacts":[],"validation_gates":[],"build_profile":"fast","instrumentation_layers":[],"specialization_inputs":[],"build_fingerprint":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"})json";
 }
 
 std::string harnessTrace() {
-  return R"json({"schema":"pto-trace","version":"0.1","contract_epoch":"0.1","metadata":{"record_count":0},"records":[]})json";
+  return R"json({"schema":"pto-trace","version":"0.1","contract_epoch":"0.2","metadata":{"record_count":0},"records":[]})json";
 }
 
 std::string harnessTraceWithOneRecord() {
-  return R"json({"schema":"pto-trace","version":"0.1","contract_epoch":"0.1","metadata":{"record_count":1},"records":[{"sequence_id":17,"opcode":"pto.test","operands":[],"dependencies":[],"attributes":{}}]})json";
+  return R"json({"schema":"pto-trace","version":"0.1","contract_epoch":"0.2","metadata":{"record_count":1},"records":[{"sequence_id":17,"opcode":"pto.test","operands":[],"dependencies":[],"attributes":{}}]})json";
 }
 
 std::string harnessRunManifest(std::string_view buildHash,
                                std::string_view traceHash,
                                std::string_view eventLog = "disabled") {
   return "{\"schema\":\"agentic-circuit-run-manifest\",\"version\":\"0.1\","
-         "\"contract_epoch\":\"0.1\",\"build_manifest\":{\"path\":"
+         "\"contract_epoch\":\"0.2\",\"build_manifest\":{\"path\":"
          "\"build-manifest.json\",\"sha256\":\"" +
          std::string(buildHash) +
          "\"},\"trace\":{\"path\":\"trace.json\",\"schema\":\"pto-trace\","
@@ -1327,16 +1327,16 @@ TEST(GfsimComponentsTest, BaselineTemplatesExposeCanonicalObjectKinds) {
   EXPECT_EQ(link.kind(), ObjectKind::Link);
   EXPECT_EQ(memory.kind(), ObjectKind::Memory);
   EXPECT_EQ(sink.kind(), ObjectKind::Sink);
-  EXPECT_EQ(TraceSource<>::contractName, "ac.std.TraceSource");
-  EXPECT_EQ(Queue<uint64_t>::contractName, "ac.std.Queue");
-  EXPECT_EQ(Scheduler<uint64_t>::contractName, "ac.std.Scheduler");
-  EXPECT_EQ(Compute<>::contractName, "ac.std.Compute");
-  EXPECT_EQ(Link<>::contractName, "ac.std.Link");
-  EXPECT_EQ(Memory<>::contractName, "ac.std.Memory");
-  EXPECT_EQ(Sink<>::contractName, "ac.std.Sink");
-  EXPECT_EQ(ReadyValid<uint64_t>::contractName, "ac.std.ready_valid");
+  EXPECT_EQ(TraceSource<>::contractName, "ac.TraceSource");
+  EXPECT_EQ(Queue<uint64_t>::contractName, "ac.Queue");
+  EXPECT_EQ(Scheduler<uint64_t>::contractName, "ac.Scheduler");
+  EXPECT_EQ(Compute<>::contractName, "ac.Compute");
+  EXPECT_EQ(Link<>::contractName, "ac.Link");
+  EXPECT_EQ(Memory<>::contractName, "ac.Memory");
+  EXPECT_EQ(Sink<>::contractName, "ac.Sink");
+  EXPECT_EQ(ReadyValid<uint64_t>::contractName, "ac.ready_valid");
   EXPECT_EQ((RequestResponse<uint64_t, uint64_t>::contractName),
-            "ac.std.request_response");
+            "ac.request_response");
 }
 
 TEST(GfsimComponentsTest, QueueCommitsThroughBarrierAndTracksStatistics) {
@@ -1599,7 +1599,7 @@ TEST(GfsimProtocolTest, ProtocolStatePreservesCreditAndPhaseInvariants) {
 constexpr std::string_view ValidPtoTrace = R"json({
   "schema": "pto-trace",
   "version": "0.1",
-  "contract_epoch": "0.1",
+  "contract_epoch": "0.2",
   "metadata": {
     "producer": "gfsim-test",
     "address_spaces": ["global"],
@@ -1691,7 +1691,7 @@ TEST(GfsimTraceTest, StreamingAndBufferedParsingProduceIdenticalDocument) {
 
 TEST(GfsimTraceTest, RejectsForwardDependencyWithStableDiagnostic) {
   constexpr std::string_view invalid = R"json({
-    "schema":"pto-trace","version":"0.1","contract_epoch":"0.1",
+    "schema":"pto-trace","version":"0.1","contract_epoch":"0.2",
     "metadata":{},"records":[
       {"sequence_id":1,"opcode":"pto.a","operands":[],
        "dependencies":[2],"attributes":{}},
@@ -1709,7 +1709,7 @@ TEST(GfsimTraceTest, RejectsForwardDependencyWithStableDiagnostic) {
 
 TEST(GfsimTraceTest, RejectsUnknownFieldsAndRepresentationCaps) {
   constexpr std::string_view unknown = R"json({
-    "schema":"pto-trace","version":"0.1","contract_epoch":"0.1",
+    "schema":"pto-trace","version":"0.1","contract_epoch":"0.2",
     "metadata":{"extension":true},"records":[]})json";
   TraceLoadResult closed = parsePtoTrace(unknown);
   ASSERT_FALSE(closed.succeeded());
@@ -1725,7 +1725,7 @@ TEST(GfsimTraceTest, RejectsUnknownFieldsAndRepresentationCaps) {
 
 TEST(GfsimTraceTest, ValidatesDuplicateKeysRecordCountAndContentHash) {
   constexpr std::string_view validEmpty = R"json({
-    "schema":"pto-trace","version":"0.1","contract_epoch":"0.1",
+    "schema":"pto-trace","version":"0.1","contract_epoch":"0.2",
     "metadata":{
       "record_count":0,
       "content_hash":"sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
@@ -1733,7 +1733,7 @@ TEST(GfsimTraceTest, ValidatesDuplicateKeysRecordCountAndContentHash) {
   EXPECT_TRUE(parsePtoTrace(validEmpty).succeeded());
 
   constexpr std::string_view wrongCount = R"json({
-    "schema":"pto-trace","version":"0.1","contract_epoch":"0.1",
+    "schema":"pto-trace","version":"0.1","contract_epoch":"0.2",
     "metadata":{"record_count":1},"records":[]})json";
   TraceLoadResult count = parsePtoTrace(wrongCount);
   ASSERT_FALSE(count.succeeded());
@@ -1741,7 +1741,7 @@ TEST(GfsimTraceTest, ValidatesDuplicateKeysRecordCountAndContentHash) {
 
   constexpr std::string_view duplicateKey = R"json({
     "schema":"pto-trace","schema":"pto-trace","version":"0.1",
-    "contract_epoch":"0.1","metadata":{},"records":[]})json";
+    "contract_epoch":"0.2","metadata":{},"records":[]})json";
   TraceLoadResult duplicate = parsePtoTrace(duplicateKey);
   ASSERT_FALSE(duplicate.succeeded());
   EXPECT_EQ(duplicate.diagnostics.front().code, "ACTRACE-JSON");
@@ -2193,7 +2193,7 @@ private:
 TEST(GfsimComponentObservationTest,
      ProtocolBackpressureRequestsResponsesAndTraceCursorAreCommitted) {
   constexpr std::string_view oneRecord = R"json({
-    "schema":"pto-trace","version":"0.1","contract_epoch":"0.1",
+    "schema":"pto-trace","version":"0.1","contract_epoch":"0.2",
     "metadata":{"record_count":1},"records":[{
       "sequence_id":17,"opcode":"pto.done","operands":[],
       "dependencies":[],"attributes":{}}]})json";
@@ -2309,7 +2309,7 @@ TEST(GfsimSystemTest, TraceLimitIsIncompleteAndReportsExactPosition) {
 
 TEST(GfsimSystemTest, ExhaustedTraceCompletesWithCommittedCursorIdentity) {
   constexpr std::string_view oneRecord = R"json({
-    "schema":"pto-trace","version":"0.1","contract_epoch":"0.1",
+    "schema":"pto-trace","version":"0.1","contract_epoch":"0.2",
     "metadata":{"record_count":1},"records":[{
       "sequence_id":9,"opcode":"pto.done","operands":[],
       "dependencies":[],"attributes":{}}]})json";

@@ -1,4 +1,4 @@
-contract_epoch = "0.1"
+contract_epoch = "0.2"
 
 [project]
 name = "phase5-producer-queue-consumer"
@@ -7,7 +7,7 @@ architecture = "architecture.py"
 system = "main"
 
 [providers]
-standard_library = ["ac.std"]
+standard_library = ["ac"]
 
 [build]
 profile = "fast"

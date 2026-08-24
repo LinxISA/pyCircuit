@@ -52,6 +52,61 @@ TEST(ACIRTypesTest, PublicTypeInventoryRoundTrips) {
   }
 }
 
+TEST(ACIRTypesTest, V02QueueVarTypesRoundTripWithImmutablePayloads) {
+  mlir::MLIRContext context;
+  context.loadDialect<ACIRDialect>();
+
+  struct TypeCase {
+    llvm::StringLiteral spelling;
+    mlir::TypeID typeID;
+  };
+  const std::array<TypeCase, 2> cases = {{
+      {"!ac.var<i32>", VarType::getTypeID()},
+      {"!ac.queue<!ac.struct<@types::@Token>>", QueueType::getTypeID()},
+  }};
+
+  for (const TypeCase &testCase : cases) {
+    mlir::Type type = mlir::parseType(testCase.spelling, &context);
+    ASSERT_TRUE(type) << testCase.spelling.str();
+    EXPECT_EQ(type.getTypeID(), testCase.typeID) << testCase.spelling.str();
+
+    std::string printed;
+    llvm::raw_string_ostream(printed) << type;
+    EXPECT_EQ(printed, testCase.spelling) << testCase.spelling.str();
+    EXPECT_EQ(type, mlir::parseType(printed, &context));
+  }
+}
+
+TEST(ACIRTypesTest, V02StaticQueueVarCollectionsRoundTrip) {
+  mlir::MLIRContext context;
+  context.loadDialect<ACIRDialect>();
+
+  struct TypeCase {
+    llvm::StringLiteral spelling;
+    mlir::TypeID typeID;
+  };
+  const std::array<TypeCase, 4> cases = {{
+      {"!ac.array<4 x !ac.queue<i32>>", ArrayType::getTypeID()},
+      {"!ac.map<[\"cube\", \"scalar\", \"vector\"], !ac.queue<i32>>",
+       MapType::getTypeID()},
+      {"!ac.set<4 x !ac.var<i1>>", SetType::getTypeID()},
+      {"!ac.array<2 x !ac.map<[\"left\", \"right\"], "
+       "!ac.queue<!ac.struct<@types::@Token>>>>",
+       ArrayType::getTypeID()},
+  }};
+
+  for (const TypeCase &testCase : cases) {
+    mlir::Type type = mlir::parseType(testCase.spelling, &context);
+    ASSERT_TRUE(type) << testCase.spelling.str();
+    EXPECT_EQ(type.getTypeID(), testCase.typeID) << testCase.spelling.str();
+
+    std::string printed;
+    llvm::raw_string_ostream(printed) << type;
+    EXPECT_EQ(printed, testCase.spelling) << testCase.spelling.str();
+    EXPECT_EQ(type, mlir::parseType(printed, &context));
+  }
+}
+
 TEST(ACIRTypesTest, EveryUnitCategoryIsChecked) {
   mlir::MLIRContext context;
   context.loadDialect<ACIRDialect>();
@@ -118,6 +173,40 @@ TEST(ACIRTypesTest, CheckedBuildersRejectInvalidParameters) {
   EXPECT_FALSE(VectorType::getChecked(emitError, &context, int64_t{0},
                                       mlir::Type(payload)));
   EXPECT_FALSE(DurationType::getChecked(emitError, &context, Unit::Bytes));
+  auto functionType = mlir::FunctionType::get(&context, {payload}, {payload});
+  EXPECT_FALSE(
+      VarType::getChecked(emitError, &context, mlir::Type(functionType)));
+  EXPECT_FALSE(
+      QueueType::getChecked(emitError, &context, mlir::Type(functionType)));
+  auto variable = VarType::get(&context, payload);
+  auto queue = QueueType::get(&context, payload);
+  auto dynamicList = ListType::get(&context, payload);
+  EXPECT_FALSE(
+      QueueType::getChecked(emitError, &context, mlir::Type(variable)));
+  EXPECT_FALSE(VarType::getChecked(emitError, &context, mlir::Type(queue)));
+  EXPECT_FALSE(
+      QueueType::getChecked(emitError, &context, mlir::Type(dynamicList)));
+  EXPECT_FALSE(
+      VarType::getChecked(emitError, &context, mlir::Type(dynamicList)));
+  auto queueCollection = QueueType::get(&context, payload);
+  auto duplicateKeys =
+      mlir::ArrayAttr::get(&context, {mlir::StringAttr::get(&context, "lane"),
+                                      mlir::StringAttr::get(&context, "lane")});
+  auto reversedKeys =
+      mlir::ArrayAttr::get(&context, {mlir::StringAttr::get(&context, "right"),
+                                      mlir::StringAttr::get(&context, "left")});
+  EXPECT_FALSE(ArrayType::getChecked(emitError, &context, int64_t{0},
+                                     mlir::Type(queueCollection)));
+  EXPECT_FALSE(ArrayType::getChecked(emitError, &context, int64_t{2},
+                                     mlir::Type(payload)));
+  EXPECT_FALSE(MapType::getChecked(emitError, &context, duplicateKeys,
+                                   mlir::Type(queueCollection)));
+  EXPECT_FALSE(MapType::getChecked(emitError, &context, reversedKeys,
+                                   mlir::Type(queueCollection)));
+  EXPECT_FALSE(SetType::getChecked(emitError, &context, int64_t{0},
+                                   mlir::Type(queueCollection)));
+  EXPECT_FALSE(SetType::getChecked(emitError, &context, int64_t{2},
+                                   mlir::Type(payload)));
   EXPECT_FALSE(
       RateType::getChecked(emitError, &context, Unit::Cycles, Unit::Cycles));
 }

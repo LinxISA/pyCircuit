@@ -21,7 +21,23 @@ from ._definitions import (
     transaction,
 )
 from ._resources import address_map, address_space, queue
-from ._types import Endpoint, Flow, ResourceRef, Static
+from ._types import (
+    Endpoint,
+    Flow,
+    ResourceRef,
+    Static,
+    s8,
+    s16,
+    s32,
+    s64,
+    u1,
+    u2,
+    u4,
+    u8,
+    u16,
+    u32,
+    u64,
+)
 
 
 __all__ = (
@@ -37,6 +53,8 @@ __all__ = (
     "process",
     "scope",
     "array",
+    "map",
+    "set",
     "instances",
     "view",
     "queue",
@@ -46,12 +64,28 @@ __all__ = (
     "Static",
     "Flow",
     "Endpoint",
+    "source",
+    "sink",
+    "observe",
+    "expect",
+    "atomic",
+    "u1",
+    "u2",
+    "u4",
+    "u8",
+    "u16",
+    "u32",
+    "u64",
+    "s8",
+    "s16",
+    "s32",
+    "s64",
 )
 
 
 def _not_implemented(primitive: str) -> Never:
     raise NotImplementedError(
-        f"{primitive} is part of the v0.1 public surface but is not implemented yet"
+        f"{primitive} is part of the v0.2 public surface but is not implemented yet"
     )
 
 
@@ -63,9 +97,37 @@ def array(*values: object) -> Never:
     return _not_implemented("array")
 
 
+def map(*values: object) -> Never:
+    return _not_implemented("map")
+
+
+def set(*values: object) -> Never:
+    return _not_implemented("set")
+
+
 def instances(*values: object) -> Never:
     return _not_implemented("instances")
 
 
 def view(value: object, *selectors: object) -> Never:
     return _not_implemented("view")
+
+
+def source(payload: object, *, depth: int = 1, latency: int = 1) -> Never:
+    return _not_implemented("source")
+
+
+def sink(value: object) -> Never:
+    return _not_implemented("sink")
+
+
+def observe(value: object) -> Never:
+    return _not_implemented("observe")
+
+
+def expect(value: object, *, predicate: object, message: str) -> Never:
+    return _not_implemented("expect")
+
+
+def atomic() -> Never:
+    return _not_implemented("atomic")

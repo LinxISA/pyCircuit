@@ -2,7 +2,8 @@
 
 Agentic Circuit is a Python and MLIR-based architecture construction system
 that generates a structured, pure C++ graph-flow simulator named `gfsim`.
-Its public v0.1 contracts use exact global contract epoch `0.1`.
+The v0.2 upgrade branch uses exact global contract epoch `0.2` and rejects
+legacy epoch `0.1` artifacts.
 
 ## Development baseline
 
@@ -23,8 +24,9 @@ Use `release-llvm22` for a release configuration. The exact upstream release,
 commit, archive digest, supported host triples, and version policy are recorded
 in `toolchains/llvm.lock.json`.
 
-Normative specifications:
+Historical v0.1 specifications:
 
+- [Specification index](docs/specs/README.md)
 - [Interface Evolution v0.1](docs/specs/interface-evolution-v0.1.md)
 - [ACIR Core v0.1](docs/specs/acir-core-v0.1.md)
 - [Python-to-ACIR Lowering v0.1](docs/specs/python-to-acir-lowering-v0.1.md)
@@ -35,11 +37,18 @@ Normative specifications:
 - [PTO Trace Schema v0.1](docs/specs/pto-trace-schema-v0.1.md)
 - [ACIR Process-State Plan v0.1](docs/specs/acir-process-state-plan-v0.1.md)
 
+Queue/Var v0.2 candidate contract:
+
+- [Agentic Circuit Queue/Var v0.2 Specification Manual](docs/specs/agentic-circuit-v0.2.md)
+- [Agentic Circuit Queue/Var Architecture v0.2 Proposal Manual](docs/specs/agentic-circuit-queue-var-v0.2-proposal.md)
+
 Canonical machine-readable schemas:
 
 - [ACPy](schemas/acpy.schema.json)
 - [Capabilities](schemas/capabilities.schema.json)
 - [ComponentSchema](schemas/component.schema.json)
+- [Official opcode catalog schema](schemas/opcode-catalog.schema.json)
+- [Official Queue building-block catalog](schemas/opcodes-v0.2.json)
 - [PTO trace](schemas/pto-trace.schema.json)
 - [Build manifest](schemas/build-manifest.schema.json)
 - [Run manifest](schemas/run-manifest.schema.json)

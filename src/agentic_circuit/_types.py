@@ -8,8 +8,27 @@ from typing import Generic, Never, TypeVar
 
 T = TypeVar("T")
 P = TypeVar("P")
-I = TypeVar("I")
+InterfaceT = TypeVar("InterfaceT")
 R = TypeVar("R")
+
+
+@dataclass(frozen=True, slots=True)
+class ScalarType:
+    width: int
+    signed: bool = False
+
+
+u1 = ScalarType(1)
+u2 = ScalarType(2)
+u4 = ScalarType(4)
+u8 = ScalarType(8)
+u16 = ScalarType(16)
+u32 = ScalarType(32)
+u64 = ScalarType(64)
+s8 = ScalarType(8, True)
+s16 = ScalarType(16, True)
+s32 = ScalarType(32, True)
+s64 = ScalarType(64, True)
 
 
 class Static(Generic[T]):
@@ -20,7 +39,7 @@ class Flow(Generic[T, P]):
     """Describe a typed logical dataflow edge using protocol ``P``."""
 
 
-class Endpoint(Generic[I, R]):
+class Endpoint(Generic[InterfaceT, R]):
     """Describe interface ``I`` bound in role ``R``."""
 
 

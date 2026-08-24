@@ -49,7 +49,7 @@ template <typename Input = uint64_t, typename Output = Input,
                Output>
 class Compute : public SimObject {
 public:
-  static constexpr std::string_view contractName = "ac.std.Compute";
+  static constexpr std::string_view contractName = "ac.Compute";
   static constexpr ObjectKind componentKind = ObjectKind::Compute;
 
   Compute(std::string name, ObjectId id, SimObject *parent,
@@ -124,7 +124,7 @@ private:
 /// A terminal component that consumes data and produces statistics.
 template <typename T = uint64_t> class Sink : public SimObject {
 public:
-  static constexpr std::string_view contractName = "ac.std.Sink";
+  static constexpr std::string_view contractName = "ac.Sink";
   static constexpr ObjectKind componentKind = ObjectKind::Sink;
 
   Sink(std::string name, ObjectId id, SimObject *parent,
@@ -187,7 +187,7 @@ private:
 /// A connector that forwards data between components.
 template <typename T = uint64_t> class Link : public SimObject {
 public:
-  static constexpr std::string_view contractName = "ac.std.Link";
+  static constexpr std::string_view contractName = "ac.Link";
   static constexpr ObjectKind componentKind = ObjectKind::Link;
 
   Link(std::string name, ObjectId id, SimObject *parent,
@@ -256,7 +256,7 @@ private:
 /// A storage component with read/write proposals and capacity.
 template <typename T = uint64_t> class Memory : public SimObject {
 public:
-  static constexpr std::string_view contractName = "ac.std.Memory";
+  static constexpr std::string_view contractName = "ac.Memory";
   static constexpr ObjectKind componentKind = ObjectKind::Memory;
 
   Memory(std::string name, ObjectId id, SimObject *parent, size_t capacity,
@@ -330,7 +330,7 @@ private:
 /// arbitration selects by stable keys and never by insertion order.
 template <typename T> class Scheduler final : public SimObject {
 public:
-  static constexpr std::string_view contractName = "ac.std.Scheduler";
+  static constexpr std::string_view contractName = "ac.Scheduler";
   static constexpr ObjectKind componentKind = ObjectKind::Scheduler;
 
   Scheduler(std::string name, ObjectId id, SimObject *parent, size_t capacity,
@@ -540,7 +540,7 @@ private:
 
 template <typename T> class ReadyValid : public SimObject {
 public:
-  static constexpr std::string_view contractName = "ac.std.ready_valid";
+  static constexpr std::string_view contractName = "ac.ready_valid";
   static constexpr ObjectKind componentKind = ObjectKind::Link;
 
   ReadyValid(std::string name, ObjectId id, SimObject *parent,
@@ -647,7 +647,7 @@ private:
 template <typename Req, typename Resp>
 class RequestResponse : public SimObject {
 public:
-  static constexpr std::string_view contractName = "ac.std.request_response";
+  static constexpr std::string_view contractName = "ac.request_response";
   static constexpr ObjectKind componentKind = ObjectKind::Link;
 
   RequestResponse(std::string name, ObjectId id, SimObject *parent,

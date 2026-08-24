@@ -78,7 +78,7 @@ TEST(ModelPlanTest, ExtractsClosedIdentitiesTypesAndDenseRuntimePlan) {
 
   EXPECT_EQ(plan->modelSymbol, "demo");
   EXPECT_EQ(plan->rootSymbol, "Top");
-  EXPECT_EQ(plan->contractEpoch, "0.1");
+  EXPECT_EQ(plan->contractEpoch, "0.2");
   EXPECT_EQ(plan->frozenAcirFingerprint,
             "sha256:"
             "0000000000000000000000000000000000000000000000000000000000000001");
@@ -134,7 +134,7 @@ TEST(ModelPlanTest, IdentifiesTraceOwnersFromTypedBindingMetadata) {
       source.replace(position, from.size(), to);
   };
   replaceAll("gfsim::Fifo", "gfsim::TraceSource");
-  replaceAll("fifo.schema", "ac.std.TraceSource");
+  replaceAll("fifo.schema", "ac.TraceSource");
   auto file = mlir::parseSourceString<mlir::ModuleOp>(source, &context);
   ASSERT_TRUE(file);
 

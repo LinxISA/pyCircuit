@@ -5,20 +5,20 @@
 // RUN: %not %acir_opt %t/unregistered-dialect.mlir 2>&1 | %FileCheck %s --check-prefix=UNREGISTERED
 
 // DIALECTS: Available Dialects: ac,acsim,arith,builtin,cf,dlti,func,index,scf
-// CANONICAL: module attributes {ac.contract_epoch = "0.1"}
+// CANONICAL: module attributes {ac.contract_epoch = "0.2"}
 // UNKNOWN-ACSIM: error: unregistered operation 'acsim.unknown'
 // UNREGISTERED: error: operation being parsed with an unregistered dialect
 
 //--- canonical.mlir
-builtin.module attributes {ac.contract_epoch = "0.1"} {
+builtin.module attributes {ac.contract_epoch = "0.2"} {
 }
 
 //--- unknown-acsim-op.mlir
-builtin.module attributes {ac.contract_epoch = "0.1"} {
+builtin.module attributes {ac.contract_epoch = "0.2"} {
   "acsim.unknown"() : () -> ()
 }
 
 //--- unregistered-dialect.mlir
-builtin.module attributes {ac.contract_epoch = "0.1"} {
+builtin.module attributes {ac.contract_epoch = "0.2"} {
   "gpu.unknown"() : () -> ()
 }
