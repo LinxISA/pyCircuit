@@ -14,6 +14,69 @@ SOURCE = ROOT / "examples" / "v02" / "davincioo_queue_model.py"
 
 
 class V02QueueCodegenTest(unittest.TestCase):
+    def test_native_frozen_acir_codegen_covers_broadcast_and_feedback(self) -> None:
+        from tests.python_frontend.test_queue_codegen_v02 import (
+            BROADCAST_SOURCE,
+            FEEDBACK_SOURCE,
+        )
+
+        compiler = shutil.which("c++")
+        if compiler is None:
+            self.skipTest("C++ compiler is unavailable")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for name, source, expected in (
+                ("broadcast", BROADCAST_SOURCE, "gfsim::QueueBroadcast"),
+                ("feedback", FEEDBACK_SOURCE, "gfsim::QueueFeedback"),
+            ):
+                python = root / f"{name}.py"
+                model = root / f"{name}.cpp"
+                acir = root / f"{name}.ac.mlir"
+                plan = root / f"{name}.queue-plan.json"
+                python.write_text(source, encoding="utf-8")
+                generated = subprocess.run(
+                    (
+                        str(ROOT / "tools" / "ac-queue-cxxgen.py"),
+                        str(python),
+                        "--system",
+                        "pipeline",
+                        "--acir-output",
+                        str(acir),
+                        "--plan-output",
+                        str(plan),
+                        "--acir-opt",
+                        str(ROOT / "build/dev-llvm22/bin/acir-opt"),
+                        "--queue-plan-tool",
+                        str(ROOT / "build/dev-llvm22/bin/acir-queue-plan"),
+                        "--queue-cxxgen-tool",
+                        str(ROOT / "build/dev-llvm22/bin/acir-queue-cxxgen"),
+                        "-o",
+                        str(model),
+                    ),
+                    cwd=ROOT,
+                    env={**os.environ, "PYTHONPATH": str(ROOT / "src")},
+                    text=True,
+                    capture_output=True,
+                    check=False,
+                )
+                self.assertEqual(0, generated.returncode, generated.stderr)
+                self.assertIn(expected, model.read_text(encoding="utf-8"))
+                compiled = subprocess.run(
+                    (
+                        compiler,
+                        "-std=c++20",
+                        "-I",
+                        str(ROOT / "include"),
+                        "-fsyntax-only",
+                        str(model),
+                    ),
+                    cwd=root,
+                    text=True,
+                    capture_output=True,
+                    check=False,
+                )
+                self.assertEqual(0, compiled.returncode, compiled.stderr)
+
     def test_davincioo_like_python_generates_and_runs_typed_cpp(self) -> None:
         compiler = shutil.which("c++")
         if compiler is None:

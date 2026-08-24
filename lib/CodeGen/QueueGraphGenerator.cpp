@@ -1,5 +1,6 @@
 #include "acir/CodeGen/QueueGraphGenerator.h"
 
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/StringSwitch.h"
@@ -213,6 +214,10 @@ llvm::Expected<std::string> generateQueueGraphCpp(const QueueGraphPlan &plan) {
   for (auto [index, queue] : llvm::enumerate(plan.queues))
     queueIds[queue.name] = index;
   uint64_t nextId = plan.queues.size();
+  llvm::DenseMap<size_t, uint64_t> feedbackStateIds;
+  for (auto [index, block] : llvm::enumerate(runtimeBlocks))
+    if (block->kind == "feedback")
+      feedbackStateIds[index] = nextId++;
   llvm::StringMap<uint64_t> blockIds;
   for (auto [index, block] : llvm::enumerate(runtimeBlocks))
     blockIds[block->name + "#" + std::to_string(index)] = nextId++;
@@ -237,17 +242,21 @@ llvm::Expected<std::string> generateQueueGraphCpp(const QueueGraphPlan &plan) {
   }
 
   for (auto [index, block] : llvm::enumerate(runtimeBlocks)) {
-    if (block->kind != "transform" && block->kind != "route")
+    if (block->kind != "transform" && block->kind != "route" &&
+        block->kind != "feedback")
       continue;
-    if (block->yields.size() != 1 || block->inputs.size() != 1)
-      return generatorError("transform/route policy arity is unsupported");
+    const size_t expectedYields = block->kind == "feedback" ? 2 : 1;
+    if (block->yields.size() != expectedYields || block->inputs.size() != 1)
+      return generatorError("Queue policy arity is unsupported");
     const QueuePlan *input = findQueue(plan, block->inputs.front());
     if (!input)
       return generatorError("policy input Queue is missing");
     auto inputType = cppType(input->payloadType);
     if (!inputType)
       return inputType.takeError();
-    std::string policy = "block_" + std::to_string(index) + "_policy";
+    std::string policy =
+        "block_" + std::to_string(index) +
+        (block->kind == "feedback" ? "_update_policy" : "_policy");
     output << "struct " << policy << " {\n  ";
     if (block->kind == "route")
       output << "size_t";
@@ -270,6 +279,15 @@ llvm::Expected<std::string> generateQueueGraphCpp(const QueueGraphPlan &plan) {
     else
       output << *body;
     output << "  }\n};\n\n";
+    if (block->kind == "feedback") {
+      output << "struct block_" << index
+             << "_condition_policy {\n  bool operator()(const " << *inputType
+             << " &item) const {\n";
+      auto condition = emitExpressionBody(*block, block->yields[1], 4);
+      if (!condition)
+        return condition.takeError();
+      output << *condition << "  }\n};\n\n";
+    }
   }
 
   std::string modelClass = className(plan.system);
@@ -302,6 +320,24 @@ llvm::Expected<std::string> generateQueueGraphCpp(const QueueGraphPlan &plan) {
                            ", std::numeric_limits<size_t>::max(), nullptr, " +
                            std::to_string(queue.latency) + ")");
   }
+  for (auto [index, block] : llvm::enumerate(runtimeBlocks)) {
+    auto state = feedbackStateIds.find(index);
+    if (state == feedbackStateIds.end())
+      continue;
+    const QueuePlan *input = findQueue(plan, block->inputs[0]);
+    auto type = input ? cppType(input->payloadType)
+                      : llvm::Expected<std::string>(
+                            generatorError("feedback input Queue is missing"));
+    auto parent = modulePointer(block->scope);
+    if (!type)
+      return type.takeError();
+    if (!parent)
+      return parent.takeError();
+    initializers.push_back(
+        "block_" + std::to_string(index) + "_state_(\"" + block->name +
+        "_state\", " + std::to_string(state->second) + ", " + *parent +
+        ", 1, std::numeric_limits<size_t>::max(), nullptr, 1)");
+  }
   size_t sinkIndex = 0;
   for (auto [index, block] : llvm::enumerate(runtimeBlocks)) {
     auto parent = modulePointer(block->scope);
@@ -314,11 +350,11 @@ llvm::Expected<std::string> generateQueueGraphCpp(const QueueGraphPlan &plan) {
                              std::to_string(blockIds[key]) + ", " + *parent +
                              ", " + queueMembers[block->inputs[0]] + ", " +
                              queueMembers[block->outputs[0]] + ")");
-    } else if (block->kind == "route") {
+    } else if (block->kind == "broadcast" || block->kind == "route") {
       const QueuePlan *input = findQueue(plan, block->inputs[0]);
       auto type = input ? cppType(input->payloadType)
-                        : llvm::Expected<std::string>(
-                              generatorError("route input Queue is missing"));
+                        : llvm::Expected<std::string>(generatorError(
+                              "topology input Queue is missing"));
       if (!type)
         return type.takeError();
       std::string outputs;
@@ -355,6 +391,13 @@ llvm::Expected<std::string> generateQueueGraphCpp(const QueueGraphPlan &plan) {
                              std::to_string(block->inputs.size()) + ">{" +
                              inputs + "}, " + queueMembers[block->outputs[0]] +
                              ", " + policy + ")");
+    } else if (block->kind == "feedback") {
+      initializers.push_back(member + "(\"" + block->name + "\", " +
+                             std::to_string(blockIds[key]) + ", " + *parent +
+                             ", " + queueMembers[block->inputs[0]] +
+                             ", block_" + std::to_string(index) + "_state_, " +
+                             queueMembers[block->outputs[0]] + ", " +
+                             std::to_string(block->maxIterations) + ")");
     } else if (block->kind == "sink") {
       initializers.push_back(member + "(\"" + block->name + "\", " +
                              std::to_string(blockIds[key]) + ", " + *parent +
@@ -380,6 +423,15 @@ llvm::Expected<std::string> generateQueueGraphCpp(const QueueGraphPlan &plan) {
   }
   for (const QueuePlan &queue : plan.queues) {
     auto line = attach(queueOwners[queue.name], queueMembers[queue.name]);
+    if (!line)
+      return line.takeError();
+    output << *line << '\n';
+  }
+  for (auto [index, block] : llvm::enumerate(runtimeBlocks)) {
+    if (!feedbackStateIds.contains(index))
+      continue;
+    auto line =
+        attach(block->scope, "block_" + std::to_string(index) + "_state_");
     if (!line)
       return line.takeError();
     output << *line << '\n';
@@ -419,12 +471,14 @@ llvm::Expected<std::string> generateQueueGraphCpp(const QueueGraphPlan &plan) {
     }
   output << "\n  std::array<gfsim::DispatchRow, " << nextId
          << "> dispatch_rows() {\n    return {\n";
-  size_t row = 0;
   for (const QueuePlan &queue : plan.queues)
     output << "        gfsim::makeDispatchRow(&" << queueMembers[queue.name]
            << "),\n";
+  for (auto [index, block] : llvm::enumerate(runtimeBlocks))
+    if (feedbackStateIds.contains(index))
+      output << "        gfsim::makeDispatchRow(&block_" << index
+             << "_state_),\n";
   for (size_t index = 0; index < runtimeBlocks.size(); ++index) {
-    ++row;
     output << "        gfsim::makeDispatchRow(&block_" << index << "_)"
            << (index + 1 == runtimeBlocks.size() ? "\n" : ",\n");
   }
@@ -437,6 +491,18 @@ llvm::Expected<std::string> generateQueueGraphCpp(const QueueGraphPlan &plan) {
       return type.takeError();
     output << "  gfsim::SimQueue<" << *type << "> " << queueMembers[queue.name]
            << ";\n";
+  }
+  for (auto [index, block] : llvm::enumerate(runtimeBlocks)) {
+    if (!feedbackStateIds.contains(index))
+      continue;
+    const QueuePlan *input = findQueue(plan, block->inputs[0]);
+    auto type = input ? cppType(input->payloadType)
+                      : llvm::Expected<std::string>(
+                            generatorError("feedback state type is missing"));
+    if (!type)
+      return type.takeError();
+    output << "  gfsim::SimQueue<gfsim::FeedbackToken<" << *type << ">> block_"
+           << index << "_state_;\n";
   }
   sinkIndex = 0;
   for (auto [index, block] : llvm::enumerate(runtimeBlocks)) {
@@ -455,15 +521,20 @@ llvm::Expected<std::string> generateQueueGraphCpp(const QueueGraphPlan &plan) {
         return resultType.takeError();
       output << "  gfsim::QueueTransform<" << *inputType << ", " << *resultType
              << ", block_" << index << "_policy> block_" << index << "_;\n";
-    } else if (block->kind == "route") {
+    } else if (block->kind == "broadcast" || block->kind == "route") {
       const QueuePlan *input = findQueue(plan, block->inputs[0]);
       auto type = input ? cppType(input->payloadType)
                         : llvm::Expected<std::string>(
                               generatorError("route input missing"));
       if (!type)
         return type.takeError();
-      output << "  gfsim::QueueRoute<" << *type << ", " << block->outputs.size()
-             << ", block_" << index << "_policy> block_" << index << "_;\n";
+      if (block->kind == "broadcast")
+        output << "  gfsim::QueueBroadcast<" << *type << ", "
+               << block->outputs.size() << "> block_" << index << "_;\n";
+      else
+        output << "  gfsim::QueueRoute<" << *type << ", "
+               << block->outputs.size() << ", block_" << index
+               << "_policy> block_" << index << "_;\n";
     } else if (block->kind == "merge") {
       const QueuePlan *result = findQueue(plan, block->outputs[0]);
       auto type = result ? cppType(result->payloadType)
@@ -473,6 +544,16 @@ llvm::Expected<std::string> generateQueueGraphCpp(const QueueGraphPlan &plan) {
         return type.takeError();
       output << "  gfsim::QueueMerge<" << *type << ", " << block->inputs.size()
              << "> block_" << index << "_;\n";
+    } else if (block->kind == "feedback") {
+      const QueuePlan *input = findQueue(plan, block->inputs[0]);
+      auto type = input ? cppType(input->payloadType)
+                        : llvm::Expected<std::string>(
+                              generatorError("feedback input missing"));
+      if (!type)
+        return type.takeError();
+      output << "  gfsim::QueueFeedback<" << *type << ", block_" << index
+             << "_update_policy, block_" << index << "_condition_policy> block_"
+             << index << "_;\n";
     } else if (block->kind == "sink") {
       const QueuePlan *input = findQueue(plan, block->inputs[0]);
       auto type = input ? cppType(input->payloadType)
