@@ -47,6 +47,8 @@ operations:
   - ac.packet.deserialize
   - ac.transform
   - ac.transform.yield
+  - ac.source
+  - ac.sink
   - ac.firing
   - ac.firing.yield
   - ac.queue.peek

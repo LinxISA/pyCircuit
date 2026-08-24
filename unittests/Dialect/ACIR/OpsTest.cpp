@@ -97,14 +97,15 @@ TEST(ACIROpsTest, V02QueueEffectsAreAttachedToExactSSAQueueHandles) {
   context.loadDialect<ACIRDialect>();
   auto module = mlir::parseSourceString<mlir::ModuleOp>(R"mlir(
     module attributes {ac.contract_epoch = "0.1"} {
-      %input = "builtin.unrealized_conversion_cast"() : () -> !ac.queue<i32>
-      %output = "builtin.unrealized_conversion_cast"() : () -> !ac.queue<i32>
+      %input = ac.source depth 4 latency 1 : !ac.queue<i32>
+      %output = ac.source depth 4 latency 1 : !ac.queue<i32>
       ac.firing(%input, %output) {
         %peeked = ac.queue.peek %input : !ac.queue<i32> -> !ac.var<i32>
         %popped = ac.queue.pop %input : !ac.queue<i32> -> !ac.var<i32>
         ac.queue.push %output, %popped : !ac.queue<i32>, !ac.var<i32>
         ac.firing.yield
       } : (!ac.queue<i32>, !ac.queue<i32>)
+      ac.sink %output : !ac.queue<i32>
     }
   )mlir",
                                                         &context);
@@ -130,6 +131,14 @@ TEST(ACIROpsTest, V02QueueEffectsAreAttachedToExactSSAQueueHandles) {
   });
   module->walk([&](QueuePushOp operation) {
     checkEffect(operation, operation.getQueue(),
+                mlir::MemoryEffects::Write::get());
+  });
+  module->walk([&](SourceOp operation) {
+    checkEffect(operation, operation.getOutput(),
+                mlir::MemoryEffects::Write::get());
+  });
+  module->walk([&](SinkOp operation) {
+    checkEffect(operation, operation.getInput(),
                 mlir::MemoryEffects::Write::get());
   });
 }
@@ -338,6 +347,8 @@ TEST(ACIROpsTest, RegistryContainsExactV02QueueVarOperations) {
       "ac.return",
       "ac.resource",
       "ac.role",
+      "ac.sink",
+      "ac.source",
       "ac.state",
       "ac.stat",
       "ac.stat.add",
@@ -724,14 +735,15 @@ TEST(ACIROpsTest, RuntimeAndV02QueueVarRegistryIsExact) {
         << name.str();
   EXPECT_FALSE(mlir::OperationName("ac.try_issue", &context).isRegistered());
   EXPECT_FALSE(mlir::OperationName("ac.connect", &context).isRegistered());
-  const std::array<llvm::StringLiteral, 7> v02Names = {
-      "ac.transform",  "ac.transform.yield", "ac.firing",     "ac.firing.yield",
-      "ac.queue.peek", "ac.queue.pop",       "ac.queue.push",
+  const std::array<llvm::StringLiteral, 9> v02Names = {
+      "ac.transform",    "ac.transform.yield", "ac.firing",
+      "ac.firing.yield", "ac.queue.peek",      "ac.queue.pop",
+      "ac.queue.push",   "ac.source",          "ac.sink",
   };
   for (llvm::StringLiteral name : v02Names)
     EXPECT_TRUE(mlir::OperationName(name, &context).isRegistered())
         << name.str();
-  EXPECT_EQ(context.getRegisteredOperationsByDialect("ac").size(), 62u);
+  EXPECT_EQ(context.getRegisteredOperationsByDialect("ac").size(), 64u);
 }
 
 TEST(ACIROpsTest, ProcessLinearLivenessDoesNotRescanBlockPerValue) {

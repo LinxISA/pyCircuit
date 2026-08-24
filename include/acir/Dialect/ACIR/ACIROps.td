@@ -107,6 +107,25 @@ def ACIR_TransformYieldOp : ACIR_Op<"transform.yield", [
   let assemblyFormat = "attr-dict ($values^ `:` type($values))?";
 }
 
+def ACIR_SourceOp : ACIR_Op<"source", [
+    DeclareOpInterfaceMethods<MemoryEffectsOpInterface>
+  ]> {
+  let arguments = (ins I64Attr:$depth, I64Attr:$latency);
+  let results = (outs ACIR_QueueType:$output);
+  let hasVerifier = 1;
+  let assemblyFormat = [{
+    `depth` $depth `latency` $latency attr-dict `:`
+    qualified(type($output))
+  }];
+}
+
+def ACIR_SinkOp : ACIR_Op<"sink", [
+    DeclareOpInterfaceMethods<MemoryEffectsOpInterface>
+  ]> {
+  let arguments = (ins ACIR_QueueType:$input);
+  let assemblyFormat = "$input attr-dict `:` qualified(type($input))";
+}
+
 def ACIR_FiringOp : ACIR_Op<"firing", [
     SingleBlock, RecursiveMemoryEffects
   ]> {

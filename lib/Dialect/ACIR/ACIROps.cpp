@@ -83,6 +83,14 @@ LogicalResult TransformOp::verify() {
   return success();
 }
 
+LogicalResult SourceOp::verify() {
+  if (getDepth() <= 0)
+    return emitOpError("depth must be positive");
+  if (getLatency() <= 0)
+    return emitOpError("latency must be positive");
+  return success();
+}
+
 LogicalResult QueuePeekOp::verify() {
   auto queue = cast<QueueType>(getQueue().getType());
   Type expected = VarType::get(getContext(), queue.getElementType());

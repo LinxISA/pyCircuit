@@ -281,6 +281,19 @@ void QueueOp::getEffects(
       QueueStateResource::get());
 }
 
+void SourceOp::getEffects(
+    SmallVectorImpl<MemoryEffects::EffectInstance> &effects) {
+  effects.emplace_back(MemoryEffects::Write::get(),
+                       getOperation()->getResult(0), QueueStateResource::get());
+}
+
+void SinkOp::getEffects(
+    SmallVectorImpl<MemoryEffects::EffectInstance> &effects) {
+  effects.emplace_back(MemoryEffects::Write::get(),
+                       &getOperation()->getOpOperand(0),
+                       QueueStateResource::get());
+}
+
 void QueuePeekOp::getEffects(
     SmallVectorImpl<MemoryEffects::EffectInstance> &effects) {
   effects.emplace_back(MemoryEffects::Read::get(),
