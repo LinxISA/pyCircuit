@@ -1583,7 +1583,9 @@ void ACIRToACSimPass::expandModule(unsigned moduleIndex, std::string pathPrefix,
                                    llvm::SmallSet<unsigned, 8> &active) {
   ModulePlan &module = modules[moduleIndex];
   active.insert(moduleIndex);
-  for (auto [placementIndex, placement] : llvm::enumerate(module.placements)) {
+  for (size_t placementIndex = 0; placementIndex < module.placements.size();
+       ++placementIndex) {
+    const PlacementPlan &placement = module.placements[placementIndex];
     auto elementPath = [&](llvm::ArrayRef<int64_t> indices) {
       std::string path = pathPrefix;
       path.push_back('.');
@@ -1600,7 +1602,7 @@ void ACIRToACSimPass::expandModule(unsigned moduleIndex, std::string pathPrefix,
           placement.targetIsBinding) {
         RuntimeRow row;
         row.moduleIndex = moduleIndex;
-        row.placementIndex = placementIndex;
+        row.placementIndex = static_cast<unsigned>(placementIndex);
         row.contextPath = pathPrefix;
         row.path = path;
         row.indices.assign(indices.begin(), indices.end());
