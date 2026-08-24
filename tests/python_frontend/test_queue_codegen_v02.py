@@ -74,6 +74,18 @@ def pipeline() -> None:
     sink(current)
 """
 
+BROADCAST_SOURCE = """
+from agentic_circuit import sink, source, system
+
+@system
+def pipeline() -> None:
+    input_queue = source(int)
+    left = input_queue.apply(lambda item: item + 1)
+    right = input_queue.apply(lambda item: item + 2)
+    sink(left)
+    sink(right)
+"""
+
 
 class QueueCodegenV02Test(unittest.TestCase):
     def test_serial_python_generates_typed_queue_wired_cpp(self) -> None:
@@ -304,6 +316,75 @@ int main() {{
   const auto &values = model.sink_0_values();
   return values.size() == 1 && values[0].value == 13 &&
                  values[0].remaining == 0
+             ? 0
+             : 2;
+}}
+''',
+                encoding="utf-8",
+            )
+            linked = subprocess.run(
+                (
+                    compiler,
+                    "-std=c++20",
+                    "-I",
+                    str(ROOT / "include"),
+                    str(harness),
+                    "-o",
+                    str(executable),
+                ),
+                cwd=root,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(0, linked.returncode, linked.stderr)
+            executed = subprocess.run(
+                (str(executable),),
+                cwd=root,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(0, executed.returncode, executed.stderr)
+
+    def test_multiple_consumers_generate_strict_broadcast(self) -> None:
+        from agentic_circuit._queue_codegen import lower_queue_source_to_cpp
+
+        generated = lower_queue_source_to_cpp(BROADCAST_SOURCE, "pipeline")
+        self.assertIn("gfsim::QueueBroadcast<std::int64_t, 2>", generated)
+        self.assertIn("input_queue__fanout0_", generated)
+        self.assertIn("input_queue__fanout1_", generated)
+        compiler = shutil.which("c++")
+        if compiler is None:
+            self.skipTest("C++ compiler is unavailable")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            model = root / "broadcast.cpp"
+            harness = root / "harness.cpp"
+            executable = root / "broadcast"
+            model.write_text(generated, encoding="utf-8")
+            harness.write_text(
+                f'''#include "{model.name}"
+#include <cstddef>
+
+int main() {{
+  ac_generated::Pipeline model;
+  if (!model.input_queue().proposePush(10))
+    return 1;
+  auto rows = model.dispatch_rows();
+  for (std::size_t tick = 0; tick < 6; ++tick) {{
+    const gfsim::Epoch epoch{{tick, 0}};
+    for (auto &row : rows)
+      row.work(row.object, epoch);
+    for (auto &row : rows)
+      row.xfer(row.object, epoch, gfsim::XferPhase::Arbitrate);
+    for (auto &row : rows)
+      row.xfer(row.object, epoch, gfsim::XferPhase::Commit);
+  }}
+  return model.sink_0_values().size() == 1 &&
+                 model.sink_0_values()[0] == 11 &&
+                 model.sink_1_values().size() == 1 &&
+                 model.sink_1_values()[0] == 12
              ? 0
              : 2;
 }}
