@@ -49,3 +49,7 @@ source, runs Verilator lint, and writes a canonical hash manifest.
 
 The pinned toolchain is recorded in `toolchains/pyc-v0.2.lock.json`. Build that
 exact pyCircuit commit with LLVM 19 before running the PYC gate.
+
+`pyc_struct_pipeline.py` verifies deterministic packed struct layout.
+`pyc_route_merge_pipeline.py` verifies static selector demux and priority merge
+logic, including forward valid and backward ready paths.

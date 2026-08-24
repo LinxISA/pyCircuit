@@ -92,6 +92,20 @@ const QueuePlan *findQueue(const QueueGraphPlan &plan, llvm::StringRef name) {
   return found == plan.queues.end() ? nullptr : &*found;
 }
 
+llvm::Expected<std::string> yieldedType(const QueueBlockPlan &block,
+                                        llvm::StringRef yield,
+                                        llvm::StringRef inputType) {
+  if (yield == "item")
+    return inputType.str();
+  auto found = std::find_if(block.expressions.begin(), block.expressions.end(),
+                            [&](const QueueExpressionPlan &expression) {
+                              return expression.result == yield;
+                            });
+  if (found == block.expressions.end())
+    return pycError("yield references unknown expression value");
+  return found->type;
+}
+
 llvm::Expected<std::string>
 emitTransform(const QueueGraphPlan &plan, const QueueBlockPlan &block,
               llvm::StringRef inputData, llvm::StringRef inputType,
@@ -236,9 +250,23 @@ constexpr llvm::StringLiteral kStructMetrics =
 } // namespace
 
 llvm::Expected<std::string> generateQueueGraphPyc(const QueueGraphPlan &plan) {
+  struct RouteProducer {
+    const QueueBlockPlan *block = nullptr;
+    size_t index = 0;
+  };
+  struct MergeState {
+    std::string nextWire;
+    std::string enableWire;
+    std::string cursor;
+    std::string valid;
+    std::string type;
+  };
   std::vector<const QueueBlockPlan *> sources;
   std::vector<const QueueBlockPlan *> sinks;
   llvm::StringMap<const QueueBlockPlan *> transformByOutput;
+  llvm::StringMap<const QueueBlockPlan *> broadcastByOutput;
+  llvm::StringMap<RouteProducer> routeByOutput;
+  llvm::StringMap<const QueueBlockPlan *> mergeByOutput;
   for (const QueueBlockPlan &block : plan.blocks) {
     if (block.kind == "source")
       sources.push_back(&block);
@@ -248,8 +276,25 @@ llvm::Expected<std::string> generateQueueGraphPyc(const QueueGraphPlan &plan) {
       if (block.outputs.size() != 1)
         return pycError("transform output arity is unsupported");
       transformByOutput[block.outputs.front()] = &block;
+    } else if (block.kind == "route") {
+      if (block.inputs.size() != 1 || block.outputs.size() < 2)
+        return pycError("route arity is unsupported");
+      for (auto [index, output] : llvm::enumerate(block.outputs))
+        routeByOutput[output] = RouteProducer{&block, index};
+    } else if (block.kind == "broadcast") {
+      if (block.inputs.size() != 1 || block.outputs.size() < 2)
+        return pycError("broadcast arity is unsupported");
+      for (const std::string &output : block.outputs)
+        broadcastByOutput[output] = &block;
+    } else if (block.kind == "merge") {
+      if (block.outputs.size() != 1 || block.inputs.size() < 2)
+        return pycError("merge arity is unsupported");
+      if (block.policy != "priority" && block.policy != "round_robin")
+        return pycError("PYC merge policy must be priority or round_robin");
+      mergeByOutput[block.outputs.front()] = &block;
     } else {
-      return pycError("initial PYC slice supports source/transform/sink only");
+      return pycError("initial PYC slice supports "
+                      "source/transform/broadcast/route/priority-merge/sink");
     }
   }
   if (sources.size() != 1 || sinks.size() != 1)
@@ -278,10 +323,41 @@ llvm::Expected<std::string> generateQueueGraphPyc(const QueueGraphPlan &plan) {
   llvm::StringMap<std::string> inputReady;
   llvm::StringMap<std::string> outputValid;
   llvm::StringMap<std::string> outputData;
+  llvm::StringMap<std::string> routeSelector;
+  llvm::StringMap<std::string> routeCondition;
+  llvm::StringMap<std::vector<std::string>> mergeGrants;
+  llvm::StringMap<MergeState> mergeStates;
   std::ostringstream body;
   unsigned nextValue = 0;
+  auto newValue = [&]() { return "%v" + std::to_string(nextValue++); };
+  auto emitConstant = [&](uint64_t value, llvm::StringRef type) {
+    std::string result = newValue();
+    body << "    " << result << " = pyc.constant " << value << " : "
+         << type.str() << "\n";
+    return result;
+  };
+  auto emitBinary = [&](llvm::StringRef operation, llvm::StringRef lhs,
+                        llvm::StringRef rhs, llvm::StringRef type) {
+    std::string result = newValue();
+    body << "    " << result << " = pyc." << operation.str() << ' ' << lhs.str()
+         << ", " << rhs.str() << " : " << type.str() << "\n";
+    return result;
+  };
+  auto emitNot = [&](llvm::StringRef value) {
+    std::string result = newValue();
+    body << "    " << result << " = pyc.not " << value.str() << " : i1\n";
+    return result;
+  };
+  auto emitMux = [&](llvm::StringRef select, llvm::StringRef trueValue,
+                     llvm::StringRef falseValue, llvm::StringRef type) {
+    std::string result = newValue();
+    body << "    " << result << " = pyc.mux " << select.str() << ", "
+         << trueValue.str() << ", " << falseValue.str() << " : " << type.str()
+         << "\n";
+    return result;
+  };
   for (const QueuePlan &queue : plan.queues) {
-    std::string ready = "%v" + std::to_string(nextValue++);
+    std::string ready = newValue();
     readyWires[queue.name] = ready;
     body << "    " << ready << " = pyc.wire : i1\n";
   }
@@ -295,32 +371,153 @@ llvm::Expected<std::string> generateQueueGraphPyc(const QueueGraphPlan &plan) {
       producerValid = "%in_valid";
       producerData = "%in_data";
     } else {
-      auto producer = transformByOutput.find(queue.name);
-      if (producer == transformByOutput.end())
+      auto transformProducer = transformByOutput.find(queue.name);
+      auto broadcastProducer = broadcastByOutput.find(queue.name);
+      auto routeProducer = routeByOutput.find(queue.name);
+      auto mergeProducer = mergeByOutput.find(queue.name);
+      if (transformProducer != transformByOutput.end()) {
+        const QueueBlockPlan &transform = *transformProducer->getValue();
+        auto valid = outputValid.find(transform.inputs.front());
+        auto data = outputData.find(transform.inputs.front());
+        if (valid == outputValid.end() || data == outputData.end())
+          return pycError("Queue transforms are not in topological order");
+        producerValid = valid->getValue();
+        const QueuePlan *inputQueue = findQueue(plan, transform.inputs.front());
+        const bool missingInput = !inputQueue;
+        if (missingInput)
+          return pycError("transform input Queue is missing");
+        auto transformed =
+            emitTransform(plan, transform, data->getValue(),
+                          inputQueue->payloadType, nextValue, body);
+        if (!transformed)
+          return transformed.takeError();
+        producerData = std::move(*transformed);
+      } else if (broadcastProducer != broadcastByOutput.end()) {
+        const QueueBlockPlan &broadcast = *broadcastProducer->getValue();
+        auto valid = outputValid.find(broadcast.inputs.front());
+        auto data = outputData.find(broadcast.inputs.front());
+        if (valid == outputValid.end() || data == outputData.end())
+          return pycError(
+              "broadcast input is not available in topological order");
+        producerValid = valid->getValue();
+        producerData = data->getValue();
+      } else if (routeProducer != routeByOutput.end()) {
+        const RouteProducer &producer = routeProducer->getValue();
+        const QueueBlockPlan &route = *producer.block;
+        auto valid = outputValid.find(route.inputs.front());
+        auto data = outputData.find(route.inputs.front());
+        const QueuePlan *inputQueue = findQueue(plan, route.inputs.front());
+        if (valid == outputValid.end() || data == outputData.end() ||
+            !inputQueue)
+          return pycError("route input is not available in topological order");
+        auto selector = routeSelector.find(route.name);
+        if (selector == routeSelector.end()) {
+          auto selected =
+              emitTransform(plan, route, data->getValue(),
+                            inputQueue->payloadType, nextValue, body);
+          if (!selected)
+            return selected.takeError();
+          routeSelector[route.name] = *selected;
+          selector = routeSelector.find(route.name);
+        }
+        auto selectorType =
+            yieldedType(route, route.yields.front(), inputQueue->payloadType);
+        if (!selectorType)
+          return selectorType.takeError();
+        auto selectorPycType = pycType(plan, *selectorType);
+        if (!selectorPycType)
+          return selectorPycType.takeError();
+        std::string index = emitConstant(producer.index, *selectorPycType);
+        std::string condition =
+            emitBinary("eq", selector->getValue(), index, *selectorPycType);
+        routeCondition[queue.name] = condition;
+        producerValid = emitBinary("and", valid->getValue(), condition, "i1");
+        producerData = data->getValue();
+      } else if (mergeProducer != mergeByOutput.end()) {
+        const QueueBlockPlan &merge = *mergeProducer->getValue();
+        std::vector<std::string> valids;
+        std::vector<std::string> dataValues;
+        for (const std::string &input : merge.inputs) {
+          auto valid = outputValid.find(input);
+          auto data = outputData.find(input);
+          if (valid == outputValid.end() || data == outputData.end())
+            return pycError(
+                "merge input is not available in topological order");
+          valids.push_back(valid->getValue());
+          dataValues.push_back(data->getValue());
+        }
+        std::string any = valids.front();
+        for (size_t index = 1; index < valids.size(); ++index) {
+          any = emitBinary("or", any, valids[index], "i1");
+        }
+        std::vector<std::string> grants;
+        if (merge.policy == "priority") {
+          grants.push_back(valids.front());
+          std::string prior = valids.front();
+          for (size_t index = 1; index < valids.size(); ++index) {
+            std::string notPrior = emitNot(prior);
+            grants.push_back(emitBinary("and", valids[index], notPrior, "i1"));
+            prior = emitBinary("or", prior, valids[index], "i1");
+          }
+        } else {
+          unsigned pointerWidth = 1;
+          while ((uint64_t{1} << pointerWidth) < valids.size())
+            ++pointerWidth;
+          std::string pointerType = "i" + std::to_string(pointerWidth);
+          std::string nextWire = newValue();
+          std::string enableWire = newValue();
+          body << "    " << nextWire << " = pyc.wire : " << pointerType << "\n";
+          body << "    " << enableWire << " = pyc.wire : i1\n";
+          std::string zeroPointer = emitConstant(0, pointerType);
+          std::string cursor = newValue();
+          body << "    " << cursor << " = pyc.reg %clk, %rst, " << enableWire
+               << ", " << nextWire << ", " << zeroPointer << " : "
+               << pointerType << "\n";
+          std::string falseValue = emitConstant(0, "i1");
+          grants.assign(valids.size(), falseValue);
+          for (size_t start = 0; start < valids.size(); ++start) {
+            std::vector<std::string> caseGrants(valids.size(), falseValue);
+            std::string prior;
+            for (size_t offset = 0; offset < valids.size(); ++offset) {
+              const size_t input = (start + offset) % valids.size();
+              if (offset == 0) {
+                caseGrants[input] = valids[input];
+                prior = valids[input];
+              } else {
+                std::string notPrior = emitNot(prior);
+                caseGrants[input] =
+                    emitBinary("and", valids[input], notPrior, "i1");
+                prior = emitBinary("or", prior, valids[input], "i1");
+              }
+            }
+            std::string startValue = emitConstant(start, pointerType);
+            std::string selectedCase =
+                emitBinary("eq", cursor, startValue, pointerType);
+            for (size_t input = 0; input < valids.size(); ++input)
+              grants[input] =
+                  emitMux(selectedCase, caseGrants[input], grants[input], "i1");
+          }
+          mergeStates[merge.name] =
+              MergeState{nextWire, enableWire, cursor, any, pointerType};
+        }
+        auto outputType = pycType(plan, queue.payloadType);
+        if (!outputType)
+          return outputType.takeError();
+        std::string selectedData = dataValues.back();
+        for (size_t index = dataValues.size() - 1; index-- > 0;)
+          selectedData = emitMux(grants[index], dataValues[index], selectedData,
+                                 *outputType);
+        mergeGrants[merge.name] = grants;
+        producerValid = any;
+        producerData = selectedData;
+      } else {
         return pycError("Queue has no supported producer: '" + queue.name +
                         "'");
-      const QueueBlockPlan &transform = *producer->getValue();
-      if (transform.inputs.size() != 1)
-        return pycError("transform input arity is unsupported");
-      auto valid = outputValid.find(transform.inputs.front());
-      auto data = outputData.find(transform.inputs.front());
-      if (valid == outputValid.end() || data == outputData.end())
-        return pycError("Queue transforms are not in topological order");
-      producerValid = valid->getValue();
-      const QueuePlan *inputQueue = findQueue(plan, transform.inputs.front());
-      const bool missingInput = !inputQueue;
-      if (missingInput)
-        return pycError("transform input Queue is missing");
-      auto transformed =
-          emitTransform(plan, transform, data->getValue(),
-                        inputQueue->payloadType, nextValue, body);
-      if (!transformed)
-        return transformed.takeError();
-      producerData = std::move(*transformed);
+      }
     }
-    std::string inReady = "%v" + std::to_string(nextValue++);
-    std::string outValid = "%v" + std::to_string(nextValue++);
-    std::string outData = "%v" + std::to_string(nextValue++);
+    std::string inReady = newValue();
+    std::string outValid = newValue();
+    std::string outData = newValue();
     auto dataType = pycType(plan, queue.payloadType);
     if (!dataType)
       return dataType.takeError();
@@ -336,6 +533,53 @@ llvm::Expected<std::string> generateQueueGraphPyc(const QueueGraphPlan &plan) {
     if (block.kind == "transform") {
       body << "    pyc.assign " << readyWires[block.inputs.front()] << ", "
            << inputReady[block.outputs.front()] << " : i1\n";
+    } else if (block.kind == "broadcast") {
+      std::string allReady = inputReady[block.outputs.front()];
+      for (size_t index = 1; index < block.outputs.size(); ++index)
+        allReady =
+            emitBinary("and", allReady, inputReady[block.outputs[index]], "i1");
+      body << "    pyc.assign " << readyWires[block.inputs.front()] << ", "
+           << allReady << " : i1\n";
+    } else if (block.kind == "route") {
+      std::string selectedReady = emitConstant(0, "i1");
+      for (size_t index = block.outputs.size(); index-- > 0;) {
+        auto condition = routeCondition.find(block.outputs[index]);
+        if (condition == routeCondition.end())
+          return pycError("route output condition is missing");
+        selectedReady =
+            emitMux(condition->getValue(), inputReady[block.outputs[index]],
+                    selectedReady, "i1");
+      }
+      body << "    pyc.assign " << readyWires[block.inputs.front()] << ", "
+           << selectedReady << " : i1\n";
+    } else if (block.kind == "merge") {
+      auto grants = mergeGrants.find(block.name);
+      if (grants == mergeGrants.end() ||
+          grants->getValue().size() != block.inputs.size())
+        return pycError("merge grant plan is missing");
+      const std::string &ready = inputReady[block.outputs.front()];
+      for (auto [index, input] : llvm::enumerate(block.inputs)) {
+        std::string accepted =
+            emitBinary("and", ready, grants->getValue()[index], "i1");
+        body << "    pyc.assign " << readyWires[input] << ", " << accepted
+             << " : i1\n";
+      }
+      auto state = mergeStates.find(block.name);
+      if (state != mergeStates.end()) {
+        std::string accepted =
+            emitBinary("and", ready, state->getValue().valid, "i1");
+        body << "    pyc.assign " << state->getValue().enableWire << ", "
+             << accepted << " : i1\n";
+        std::string next = state->getValue().cursor;
+        for (size_t index = block.inputs.size(); index-- > 0;) {
+          std::string nextValue = emitConstant(
+              (index + 1) % block.inputs.size(), state->getValue().type);
+          next = emitMux(grants->getValue()[index], nextValue, next,
+                         state->getValue().type);
+        }
+        body << "    pyc.assign " << state->getValue().nextWire << ", " << next
+             << " : " << state->getValue().type << "\n";
+      }
     }
   }
   const std::string &sinkQueue = sinks.front()->inputs.front();
