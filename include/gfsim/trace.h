@@ -268,7 +268,7 @@ public:
       emitObservation({.category = "transaction",
                        .name = "accepted",
                        .phase = TraceEventPhase::Instant,
-                       .rootSequenceId = *committedSequenceId_,
+                       .rootSequenceId = committedSequenceId_,
                        .arguments = {{"trace_position",
                                       static_cast<uint64_t>(
                                           position_.nextRecordIndex + 1)}}});
@@ -277,7 +277,7 @@ public:
           {.category = "transaction",
            .name = "offered",
            .phase = TraceEventPhase::Instant,
-           .rootSequenceId = *proposedSequenceId_,
+           .rootSequenceId = proposedSequenceId_,
            .arguments = {{"trace_position",
                           static_cast<uint64_t>(position_.nextRecordIndex)}}});
   }
