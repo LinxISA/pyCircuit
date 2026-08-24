@@ -5,6 +5,10 @@ Machine-readable schemas under [`schemas`](../../schemas) and MLIR ODS
 definitions under [`include/acir`](../../include/acir) remain the executable
 sources of truth.
 
+The generated [official Queue building-block catalog](../../schemas/opcodes-v0.2.json)
+records the closed opcode roles, arity, constants, backend realizations, and
+refinement observations.
+
 ## Queue/Var v0.2
 
 - [Queue/Var v0.2 Specification Manual](agentic-circuit-v0.2.md) defines the

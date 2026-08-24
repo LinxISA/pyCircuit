@@ -8,6 +8,7 @@ from .._capabilities import (
     capability_document,
     diagnostic_catalog,
     load_json,
+    opcode_catalog,
     schema_root,
     standard_library_catalog,
 )
@@ -87,6 +88,18 @@ def _diagnostics(name: str | None) -> dict[str, JsonValue]:
     return matches[0]
 
 
+def _opcodes(name: str | None) -> dict[str, JsonValue]:
+    entries = opcode_catalog().get("entries")
+    if type(entries) is not list or not all(type(item) is dict for item in entries):
+        raise ValueError("packaged official opcode catalog is invalid")
+    if name is None:
+        return _listing("opcode", [str(item["operation"]) for item in entries])
+    matches = [item for item in entries if item.get("operation") == name]
+    if len(matches) != 1:
+        _fail(f"opcode identity is unknown: {name}")
+    return matches[0]
+
+
 def run(arguments: object, sink: OutputSink) -> int:
     kind = getattr(arguments, "kind")
     name = getattr(arguments, "name", None)
@@ -103,6 +116,8 @@ def run(arguments: object, sink: OutputSink) -> int:
         )
     elif kind == "diagnostic":
         document = _diagnostics(name)
+    elif kind == "opcode":
+        document = _opcodes(name)
     elif kind == "interface":
         names = ["ac.Stream"]
         if name is None:

@@ -1,4 +1,5 @@
 #include "acir/CodeGen/QueueGraphPyc.h"
+#include "acir/CodeGen/QueueBlockContract.h"
 
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/StringMap.h"
@@ -303,6 +304,11 @@ constexpr llvm::StringLiteral kStructMetrics =
 } // namespace
 
 llvm::Expected<std::string> generateQueueGraphPyc(const QueueGraphPlan &plan) {
+  if (!plan.scopes.empty()) {
+    const QueueBlockContract *scope = findQueueBlockContract("scope");
+    if (!scope || !scope->pycAvailable)
+      return pycError("official opcode has no PYC lowering: 'scope'");
+  }
   struct TransformProducer {
     const QueueBlockPlan *block = nullptr;
     size_t index = 0;
@@ -351,6 +357,10 @@ llvm::Expected<std::string> generateQueueGraphPyc(const QueueGraphPlan &plan) {
   llvm::StringMap<const QueueBlockPlan *> mergeByOutput;
   llvm::StringMap<const QueueBlockPlan *> feedbackByOutput;
   for (const QueueBlockPlan &block : plan.blocks) {
+    const QueueBlockContract *contract = findQueueBlockContract(block.kind);
+    if (!contract || !contract->pycAvailable)
+      return pycError("official opcode has no PYC lowering: '" + block.kind +
+                      "'");
     if (block.kind == "source")
       sources.push_back(&block);
     else if (block.kind == "sink")
@@ -358,8 +368,7 @@ llvm::Expected<std::string> generateQueueGraphPyc(const QueueGraphPlan &plan) {
     else if (block.kind == "observe")
       observations.push_back(&block);
     else if (block.kind == "transform") {
-      if (block.outputs.empty() ||
-          block.inputs.size() != block.outputs.size() ||
+      if (block.inputs.empty() || block.outputs.empty() ||
           block.yields.size() != block.outputs.size())
         return pycError("transform output arity is unsupported");
       for (auto [index, output] : llvm::enumerate(block.outputs))
@@ -442,6 +451,7 @@ llvm::Expected<std::string> generateQueueGraphPyc(const QueueGraphPlan &plan) {
   llvm::StringMap<std::string> outputData;
   llvm::StringMap<std::string> routeSelector;
   llvm::StringMap<std::string> routeCondition;
+  llvm::StringMap<std::string> atomicTransformValid;
   llvm::StringMap<std::vector<std::string>> mergeGrants;
   llvm::StringMap<MergeState> mergeStates;
   llvm::StringMap<ForkState> forkStates;
@@ -514,7 +524,13 @@ llvm::Expected<std::string> generateQueueGraphPyc(const QueueGraphPlan &plan) {
           inputDataValues.push_back(data->getValue());
           inputTypes.push_back(inputQueue->payloadType);
         }
-        producerValid = allValid;
+        if (transform.inputs.size() == 1 && transform.outputs.size() == 1) {
+          producerValid = allValid;
+        } else {
+          producerValid = newValue();
+          body << "    " << producerValid << " = pyc.wire : i1\n";
+          atomicTransformValid[queue.name] = producerValid;
+        }
         auto transformed =
             emitTransform(plan, transform, inputDataValues, inputTypes,
                           producer.index, nextValue, body);
@@ -798,7 +814,7 @@ llvm::Expected<std::string> generateQueueGraphPyc(const QueueGraphPlan &plan) {
   }
   for (const QueueBlockPlan &block : plan.blocks) {
     if (block.kind == "transform") {
-      if (block.inputs.size() == 1) {
+      if (block.inputs.size() == 1 && block.outputs.size() == 1) {
         body << "    pyc.assign " << readyWires[block.inputs.front()] << ", "
              << inputReady[block.outputs.front()] << " : i1\n";
       } else {
@@ -810,10 +826,31 @@ llvm::Expected<std::string> generateQueueGraphPyc(const QueueGraphPlan &plan) {
         for (size_t index = 1; index < block.inputs.size(); ++index)
           allValid = emitBinary("and", allValid,
                                 outputValid[block.inputs[index]], "i1");
-        std::string firing = emitBinary("and", allReady, allValid, "i1");
-        for (const std::string &input : block.inputs)
-          body << "    pyc.assign " << readyWires[input] << ", " << firing
+        for (auto [index, input] : llvm::enumerate(block.inputs)) {
+          std::string inputCanFire = allReady;
+          for (auto [otherIndex, other] : llvm::enumerate(block.inputs)) {
+            if (otherIndex == index)
+              continue;
+            inputCanFire =
+                emitBinary("and", inputCanFire, outputValid[other], "i1");
+          }
+          body << "    pyc.assign " << readyWires[input] << ", " << inputCanFire
                << " : i1\n";
+        }
+        for (auto [index, output] : llvm::enumerate(block.outputs)) {
+          auto validWire = atomicTransformValid.find(output);
+          if (validWire == atomicTransformValid.end())
+            return pycError("atomic transform valid wire is missing");
+          std::string outputCanFire = allValid;
+          for (auto [otherIndex, other] : llvm::enumerate(block.outputs)) {
+            if (otherIndex == index)
+              continue;
+            outputCanFire =
+                emitBinary("and", outputCanFire, inputReady[other], "i1");
+          }
+          body << "    pyc.assign " << validWire->getValue() << ", "
+               << outputCanFire << " : i1\n";
+        }
       }
     } else if (block.kind == "broadcast") {
       std::string allReady = inputReady[block.outputs.front()];

@@ -62,18 +62,23 @@ private:
   bool fired_ = false;
 };
 
-template <typename Policy, typename... Ts>
-  requires std::invocable<const Policy &, const Ts &...> &&
-           std::same_as<std::invoke_result_t<const Policy &, const Ts &...>,
-                        std::tuple<Ts...>>
-class QueueAtomicTransform final : public SimObject {
+template <typename Policy, typename InputTypes, typename OutputTypes>
+class QueueAtomicTransform;
+
+template <typename Policy, typename... Inputs, typename... Outputs>
+  requires std::invocable<const Policy &, const Inputs &...> &&
+           std::same_as<std::invoke_result_t<const Policy &, const Inputs &...>,
+                        std::tuple<Outputs...>>
+class QueueAtomicTransform<Policy, std::tuple<Inputs...>,
+                           std::tuple<Outputs...>>
+    final : public SimObject {
 public:
   static constexpr std::string_view contractName = "ac.transform.atomic";
   static constexpr ObjectKind componentKind = ObjectKind::Compute;
 
   QueueAtomicTransform(std::string name, ObjectId id, SimObject *parent,
-                       std::tuple<SimQueue<Ts> *...> inputs,
-                       std::tuple<SimQueue<Ts> *...> outputs,
+                       std::tuple<SimQueue<Inputs> *...> inputs,
+                       std::tuple<SimQueue<Outputs> *...> outputs,
                        Policy policy = {},
                        ObservationSink *observations = nullptr)
       : SimObject(componentKind, std::move(name), id, parent, observations),
@@ -82,10 +87,10 @@ public:
   void doWork(Epoch) override {
     if (fired_ || !allInputsReady() || !allOutputsReady())
       return;
-    auto values = inputValues(std::index_sequence_for<Ts...>{});
+    auto values = inputValues(std::index_sequence_for<Inputs...>{});
     auto results = std::apply(std::as_const(policy_), values);
-    if (!pushAll(results, std::index_sequence_for<Ts...>{}) ||
-        !popAll(std::index_sequence_for<Ts...>{}))
+    if (!pushAll(results, std::index_sequence_for<Outputs...>{}) ||
+        !popAll(std::index_sequence_for<Inputs...>{}))
       return;
     fired_ = true;
   }
@@ -115,11 +120,11 @@ private:
         outputs_);
   }
   template <size_t... Indices>
-  std::tuple<Ts...> inputValues(std::index_sequence<Indices...>) const {
-    return std::tuple<Ts...>{*std::get<Indices>(inputs_)->peek()...};
+  std::tuple<Inputs...> inputValues(std::index_sequence<Indices...>) const {
+    return std::tuple<Inputs...>{*std::get<Indices>(inputs_)->peek()...};
   }
   template <size_t... Indices>
-  bool pushAll(const std::tuple<Ts...> &values,
+  bool pushAll(const std::tuple<Outputs...> &values,
                std::index_sequence<Indices...>) {
     return (
         std::get<Indices>(outputs_)->proposePush(std::get<Indices>(values)) &&
@@ -129,8 +134,8 @@ private:
     return (std::get<Indices>(inputs_)->proposePop().has_value() && ...);
   }
 
-  std::tuple<SimQueue<Ts> *...> inputs_;
-  std::tuple<SimQueue<Ts> *...> outputs_;
+  std::tuple<SimQueue<Inputs> *...> inputs_;
+  std::tuple<SimQueue<Outputs> *...> outputs_;
   [[no_unique_address]] Policy policy_;
   bool fired_ = false;
 };

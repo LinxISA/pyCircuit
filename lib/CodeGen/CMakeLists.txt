@@ -7,6 +7,7 @@ add_acir_library(ACIRCodeGen SOURCES
   ModelPlan.cpp
   ModelPlanDetails.cpp
   ProcessGenerator.cpp
+  QueueBlockContract.cpp
   QueueGraphPlan.cpp
   QueueGraphGenerator.cpp
   QueueGraphPyc.cpp

@@ -59,6 +59,8 @@ The principal machine-readable and executable sources are:
 - [`ACIROps.cpp`](../../lib/Dialect/ACIR/ACIROps.cpp) for semantic verification;
 - [`QueueGraphPlan.cpp`](../../lib/CodeGen/QueueGraphPlan.cpp) for the frozen
   backend plan;
+- [`opcodes-v0.2.json`](../../schemas/opcodes-v0.2.json) for the closed official
+  building-block catalog and backend availability;
 - [`queue.h`](../../include/gfsim/queue.h) and
   [`queue_blocks.h`](../../include/gfsim/queue_blocks.h) for gfsim behavior;
 - [`test_queue_frontend_v02.py`](../../tests/python_frontend/test_queue_frontend_v02.py)
@@ -137,6 +139,13 @@ providers.
 
 Application stages such as `decode`, `rename`, `dispatch`, and `retire` are
 scope names or compositions. They are not generic ACIR opcodes.
+
+Generate the canonical catalog directly from the shared backend contract table:
+
+```sh
+build/dev-llvm22/bin/acir-opcode-catalog
+agentic-circuit schema opcode ac.transform
+```
 
 ## Python authoring contract
 
@@ -493,19 +502,26 @@ or another supported static collection with a valid fixed shape.
 
 ### Implemented common building blocks
 
-| Operation | Queue arity | Core behavior |
-| --- | --- | --- |
-| `ac.source` | none to one | boundary producer with positive depth and latency |
-| `ac.sink` | one to none | consuming boundary |
-| `ac.observe` | one observation | non-consuming, non-backpressuring probe |
-| `ac.transform` | one or more to one or more | pure Var region plus atomic Queue transfer |
-| `ac.broadcast` | one to two or more | strict atomic fanout |
-| `ac.fork` | one to two or more | decoupled exactly-once fanout |
-| `ac.route` | one to two or more | selector-controlled demultiplexing |
-| `ac.merge` | two or more to one | priority or round-robin arbitration |
-| `ac.feedback` | one to one | bounded stateful loop |
-| `ac.scope` | variadic to variadic | hierarchy and inferred Queue boundary |
-| `ac.firing` | listed Queue set | explicit peek/pop/push transaction region |
+The official graph-level catalog contains exactly these operations. Every entry
+has both a typed gfsim realization and a PYC realization.
+
+| Operation | Role | Queue arity | Static parameters | Core behavior |
+| --- | --- | --- | --- | --- |
+| `ac.source` | design | none to one | `depth`, `latency` | boundary producer |
+| `ac.sink` | design | one to none | none | consuming boundary |
+| `ac.observe` | observation | one to none | `name` | non-consuming, non-backpressuring probe |
+| `ac.transform` | design | one or more to one or more | output depths and latencies | pure Var region plus atomic Queue transfer |
+| `ac.broadcast` | design | one to two or more | output depths and latencies | strict atomic fanout |
+| `ac.fork` | design | one to two or more | output depths and latencies | decoupled exactly-once fanout |
+| `ac.route` | design | one to two or more | output depths and latencies | selector-controlled demultiplexing |
+| `ac.merge` | design | two or more to one | `policy`, `depth`, `latency` | priority or round-robin arbitration |
+| `ac.feedback` | design | one to one | `depth`, `latency`, `max_iterations` | bounded stateful loop |
+| `ac.scope` | design | variadic to variadic | symbol name | hierarchy boundary; PYC elaboration flattens it |
+
+`ac.firing`, `ac.queue.peek`, `ac.queue.pop`, and `ac.queue.push` are lower-level
+transactional primitives. They are normative ACIR operations, but they are not
+independent QueueGraph building blocks and therefore do not appear in the
+graph-level opcode catalog.
 
 The closed inventory will grow with other common hardware blocks. New
 application-specific opcodes and private provider identities are not an
@@ -534,6 +550,22 @@ The following excerpt is the canonical shape produced for a structure update:
 The region MUST have one Var block argument for each input Queue. All body
 operations before `ac.transform.yield` MUST be pure. Yielded Var types MUST
 match the payload types of the corresponding output Queues.
+
+Input and output arity are independent. This two-input, one-output transform
+consumes both heads and publishes the sum as one atomic transaction:
+
+```mlir
+%sum = ac.transform %left, %right depths [2] latencies [1] {
+^transform(%left_item: !ac.var<i64>, %right_item: !ac.var<i64>):
+  %value = ac.var.add %left_item, %right_item : !ac.var<i64>
+  ac.transform.yield %value : !ac.var<i64>
+} {ac.output_names = ["sum"]}
+  : (!ac.queue<i64>, !ac.queue<i64>) -> !ac.queue<i64>
+```
+
+Neither backend may consume only one input or publish a partial output set.
+The transform fires only when every input is valid and every output can accept
+its corresponding result.
 
 ### Explicit firing example
 
@@ -936,8 +968,8 @@ The following v0.2 slices are implemented and tested:
 - canonical QueueGraph extraction;
 - typed gfsim C++ generation;
 - PYC/Verilog lowering for transform, broadcast, fork, route, merge, bounded
-  feedback, hierarchy, packed structures, atomic handshakes, and exact Queue
-  latency;
+  feedback, elaboration-time scope flattening, packed structures, atomic
+  handshakes, and exact Queue latency;
 - PYC C++ versus Verilog cycle equivalence and gfsim/PYC projected transaction
   comparison.
 

@@ -12,13 +12,14 @@
     "contract_identities": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["acpy", "acir", "acsim", "cli", "component_schema", "cxx_source_contract", "pto_trace", "diagnostic", "build_manifest", "run_manifest", "run_result"],
+      "required": ["acpy", "acir", "acsim", "cli", "component_schema", "opcode_catalog", "cxx_source_contract", "pto_trace", "diagnostic", "build_manifest", "run_manifest", "run_result"],
       "properties": {
         "acpy": {"const": "acpy@0.1"},
         "acir": {"const": "acir@0.1"},
         "acsim": {"const": "acsim@0.1"},
         "cli": {"const": "agentic-circuit-cli@0.1"},
         "component_schema": {"const": "agentic-circuit-component@0.1"},
+        "opcode_catalog": {"const": "agentic-circuit-opcode-catalog@0.2"},
         "cxx_source_contract": {"const": "gfsim-cxx20@0.1"},
         "pto_trace": {"const": "pto-trace@0.1"},
         "diagnostic": {"const": "agentic-circuit-diagnostic@0.1"},
@@ -38,7 +39,7 @@
       "additionalProperties": false,
       "required": ["kind", "name", "availability", "schema_fingerprint", "implementation_fingerprint"],
       "properties": {
-        "kind": {"enum": ["provider", "component", "policy", "interface", "protocol", "output_format"]},
+        "kind": {"enum": ["provider", "component", "opcode", "policy", "interface", "protocol", "output_format"]},
         "name": {"type": "string", "minLength": 1},
         "availability": {"enum": ["available", "declared_unavailable"]},
         "schema_fingerprint": {"$ref": "#/$defs/sha256"},

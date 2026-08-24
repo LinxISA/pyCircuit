@@ -138,6 +138,7 @@ def build_parser() -> argparse.ArgumentParser:
         "kind",
         choices=(
             "component",
+            "opcode",
             "protocol",
             "interface",
             "packet",

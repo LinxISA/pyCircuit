@@ -1,4 +1,5 @@
 #include "acir/CodeGen/QueueGraphGenerator.h"
+#include "acir/CodeGen/QueueBlockContract.h"
 
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/StringMap.h"
@@ -178,6 +179,17 @@ bool isRuntimeBlock(const QueueBlockPlan &block) {
 llvm::Expected<std::string> generateQueueGraphCpp(const QueueGraphPlan &plan) {
   if (plan.system.empty() || plan.queues.empty() || plan.blocks.empty())
     return generatorError("QueueGraph plan is incomplete");
+  if (!plan.scopes.empty()) {
+    const QueueBlockContract *scope = findQueueBlockContract("scope");
+    if (!scope || !scope->gfsimAvailable)
+      return generatorError("official opcode has no gfsim lowering: 'scope'");
+  }
+  for (const QueueBlockPlan &block : plan.blocks) {
+    const QueueBlockContract *contract = findQueueBlockContract(block.kind);
+    if (!contract || !contract->gfsimAvailable)
+      return generatorError("official opcode has no gfsim lowering: '" +
+                            block.kind + "'");
+  }
 
   llvm::StringMap<std::string> queueMembers;
   llvm::StringMap<std::string> queueOwners;
@@ -260,31 +272,39 @@ llvm::Expected<std::string> generateQueueGraphCpp(const QueueGraphPlan &plan) {
     if (block->kind != "transform" && block->kind != "route" &&
         block->kind != "feedback")
       continue;
-    if (block->kind == "transform" && block->inputs.size() > 1) {
-      if (block->inputs.size() != block->outputs.size() ||
+    if (block->kind == "transform" &&
+        (block->inputs.size() != 1 || block->outputs.size() != 1)) {
+      if (block->inputs.empty() || block->outputs.empty() ||
           block->outputs.size() != block->yields.size())
         return generatorError("atomic transform arity is inconsistent");
-      std::vector<std::string> types;
-      for (size_t valueIndex = 0; valueIndex < block->inputs.size();
-           ++valueIndex) {
-        const QueuePlan *input = findQueue(plan, block->inputs[valueIndex]);
-        const QueuePlan *result = findQueue(plan, block->outputs[valueIndex]);
-        if (!input || !result || input->payloadType != result->payloadType)
-          return generatorError(
-              "atomic transform must preserve each Queue payload type");
+      std::vector<std::string> inputTypes;
+      std::vector<std::string> outputTypes;
+      for (const std::string &inputName : block->inputs) {
+        const QueuePlan *input = findQueue(plan, inputName);
+        if (!input)
+          return generatorError("atomic transform input Queue is missing");
         auto type = cppType(input->payloadType);
         if (!type)
           return type.takeError();
-        types.push_back(std::move(*type));
+        inputTypes.push_back(std::move(*type));
+      }
+      for (const std::string &outputName : block->outputs) {
+        const QueuePlan *result = findQueue(plan, outputName);
+        if (!result)
+          return generatorError("atomic transform output Queue is missing");
+        auto type = cppType(result->payloadType);
+        if (!type)
+          return type.takeError();
+        outputTypes.push_back(std::move(*type));
       }
       output << "struct block_" << index << "_policy {\n  std::tuple<";
-      for (auto [typeIndex, type] : llvm::enumerate(types)) {
+      for (auto [typeIndex, type] : llvm::enumerate(outputTypes)) {
         if (typeIndex)
           output << ", ";
         output << type;
       }
       output << "> operator()(";
-      for (auto [typeIndex, type] : llvm::enumerate(types)) {
+      for (auto [typeIndex, type] : llvm::enumerate(inputTypes)) {
         if (typeIndex)
           output << ", ";
         output << "const " << type << " &item";
@@ -293,7 +313,7 @@ llvm::Expected<std::string> generateQueueGraphCpp(const QueueGraphPlan &plan) {
       }
       output << ") const {\n    return {\n";
       for (auto [yieldIndex, yield] : llvm::enumerate(block->yields)) {
-        output << "      [&]() -> " << types[yieldIndex] << " {\n";
+        output << "      [&]() -> " << outputTypes[yieldIndex] << " {\n";
         auto body = emitExpressionBody(*block, yield, 8);
         if (!body)
           return body.takeError();
@@ -404,7 +424,7 @@ llvm::Expected<std::string> generateQueueGraphCpp(const QueueGraphPlan &plan) {
     std::string member = "block_" + std::to_string(index) + "_";
     std::string key = block->name + "#" + std::to_string(index);
     if (block->kind == "transform") {
-      if (block->inputs.size() == 1) {
+      if (block->inputs.size() == 1 && block->outputs.size() == 1) {
         initializers.push_back(member + "(\"" + block->name + "\", " +
                                std::to_string(blockIds[key]) + ", " + *parent +
                                ", " + queueMembers[block->inputs[0]] + ", " +
@@ -413,12 +433,14 @@ llvm::Expected<std::string> generateQueueGraphCpp(const QueueGraphPlan &plan) {
         std::string inputs;
         std::string outputs;
         for (size_t operand = 0; operand < block->inputs.size(); ++operand) {
-          if (operand) {
+          if (operand)
             inputs.append(", ");
-            outputs.append(", ");
-          }
           inputs.append("&").append(queueMembers[block->inputs[operand]]);
-          outputs.append("&").append(queueMembers[block->outputs[operand]]);
+        }
+        for (size_t result = 0; result < block->outputs.size(); ++result) {
+          if (result)
+            outputs.append(", ");
+          outputs.append("&").append(queueMembers[block->outputs[result]]);
         }
         initializers.push_back(member + "(\"" + block->name + "\", " +
                                std::to_string(blockIds[key]) + ", " + *parent +
@@ -595,7 +617,7 @@ llvm::Expected<std::string> generateQueueGraphCpp(const QueueGraphPlan &plan) {
   sinkIndex = 0;
   for (auto [index, block] : llvm::enumerate(runtimeBlocks)) {
     if (block->kind == "transform") {
-      if (block->inputs.size() == 1) {
+      if (block->inputs.size() == 1 && block->outputs.size() == 1) {
         const QueuePlan *input = findQueue(plan, block->inputs[0]);
         const QueuePlan *result = findQueue(plan, block->outputs[0]);
         auto inputType = input ? cppType(input->payloadType)
@@ -612,17 +634,32 @@ llvm::Expected<std::string> generateQueueGraphCpp(const QueueGraphPlan &plan) {
                << *resultType << ", block_" << index << "_policy> block_"
                << index << "_;\n";
       } else {
-        output << "  gfsim::QueueAtomicTransform<block_" << index << "_policy";
-        for (const std::string &inputName : block->inputs) {
+        output << "  gfsim::QueueAtomicTransform<block_" << index
+               << "_policy, std::tuple<";
+        for (auto [inputIndex, inputName] : llvm::enumerate(block->inputs)) {
           const QueuePlan *input = findQueue(plan, inputName);
           auto type = input ? cppType(input->payloadType)
                             : llvm::Expected<std::string>(
                                   generatorError("atomic input missing"));
           if (!type)
             return type.takeError();
-          output << ", " << *type;
+          if (inputIndex)
+            output << ", ";
+          output << *type;
         }
-        output << "> block_" << index << "_;\n";
+        output << ">, std::tuple<";
+        for (auto [outputIndex, outputName] : llvm::enumerate(block->outputs)) {
+          const QueuePlan *result = findQueue(plan, outputName);
+          auto type = result ? cppType(result->payloadType)
+                             : llvm::Expected<std::string>(generatorError(
+                                   "atomic transform output missing"));
+          if (!type)
+            return type.takeError();
+          if (outputIndex)
+            output << ", ";
+          output << *type;
+        }
+        output << ">> block_" << index << "_;\n";
       }
     } else if (block->kind == "broadcast" || block->kind == "fork" ||
                block->kind == "route") {

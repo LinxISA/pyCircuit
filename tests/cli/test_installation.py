@@ -56,6 +56,14 @@ class InstallationTest(unittest.TestCase):
             capabilities = run_installed(
                 prefix, "schema", "capabilities", "--json", cwd=unrelated
             )
+            opcode = run_installed(
+                prefix,
+                "schema",
+                "opcode",
+                "ac.feedback",
+                "--json",
+                cwd=unrelated,
+            )
             checked = run_installed(
                 prefix,
                 "check",
@@ -86,6 +94,8 @@ class InstallationTest(unittest.TestCase):
             "agentic-circuit-capabilities",
             json.loads(capabilities.stdout)["schema"],
         )
+        self.assertEqual(0, opcode.returncode, opcode.stderr)
+        self.assertEqual("ac.feedback", json.loads(opcode.stdout)["operation"])
         self.assertEqual(0, checked.returncode, checked.stderr)
         self.assertEqual("passed", json.loads(checked.stdout)["status"])
         self.assertEqual(0, initialized.returncode, initialized.stderr)

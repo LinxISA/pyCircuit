@@ -94,6 +94,54 @@ def assert_exact_ci_cache_commands(test_case, workflow):
 
 
 class RepositoryContractsTest(unittest.TestCase):
+    def test_official_opcode_catalog_is_closed_backend_complete_and_standard(self):
+        from jsonschema import Draft202012Validator
+
+        schema = json.loads(
+            (ROOT / "schemas/opcode-catalog.schema.json").read_text()
+        )
+        catalog = json.loads((ROOT / "schemas/opcodes-v0.2.json").read_text())
+        Draft202012Validator(schema).validate(catalog)
+        expected = {
+            "ac.broadcast",
+            "ac.feedback",
+            "ac.fork",
+            "ac.merge",
+            "ac.observe",
+            "ac.route",
+            "ac.scope",
+            "ac.sink",
+            "ac.source",
+            "ac.transform",
+        }
+        operations = [entry["operation"] for entry in catalog["entries"]]
+        self.assertEqual(sorted(expected), operations)
+        self.assertEqual(len(operations), len(set(operations)))
+        forbidden = {"decode", "dispatch", "rename", "retire"}
+        for entry in catalog["entries"]:
+            self.assertEqual(entry["kind"], entry["operation"].removeprefix("ac."))
+            self.assertTrue(entry["gfsim"]["available"])
+            self.assertTrue(entry["pyc"]["available"])
+            self.assertTrue(entry["gfsim"]["realization"])
+            self.assertTrue(entry["pyc"]["realization"])
+            self.assertTrue(entry["refinement_observations"])
+            self.assertNotIn(entry["kind"], forbidden)
+            maximum_inputs = entry["inputs"]["max"]
+            maximum_outputs = entry["outputs"]["max"]
+            if maximum_inputs is not None:
+                self.assertGreaterEqual(maximum_inputs, entry["inputs"]["min"])
+            if maximum_outputs is not None:
+                self.assertGreaterEqual(maximum_outputs, entry["outputs"]["min"])
+        roles = {entry["operation"]: entry["role"] for entry in catalog["entries"]}
+        self.assertEqual("observation", roles["ac.observe"])
+        self.assertTrue(
+            all(
+                role == "design"
+                for operation, role in roles.items()
+                if operation != "ac.observe"
+            )
+        )
+
     def test_diagnostic_explanation_catalog_is_closed_and_versioned(self):
         path = ROOT / "resources/diagnostics-v0.2.json"
         self.assertTrue(path.is_file())
@@ -355,7 +403,7 @@ class RepositoryContractsTest(unittest.TestCase):
             r'^contract-epoch\s*=\s*"([^"]+)"\s*$', pyproject, re.MULTILINE
         )
 
-        self.assertEqual(10, len(schema_epochs))
+        self.assertEqual(11, len(schema_epochs))
         self.assertEqual(
             {CONTRACT_EPOCH}, set(schema_epochs.values()), schema_epochs
         )
@@ -379,7 +427,7 @@ class RepositoryContractsTest(unittest.TestCase):
             )
             Draft202012Validator.check_schema(document)
             checked.append(path.name)
-        self.assertEqual(10, len(checked), checked)
+        self.assertEqual(11, len(checked), checked)
 
     def test_trace_source_decoder_uses_the_runtime_decoder_concept(self):
         record = json.loads((ROOT / "schemas/stdlib/TraceSource.json").read_text())

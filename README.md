@@ -47,6 +47,8 @@ Canonical machine-readable schemas:
 - [ACPy](schemas/acpy.schema.json)
 - [Capabilities](schemas/capabilities.schema.json)
 - [ComponentSchema](schemas/component.schema.json)
+- [Official opcode catalog schema](schemas/opcode-catalog.schema.json)
+- [Official Queue building-block catalog](schemas/opcodes-v0.2.json)
 - [PTO trace](schemas/pto-trace.schema.json)
 - [Build manifest](schemas/build-manifest.schema.json)
 - [Run manifest](schemas/run-manifest.schema.json)

@@ -32,6 +32,12 @@ struct IncrementAndDouble {
   }
 };
 
+struct SumToWide {
+  std::tuple<int64_t> operator()(const int &left, const int64_t &right) const {
+    return {static_cast<int64_t>(left) + right};
+  }
+};
+
 TEST(QueueBlocksTest, TransformCommitsOnlyAcrossTheQueueBarrier) {
   SimQueue<int> input("input", 1, nullptr, 2);
   SimQueue<int> output("output", 2, nullptr, 2);
@@ -78,8 +84,10 @@ TEST(QueueBlocksTest, AtomicTransformCommitsAllQueuesTogether) {
   SimQueue<int> right("right", 2, nullptr, 1);
   SimQueue<int> leftOutput("left_output", 3, nullptr, 1);
   SimQueue<int> rightOutput("right_output", 4, nullptr, 1);
-  QueueAtomicTransform<IncrementAndDouble, int, int> atomic(
-      "atomic", 5, nullptr, {&left, &right}, {&leftOutput, &rightOutput});
+  QueueAtomicTransform<IncrementAndDouble, std::tuple<int, int>,
+                       std::tuple<int, int>>
+      atomic("atomic", 5, nullptr, {&left, &right},
+             {&leftOutput, &rightOutput});
   ASSERT_TRUE(left.proposePush(4));
   ASSERT_TRUE(right.proposePush(7));
   left.doXfer({0, 0});
@@ -100,6 +108,32 @@ TEST(QueueBlocksTest, AtomicTransformCommitsAllQueuesTogether) {
   ASSERT_NE(rightOutput.peek(), nullptr);
   EXPECT_EQ(*leftOutput.peek(), 5);
   EXPECT_EQ(*rightOutput.peek(), 14);
+}
+
+TEST(QueueBlocksTest, AtomicTransformSupportsIndependentInputOutputArity) {
+  SimQueue<int> left("left", 1, nullptr, 1);
+  SimQueue<int64_t> right("right", 2, nullptr, 1);
+  SimQueue<int64_t> output("output", 3, nullptr, 1);
+  QueueAtomicTransform<SumToWide, std::tuple<int, int64_t>, std::tuple<int64_t>>
+      atomic("atomic", 4, nullptr, {&left, &right}, {&output});
+
+  ASSERT_TRUE(left.proposePush(4));
+  ASSERT_TRUE(right.proposePush(8));
+  left.doXfer({0, 0});
+  right.doXfer({0, 0});
+  atomic.doWork({1, 0});
+
+  EXPECT_EQ(left.committedSize(), 1u);
+  EXPECT_EQ(right.committedSize(), 1u);
+  EXPECT_TRUE(output.isEmpty());
+  left.doXfer({1, 0});
+  right.doXfer({1, 0});
+  output.doXfer({1, 0});
+  atomic.doXfer({1, 0});
+  EXPECT_TRUE(left.isEmpty());
+  EXPECT_TRUE(right.isEmpty());
+  ASSERT_NE(output.peek(), nullptr);
+  EXPECT_EQ(*output.peek(), 12);
 }
 
 TEST(QueueBlocksTest, QueueLatencyDelaysVisibilityButReservesCapacity) {

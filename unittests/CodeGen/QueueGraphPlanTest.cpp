@@ -177,6 +177,37 @@ TEST(QueueGraphPlanTest, EmitsCanonicalScalarQueuePyc) {
             std::string::npos);
 }
 
+TEST(QueueGraphPlanTest, EmitsAtomicTransformWithIndependentArity) {
+  QueueGraphPlan plan;
+  plan.system = "atomic_sum";
+  plan.queues = {{"left", "i64", "/", 2, 1},
+                 {"right", "i64", "/", 2, 1},
+                 {"sum", "i64", "/", 2, 1}};
+  plan.blocks.push_back({"source", "left", "/", {}, {"left"}, {2}, {1}});
+  plan.blocks.push_back({"source", "right", "/", {}, {"right"}, {2}, {1}});
+  QueueBlockPlan transform{"transform", "sum", "/", {"left", "right"},
+                           {"sum"},     {2},   {1}};
+  transform.expressions = {{"v0", "add", "i64", {"item", "item1"}, "", "", ""}};
+  transform.yields = {"v0"};
+  plan.blocks.push_back(std::move(transform));
+  plan.blocks.push_back({"sink", "sink_0", "/", {"sum"}, {}});
+
+  auto cpp = generateQueueGraphCpp(plan);
+  ASSERT_TRUE(bool(cpp)) << llvm::toString(cpp.takeError());
+  EXPECT_NE(cpp->find("std::tuple<std::int64_t> operator()(const "
+                      "std::int64_t &item, const std::int64_t &item1)"),
+            std::string::npos);
+  EXPECT_NE(cpp->find("QueueAtomicTransform<block_0_policy, "
+                      "std::tuple<std::int64_t, std::int64_t>, "
+                      "std::tuple<std::int64_t>>"),
+            std::string::npos);
+
+  auto pyc = generateQueueGraphPyc(plan);
+  ASSERT_TRUE(bool(pyc)) << llvm::toString(pyc.takeError());
+  EXPECT_NE(pyc->find("pyc.add"), std::string::npos);
+  EXPECT_NE(pyc->find("= pyc.wire : i1"), std::string::npos);
+}
+
 TEST(QueueGraphPlanTest, EmitsQueuePredicateAsPycComparison) {
   struct Case {
     llvm::StringLiteral predicate;
@@ -274,6 +305,23 @@ TEST(QueueGraphPlanTest, RejectsMalformedPycFeedbackContract) {
   EXPECT_NE(
       llvm::toString(pyc.takeError()).find("feedback contract is unsupported"),
       std::string::npos);
+}
+
+TEST(QueueGraphPlanTest, BackendsRejectUncatalogedApplicationBlock) {
+  QueueGraphPlan plan;
+  plan.system = "bad_dispatch";
+  plan.queues = {{"input", "i64", "/", 1, 1}};
+  plan.blocks.push_back({"dispatch", "dispatch", "/", {"input"}, {}});
+  auto cpp = generateQueueGraphCpp(plan);
+  ASSERT_FALSE(bool(cpp));
+  EXPECT_NE(llvm::toString(cpp.takeError())
+                .find("official opcode has no gfsim lowering: 'dispatch'"),
+            std::string::npos);
+  auto pyc = generateQueueGraphPyc(plan);
+  ASSERT_FALSE(bool(pyc));
+  EXPECT_NE(llvm::toString(pyc.takeError())
+                .find("official opcode has no PYC lowering: 'dispatch'"),
+            std::string::npos);
 }
 
 } // namespace
