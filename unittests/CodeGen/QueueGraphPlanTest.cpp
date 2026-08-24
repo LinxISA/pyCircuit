@@ -1,6 +1,8 @@
 #include "acir/CodeGen/QueueGraphPlan.h"
+#include "acir/CodeGen/QueueGraphGenerator.h"
 
 #include "acir/Dialect/ACIR/ACIRDialect.h"
+#include "mlir/Dialect/DLTI/DLTI.h"
 #include "mlir/IR/MLIRContext.h"
 #include "mlir/Parser/Parser.h"
 #include "llvm/Support/Error.h"
@@ -21,9 +23,27 @@ module attributes {ac.contract_epoch = "0.1", ac.system = "pipeline"} {
 }
 )mlir";
 
+constexpr llvm::StringLiteral kStructuredTransform = R"mlir(
+module attributes {ac.contract_epoch = "0.1", ac.system = "structured"} {
+  ac.type_scope @types {
+    ac.struct @Item fields [{name = "value", type = i64}]
+  } {dlti.dl_spec = #dlti.dl_spec<!ac.struct<@types::@Item> = {abi_alignment = 8 : i64, endianness = "little", preferred_alignment = 8 : i64, size = 8 : i64}>}
+  %input = ac.source depth 2 latency 1 {ac.name = "input"} : !ac.queue<!ac.struct<@types::@Item>>
+  %output = ac.transform %input depths [2] latencies [1] {
+  ^body(%item: !ac.var<!ac.struct<@types::@Item>>):
+    %value = ac.var.get %item field "value" : !ac.var<!ac.struct<@types::@Item>> -> !ac.var<i64>
+    %one = ac.var.constant 1 : i64 as !ac.var<i64>
+    %sum = ac.var.add %value, %one : !ac.var<i64>
+    %updated = ac.var.with %item, %sum field "value" : !ac.var<!ac.struct<@types::@Item>>, !ac.var<i64> -> !ac.var<!ac.struct<@types::@Item>>
+    ac.transform.yield %updated : !ac.var<!ac.struct<@types::@Item>>
+  } {ac.name = "output"} : (!ac.queue<!ac.struct<@types::@Item>>) -> !ac.queue<!ac.struct<@types::@Item>>
+  ac.sink %output {ac.name = "sink_0"} : !ac.queue<!ac.struct<@types::@Item>>
+}
+)mlir";
+
 TEST(QueueGraphPlanTest, ExtractsFrozenQueueIdentitiesAndTopology) {
   mlir::MLIRContext context;
-  context.loadDialect<ac::ACIRDialect>();
+  context.loadDialect<ac::ACIRDialect, mlir::DLTIDialect>();
   auto module = mlir::parseSourceString<mlir::ModuleOp>(kQueueGraph, &context);
   ASSERT_TRUE(module);
   auto plan = buildQueueGraphPlan(*module);
@@ -44,7 +64,7 @@ TEST(QueueGraphPlanTest, ExtractsFrozenQueueIdentitiesAndTopology) {
 
 TEST(QueueGraphPlanTest, CanonicalJsonIsByteIdenticalAndClosed) {
   mlir::MLIRContext context;
-  context.loadDialect<ac::ACIRDialect>();
+  context.loadDialect<ac::ACIRDialect, mlir::DLTIDialect>();
   auto module = mlir::parseSourceString<mlir::ModuleOp>(kQueueGraph, &context);
   ASSERT_TRUE(module);
   auto plan = buildQueueGraphPlan(*module);
@@ -58,6 +78,45 @@ TEST(QueueGraphPlanTest, CanonicalJsonIsByteIdenticalAndClosed) {
             std::string::npos);
   EXPECT_NE(first->find("\"version\":\"0.2\""), std::string::npos);
   EXPECT_NE(first->find("\"name\":\"merged\""), std::string::npos);
+}
+
+TEST(QueueGraphPlanTest, ExtractsPayloadAndImmutableVarDag) {
+  mlir::MLIRContext context;
+  context.loadDialect<ac::ACIRDialect, mlir::DLTIDialect>();
+  auto module =
+      mlir::parseSourceString<mlir::ModuleOp>(kStructuredTransform, &context);
+  ASSERT_TRUE(module);
+  auto plan = buildQueueGraphPlan(*module);
+  ASSERT_TRUE(bool(plan)) << llvm::toString(plan.takeError());
+  ASSERT_EQ(plan->payloads.size(), 1u);
+  EXPECT_EQ(plan->payloads[0].name, "Item");
+  ASSERT_EQ(plan->payloads[0].fields.size(), 1u);
+  EXPECT_EQ(plan->payloads[0].fields[0].name, "value");
+  ASSERT_EQ(plan->blocks.size(), 3u);
+  const QueueBlockPlan &transform = plan->blocks[1];
+  ASSERT_EQ(transform.expressions.size(), 4u);
+  EXPECT_EQ(transform.expressions[0].kind, "get");
+  EXPECT_EQ(transform.expressions[1].kind, "constant");
+  EXPECT_EQ(transform.expressions[2].kind, "add");
+  EXPECT_EQ(transform.expressions[3].kind, "with");
+  ASSERT_EQ(transform.yields.size(), 1u);
+  EXPECT_EQ(transform.yields[0], "v3");
+}
+
+TEST(QueueGraphPlanTest, NativeGeneratorConsumesOnlyExtractedPlan) {
+  mlir::MLIRContext context;
+  context.loadDialect<ac::ACIRDialect, mlir::DLTIDialect>();
+  auto module = mlir::parseSourceString<mlir::ModuleOp>(kQueueGraph, &context);
+  ASSERT_TRUE(module);
+  auto plan = buildQueueGraphPlan(*module);
+  ASSERT_TRUE(bool(plan)) << llvm::toString(plan.takeError());
+  auto source = generateQueueGraphCpp(*plan);
+  ASSERT_TRUE(bool(source)) << llvm::toString(source.takeError());
+  EXPECT_NE(source->find("gfsim::QueueRoute<std::int64_t, 2"),
+            std::string::npos);
+  EXPECT_NE(source->find("gfsim::QueueMerge<std::int64_t, 2>"),
+            std::string::npos);
+  EXPECT_NE(source->find("gfsim::QueueSink<std::int64_t>"), std::string::npos);
 }
 
 } // namespace

@@ -45,6 +45,14 @@ class V02QueueCodegenTest(unittest.TestCase):
                         / "bin"
                         / "acir-queue-plan"
                     ),
+                    "--queue-cxxgen-tool",
+                    str(
+                        ROOT
+                        / "build"
+                        / "dev-llvm22"
+                        / "bin"
+                        / "acir-queue-cxxgen"
+                    ),
                     "-o",
                     str(model),
                 ),
@@ -63,6 +71,8 @@ class V02QueueCodegenTest(unittest.TestCase):
             self.assertEqual(10, len(plan_document["blocks"]))
             copied_source = root / "copied_model.py"
             copied_model = root / "copied_model.cpp"
+            copied_acir = root / "copied_model.ac.mlir"
+            copied_plan = root / "copied_model.queue-plan.json"
             shutil.copyfile(SOURCE, copied_source)
             regenerated = subprocess.run(
                 (
@@ -70,6 +80,28 @@ class V02QueueCodegenTest(unittest.TestCase):
                     str(copied_source),
                     "--system",
                     "davincioo_queue_model",
+                    "--acir-output",
+                    str(copied_acir),
+                    "--plan-output",
+                    str(copied_plan),
+                    "--acir-opt",
+                    str(ROOT / "build" / "dev-llvm22" / "bin" / "acir-opt"),
+                    "--queue-plan-tool",
+                    str(
+                        ROOT
+                        / "build"
+                        / "dev-llvm22"
+                        / "bin"
+                        / "acir-queue-plan"
+                    ),
+                    "--queue-cxxgen-tool",
+                    str(
+                        ROOT
+                        / "build"
+                        / "dev-llvm22"
+                        / "bin"
+                        / "acir-queue-cxxgen"
+                    ),
                     "-o",
                     str(copied_model),
                 ),

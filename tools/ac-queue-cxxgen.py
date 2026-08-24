@@ -38,19 +38,21 @@ def main() -> int:
     parser.add_argument("--plan-output", type=Path)
     parser.add_argument("--acir-opt", type=Path)
     parser.add_argument("--queue-plan-tool", type=Path)
+    parser.add_argument("--queue-cxxgen-tool", type=Path)
     arguments = parser.parse_args()
     artifact_options = (
         arguments.acir_output,
         arguments.plan_output,
         arguments.acir_opt,
         arguments.queue_plan_tool,
+        arguments.queue_cxxgen_tool,
     )
     if any(value is not None for value in artifact_options) and any(
         value is None for value in artifact_options
     ):
         parser.error(
-            "--acir-output, --plan-output, --acir-opt, and --queue-plan-tool "
-            "must be provided together"
+            "--acir-output, --plan-output, --acir-opt, --queue-plan-tool, and "
+            "--queue-cxxgen-tool must be provided together"
         )
     program = parse_queue_program(
         arguments.source.read_text(encoding="utf-8"), arguments.system
@@ -61,6 +63,7 @@ def main() -> int:
     if arguments.acir_output is not None:
         assert arguments.acir_opt is not None
         assert arguments.queue_plan_tool is not None
+        assert arguments.queue_cxxgen_tool is not None
         with tempfile.TemporaryDirectory() as directory:
             raw = Path(directory) / "model.ac.mlir"
             raw.write_text(lower_queue_program(program), encoding="utf-8")
@@ -84,6 +87,15 @@ def main() -> int:
             if planned.returncode != 0:
                 parser.error(f"QueueGraph planning failed: {planned.stderr}")
             queue_plan = planned.stdout
+            emitted = subprocess.run(
+                (str(arguments.queue_cxxgen_tool), str(frozen)),
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            if emitted.returncode != 0:
+                parser.error(f"native Queue C++ generation failed: {emitted.stderr}")
+            generated = emitted.stdout
     _write_atomic(arguments.output, generated)
     if canonical_acir is not None and queue_plan is not None:
         assert arguments.acir_output is not None

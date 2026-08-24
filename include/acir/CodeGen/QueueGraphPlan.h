@@ -10,6 +10,26 @@
 
 namespace acir::codegen {
 
+struct QueuePayloadFieldPlan {
+  std::string name;
+  std::string type;
+};
+
+struct QueuePayloadPlan {
+  std::string name;
+  std::vector<QueuePayloadFieldPlan> fields;
+};
+
+struct QueueExpressionPlan {
+  std::string result;
+  std::string kind;
+  std::string type;
+  std::vector<std::string> operands;
+  std::string field;
+  std::string predicate;
+  std::string literal;
+};
+
 struct QueuePlan {
   std::string name;
   std::string payloadType;
@@ -29,10 +49,13 @@ struct QueueBlockPlan {
   std::string policy;
   uint64_t maxIterations = 0;
   std::string region;
+  std::vector<QueueExpressionPlan> expressions;
+  std::vector<std::string> yields;
 };
 
 struct QueueGraphPlan {
   std::string system;
+  std::vector<QueuePayloadPlan> payloads;
   std::vector<std::string> scopes;
   std::vector<QueuePlan> queues;
   std::vector<QueueBlockPlan> blocks;

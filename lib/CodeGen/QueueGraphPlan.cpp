@@ -6,6 +6,7 @@
 
 #include "mlir/IR/Operation.h"
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringSet.h"
 #include "llvm/Support/JSON.h"
 #include "llvm/Support/raw_ostream.h"
@@ -25,6 +26,13 @@ std::string printType(mlir::Type type) {
   std::string result;
   llvm::raw_string_ostream stream(result);
   stream << type;
+  return result;
+}
+
+std::string printAttribute(mlir::Attribute attribute) {
+  std::string result;
+  llvm::raw_string_ostream stream(result);
+  stream << attribute;
   return result;
 }
 
@@ -85,6 +93,100 @@ llvm::Expected<std::vector<std::string>> outputNames(mlir::Operation *op,
   return result;
 }
 
+llvm::Error extractExpressions(mlir::Region &region, QueueBlockPlan &plan) {
+  mlir::Block &block = region.front();
+  llvm::DenseMap<mlir::Value, std::string> values;
+  for (auto [index, argument] : llvm::enumerate(block.getArguments()))
+    values[argument] = index == 0 ? "item" : "item" + std::to_string(index);
+  auto operandNames = [&](mlir::ValueRange operands)
+      -> llvm::Expected<std::vector<std::string>> {
+    std::vector<std::string> result;
+    for (mlir::Value operand : operands) {
+      auto found = values.find(operand);
+      if (found == values.end())
+        return planError("Var expression operand has no local identity");
+      result.push_back(found->second);
+    }
+    return result;
+  };
+  auto append = [&](mlir::Operation &operation, llvm::StringRef kind,
+                    llvm::StringRef field = {}, llvm::StringRef predicate = {},
+                    llvm::StringRef literal = {}) -> llvm::Error {
+    if (operation.getNumResults() != 1)
+      return planError("Var expression must produce exactly one result");
+    auto resultType =
+        mlir::dyn_cast<ac::VarType>(operation.getResult(0).getType());
+    if (!resultType)
+      return planError("Var expression result must be ac.var");
+    auto operands = operandNames(operation.getOperands());
+    if (!operands)
+      return operands.takeError();
+    std::string result = "v" + std::to_string(plan.expressions.size());
+    values[operation.getResult(0)] = result;
+    plan.expressions.push_back(
+        {std::move(result), kind.str(), printType(resultType.getElementType()),
+         std::move(*operands), field.str(), predicate.str(), literal.str()});
+    return llvm::Error::success();
+  };
+
+  for (mlir::Operation &operation : block) {
+    if (auto constant = mlir::dyn_cast<ac::VarConstantOp>(operation)) {
+      if (auto error = append(operation, "constant", {}, {},
+                              printAttribute(constant.getValueAttr())))
+        return error;
+      continue;
+    }
+    if (mlir::isa<ac::VarAddOp>(operation)) {
+      if (auto error = append(operation, "add"))
+        return error;
+      continue;
+    }
+    if (mlir::isa<ac::VarSubOp>(operation)) {
+      if (auto error = append(operation, "sub"))
+        return error;
+      continue;
+    }
+    if (mlir::isa<ac::VarMulOp>(operation)) {
+      if (auto error = append(operation, "mul"))
+        return error;
+      continue;
+    }
+    if (auto compare = mlir::dyn_cast<ac::VarCmpOp>(operation)) {
+      if (auto error = append(operation, "cmp", {}, compare.getPredicate()))
+        return error;
+      continue;
+    }
+    if (auto get = mlir::dyn_cast<ac::VarGetOp>(operation)) {
+      if (auto error = append(operation, "get", get.getField()))
+        return error;
+      continue;
+    }
+    if (auto with = mlir::dyn_cast<ac::VarWithOp>(operation)) {
+      if (auto error = append(operation, "with", with.getField()))
+        return error;
+      continue;
+    }
+    llvm::SmallVector<mlir::Value, 2> yielded;
+    if (auto yield = mlir::dyn_cast<ac::TransformYieldOp>(operation))
+      yielded.append(yield.getValues().begin(), yield.getValues().end());
+    else if (auto yield = mlir::dyn_cast<ac::RouteYieldOp>(operation))
+      yielded.push_back(yield.getSelector());
+    else if (auto yield = mlir::dyn_cast<ac::FeedbackYieldOp>(operation)) {
+      yielded.push_back(yield.getValue());
+      yielded.push_back(yield.getContinueValue());
+    } else
+      return planError("unsupported operation in Queue Var region: " +
+                       operation.getName().getStringRef());
+    auto names = operandNames(yielded);
+    if (!names)
+      return names.takeError();
+    plan.yields = std::move(*names);
+  }
+  if (plan.yields.empty())
+    return planError("Queue Var region has no structured yield");
+  return llvm::Error::success();
+}
+
 class Extractor {
 public:
   explicit Extractor(mlir::ModuleOp module) : module(module) {}
@@ -137,6 +239,29 @@ private:
 
   llvm::Error extractBlock(mlir::Block &block, std::vector<std::string> scope) {
     for (mlir::Operation &operation : block) {
+      if (auto typeScope = mlir::dyn_cast<ac::TypeScopeOp>(operation)) {
+        for (mlir::Operation &declaration : typeScope.getBody().front()) {
+          auto structure = mlir::dyn_cast<ac::StructOp>(declaration);
+          if (!structure)
+            continue;
+          if (!payloadIdentities.insert(structure.getSymName()).second)
+            return planError("payload identities must be unique");
+          QueuePayloadPlan payload{structure.getSymName().str(), {}};
+          for (mlir::Attribute rawField : structure.getFields()) {
+            auto field = mlir::dyn_cast<mlir::DictionaryAttr>(rawField);
+            auto name = field ? field.getAs<mlir::StringAttr>("name")
+                              : mlir::StringAttr();
+            auto type =
+                field ? field.getAs<mlir::TypeAttr>("type") : mlir::TypeAttr();
+            if (!name || !type)
+              return planError("struct field requires name and type");
+            payload.fields.push_back(
+                {name.getValue().str(), printType(type.getValue())});
+          }
+          plan.payloads.push_back(std::move(payload));
+        }
+        continue;
+      }
       if (auto source = mlir::dyn_cast<ac::SourceOp>(operation)) {
         std::vector<std::string> outputs;
         if (auto error = addOutputs(
@@ -170,6 +295,8 @@ private:
         for (int64_t value : transform.getOutputLatencies())
           blockPlan.latencies.push_back(value);
         blockPlan.region = printRegion(transform.getBody());
+        if (auto error = extractExpressions(transform.getBody(), blockPlan))
+          return error;
         plan.blocks.push_back(std::move(blockPlan));
         continue;
       }
@@ -216,6 +343,8 @@ private:
         for (int64_t value : route.getOutputLatencies())
           blockPlan.latencies.push_back(value);
         blockPlan.region = printRegion(route.getSelector());
+        if (auto error = extractExpressions(route.getSelector(), blockPlan))
+          return error;
         plan.blocks.push_back(std::move(blockPlan));
         continue;
       }
@@ -258,6 +387,8 @@ private:
                                  "",
                                  uint64_t(feedback.getMaxIterations())};
         blockPlan.region = printRegion(feedback.getBody());
+        if (auto error = extractExpressions(feedback.getBody(), blockPlan))
+          return error;
         plan.blocks.push_back(std::move(blockPlan));
         continue;
       }
@@ -317,6 +448,7 @@ private:
   QueueGraphPlan plan;
   llvm::DenseMap<mlir::Value, std::string> names;
   llvm::StringSet<> queueIdentities;
+  llvm::StringSet<> payloadIdentities;
 };
 
 } // namespace
@@ -326,6 +458,15 @@ llvm::Expected<QueueGraphPlan> buildQueueGraphPlan(mlir::ModuleOp module) {
 }
 
 llvm::Expected<std::string> QueueGraphPlan::canonicalJson() const {
+  llvm::json::Array payloadValues;
+  for (const QueuePayloadPlan &payload : payloads) {
+    llvm::json::Array fields;
+    for (const QueuePayloadFieldPlan &field : payload.fields)
+      fields.push_back(
+          llvm::json::Object{{"name", field.name}, {"type", field.type}});
+    payloadValues.push_back(llvm::json::Object{{"fields", std::move(fields)},
+                                               {"name", payload.name}});
+  }
   llvm::json::Array scopeValues;
   for (const std::string &scope : scopes)
     scopeValues.push_back(scope);
@@ -351,8 +492,26 @@ llvm::Expected<std::string> QueueGraphPlan::canonicalJson() const {
     llvm::json::Array latencies;
     for (uint64_t latency : block.latencies)
       latencies.push_back(latency);
+    llvm::json::Array expressions;
+    for (const QueueExpressionPlan &expression : block.expressions) {
+      llvm::json::Array operands;
+      for (const std::string &operand : expression.operands)
+        operands.push_back(operand);
+      expressions.push_back(
+          llvm::json::Object{{"field", expression.field},
+                             {"kind", expression.kind},
+                             {"literal", expression.literal},
+                             {"operands", std::move(operands)},
+                             {"predicate", expression.predicate},
+                             {"result", expression.result},
+                             {"type", expression.type}});
+    }
+    llvm::json::Array yields;
+    for (const std::string &yield : block.yields)
+      yields.push_back(yield);
     blockValues.push_back(
         llvm::json::Object{{"depths", std::move(depths)},
+                           {"expressions", std::move(expressions)},
                            {"inputs", std::move(inputs)},
                            {"kind", block.kind},
                            {"latencies", std::move(latencies)},
@@ -361,9 +520,11 @@ llvm::Expected<std::string> QueueGraphPlan::canonicalJson() const {
                            {"outputs", std::move(outputs)},
                            {"policy", block.policy},
                            {"region", block.region},
-                           {"scope", block.scope}});
+                           {"scope", block.scope},
+                           {"yields", std::move(yields)}});
   }
   llvm::json::Object root{{"blocks", std::move(blockValues)},
+                          {"payloads", std::move(payloadValues)},
                           {"queues", std::move(queueValues)},
                           {"schema", "agentic-circuit-queue-graph-plan"},
                           {"scopes", std::move(scopeValues)},

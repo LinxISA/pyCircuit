@@ -14,6 +14,7 @@ PYTHONPATH=src tools/ac-queue-cxxgen.py \
   --plan-output build/davincioo_queue_model.queue-plan.json \
   --acir-opt build/dev-llvm22/bin/acir-opt \
   --queue-plan-tool build/dev-llvm22/bin/acir-queue-plan \
+  --queue-cxxgen-tool build/dev-llvm22/bin/acir-queue-cxxgen \
   -o build/davincioo_queue_model.cpp
 ```
 
