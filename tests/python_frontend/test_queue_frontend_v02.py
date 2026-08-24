@@ -48,6 +48,18 @@ def pipeline() -> None:
     sink(completed)
 """
 
+BROADCAST_SOURCE = """
+from agentic_circuit import sink, source, system
+
+@system
+def pipeline() -> None:
+    input_queue = source(int)
+    left = input_queue.apply(lambda item: item + 1)
+    right = input_queue.apply(lambda item: item * 2)
+    sink(left)
+    sink(right)
+"""
+
 
 class QueueFrontendV02Test(unittest.TestCase):
     def test_simple_serial_python_lowers_to_typed_queue_graph(self) -> None:
@@ -100,6 +112,18 @@ class QueueFrontendV02Test(unittest.TestCase):
         )
         self.assertIn("ac.scope.yield %completed__local", lowered)
         self.assertIn("ac.sink %completed : !ac.queue<i64>", lowered)
+
+    def test_multiple_consumers_insert_strict_atomic_broadcast(self) -> None:
+        from agentic_circuit._queue_frontend import lower_queue_source
+
+        lowered = lower_queue_source(BROADCAST_SOURCE, "pipeline")
+        self.assertIn(
+            "%input_queue__fanout0, %input_queue__fanout1 = ac.broadcast "
+            "%input_queue depths [1, 1] latencies [1, 1]",
+            lowered,
+        )
+        self.assertIn("ac.transform %input_queue__fanout0", lowered)
+        self.assertIn("ac.transform %input_queue__fanout1", lowered)
 
     def test_latency_zero_and_unsupported_lambda_are_rejected(self) -> None:
         from agentic_circuit._queue_frontend import (

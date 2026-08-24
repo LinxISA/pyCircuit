@@ -302,6 +302,22 @@ def lower_queue_program(program: QueueProgram) -> str:
     for sink_binding in program.sinks:
         uses[sink_binding.queue].append(sink_binding.scope)
 
+    consumers: dict[str, list[QueueBinding]] = {}
+    for queue in program.queues:
+        if queue.input_name is not None:
+            consumers.setdefault(queue.input_name, []).append(queue)
+    fanouts: dict[str, tuple[tuple[str, ...], tuple[QueueBinding, ...]]] = {}
+    for source_name, group in consumers.items():
+        if len(group) < 2:
+            continue
+        scopes = {consumer.scope for consumer in group}
+        if len(scopes) != 1:
+            raise QueueFrontendError(
+                "ACPY-QUEUE-005: multi-scope broadcast placement is not frozen"
+            )
+        fanouts[source_name] = (next(iter(scopes)), tuple(group))
+    consumer_inputs: dict[str, str] = {}
+
     def inside(container: tuple[str, ...], candidate: tuple[str, ...]) -> bool:
         return candidate[: len(container)] == container
 
@@ -340,7 +356,7 @@ def lower_queue_program(program: QueueProgram) -> str:
             raise QueueFrontendError(
                 "ACPY-QUEUE-003: lambda result must preserve Queue payload type"
             )
-        input_ssa = mapping[queue.input_name]
+        input_ssa = consumer_inputs.get(queue.name, mapping[queue.input_name])
         lines.append(
             f"{indent}%{output_ssa} = ac.transform %{input_ssa} "
             f"depths [{queue.depth}] latencies [{queue.latency}] {{"
@@ -359,11 +375,16 @@ def lower_queue_program(program: QueueProgram) -> str:
     def render_items(
         path: tuple[str, ...], mapping: dict[str, str], indent: str
     ) -> None:
-        events: list[tuple[int, str, object]] = []
+        events: list[tuple[float, str, object]] = []
         events.extend(
             (queue.order, "queue", queue)
             for queue in program.queues
             if queue.scope == path
+        )
+        events.extend(
+            (min(consumer.order for consumer in group) - 0.5, "broadcast", source)
+            for source, (fanout_scope, group) in fanouts.items()
+            if fanout_scope == path
         )
         events.extend(
             (scope.order, "scope", scope)
@@ -385,6 +406,22 @@ def lower_queue_program(program: QueueProgram) -> str:
                 scope = item
                 assert isinstance(scope, ScopeBinding)
                 render_scope(scope, mapping, indent)
+            elif kind == "broadcast":
+                source = item
+                assert isinstance(source, str)
+                _, group = fanouts[source]
+                outputs = [f"{source}__fanout{index}" for index in range(len(group))]
+                lhs = ", ".join(f"%{name}" for name in outputs)
+                depths = ", ".join("1" for _ in outputs)
+                payload = by_name[source].payload
+                output_types = ", ".join(f"!ac.queue<{payload}>" for _ in outputs)
+                lines.append(
+                    f"{indent}{lhs} = ac.broadcast %{mapping[source]} depths "
+                    f"[{depths}] latencies [{depths}] : !ac.queue<{payload}> -> "
+                    f"({output_types})"
+                )
+                for consumer, output in zip(group, outputs, strict=True):
+                    consumer_inputs[consumer.name] = output
             else:
                 sink_binding = item
                 assert isinstance(sink_binding, SinkBinding)
