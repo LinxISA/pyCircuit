@@ -9,6 +9,7 @@
 // CHECK-SAME: "operation":"ac{{\.}}fork"
 // CHECK-SAME: "operation":"ac{{\.}}merge"
 // CHECK-SAME: "operation":"ac{{\.}}observe"
+// CHECK-SAME: "operation":"ac{{\.}}reorder"
 // CHECK-SAME: "operation":"ac{{\.}}route"
 // CHECK-SAME: "operation":"ac{{\.}}scope"
 // CHECK-SAME: "operation":"ac{{\.}}sink"

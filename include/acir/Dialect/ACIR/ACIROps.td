@@ -246,6 +246,26 @@ def ACIR_MergeOp : ACIR_Op<"merge"> {
   }];
 }
 
+def ACIR_ReorderOp : ACIR_Op<"reorder", [SingleBlock]> {
+  let arguments = (ins ACIR_QueueType:$input, I64Attr:$capacity,
+                       I64Attr:$start, I64Attr:$depth, I64Attr:$latency);
+  let results = (outs ACIR_QueueType:$output);
+  let regions = (region SizedRegion<1>:$key);
+  let hasVerifier = 1;
+  let assemblyFormat = [{
+    $input `capacity` $capacity `start` $start `depth` $depth
+    `latency` $latency $key attr-dict `:` qualified(type($input)) `->`
+    qualified(type($output))
+  }];
+}
+
+def ACIR_ReorderYieldOp : ACIR_Op<"reorder.yield", [
+    Pure, Terminator, HasParent<"ReorderOp">
+  ]> {
+  let arguments = (ins ACIR_VarType:$key);
+  let assemblyFormat = "$key attr-dict `:` qualified(type($key))";
+}
+
 def ACIR_FeedbackOp : ACIR_Op<"feedback", [SingleBlock]> {
   let arguments = (ins ACIR_QueueType:$input, I64Attr:$depth,
                        I64Attr:$latency, I64Attr:$max_iterations);

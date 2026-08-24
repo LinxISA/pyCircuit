@@ -208,6 +208,32 @@ TEST(QueueGraphPlanTest, EmitsAtomicTransformWithIndependentArity) {
   EXPECT_NE(pyc->find("= pyc.wire : i1"), std::string::npos);
 }
 
+TEST(QueueGraphPlanTest, EmitsTypedReorderForBothBackends) {
+  QueueGraphPlan plan;
+  plan.system = "ordered";
+  plan.queues = {{"input", "i64", "/", 4, 1}, {"output", "i64", "/", 4, 1}};
+  plan.blocks.push_back({"source", "input", "/", {}, {"input"}, {4}, {1}});
+  QueueBlockPlan reorder{"reorder",  "output", "/", {"input"},
+                         {"output"}, {4},      {1}};
+  reorder.yields = {"item"};
+  reorder.capacity = 4;
+  reorder.start = 0;
+  plan.blocks.push_back(std::move(reorder));
+  plan.blocks.push_back({"sink", "sink_0", "/", {"output"}, {}});
+
+  auto cpp = generateQueueGraphCpp(plan);
+  ASSERT_TRUE(bool(cpp)) << llvm::toString(cpp.takeError());
+  EXPECT_NE(cpp->find("gfsim::QueueReorder<std::int64_t, block_0_policy>"),
+            std::string::npos);
+  EXPECT_NE(cpp->find(", input_, output_, 4, 0)"), std::string::npos);
+
+  auto pyc = generateQueueGraphPyc(plan);
+  ASSERT_TRUE(bool(pyc)) << llvm::toString(pyc.takeError());
+  EXPECT_NE(pyc->find("pyc.reg"), std::string::npos);
+  EXPECT_NE(pyc->find("pyc.ult"), std::string::npos);
+  EXPECT_GE(std::count(pyc->begin(), pyc->end(), '\n'), 40);
+}
+
 TEST(QueueGraphPlanTest, EmitsQueuePredicateAsPycComparison) {
   struct Case {
     llvm::StringLiteral predicate;

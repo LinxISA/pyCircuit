@@ -179,6 +179,37 @@ LogicalResult MergeOp::verify() {
   return success();
 }
 
+LogicalResult ReorderOp::verify() {
+  if (getInput().getType() != getOutput().getType())
+    return emitOpError("output queue must match input queue type");
+  if (getCapacity() <= 0 || getDepth() <= 0 || getLatency() <= 0)
+    return emitOpError("capacity, depth, and latency must be positive");
+  if (getStart() < 0)
+    return emitOpError("start must be non-negative");
+
+  Block &block = getKey().front();
+  Type payload = cast<QueueType>(getInput().getType()).getElementType();
+  Type expected = VarType::get(getContext(), payload);
+  if (block.getNumArguments() != 1 ||
+      block.getArgument(0).getType() != expected)
+    return emitOpError("key argument must match queue payload Var");
+  for (Operation &operation : block.without_terminator())
+    if (!isMemoryEffectFree(&operation))
+      return emitOpError() << "key operation '" << operation.getName()
+                           << "' must be pure";
+  auto yield = dyn_cast<ReorderYieldOp>(block.getTerminator());
+  if (!yield)
+    return emitOpError("key must terminate with ac.reorder.yield");
+  auto key = cast<VarType>(yield.getKey().getType()).getElementType();
+  auto integer = dyn_cast<IntegerType>(key);
+  if (!integer || integer.getWidth() > 64)
+    return emitOpError("key must be an integer Var with width at most 64");
+  if (integer.getWidth() < 64 &&
+      static_cast<uint64_t>(getStart()) >= (uint64_t{1} << integer.getWidth()))
+    return emitOpError("start must fit key width");
+  return success();
+}
+
 LogicalResult FeedbackOp::verify() {
   if (getInput().getType() != getOutput().getType())
     return emitOpError("output queue must match input queue type");

@@ -38,6 +38,29 @@ struct SumToWide {
   }
 };
 
+struct SequencedValue {
+  uint64_t sequence = 0;
+  int value = 0;
+
+  bool operator==(const SequencedValue &) const = default;
+};
+
+struct SequenceKey {
+  uint64_t operator()(const SequencedValue &value) const {
+    return value.sequence;
+  }
+};
+
+struct SignedSequencedValue {
+  int64_t sequence = 0;
+};
+
+struct SignedSequenceKey {
+  int64_t operator()(const SignedSequencedValue &value) const {
+    return value.sequence;
+  }
+};
+
 TEST(QueueBlocksTest, TransformCommitsOnlyAcrossTheQueueBarrier) {
   SimQueue<int> input("input", 1, nullptr, 2);
   SimQueue<int> output("output", 2, nullptr, 2);
@@ -134,6 +157,64 @@ TEST(QueueBlocksTest, AtomicTransformSupportsIndependentInputOutputArity) {
   EXPECT_TRUE(right.isEmpty());
   ASSERT_NE(output.peek(), nullptr);
   EXPECT_EQ(*output.peek(), 12);
+}
+
+TEST(QueueBlocksTest, ReorderRetiresOutOfOrderArrivalsBySequenceKey) {
+  SimQueue<SequencedValue> input("input", 1, nullptr, 4);
+  SimQueue<SequencedValue> output("output", 2, nullptr, 4);
+  QueueReorder<SequencedValue, SequenceKey> reorder("reorder", 3, nullptr,
+                                                    input, output, 4, 0);
+  QueueSink<SequencedValue> sink("sink", 4, nullptr, output);
+  ASSERT_TRUE(input.proposePush({2, 20}));
+  ASSERT_TRUE(input.proposePush({0, 0}));
+  ASSERT_TRUE(input.proposePush({1, 10}));
+  input.doXfer({0, 0});
+
+  for (uint64_t tick = 1; tick < 12; ++tick) {
+    const Epoch epoch{tick, 0};
+    reorder.doWork(epoch);
+    sink.doWork(epoch);
+    input.doXfer(epoch);
+    output.doXfer(epoch);
+    reorder.doXfer(epoch);
+    sink.doXfer(epoch);
+  }
+
+  ASSERT_EQ(sink.received().size(), 3u);
+  EXPECT_EQ(sink.received()[0], (SequencedValue{0, 0}));
+  EXPECT_EQ(sink.received()[1], (SequencedValue{1, 10}));
+  EXPECT_EQ(sink.received()[2], (SequencedValue{2, 20}));
+}
+
+TEST(QueueBlocksTest, ReorderRejectsDuplicateSequenceKey) {
+  SimQueue<SequencedValue> input("input", 1, nullptr, 2);
+  SimQueue<SequencedValue> output("output", 2, nullptr, 2);
+  QueueReorder<SequencedValue, SequenceKey> reorder("reorder", 3, nullptr,
+                                                    input, output, 2, 0);
+  ASSERT_TRUE(input.proposePush({0, 1}));
+  ASSERT_TRUE(input.proposePush({0, 2}));
+  input.doXfer({0, 0});
+  reorder.doWork({1, 0});
+  input.doXfer({1, 0});
+  output.doXfer({1, 0});
+  reorder.doXfer({1, 0});
+  reorder.doWork({2, 0});
+  EXPECT_EQ(reorder.runtimeFailureCode(), "reorder_duplicate_key");
+  EXPECT_FALSE(reorder.hasPendingCommit());
+  EXPECT_TRUE(output.isEmpty());
+}
+
+TEST(QueueBlocksTest, ReorderRejectsNegativeSequenceKey) {
+  SimQueue<SignedSequencedValue> input("input", 1, nullptr, 1);
+  SimQueue<SignedSequencedValue> output("output", 2, nullptr, 1);
+  QueueReorder<SignedSequencedValue, SignedSequenceKey> reorder(
+      "reorder", 3, nullptr, input, output, 1, 0);
+  ASSERT_TRUE(input.proposePush({-1}));
+  input.doXfer({0, 0});
+  reorder.doWork({1, 0});
+  EXPECT_EQ(reorder.runtimeFailureCode(), "reorder_negative_key");
+  EXPECT_FALSE(reorder.hasPendingCommit());
+  EXPECT_TRUE(output.isEmpty());
 }
 
 TEST(QueueBlocksTest, QueueLatencyDelaysVisibilityButReservesCapacity) {

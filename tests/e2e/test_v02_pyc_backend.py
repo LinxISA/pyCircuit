@@ -17,6 +17,7 @@ DAVINCIOO_EXAMPLE = ROOT / "examples" / "v02" / "davincioo_queue_model.py"
 STRUCT_EXAMPLE = ROOT / "examples" / "v02" / "pyc_struct_pipeline.py"
 ROUTE_EXAMPLE = ROOT / "examples" / "v02" / "pyc_route_merge_pipeline.py"
 ATOMIC_EXAMPLE = ROOT / "examples" / "v02" / "pyc_atomic_pipeline.py"
+REORDER_EXAMPLE = ROOT / "examples" / "v02" / "pyc_reorder_pipeline.py"
 FORK_EXAMPLE = ROOT / "examples" / "v02" / "pyc_fork_pipeline.py"
 CONDITIONAL_EXAMPLE = ROOT / "examples" / "v02" / "pyc_conditional_pipeline.py"
 FEEDBACK_EXAMPLE = ROOT / "examples" / "v02" / "pyc_feedback_pipeline.py"
@@ -24,6 +25,12 @@ DEFAULT_TOOLCHAIN = Path(
     "/Users/zhoubot/Documents/SummerSchool/vendor/pyCircuit/"
     ".pycircuit_out/toolchain/install"
 )
+DAVINCIOO_TRACE = (
+    ROOT
+    / "examples/reference/davincioo-gfsim/upstream/tests/fixtures/traces"
+    / "examples_intermediate_softmax.pto.trace"
+)
+DAVINCIOO_PROJECTION = ROOT / "examples/v02/davincioo-softmax-projection.json"
 
 
 class V02PycBackendTest(unittest.TestCase):
@@ -469,6 +476,208 @@ int main() {{
             self.assertIn("%out1_ready", pyc)
             self.assertIn("result_names = [\"out0_valid\"", pyc)
 
+    def test_reorder_is_cycle_equivalent_in_pyc_cpp_and_verilog(self) -> None:
+        toolchain = Path(os.environ.get("PYC_V02_TOOLCHAIN_ROOT", DEFAULT_TOOLCHAIN))
+        pycc = toolchain / "bin" / "pycc"
+        metadata = toolchain / "share" / "pycircuit" / "toolchain-metadata.json"
+        cxx = shutil.which("c++")
+        verilator = shutil.which("verilator")
+        if not pycc.is_file() or not metadata.is_file() or cxx is None or verilator is None:
+            self.skipTest("pinned pyCircuit toolchain, C++, or Verilator is unavailable")
+        source = REORDER_EXAMPLE.read_text(encoding="utf-8").replace(
+            "capacity=16", "capacity=4"
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            raw = root / "reorder.raw.ac.mlir"
+            frozen = root / "reorder.frozen.ac.mlir"
+            output = root / "output"
+            raw.write_text(
+                lower_queue_source(source, "pyc_reorder_pipeline"),
+                encoding="utf-8",
+            )
+            optimized = subprocess.run(
+                (str(ROOT / "build/dev-llvm22/bin/acir-opt"), str(raw)),
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(0, optimized.returncode, optimized.stderr)
+            frozen.write_text(optimized.stdout, encoding="utf-8")
+            completed = subprocess.run(
+                (
+                    str(ROOT / "tools/ac-queue-pyc-build.py"),
+                    str(frozen),
+                    "--pycgen-tool",
+                    str(ROOT / "build/dev-llvm22/bin/acir-queue-pycgen"),
+                    "--pycc",
+                    str(pycc),
+                    "--toolchain-lock",
+                    str(ROOT / "toolchains/pyc-v0.2.lock.json"),
+                    "--toolchain-metadata",
+                    str(metadata),
+                    "--cxx",
+                    cxx,
+                    "--verilator",
+                    verilator,
+                    "--pyc-output",
+                    str(output / "model.pyc"),
+                    "--cpp-output-dir",
+                    str(output / "cpp"),
+                    "--verilog-output-dir",
+                    str(output / "verilog"),
+                    "--manifest",
+                    str(output / "manifest.json"),
+                ),
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(0, completed.returncode, completed.stderr)
+            pyc = (output / "model.pyc").read_text(encoding="utf-8")
+            self.assertEqual(5, pyc.count("pyc.reg"))
+            self.assertIn("pyc.ult", pyc)
+            manifest = json.loads((output / "manifest.json").read_text())
+            self.assertEqual(
+                ["ac.reorder", "ac.sink", "ac.source"],
+                manifest["opcode_lowering_inventory"],
+            )
+            self.assertEqual("strict", manifest["hierarchy_policy"])
+            self.assertEqual(["cpp", "verilog"], manifest["targets"])
+
+            cpp_harness = root / "cpp_harness.cpp"
+            cpp_executable = root / "cpp_model"
+            cpp_harness.write_text(
+                '''#include "pyc_reorder_pipeline.hpp"
+#include <array>
+#include <cstdint>
+#include <iostream>
+
+int main() {
+  pyc::gen::pyc_reorder_pipeline dut;
+  const std::array<std::uint64_t, 3> input{
+      (2ULL << 32) | 20, (0ULL << 32) | 0, (1ULL << 32) | 10};
+  std::size_t cursor = 0;
+  for (std::uint64_t cycle = 0; cycle < 20; ++cycle) {
+    const bool offering = cycle != 0 && cursor < input.size();
+    dut.rst = pyc::cpp::Wire<1>(cycle == 0 ? 1 : 0);
+    dut.in_valid = pyc::cpp::Wire<1>(offering ? 1 : 0);
+    dut.in_data = pyc::cpp::Wire<64>(offering ? input[cursor] : 0);
+    dut.out_ready = pyc::cpp::Wire<1>(1);
+    dut.clk = pyc::cpp::Wire<1>(0);
+    dut.step();
+    dut.clk = pyc::cpp::Wire<1>(1);
+    dut.step();
+    std::cout << cycle << " " << dut.out_valid.value() << " "
+              << dut.out_data.value() << " " << dut.in_ready.value() << "\\n";
+    if (offering && dut.in_ready.value() != 0)
+      ++cursor;
+    dut.clk = pyc::cpp::Wire<1>(0);
+    dut.step();
+  }
+}
+''',
+                encoding="utf-8",
+            )
+            cpp_build = subprocess.run(
+                (
+                    cxx,
+                    "-std=c++17",
+                    "-I",
+                    str(output / "cpp"),
+                    "-I",
+                    str(toolchain / "include"),
+                    str(output / "cpp/pyc_reorder_pipeline.cpp"),
+                    str(cpp_harness),
+                    str(toolchain / "lib/libpyc4_runtime.a"),
+                    "-o",
+                    str(cpp_executable),
+                ),
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(0, cpp_build.returncode, cpp_build.stderr)
+            cpp_run = subprocess.run(
+                (str(cpp_executable),),
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(0, cpp_run.returncode, cpp_run.stdout + cpp_run.stderr)
+
+            verilator_harness = root / "verilator_harness.cpp"
+            verilator_harness.write_text(
+                '''#include "Vpyc_reorder_pipeline.h"
+#include <array>
+#include <cstdint>
+#include <iostream>
+
+int main() {
+  Vpyc_reorder_pipeline dut;
+  const std::array<std::uint64_t, 3> input{
+      (2ULL << 32) | 20, (0ULL << 32) | 0, (1ULL << 32) | 10};
+  std::size_t cursor = 0;
+  for (std::uint64_t cycle = 0; cycle < 20; ++cycle) {
+    const bool offering = cycle != 0 && cursor < input.size();
+    dut.rst = cycle == 0 ? 1 : 0;
+    dut.in_valid = offering ? 1 : 0;
+    dut.in_data = offering ? input[cursor] : 0;
+    dut.out_ready = 1;
+    dut.clk = 0;
+    dut.eval();
+    dut.clk = 1;
+    dut.eval();
+    std::cout << cycle << " " << unsigned(dut.out_valid) << " "
+              << dut.out_data << " " << unsigned(dut.in_ready) << "\\n";
+    if (offering && dut.in_ready != 0)
+      ++cursor;
+    dut.clk = 0;
+    dut.eval();
+  }
+}
+''',
+                encoding="utf-8",
+            )
+            object_dir = root / "verilator_obj"
+            verilator_build = subprocess.run(
+                (
+                    verilator,
+                    "--cc",
+                    "--exe",
+                    "--build",
+                    "-Wno-fatal",
+                    "--top-module",
+                    "pyc_reorder_pipeline",
+                    "--Mdir",
+                    str(object_dir),
+                    str(output / "verilog/pyc_primitives.v"),
+                    str(output / "verilog/pyc_reorder_pipeline.v"),
+                    str(verilator_harness),
+                ),
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(0, verilator_build.returncode, verilator_build.stderr)
+            verilator_run = subprocess.run(
+                (str(object_dir / "Vpyc_reorder_pipeline"),),
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(0, verilator_run.returncode, verilator_run.stderr)
+            self.assertEqual(cpp_run.stdout, verilator_run.stdout)
+            transactions = [
+                int(fields[2])
+                for line in cpp_run.stdout.splitlines()
+                if len(fields := line.split()) == 4 and fields[1] == "1"
+            ]
+            self.assertEqual(
+                [0, (1 << 32) | 10, (2 << 32) | 20], transactions
+            )
+
     def test_davincioo_like_graph_builds_full_pyc_and_verilog(self) -> None:
         toolchain = Path(os.environ.get("PYC_V02_TOOLCHAIN_ROOT", DEFAULT_TOOLCHAIN))
         pycc = toolchain / "bin" / "pycc"
@@ -527,13 +736,206 @@ int main() {{
             )
             self.assertEqual(0, completed.returncode, completed.stderr)
             pyc = (output / "model.pyc").read_text(encoding="utf-8")
-            self.assertIn("%in_data: i192", pyc)
+            self.assertIn("%in_data: i98", pyc)
             self.assertIn("pyc.reg", pyc)
             self.assertIn(": i2", pyc)
-            self.assertGreaterEqual(pyc.count("pyc.fifo"), 12)
+            self.assertGreaterEqual(pyc.count("pyc.fifo"), 17)
+            self.assertGreaterEqual(pyc.count("pyc.reg"), 50)
             self.assertTrue(
                 (output / "verilog/davincioo_queue_model.v").is_file()
             )
+            manifest = json.loads((output / "manifest.json").read_text())
+            self.assertEqual(
+                [
+                    "ac.feedback",
+                    "ac.merge",
+                    "ac.observe",
+                    "ac.reorder",
+                    "ac.route",
+                    "ac.scope",
+                    "ac.sink",
+                    "ac.source",
+                    "ac.transform",
+                ],
+                manifest["opcode_lowering_inventory"],
+            )
+
+            projection = json.loads(DAVINCIOO_PROJECTION.read_text(encoding="utf-8"))
+            records = [
+                json.loads(line)
+                for line in DAVINCIOO_TRACE.read_text(encoding="utf-8").splitlines()
+                if line.strip()
+            ]
+            packed_inputs: list[tuple[int, int]] = []
+            packed_outputs: list[tuple[int, int]] = []
+            for row, value in zip(
+                records, projection["architectural_values"], strict=True
+            ):
+                sequence = row["sequence_id"]
+                opcode = projection["opcode_ids"][row["opcode"]]
+                route = projection["routes"][row["opcode"]]
+                remaining = projection["projected_cycles"][row["opcode"]]
+                high = (
+                    remaining
+                    | (route << 16)
+                    | (opcode << 18)
+                    | (sequence << 26)
+                )
+                packed_inputs.append((sequence * 10, high))
+                output_high = (route << 16) | (opcode << 18) | (sequence << 26)
+                packed_outputs.append((value, output_high))
+            input_rows = ",\n      ".join(
+                f"Packed{{{low}ULL, {high}ULL}}" for low, high in packed_inputs
+            )
+
+            cpp_harness = root / "davinci_cpp_harness.cpp"
+            cpp_executable = root / "davinci_cpp_model"
+            cpp_harness.write_text(
+                f'''#include "davincioo_queue_model.hpp"
+#include <array>
+#include <cstdint>
+#include <iostream>
+
+struct Packed {{ std::uint64_t low; std::uint64_t high; }};
+
+int main() {{
+  pyc::gen::davincioo_queue_model dut;
+  const std::array<Packed, 15> input{{
+      {input_rows},
+  }};
+  std::size_t cursor = 0;
+  for (std::uint64_t cycle = 0; cycle < 700; ++cycle) {{
+    const bool offering = cycle != 0 && cursor < input.size();
+    dut.rst = pyc::cpp::Wire<1>(cycle == 0 ? 1 : 0);
+    dut.in_valid = pyc::cpp::Wire<1>(offering ? 1 : 0);
+    dut.in_data = offering
+                      ? pyc::cpp::Wire<98>{{input[cursor].low, input[cursor].high}}
+                      : pyc::cpp::Wire<98>{{}};
+    dut.out_ready = pyc::cpp::Wire<1>(1);
+    dut.clk = pyc::cpp::Wire<1>(0);
+    dut.step();
+    dut.clk = pyc::cpp::Wire<1>(1);
+    dut.step();
+    std::cout << cycle << " " << dut.out_valid.value() << " "
+              << dut.out_data.word(0) << " " << dut.out_data.word(1) << " "
+              << dut.in_ready.value() << "\\n";
+    if (offering && dut.in_ready.value() != 0)
+      ++cursor;
+    dut.clk = pyc::cpp::Wire<1>(0);
+    dut.step();
+  }}
+}}
+''',
+                encoding="utf-8",
+            )
+            cpp_build = subprocess.run(
+                (
+                    cxx,
+                    "-std=c++17",
+                    "-I",
+                    str(output / "cpp"),
+                    "-I",
+                    str(toolchain / "include"),
+                    str(output / "cpp/davincioo_queue_model.cpp"),
+                    str(cpp_harness),
+                    str(toolchain / "lib/libpyc4_runtime.a"),
+                    "-o",
+                    str(cpp_executable),
+                ),
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(0, cpp_build.returncode, cpp_build.stderr)
+            cpp_run = subprocess.run(
+                (str(cpp_executable),),
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(0, cpp_run.returncode, cpp_run.stderr)
+
+            verilator_harness = root / "davinci_verilator_harness.cpp"
+            verilator_harness.write_text(
+                f'''#include "Vdavincioo_queue_model.h"
+#include <array>
+#include <cstdint>
+#include <iostream>
+
+struct Packed {{ std::uint64_t low; std::uint64_t high; }};
+
+int main() {{
+  Vdavincioo_queue_model dut;
+  const std::array<Packed, 15> input{{
+      {input_rows},
+  }};
+  std::size_t cursor = 0;
+  for (std::uint64_t cycle = 0; cycle < 700; ++cycle) {{
+    const bool offering = cycle != 0 && cursor < input.size();
+    const Packed value = offering ? input[cursor] : Packed{{0, 0}};
+    dut.rst = cycle == 0 ? 1 : 0;
+    dut.in_valid = offering ? 1 : 0;
+    dut.in_data[0] = static_cast<std::uint32_t>(value.low);
+    dut.in_data[1] = static_cast<std::uint32_t>(value.low >> 32);
+    dut.in_data[2] = static_cast<std::uint32_t>(value.high);
+    dut.in_data[3] = static_cast<std::uint32_t>(value.high >> 32);
+    dut.out_ready = 1;
+    dut.clk = 0;
+    dut.eval();
+    dut.clk = 1;
+    dut.eval();
+    const std::uint64_t outLow =
+        static_cast<std::uint64_t>(dut.out_data[0]) |
+        (static_cast<std::uint64_t>(dut.out_data[1]) << 32);
+    const std::uint64_t outHigh =
+        static_cast<std::uint64_t>(dut.out_data[2]) |
+        (static_cast<std::uint64_t>(dut.out_data[3]) << 32);
+    std::cout << cycle << " " << unsigned(dut.out_valid) << " " << outLow
+              << " " << outHigh << " " << unsigned(dut.in_ready) << "\\n";
+    if (offering && dut.in_ready != 0)
+      ++cursor;
+    dut.clk = 0;
+    dut.eval();
+  }}
+}}
+''',
+                encoding="utf-8",
+            )
+            object_dir = root / "davinci_verilator_obj"
+            verilator_build = subprocess.run(
+                (
+                    verilator,
+                    "--cc",
+                    "--exe",
+                    "--build",
+                    "-Wno-fatal",
+                    "--top-module",
+                    "davincioo_queue_model",
+                    "--Mdir",
+                    str(object_dir),
+                    str(output / "verilog/pyc_primitives.v"),
+                    str(output / "verilog/davincioo_queue_model.v"),
+                    str(verilator_harness),
+                ),
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(0, verilator_build.returncode, verilator_build.stderr)
+            verilator_run = subprocess.run(
+                (str(object_dir / "Vdavincioo_queue_model"),),
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(0, verilator_run.returncode, verilator_run.stderr)
+            self.assertEqual(cpp_run.stdout, verilator_run.stdout)
+            transactions = [
+                (int(fields[2]), int(fields[3]))
+                for line in cpp_run.stdout.splitlines()
+                if len(fields := line.split()) == 5 and fields[1] == "1"
+            ]
+            self.assertEqual(packed_outputs, transactions)
 
     def test_route_and_priority_merge_lower_to_static_pyc_topology(self) -> None:
         toolchain = Path(os.environ.get("PYC_V02_TOOLCHAIN_ROOT", DEFAULT_TOOLCHAIN))

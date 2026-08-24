@@ -6,7 +6,9 @@ by these examples.
 
 `davincioo_queue_model.py` is the first executable v0.2 topology generated
 from serial Python. It uses only repository-owned common building blocks:
-`ac.transform`, `ac.route`, `ac.merge`, `ac.queue`, and `ac.sink`.
+`ac.source`, `ac.transform`, `ac.route`, `ac.feedback`, `ac.merge`,
+`ac.observe`, `ac.reorder`, and `ac.sink`, connected by typed `ac.queue`
+values.
 
 Generate one canonical typed C++ model:
 
@@ -37,11 +39,28 @@ trace -> frontend -> 4-way dispatch
                     merge -> retire -> sink
 ```
 
-This milestone validates topology, typed payload updates, finite queues,
-backpressure, Work/arbitrate/Xfer barriers, and deterministic generated C++.
-It does not yet claim the imported DavinciOO 15-record/453-cycle performance
-contract. That gate requires the remaining official scheduler, dependency,
-ROB, memory, and observation blocks.
+The checked-in
+[`davincioo-softmax-projection.json`](davincioo-softmax-projection.json) binds
+this generated topology to the provenance-locked 15-record softmax trace. It
+records opcode identities, engine routes, projected execution/dependency
+budgets, out-of-order completion order, in-order retirement, architectural
+values, and the 453-cycle oracle.
+
+The generated model uses four official bounded feedback engines, round-robin
+merge, committed observations, and the official `ac.reorder` block. The same
+serial Python and frozen ACIR now pass all of these gates:
+
+- typed gfsim consumes all 15 projected records and finishes in 453 cycles;
+- opcode counts and completion/retirement order match the reference projection;
+- copied-source generation remains byte-identical across unrelated roots;
+- the same frozen ACIR builds with pinned `pycc` as PYC C++ and Verilog;
+- PYC C++ and Verilator produce cycle-identical ready/valid/data observations;
+- gfsim, PYC C++, and Verilog produce the same projected output transactions.
+
+The projection deliberately folds reference dependency-wait time into the
+per-token bounded feedback budget. This closes the bounded softmax behavior
+gate without claiming that the current generated topology exposes the
+reference model's internal rename tables, issue queues, or ROB occupancy.
 
 ## PYC and Verilog slice
 
@@ -63,3 +82,5 @@ logic, including forward valid and backward ready paths.
 official route, two branch transforms, and a mutually exclusive priority merge.
 `pyc_feedback_pipeline.py` verifies a bounded serial `while` as sequential
 feedback data, valid, and iteration state shared by PYC C++ and Verilog.
+`pyc_reorder_pipeline.py` verifies bounded key-ordered retirement with the same
+register-bank and handshake semantics in typed gfsim, PYC C++, and Verilog.

@@ -252,8 +252,45 @@ def pipeline() -> None:
     ac.sink(output_queue)
 """
 
+REORDER_SOURCE = """
+import agentic_circuit as ac
+
+@ac.struct
+class Token:
+    sequence: ac.u64
+    value: ac.u32
+
+@ac.system
+def pipeline() -> None:
+    completed = ac.source(Token)
+    retired = completed.reorder(
+        key=lambda item: item.sequence,
+        capacity=16,
+        start=0,
+        depth=4,
+        latency=1,
+    )
+    ac.sink(retired)
+"""
+
 
 class QueueFrontendV02Test(unittest.TestCase):
+    def test_reorder_lowers_sequence_key_and_static_capacity(self) -> None:
+        from agentic_circuit._queue_frontend import (
+            QueueFrontendError,
+            lower_queue_source,
+        )
+
+        lowered = lower_queue_source(REORDER_SOURCE, "pipeline")
+        self.assertIn(
+            "%retired = ac.reorder %completed capacity 16 start 0 depth 4 latency 1",
+            lowered,
+        )
+        self.assertIn('ac.var.get %item field "sequence"', lowered)
+        self.assertIn("ac.reorder.yield", lowered)
+        with self.assertRaisesRegex(QueueFrontendError, "capacity must be positive"):
+            lower_queue_source(REORDER_SOURCE.replace("capacity=16", "capacity=0"), "pipeline")
+
     def test_simple_serial_python_lowers_to_typed_queue_graph(self) -> None:
         from agentic_circuit._queue_frontend import lower_queue_source
 

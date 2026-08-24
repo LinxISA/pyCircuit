@@ -67,6 +67,11 @@ The principal machine-readable and executable sources are:
   for accepted and rejected Python syntax;
 - [`test/ACIR`](../../test/ACIR) for ACIR conformance tests.
 
+The live requirement-by-requirement status is tracked in the
+[v0.2 issue closure matrix](../implementation/v0.2-issue-closure.md). A feature
+listed in this manual is not considered issue-complete when that matrix still
+marks part of its acceptance scope as partial or missing.
+
 ## Core mental model
 
 ### Serial Python elaborates a static graph
@@ -338,6 +343,29 @@ Supported policies are:
 
 The output Queue applies ordinary capacity and latency rules.
 
+### Reorder
+
+`reorder` accepts out-of-order completions and releases them in monotonically
+increasing key order. It is the generic ordering primitive used to compose a
+ROB-like retirement path; `retire` itself remains an application scope.
+
+```python
+retired = completed.reorder(
+    key=lambda item: item.sequence_id,
+    capacity=64,
+    start=0,
+    depth=8,
+    latency=1,
+)
+```
+
+The key lambda MUST return an integer Var no wider than 64 bits. `capacity`,
+`start`, output `depth`, and output `latency` are compile-time constants. The
+non-negative `start` value MUST fit the key width. The
+block backpressures when every entry is occupied and emits only the token whose
+key equals the committed next key. Duplicate, negative, or already retired keys
+are invalid.
+
 ### Observation
 
 `ac.observe(queue)` reads the committed Queue head without consuming it and
@@ -515,6 +543,7 @@ has both a typed gfsim realization and a PYC realization.
 | `ac.fork` | design | one to two or more | output depths and latencies | decoupled exactly-once fanout |
 | `ac.route` | design | one to two or more | output depths and latencies | selector-controlled demultiplexing |
 | `ac.merge` | design | two or more to one | `policy`, `depth`, `latency` | priority or round-robin arbitration |
+| `ac.reorder` | design | one to one | `capacity`, `start`, `depth`, `latency` | bounded key-ordered retirement |
 | `ac.feedback` | design | one to one | `depth`, `latency`, `max_iterations` | bounded stateful loop |
 | `ac.scope` | design | variadic to variadic | symbol name | hierarchy boundary; PYC elaboration flattens it |
 
@@ -612,6 +641,7 @@ A backend-ready Queue graph MUST satisfy:
 - `ac.observe` does not count as a consuming block;
 - fanout is represented by `ac.broadcast` or `ac.fork`;
 - merge is represented by `ac.merge`, not multiple producers on one Queue;
+- key-ordered retirement is represented by bounded `ac.reorder` state;
 - every Queue depth and latency is positive;
 - Queue logical identities are non-empty and unique;
 - every Var region uses only supported pure operations and structured yields;
@@ -961,15 +991,15 @@ The following v0.2 slices are implemented and tested:
 - immutable scalar and structure payloads;
 - Queue/Var types and pure Var expressions;
 - scopes with inferred Queue boundaries;
-- transform, strict broadcast, decoupled fork, route, merge, observe, sink,
-  explicit atomic transform, and bounded feedback;
+- transform, strict broadcast, decoupled fork, route, merge, reorder, observe,
+  sink, explicit atomic transform, and bounded feedback;
 - static arrays, maps, sets, static `if`, static loops, and symmetric runtime
   Queue `if` lowering through route/transform/merge;
 - canonical QueueGraph extraction;
 - typed gfsim C++ generation;
-- PYC/Verilog lowering for transform, broadcast, fork, route, merge, bounded
-  feedback, elaboration-time scope flattening, packed structures, atomic
-  handshakes, and exact Queue latency;
+- PYC/Verilog lowering for transform, broadcast, fork, route, merge, reorder,
+  bounded feedback, elaboration-time scope flattening, packed structures,
+  atomic handshakes, and exact Queue latency;
 - PYC C++ versus Verilog cycle equivalence and gfsim/PYC projected transaction
   comparison.
 
@@ -986,10 +1016,13 @@ The following work remains before v0.2 is complete:
 - run the complete release, sanitizer, install, determinism, replay, PYC,
   Verilog, and refinement audit.
 
-The checked-in DavinciOO-like model currently proves topology, typed payloads,
-finite Queues, backpressure, deterministic C++ generation, and the supported
-PYC topology. It does not yet claim that the generated model reproduces the
-imported reference's full 15-record, 453-cycle performance behavior.
+The checked-in DavinciOO-like model now proves topology, typed payloads, finite
+Queues, backpressure, deterministic C++ generation, the 15-record softmax
+opcode/completion/retirement projection, and the 453-cycle bounded oracle. The
+same frozen ACIR produces PYC C++ and Verilog with cycle-identical hardware
+observations and the same projected output transactions. Dependency-wait time
+is currently carried as an explicit per-token feedback budget; internal
+rename/issue/ROB occupancy equivalence remains a future refinement layer.
 
 ## Contributor checklist
 

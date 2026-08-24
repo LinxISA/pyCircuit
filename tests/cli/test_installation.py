@@ -60,7 +60,7 @@ class InstallationTest(unittest.TestCase):
                 prefix,
                 "schema",
                 "opcode",
-                "ac.feedback",
+                "ac.reorder",
                 "--json",
                 cwd=unrelated,
             )
@@ -95,7 +95,7 @@ class InstallationTest(unittest.TestCase):
             json.loads(capabilities.stdout)["schema"],
         )
         self.assertEqual(0, opcode.returncode, opcode.stderr)
-        self.assertEqual("ac.feedback", json.loads(opcode.stdout)["operation"])
+        self.assertEqual("ac.reorder", json.loads(opcode.stdout)["operation"])
         self.assertEqual(0, checked.returncode, checked.stderr)
         self.assertEqual("passed", json.loads(checked.stdout)["status"])
         self.assertEqual(0, initialized.returncode, initialized.stderr)

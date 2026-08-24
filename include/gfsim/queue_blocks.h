@@ -8,7 +8,9 @@
 #include <array>
 #include <concepts>
 #include <cstddef>
+#include <cstdint>
 #include <functional>
+#include <map>
 #include <optional>
 #include <tuple>
 #include <utility>
@@ -138,6 +140,98 @@ private:
   std::tuple<SimQueue<Outputs> *...> outputs_;
   [[no_unique_address]] Policy policy_;
   bool fired_ = false;
+};
+
+template <typename T, typename Key>
+  requires std::invocable<const Key &, const T &> &&
+           std::integral<std::invoke_result_t<const Key &, const T &>>
+class QueueReorder final : public SimObject {
+public:
+  static constexpr std::string_view contractName = "ac.reorder";
+  static constexpr ObjectKind componentKind = ObjectKind::Scheduler;
+
+  QueueReorder(std::string name, ObjectId id, SimObject *parent,
+               SimQueue<T> &input, SimQueue<T> &output, size_t capacity,
+               uint64_t start = 0, Key key = {},
+               ObservationSink *observations = nullptr)
+      : SimObject(componentKind, std::move(name), id, parent, observations),
+        input_(input), output_(output), capacity_(capacity), start_(start),
+        nextKey_(start), key_(std::move(key)) {}
+
+  void doWork(Epoch) override {
+    if (!pendingInput_ && entries_.size() < capacity_ &&
+        input_.canProposePop()) {
+      const T *head = input_.peek();
+      if (head != nullptr) {
+        using KeyResult = std::invoke_result_t<const Key &, const T &>;
+        const KeyResult rawKey = std::invoke(std::as_const(key_), *head);
+        if constexpr (std::signed_integral<KeyResult>)
+          if (rawKey < 0) {
+            setRuntimeFailureCode("reorder_negative_key");
+            return;
+          }
+        const uint64_t key = static_cast<uint64_t>(rawKey);
+        if (key < nextKey_) {
+          setRuntimeFailureCode("reorder_stale_key");
+          return;
+        }
+        if (entries_.contains(key)) {
+          setRuntimeFailureCode("reorder_duplicate_key");
+          return;
+        }
+        if (input_.proposePop())
+          pendingInput_ = std::pair<uint64_t, T>{key, *head};
+      }
+    }
+    if (!pendingOutputKey_) {
+      auto next = entries_.find(nextKey_);
+      if (next != entries_.end() && output_.canProposePush() &&
+          output_.proposePush(next->second))
+        pendingOutputKey_ = nextKey_;
+    }
+  }
+
+  void doXfer(Epoch) override {
+    if (pendingOutputKey_) {
+      entries_.erase(*pendingOutputKey_);
+      ++nextKey_;
+      pendingOutputKey_.reset();
+    }
+    if (pendingInput_) {
+      entries_.emplace(pendingInput_->first, std::move(pendingInput_->second));
+      pendingInput_.reset();
+    }
+  }
+  bool hasPendingCommit() const override {
+    return pendingInput_.has_value() || pendingOutputKey_.has_value();
+  }
+  bool isRunnable(Epoch) const override {
+    const bool canRetire = !pendingOutputKey_ && entries_.contains(nextKey_) &&
+                           output_.canProposePush();
+    const bool canAdmit =
+        !pendingInput_ && entries_.size() < capacity_ && input_.canProposePop();
+    return canRetire || canAdmit;
+  }
+  size_t buffered() const { return entries_.size(); }
+  uint64_t nextKey() const { return nextKey_; }
+  void reset() override {
+    entries_.clear();
+    pendingInput_.reset();
+    pendingOutputKey_.reset();
+    nextKey_ = start_;
+    clearRuntimeFailureCode();
+  }
+
+private:
+  SimQueue<T> &input_;
+  SimQueue<T> &output_;
+  size_t capacity_;
+  uint64_t start_;
+  uint64_t nextKey_;
+  [[no_unique_address]] Key key_;
+  std::map<uint64_t, T> entries_;
+  std::optional<std::pair<uint64_t, T>> pendingInput_;
+  std::optional<uint64_t> pendingOutputKey_;
 };
 
 template <typename T> class QueueSink final : public SimObject {

@@ -189,6 +189,10 @@ llvm::Expected<std::string> generateQueueGraphCpp(const QueueGraphPlan &plan) {
     if (!contract || !contract->gfsimAvailable)
       return generatorError("official opcode has no gfsim lowering: '" +
                             block.kind + "'");
+    if (block.kind == "reorder" &&
+        (block.inputs.size() != 1 || block.outputs.size() != 1 ||
+         block.yields.size() != 1 || block.capacity == 0))
+      return generatorError("reorder contract is unsupported");
   }
 
   llvm::StringMap<std::string> queueMembers;
@@ -270,7 +274,7 @@ llvm::Expected<std::string> generateQueueGraphCpp(const QueueGraphPlan &plan) {
 
   for (auto [index, block] : llvm::enumerate(runtimeBlocks)) {
     if (block->kind != "transform" && block->kind != "route" &&
-        block->kind != "feedback")
+        block->kind != "reorder" && block->kind != "feedback")
       continue;
     if (block->kind == "transform" &&
         (block->inputs.size() != 1 || block->outputs.size() != 1)) {
@@ -338,7 +342,23 @@ llvm::Expected<std::string> generateQueueGraphCpp(const QueueGraphPlan &plan) {
     output << "struct " << policy << " {\n  ";
     if (block->kind == "route")
       output << "size_t";
-    else {
+    else if (block->kind == "reorder") {
+      llvm::StringRef keyType = input->payloadType;
+      if (block->yields.front() != "item") {
+        auto expression =
+            std::find_if(block->expressions.begin(), block->expressions.end(),
+                         [&](const QueueExpressionPlan &candidate) {
+                           return candidate.result == block->yields.front();
+                         });
+        if (expression == block->expressions.end())
+          return generatorError("reorder yield type is missing");
+        keyType = expression->type;
+      }
+      auto keyCppType = cppType(keyType);
+      if (!keyCppType)
+        return keyCppType.takeError();
+      output << *keyCppType;
+    } else {
       const QueuePlan *result = findQueue(plan, block->outputs.front());
       if (!result)
         return generatorError("transform output Queue is missing");
@@ -489,6 +509,13 @@ llvm::Expected<std::string> generateQueueGraphCpp(const QueueGraphPlan &plan) {
                              std::to_string(block->inputs.size()) + ">{" +
                              inputs + "}, " + queueMembers[block->outputs[0]] +
                              ", " + policy + ")");
+    } else if (block->kind == "reorder") {
+      initializers.push_back(member + "(\"" + block->name + "\", " +
+                             std::to_string(blockIds[key]) + ", " + *parent +
+                             ", " + queueMembers[block->inputs[0]] + ", " +
+                             queueMembers[block->outputs[0]] + ", " +
+                             std::to_string(block->capacity) + ", " +
+                             std::to_string(block->start) + ")");
     } else if (block->kind == "feedback") {
       initializers.push_back(member + "(\"" + block->name + "\", " +
                              std::to_string(blockIds[key]) + ", " + *parent +
@@ -688,6 +715,15 @@ llvm::Expected<std::string> generateQueueGraphCpp(const QueueGraphPlan &plan) {
         return type.takeError();
       output << "  gfsim::QueueMerge<" << *type << ", " << block->inputs.size()
              << "> block_" << index << "_;\n";
+    } else if (block->kind == "reorder") {
+      const QueuePlan *input = findQueue(plan, block->inputs[0]);
+      auto type = input ? cppType(input->payloadType)
+                        : llvm::Expected<std::string>(
+                              generatorError("reorder input missing"));
+      if (!type)
+        return type.takeError();
+      output << "  gfsim::QueueReorder<" << *type << ", block_" << index
+             << "_policy> block_" << index << "_;\n";
     } else if (block->kind == "feedback") {
       const QueuePlan *input = findQueue(plan, block->inputs[0]);
       auto type = input ? cppType(input->payloadType)

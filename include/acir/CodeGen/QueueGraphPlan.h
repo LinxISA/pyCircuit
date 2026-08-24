@@ -51,6 +51,8 @@ struct QueueBlockPlan {
   std::string region;
   std::vector<QueueExpressionPlan> expressions;
   std::vector<std::string> yields;
+  uint64_t capacity = 0;
+  uint64_t start = 0;
 };
 
 struct QueueGraphPlan {

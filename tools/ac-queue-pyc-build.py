@@ -8,6 +8,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import tempfile
 
@@ -25,6 +26,19 @@ def _read_json(path: Path) -> dict[str, object]:
 
 def _canonical_json(value: object) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n"
+
+
+def _opcode_inventory(acir: str, catalog: dict[str, object]) -> list[str]:
+    entries = catalog.get("entries")
+    if not isinstance(entries, list):
+        raise ValueError("official opcode catalog entries are invalid")
+    official = {
+        entry["operation"]
+        for entry in entries
+        if isinstance(entry, dict) and isinstance(entry.get("operation"), str)
+    }
+    mentioned = set(re.findall(r"\bac\.[a-z][a-z0-9_.]*\b", acir))
+    return sorted(official & mentioned)
 
 
 def _write_atomic(path: Path, content: str) -> None:
@@ -115,6 +129,8 @@ def main() -> int:
 
     lock = _read_json(arguments.toolchain_lock)
     metadata = _read_json(arguments.toolchain_metadata)
+    catalog_path = Path(__file__).resolve().parents[1] / "schemas/opcodes-v0.2.json"
+    catalog = _read_json(catalog_path)
     if metadata.get("git_sha") != lock.get("pycircuit_commit"):
         parser.error("pyCircuit commit does not match toolchain lock")
     if metadata.get("llvm_version") != lock.get("llvm_version"):
@@ -197,20 +213,29 @@ def main() -> int:
         )
 
         pyc_bytes = pyc.read_bytes()
+        frozen_acir_bytes = arguments.frozen_acir.read_bytes()
         manifest = {
             "artifacts": [
                 *_artifacts(cpp, "cpp"),
                 *_artifacts(verilog, "verilog"),
             ],
             "contract_epoch": "0.2",
-            "frozen_acir_sha256": _sha256(arguments.frozen_acir.read_bytes()),
+            "build_profile": "dev-fast",
+            "frozen_acir_sha256": _sha256(frozen_acir_bytes),
             "gates": ["pycc-cpp", "pycc-verilog", "cxx-syntax", "verilator-lint"],
+            "hierarchy_policy": "strict",
+            "inline_policy": "off",
             "llvm_version": metadata["llvm_version"],
+            "opcode_catalog_sha256": _sha256(catalog_path.read_bytes()),
+            "opcode_lowering_inventory": _opcode_inventory(
+                frozen_acir_bytes.decode("utf-8"), catalog
+            ),
             "pyc_interface": lock["pyc_interface"],
             "pyc_ir_sha256": _sha256(pyc_bytes),
             "pycc_sha256": _sha256(arguments.pycc.read_bytes()),
             "pycircuit_commit": metadata["git_sha"],
             "schema": "agentic-circuit-pyc-build-manifest",
+            "targets": ["cpp", "verilog"],
             "version": "0.2",
         }
 

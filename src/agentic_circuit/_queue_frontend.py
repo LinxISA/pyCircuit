@@ -35,6 +35,7 @@ class QueueBinding:
     route_output: bool = False
     feedback_output: bool = False
     merge_output: bool = False
+    reorder_output: bool = False
     atomic_group: int | None = None
 
 
@@ -109,6 +110,20 @@ class MergeBinding:
 
 
 @dataclass(frozen=True, slots=True)
+class ReorderBinding:
+    input_name: str
+    output_name: str
+    argument: str
+    key: ast.expr
+    capacity: int
+    start: int
+    depth: int
+    latency: int
+    scope: tuple[str, ...]
+    order: int
+
+
+@dataclass(frozen=True, slots=True)
 class AtomicBinding:
     queues: tuple[str, ...]
     scope: tuple[str, ...]
@@ -141,6 +156,7 @@ class QueueProgram:
     forks: tuple[ForkBinding, ...]
     feedbacks: tuple[FeedbackBinding, ...]
     merges: tuple[MergeBinding, ...]
+    reorders: tuple[ReorderBinding, ...]
     atomics: tuple[AtomicBinding, ...]
     collections: tuple[CollectionBinding, ...]
     observations: tuple[ObservationBinding, ...]
@@ -251,6 +267,27 @@ def _positive_int(
     return value
 
 
+def _nonnegative_int(
+    call: ast.Call,
+    name: str,
+    default: int,
+    static_values: dict[str, int] | None = None,
+) -> int:
+    matches = [keyword for keyword in call.keywords if keyword.arg == name]
+    if len(matches) > 1:
+        raise QueueFrontendError(f"ACPY-QUEUE-001: repeated {name!r}")
+    if not matches:
+        return default
+    value = _static_int(matches[0].value, static_values or {})
+    if value is None:
+        raise QueueFrontendError(
+            f"ACPY-QUEUE-001: {name} must be a compile-time integer"
+        )
+    if value < 0:
+        raise QueueFrontendError(f"ACPY-QUEUE-001: {name} must be non-negative")
+    return value
+
+
 def _payload(node: ast.expr, payloads: dict[str, Payload]) -> str:
     try:
         return _scalar_type(node)
@@ -301,6 +338,7 @@ def parse_queue_program(text: str, system: str) -> QueueProgram:
     forks: list[ForkBinding] = []
     feedbacks: list[FeedbackBinding] = []
     merges: list[MergeBinding] = []
+    reorders: list[ReorderBinding] = []
     atomics: list[AtomicBinding] = []
     sinks: list[SinkBinding] = []
     observations: list[ObservationBinding] = []
@@ -730,6 +768,7 @@ def parse_queue_program(text: str, system: str) -> QueueProgram:
                     route_start = len(routes)
                     fork_start = len(forks)
                     merge_start = len(merges)
+                    reorder_start = len(reorders)
                     feedback_start = len(feedbacks)
                     sink_start = len(sinks)
                     observation_start = len(observations)
@@ -742,6 +781,7 @@ def parse_queue_program(text: str, system: str) -> QueueProgram:
                         or len(routes) != route_start
                         or len(forks) != fork_start
                         or len(merges) != merge_start
+                        or len(reorders) != reorder_start
                         or len(feedbacks) != feedback_start
                         or len(sinks) != sink_start
                         or len(observations) != observation_start
@@ -969,6 +1009,72 @@ def parse_queue_program(text: str, system: str) -> QueueProgram:
                     )
                 )
                 continue
+            if (
+                isinstance(statement, ast.Assign)
+                and len(statement.targets) == 1
+                and isinstance(statement.targets[0], ast.Name)
+                and isinstance(statement.value, ast.Call)
+                and isinstance(statement.value.func, ast.Attribute)
+                and statement.value.func.attr == "reorder"
+                and isinstance(statement.value.func.value, ast.Name)
+                and not statement.value.args
+            ):
+                name = statement.targets[0].id
+                if name in by_name or name in collections:
+                    raise QueueFrontendError(
+                        "ACPY-QUEUE-013: reorder output requires one fresh name"
+                    )
+                call = statement.value
+                incoming = by_name.get(call.func.value.id)
+                if incoming is None:
+                    raise QueueFrontendError(
+                        "ACPY-QUEUE-013: reorder input is unbound"
+                    )
+                allowed_keywords = {"key", "capacity", "start", "depth", "latency"}
+                if any(
+                    keyword.arg is None or keyword.arg not in allowed_keywords
+                    for keyword in call.keywords
+                ):
+                    raise QueueFrontendError(
+                        "ACPY-QUEUE-013: reorder has an unsupported keyword"
+                    )
+                keys = [keyword.value for keyword in call.keywords if keyword.arg == "key"]
+                if len(keys) != 1:
+                    raise QueueFrontendError(
+                        "ACPY-QUEUE-013: reorder requires one key lambda"
+                    )
+                argument, key = _lambda(keys[0])
+                capacity = _positive_int(call, "capacity", 16)
+                start = _nonnegative_int(call, "start", 0)
+                depth = _positive_int(call, "depth", 1)
+                latency = _positive_int(call, "latency", 1)
+                output = QueueBinding(
+                    name,
+                    incoming.payload,
+                    depth,
+                    latency,
+                    None,
+                    scope=scope_path,
+                    order=current_order,
+                    reorder_output=True,
+                )
+                queues.append(output)
+                by_name[name] = output
+                reorders.append(
+                    ReorderBinding(
+                        incoming.name,
+                        name,
+                        argument,
+                        key,
+                        capacity,
+                        start,
+                        depth,
+                        latency,
+                        scope_path,
+                        current_order,
+                    )
+                )
+                continue
             if isinstance(statement, ast.Assign) and len(statement.targets) == 1 and isinstance(statement.targets[0], ast.Name) and isinstance(statement.value, ast.Call):
                 name, call = statement.targets[0].id, statement.value
                 if name in by_name or name in collections:
@@ -1120,6 +1226,7 @@ def parse_queue_program(text: str, system: str) -> QueueProgram:
         tuple(forks),
         tuple(feedbacks),
         tuple(merges),
+        tuple(reorders),
         tuple(atomics),
         tuple(collection_bindings),
         tuple(observations),
@@ -1310,6 +1417,8 @@ def lower_queue_program(program: QueueProgram) -> str:
     for merge in program.merges:
         for input_name in merge.inputs:
             uses[input_name].append(merge.scope)
+    for reorder in program.reorders:
+        uses[reorder.input_name].append(reorder.scope)
 
     def inside(container: tuple[str, ...], candidate: tuple[str, ...]) -> bool:
         return candidate[: len(container)] == container
@@ -1385,6 +1494,7 @@ def lower_queue_program(program: QueueProgram) -> str:
             and not queue.route_output
             and not queue.feedback_output
             and not queue.merge_output
+            and not queue.reorder_output
             and queue.atomic_group is None
         )
         events.extend(
@@ -1411,6 +1521,11 @@ def lower_queue_program(program: QueueProgram) -> str:
             (feedback.order, "feedback", feedback)
             for feedback in program.feedbacks
             if feedback.scope == path
+        )
+        events.extend(
+            (reorder.order, "reorder", reorder)
+            for reorder in program.reorders
+            if reorder.scope == path
         )
         events.extend(
             (min(visible_order(consumer) for consumer in group) - 0.5, "broadcast", source)
@@ -1556,6 +1671,42 @@ def lower_queue_program(program: QueueProgram) -> str:
                     f"!ac.queue<{incoming.payload}>"
                 )
                 mapping[feedback.output_name] = output
+            elif kind == "reorder":
+                reorder = item
+                assert isinstance(reorder, ReorderBinding)
+                incoming = by_name[reorder.input_name]
+                emitter = _ExpressionEmitter(
+                    payloads, reorder.argument, incoming.payload
+                )
+                key, key_type = emitter.emit(reorder.key)
+                if not key_type.startswith("i"):
+                    raise QueueFrontendError(
+                        "ACPY-QUEUE-013: reorder key must lower to an integer"
+                    )
+                output = (
+                    reorder.output_name
+                    if not path
+                    else f"{reorder.output_name}__local"
+                )
+                lines.append(
+                    f"{indent}%{output} = ac.reorder "
+                    f"%{mapping[reorder.input_name]} capacity {reorder.capacity} "
+                    f"start {reorder.start} depth {reorder.depth} "
+                    f"latency {reorder.latency} {{"
+                )
+                lines.append(
+                    f"{indent}^key(%item: !ac.var<{incoming.payload}>):"
+                )
+                lines.extend(indent + line[2:] for line in emitter.lines)
+                lines.append(
+                    f"{indent}  ac.reorder.yield %{key} : !ac.var<{key_type}>"
+                )
+                lines.append(
+                    f'{indent}}} {{ac.name = "{reorder.output_name}"}} : '
+                    f"!ac.queue<{incoming.payload}> -> "
+                    f"!ac.queue<{incoming.payload}>"
+                )
+                mapping[reorder.output_name] = output
             elif kind == "atomic":
                 atomic = item
                 assert isinstance(atomic, AtomicBinding)

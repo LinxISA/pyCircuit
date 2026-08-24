@@ -172,6 +172,8 @@ llvm::Error extractExpressions(mlir::Region &region, QueueBlockPlan &plan) {
       yielded.append(yield.getValues().begin(), yield.getValues().end());
     else if (auto yield = mlir::dyn_cast<ac::RouteYieldOp>(operation))
       yielded.push_back(yield.getSelector());
+    else if (auto yield = mlir::dyn_cast<ac::ReorderYieldOp>(operation))
+      yielded.push_back(yield.getKey());
     else if (auto yield = mlir::dyn_cast<ac::FeedbackYieldOp>(operation)) {
       yielded.push_back(yield.getValue());
       yielded.push_back(yield.getContinueValue());
@@ -414,6 +416,30 @@ private:
                                merge.getPolicy().str()});
         continue;
       }
+      if (auto reorder = mlir::dyn_cast<ac::ReorderOp>(operation)) {
+        auto input = queueName(reorder.getInput(), names);
+        if (!input)
+          return input.takeError();
+        std::vector<std::string> outputs;
+        if (auto error = addOutputs(
+                reorder, reorder->getResults(), {int64_t(reorder.getDepth())},
+                {int64_t(reorder.getLatency())}, scope, outputs))
+          return error;
+        QueueBlockPlan blockPlan{"reorder",
+                                 outputs.front(),
+                                 scopePath(scope),
+                                 {*input},
+                                 outputs,
+                                 {uint64_t(reorder.getDepth())},
+                                 {uint64_t(reorder.getLatency())}};
+        blockPlan.capacity = reorder.getCapacity();
+        blockPlan.start = reorder.getStart();
+        blockPlan.region = printRegion(reorder.getKey());
+        if (auto error = extractExpressions(reorder.getKey(), blockPlan))
+          return error;
+        plan.blocks.push_back(std::move(blockPlan));
+        continue;
+      }
       if (auto feedback = mlir::dyn_cast<ac::FeedbackOp>(operation)) {
         auto input = queueName(feedback.getInput(), names);
         if (!input)
@@ -569,7 +595,8 @@ llvm::Expected<std::string> QueueGraphPlan::canonicalJson() const {
     for (const std::string &yield : block.yields)
       yields.push_back(yield);
     blockValues.push_back(
-        llvm::json::Object{{"depths", std::move(depths)},
+        llvm::json::Object{{"capacity", block.capacity},
+                           {"depths", std::move(depths)},
                            {"expressions", std::move(expressions)},
                            {"inputs", std::move(inputs)},
                            {"kind", block.kind},
@@ -580,6 +607,7 @@ llvm::Expected<std::string> QueueGraphPlan::canonicalJson() const {
                            {"policy", block.policy},
                            {"region", block.region},
                            {"scope", block.scope},
+                           {"start", block.start},
                            {"yields", std::move(yields)}});
   }
   llvm::json::Object root{{"blocks", std::move(blockValues)},

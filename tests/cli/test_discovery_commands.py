@@ -84,7 +84,7 @@ class DiscoveryCommandTest(unittest.TestCase):
             )
             listing = run_cli("schema", "component", "--json", cwd=root)
             opcode = run_cli(
-                "schema", "opcode", "ac.feedback", "--json", cwd=root
+                "schema", "opcode", "ac.reorder", "--json", cwd=root
             )
             opcode_listing = run_cli("schema", "opcode", "--json", cwd=root)
 
@@ -94,13 +94,14 @@ class DiscoveryCommandTest(unittest.TestCase):
         )
         names = json.loads(listing.stdout)["items"]
         self.assertEqual(sorted(names), names)
-        feedback = json.loads(opcode.stdout)
-        self.assertEqual("ac.feedback", feedback["operation"])
-        self.assertEqual("design", feedback["role"])
-        self.assertTrue(feedback["gfsim"]["available"])
-        self.assertTrue(feedback["pyc"]["available"])
+        reorder = json.loads(opcode.stdout)
+        self.assertEqual("ac.reorder", reorder["operation"])
+        self.assertEqual("design", reorder["role"])
+        self.assertTrue(reorder["gfsim"]["available"])
+        self.assertTrue(reorder["pyc"]["available"])
         opcode_names = json.loads(opcode_listing.stdout)["items"]
         self.assertEqual(sorted(opcode_names), opcode_names)
+        self.assertIn("ac.reorder", opcode_names)
         self.assertIn("ac.transform", opcode_names)
 
     def test_unknown_schema_name_is_a_structured_user_error(self) -> None:

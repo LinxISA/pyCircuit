@@ -62,6 +62,8 @@ operations:
   - ac.route
   - ac.route.yield
   - ac.merge
+  - ac.reorder
+  - ac.reorder.yield
   - ac.feedback
   - ac.feedback.yield
   - ac.scope
