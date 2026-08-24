@@ -41,6 +41,7 @@ class QueueBinding:
     memory_output: bool = False
     barrier_output: bool = False
     select_output: bool = False
+    firing_effect: bool = False
     atomic_group: int | None = None
 
 
@@ -386,6 +387,50 @@ def _lambda(node: ast.expr) -> tuple[str, ast.expr]:
     if not isinstance(node, ast.Lambda) or len(node.args.args) != 1:
         raise QueueFrontendError("ACPY-QUEUE-003: apply requires a one-argument lambda")
     return node.args.args[0].arg, node.body
+
+
+def _validate_firing_expression(node: ast.expr, argument: str) -> None:
+    if (
+        not isinstance(node, ast.Call)
+        or not isinstance(node.func, ast.Attribute)
+        or node.func.attr != "push"
+        or not isinstance(node.func.value, ast.Name)
+        or node.func.value.id != argument
+        or len(node.args) != 1
+        or node.keywords
+    ):
+        raise QueueFrontendError(
+            "ACPY-QUEUE-019: firing must return queue.push(value)"
+        )
+    pops = 0
+    pushes = 0
+    for child in ast.walk(node):
+        if not isinstance(child, ast.Call) or not isinstance(
+            child.func, ast.Attribute
+        ):
+            continue
+        if not isinstance(child.func.value, ast.Name) or child.func.value.id != argument:
+            continue
+        if child.func.attr in {"peek", "pop"}:
+            if child.args or child.keywords:
+                raise QueueFrontendError(
+                    "ACPY-QUEUE-019: firing peek/pop take no arguments"
+                )
+            pops += child.func.attr == "pop"
+        elif child.func.attr == "push":
+            if len(child.args) != 1 or child.keywords:
+                raise QueueFrontendError(
+                    "ACPY-QUEUE-019: firing push requires one value"
+                )
+            pushes += 1
+        else:
+            raise QueueFrontendError(
+                "ACPY-QUEUE-019: unsupported queue effect method"
+            )
+    if pops != 1 or pushes != 1:
+        raise QueueFrontendError(
+            "ACPY-QUEUE-019: firing requires exactly one pop and one push"
+        )
 
 
 def parse_queue_program(text: str, system: str) -> QueueProgram:
@@ -1560,7 +1605,7 @@ def parse_queue_program(text: str, system: str) -> QueueProgram:
                     binding = source_binding(name, call, scope_path, current_order)
                 elif (
                     isinstance(call.func, ast.Attribute)
-                    and call.func.attr == "apply"
+                    and call.func.attr in {"apply", "firing"}
                     and isinstance(call.func.value, ast.Name)
                     and len(call.args) == 1
                 ):
@@ -1571,6 +1616,9 @@ def parse_queue_program(text: str, system: str) -> QueueProgram:
                             f"ACPY-QUEUE-001: input queue {input_name!r} is unbound"
                         )
                     argument, expression = _lambda(call.args[0])
+                    firing_effect = call.func.attr == "firing"
+                    if firing_effect:
+                        _validate_firing_expression(expression, argument)
                     binding = QueueBinding(
                         name,
                         incoming.payload,
@@ -1581,6 +1629,7 @@ def parse_queue_program(text: str, system: str) -> QueueProgram:
                         expression,
                         scope_path,
                         current_order,
+                        firing_effect=firing_effect,
                         atomic_group=atomic_group,
                     )
                 else:
@@ -1838,12 +1887,14 @@ class _ExpressionEmitter:
         *,
         root_name: str = "item",
         prefix: str = "",
+        allow_queue_effects: bool = False,
     ) -> None:
         self.payloads = payloads
         self.argument = argument
         self.payload = payload
         self.root_name = root_name
         self.prefix = prefix
+        self.allow_queue_effects = allow_queue_effects
         self.lines: list[str] = []
         self.index = 0
 
@@ -1855,6 +1906,28 @@ class _ExpressionEmitter:
     def emit(self, node: ast.expr, expected: str | None = None) -> tuple[str, str]:
         if isinstance(node, ast.Name) and node.id == self.argument:
             return self.root_name, self.payload
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id == self.argument
+            and node.func.attr in {"peek", "pop", "push"}
+        ):
+            if not self.allow_queue_effects:
+                raise QueueFrontendError(
+                    "ACPY-QUEUE-019: queue effects require firing()"
+                )
+            if node.func.attr in {"peek", "pop"}:
+                if node.args or node.keywords:
+                    raise QueueFrontendError(
+                        "ACPY-QUEUE-019: firing peek/pop take no arguments"
+                    )
+                return self.root_name, self.payload
+            if len(node.args) != 1 or node.keywords:
+                raise QueueFrontendError(
+                    "ACPY-QUEUE-019: firing push requires one value"
+                )
+            return self.emit(node.args[0], self.payload)
         if isinstance(node, ast.Constant) and type(node.value) in {int, bool}:
             typ = expected or ("i1" if type(node.value) is bool else "i64")
             name = self._new()
@@ -2100,7 +2173,12 @@ def lower_queue_program(program: QueueProgram) -> str:
             mapping[queue.name] = output_ssa
             return
         assert queue.argument is not None and queue.expression is not None
-        emitter = _ExpressionEmitter(payloads, queue.argument, queue.payload)
+        emitter = _ExpressionEmitter(
+            payloads,
+            queue.argument,
+            queue.payload,
+            allow_queue_effects=queue.firing_effect,
+        )
         result, result_type = emitter.emit(queue.expression)
         if result_type != queue.payload:
             raise QueueFrontendError(

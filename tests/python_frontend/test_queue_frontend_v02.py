@@ -372,8 +372,44 @@ def pipeline() -> None:
     ac.sink(selected)
 """
 
+FIRING_SOURCE = """
+import agentic_circuit as ac
+
+@ac.struct
+class FiringItem:
+    value: ac.u16
+
+@ac.system
+def pipeline() -> None:
+    incoming = ac.source(FiringItem)
+    outgoing = incoming.firing(
+        lambda queue: queue.push(
+            queue.pop().with_fields(value=queue.peek().value + 1)
+        )
+    )
+    ac.sink(outgoing)
+"""
+
 
 class QueueFrontendV02Test(unittest.TestCase):
+    def test_python_firing_effects_normalize_to_standard_atomic_transform(self) -> None:
+        from agentic_circuit._queue_frontend import (
+            QueueFrontendError,
+            lower_queue_source,
+        )
+
+        lowered = lower_queue_source(FIRING_SOURCE, "pipeline")
+        self.assertEqual(lowered, lower_queue_source(FIRING_SOURCE, "pipeline"))
+        self.assertIn("%outgoing = ac.transform %incoming", lowered)
+        self.assertIn('ac.var.get %item field "value"', lowered)
+        self.assertIn("ac.transform.yield", lowered)
+        with self.assertRaisesRegex(QueueFrontendError, "exactly one pop and one push"):
+            lower_queue_source(
+                FIRING_SOURCE.replace("queue.pop()", "queue.peek()"), "pipeline"
+            )
+        with self.assertRaisesRegex(QueueFrontendError, "queue effects require firing"):
+            lower_queue_source(FIRING_SOURCE.replace(".firing(", ".apply("), "pipeline")
+
     def test_runtime_queue_collection_index_lowers_to_official_select(self) -> None:
         from agentic_circuit._queue_frontend import lower_queue_source
 

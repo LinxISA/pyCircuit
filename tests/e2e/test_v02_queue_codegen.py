@@ -228,6 +228,7 @@ int main() {{
         from tests.python_frontend.test_queue_frontend_v02 import (
             BARRIER_SOURCE,
             CREDIT_SOURCE,
+            FIRING_SOURCE,
             MEMORY_SOURCE,
             SELECT_SOURCE,
         )
@@ -242,6 +243,7 @@ int main() {{
                 ("broadcast", BROADCAST_SOURCE, "gfsim::QueueBroadcast"),
                 ("credit", CREDIT_SOURCE, "gfsim::QueueCredit"),
                 ("feedback", FEEDBACK_SOURCE, "gfsim::QueueFeedback"),
+                ("firing", FIRING_SOURCE, "gfsim::QueueTransform"),
                 ("memory", MEMORY_SOURCE, "gfsim::QueueMemory"),
                 ("select", SELECT_SOURCE, "gfsim::QueueSelect"),
             ):

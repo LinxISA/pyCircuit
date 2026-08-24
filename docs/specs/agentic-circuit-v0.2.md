@@ -517,6 +517,32 @@ All input Queues in the group MUST be unique. The grouped transform fires only
 when every input can pop and every output can push; all effects commit or none
 commit.
 
+### Explicit Python firing effects
+
+Use `firing` when a low-level algorithm is clearer as explicit `peek`, `pop`,
+and `push` effects while keeping the destination Queue implicit.
+
+```python
+outgoing = incoming.firing(
+    lambda queue: queue.push(
+        queue.pop().with_fields(
+            value=queue.peek().value + 1,
+        )
+    )
+)
+```
+
+One Python firing MUST contain exactly one `pop` and one outer `push`; it MAY
+contain repeated non-consuming `peek` calls. `peek` and `pop` return immutable
+token Vars, and `push` requires the unchanged Queue payload type. Queue effects
+are rejected inside ordinary `apply` lambdas.
+
+The frontend normalizes this one-input/one-output form to the standard atomic
+`ac.transform` building block. The lower-level `ac.firing` and
+`ac.queue.peek/pop/push` operations remain the normative ACIR effect contract
+for future multi-Queue/state-effect normalization; generated hot paths do not
+interpret Python effect objects.
+
 ### Bounded feedback
 
 The current runtime-loop form is one Queue rebinding through one `apply`.

@@ -48,6 +48,16 @@ class _CppExpression:
             if node.value is False:
                 return "false"
             return str(node.value)
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id == self.argument
+        ):
+            if node.func.attr in {"peek", "pop"} and not node.args and not node.keywords:
+                return "item"
+            if node.func.attr == "push" and len(node.args) == 1 and not node.keywords:
+                return self.emit(node.args[0])
         if isinstance(node, ast.Attribute):
             return f"{self.emit(node.value)}.{node.attr}"
         if isinstance(node, ast.BinOp) and isinstance(
@@ -84,6 +94,14 @@ def _policy_body(queue: QueueBinding) -> list[str]:
 
 def _expression_policy_body(argument: str, node: ast.expr) -> list[str]:
     expression = _CppExpression(argument)
+    if (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "push"
+        and len(node.args) == 1
+        and not node.keywords
+    ):
+        node = node.args[0]
     if (
         isinstance(node, ast.Call)
         and isinstance(node.func, ast.Attribute)
