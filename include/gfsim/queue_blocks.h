@@ -98,6 +98,60 @@ private:
   std::vector<T> received_;
 };
 
+template <typename T>
+  requires std::equality_comparable<T>
+class QueueObserve final : public SimObject {
+public:
+  static constexpr std::string_view contractName = "ac.observe";
+  static constexpr ObjectKind componentKind = ObjectKind::Probe;
+
+  QueueObserve(std::string name, ObjectId id, SimObject *parent,
+               SimQueue<T> &input, ObservationSink *observations = nullptr)
+      : SimObject(componentKind, std::move(name), id, parent, observations),
+        input_(input) {}
+
+  void doWork(Epoch) override {
+    const T *head = input_.peek();
+    if (pending_ || head == nullptr)
+      return;
+    if (last_ && input_.totalPops() == lastPopCount_ && *last_ == *head)
+      return;
+    pending_ = *head;
+    pendingPopCount_ = input_.totalPops();
+  }
+  void doXfer(Epoch) override {
+    if (!pending_)
+      return;
+    observed_.push_back(*pending_);
+    last_ = std::move(pending_);
+    pending_.reset();
+    lastPopCount_ = pendingPopCount_;
+  }
+  bool hasPendingCommit() const override { return pending_.has_value(); }
+  bool isRunnable(Epoch) const override {
+    const T *head = input_.peek();
+    return !pending_ && head != nullptr &&
+           (!last_ || input_.totalPops() != lastPopCount_ || *last_ != *head);
+  }
+  const std::vector<T> &observed() const { return observed_; }
+  void reset() override {
+    pending_.reset();
+    last_.reset();
+    observed_.clear();
+    lastPopCount_ = 0;
+    pendingPopCount_ = 0;
+    clearRuntimeFailureCode();
+  }
+
+private:
+  SimQueue<T> &input_;
+  std::optional<T> pending_;
+  std::optional<T> last_;
+  std::vector<T> observed_;
+  uint64_t lastPopCount_ = 0;
+  uint64_t pendingPopCount_ = 0;
+};
+
 template <typename T, size_t Outputs>
 class QueueBroadcast final : public SimObject {
 public:

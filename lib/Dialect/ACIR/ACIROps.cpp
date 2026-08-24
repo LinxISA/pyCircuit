@@ -91,6 +91,12 @@ LogicalResult SourceOp::verify() {
   return success();
 }
 
+LogicalResult ObserveOp::verify() {
+  if (getName().empty())
+    return emitOpError("name must be non-empty");
+  return success();
+}
+
 LogicalResult BroadcastOp::verify() {
   if (getOutputs().size() < 2)
     return emitOpError("requires at least two output queues");

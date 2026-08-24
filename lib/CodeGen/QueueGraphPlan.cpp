@@ -7,6 +7,7 @@
 #include "mlir/IR/Operation.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/StringSet.h"
 #include "llvm/Support/JSON.h"
 #include "llvm/Support/raw_ostream.h"
@@ -198,10 +199,34 @@ public:
     plan.system = system.getValue().str();
     if (auto error = extractBlock(*module.getBody(), {}))
       return std::move(error);
+    if (auto error = validateGraph())
+      return std::move(error);
     return std::move(plan);
   }
 
 private:
+  llvm::Error validateGraph() {
+    llvm::StringMap<unsigned> producers;
+    llvm::StringMap<unsigned> consumers;
+    for (const QueueBlockPlan &block : plan.blocks) {
+      for (const std::string &output : block.outputs)
+        ++producers[output];
+      if (block.kind != "observe")
+        for (const std::string &input : block.inputs)
+          ++consumers[input];
+    }
+    for (const QueuePlan &queue : plan.queues) {
+      if (producers[queue.name] != 1)
+        return planError("Queue '" + queue.name +
+                         "' must have exactly one producer");
+      if (consumers[queue.name] > 1)
+        return planError(
+            "Queue '" + queue.name +
+            "' has multiple consuming blocks; insert ac.broadcast");
+    }
+    return llvm::Error::success();
+  }
+
   llvm::Error addQueue(mlir::Value value, llvm::StringRef name, uint64_t depth,
                        uint64_t latency, llvm::ArrayRef<std::string> scope) {
     if (name.empty() || !queueIdentities.insert(name).second)
@@ -431,6 +456,18 @@ private:
           return planError("sink requires frozen ac.name");
         plan.blocks.push_back(
             {"sink", name.getValue().str(), scopePath(scope), {*input}, {}});
+        continue;
+      }
+      auto observe = mlir::dyn_cast<ac::ObserveOp>(operation);
+      if (observe) {
+        auto input = queueName(observe.getInput(), names);
+        if (!input)
+          return input.takeError();
+        plan.blocks.push_back({"observe",
+                               observe.getName().str(),
+                               scopePath(scope),
+                               {*input},
+                               {}});
         continue;
       }
       if (mlir::isa<ac::ScopeYieldOp>(operation) ||

@@ -42,6 +42,22 @@ module attributes {ac.contract_epoch = "0.1", ac.system = "structured"} {
 }
 )mlir";
 
+constexpr llvm::StringLiteral kMultipleConsumers = R"mlir(
+module attributes {ac.contract_epoch = "0.1", ac.system = "bad"} {
+  %input = ac.source depth 2 latency 1 {ac.name = "input"} : !ac.queue<i64>
+  ac.sink %input {ac.name = "left"} : !ac.queue<i64>
+  ac.sink %input {ac.name = "right"} : !ac.queue<i64>
+}
+)mlir";
+
+constexpr llvm::StringLiteral kObservationUse = R"mlir(
+module attributes {ac.contract_epoch = "0.1", ac.system = "observed"} {
+  %input = ac.source depth 2 latency 1 {ac.name = "input"} : !ac.queue<i64>
+  ac.observe %input name "head" : !ac.queue<i64>
+  ac.sink %input {ac.name = "sink_0"} : !ac.queue<i64>
+}
+)mlir";
+
 TEST(QueueGraphPlanTest, ExtractsFrozenQueueIdentitiesAndTopology) {
   mlir::MLIRContext context;
   context.loadDialect<ac::ACIRDialect, mlir::DLTIDialect>();
@@ -139,6 +155,30 @@ TEST(QueueGraphPlanTest, EmitsCanonicalScalarQueuePyc) {
   EXPECT_NE(pyc->find("pyc.add"), std::string::npos);
   EXPECT_NE(pyc->find("pyc.frontend.contract = \"pycircuit\""),
             std::string::npos);
+}
+
+TEST(QueueGraphPlanTest, RejectsImplicitMultipleConsumers) {
+  mlir::MLIRContext context;
+  context.loadDialect<ac::ACIRDialect, mlir::DLTIDialect>();
+  auto module =
+      mlir::parseSourceString<mlir::ModuleOp>(kMultipleConsumers, &context);
+  ASSERT_TRUE(module);
+  auto plan = buildQueueGraphPlan(*module);
+  ASSERT_FALSE(bool(plan));
+  EXPECT_NE(llvm::toString(plan.takeError()).find("insert ac.broadcast"),
+            std::string::npos);
+}
+
+TEST(QueueGraphPlanTest, ObservationDoesNotConsumeQueue) {
+  mlir::MLIRContext context;
+  context.loadDialect<ac::ACIRDialect, mlir::DLTIDialect>();
+  auto module =
+      mlir::parseSourceString<mlir::ModuleOp>(kObservationUse, &context);
+  ASSERT_TRUE(module);
+  auto plan = buildQueueGraphPlan(*module);
+  ASSERT_TRUE(bool(plan)) << llvm::toString(plan.takeError());
+  ASSERT_EQ(plan->blocks.size(), 3u);
+  EXPECT_EQ(plan->blocks[1].kind, "observe");
 }
 
 } // namespace

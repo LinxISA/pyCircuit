@@ -52,6 +52,14 @@ class SinkBinding:
 
 
 @dataclass(frozen=True, slots=True)
+class ObservationBinding:
+    queue: str
+    name: str
+    scope: tuple[str, ...]
+    order: int
+
+
+@dataclass(frozen=True, slots=True)
 class RouteBinding:
     input_name: str
     outputs: tuple[str, ...]
@@ -114,6 +122,7 @@ class QueueProgram:
     feedbacks: tuple[FeedbackBinding, ...]
     merges: tuple[MergeBinding, ...]
     collections: tuple[CollectionBinding, ...]
+    observations: tuple[ObservationBinding, ...]
     sinks: tuple[SinkBinding, ...]
 
 
@@ -243,6 +252,7 @@ def parse_queue_program(text: str, system: str) -> QueueProgram:
     feedbacks: list[FeedbackBinding] = []
     merges: list[MergeBinding] = []
     sinks: list[SinkBinding] = []
+    observations: list[ObservationBinding] = []
     by_name: dict[str, QueueBinding] = {}
     collections: dict[str, StaticQueueCollection] = {}
     collection_bindings: list[CollectionBinding] = []
@@ -704,6 +714,19 @@ def parse_queue_program(text: str, system: str) -> QueueProgram:
             if (
                 isinstance(statement, ast.Expr)
                 and isinstance(statement.value, ast.Call)
+                and call_name(statement.value) == "observe"
+                and len(statement.value.args) == 1
+            ):
+                name = queue_reference(statement.value.args[0], aliases)
+                observations.append(
+                    ObservationBinding(
+                        name, f"observe_{current_order}", scope_path, current_order
+                    )
+                )
+                continue
+            if (
+                isinstance(statement, ast.Expr)
+                and isinstance(statement.value, ast.Call)
                 and call_name(statement.value) == "sink"
                 and len(statement.value.args) == 1
             ):
@@ -726,6 +749,7 @@ def parse_queue_program(text: str, system: str) -> QueueProgram:
         tuple(feedbacks),
         tuple(merges),
         tuple(collection_bindings),
+        tuple(observations),
         tuple(sinks),
     )
 
@@ -889,6 +913,8 @@ def lower_queue_program(program: QueueProgram) -> str:
         uses[source_name].append(fanout_scope)
     for sink_binding in program.sinks:
         uses[sink_binding.queue].append(sink_binding.scope)
+    for observation in program.observations:
+        uses[observation.queue].append(observation.scope)
     for route in program.routes:
         uses[route.input_name].append(route.scope)
     for feedback in program.feedbacks:
@@ -996,6 +1022,11 @@ def lower_queue_program(program: QueueProgram) -> str:
             (scope.order, "scope", scope)
             for scope in program.scopes
             if scope.path[:-1] == path
+        )
+        events.extend(
+            (observation.order, "observe", observation)
+            for observation in program.observations
+            if observation.scope == path
         )
         events.extend(
             (sink_binding.order, "sink", sink_binding)
@@ -1117,6 +1148,14 @@ def lower_queue_program(program: QueueProgram) -> str:
                     f"({input_types}) -> !ac.queue<{payload}>"
                 )
                 mapping[merge.output] = output
+            elif kind == "observe":
+                observation = item
+                assert isinstance(observation, ObservationBinding)
+                queue = by_name[observation.queue]
+                lines.append(
+                    f"{indent}ac.observe %{mapping[observation.queue]} name "
+                    f'"{observation.name}" : !ac.queue<{queue.payload}>'
+                )
             else:
                 sink_binding = item
                 assert isinstance(sink_binding, SinkBinding)

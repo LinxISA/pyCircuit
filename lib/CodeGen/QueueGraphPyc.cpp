@@ -263,6 +263,7 @@ llvm::Expected<std::string> generateQueueGraphPyc(const QueueGraphPlan &plan) {
   };
   std::vector<const QueueBlockPlan *> sources;
   std::vector<const QueueBlockPlan *> sinks;
+  std::vector<const QueueBlockPlan *> observations;
   llvm::StringMap<const QueueBlockPlan *> transformByOutput;
   llvm::StringMap<const QueueBlockPlan *> broadcastByOutput;
   llvm::StringMap<RouteProducer> routeByOutput;
@@ -272,6 +273,8 @@ llvm::Expected<std::string> generateQueueGraphPyc(const QueueGraphPlan &plan) {
       sources.push_back(&block);
     else if (block.kind == "sink")
       sinks.push_back(&block);
+    else if (block.kind == "observe")
+      observations.push_back(&block);
     else if (block.kind == "transform") {
       if (block.outputs.size() != 1)
         return pycError("transform output arity is unsupported");
@@ -584,6 +587,18 @@ llvm::Expected<std::string> generateQueueGraphPyc(const QueueGraphPlan &plan) {
   }
   const std::string &sinkQueue = sinks.front()->inputs.front();
   body << "    pyc.assign " << readyWires[sinkQueue] << ", %out_ready : i1\n";
+  for (const QueueBlockPlan *observation : observations) {
+    const QueuePlan *queue = findQueue(plan, observation->inputs.front());
+    auto type = queue ? pycType(plan, queue->payloadType)
+                      : llvm::Expected<std::string>(
+                            pycError("observation Queue is missing"));
+    if (!type)
+      return type.takeError();
+    std::string alias = newValue();
+    body << "    " << alias << " = pyc.alias "
+         << outputData[observation->inputs.front()] << " {pyc.name = \""
+         << observation->name << "\"} : " << *type << "\n";
+  }
 
   llvm::StringRef top = plan.system;
   std::ostringstream output;

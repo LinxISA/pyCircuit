@@ -145,6 +145,16 @@ def pipeline() -> None:
     sink(current)
 """
 
+OBSERVE_SOURCE = """
+import agentic_circuit as ac
+
+@ac.system
+def pipeline() -> None:
+    input_queue = ac.source(int)
+    ac.observe(input_queue)
+    ac.sink(input_queue)
+"""
+
 
 class QueueFrontendV02Test(unittest.TestCase):
     def test_simple_serial_python_lowers_to_typed_queue_graph(self) -> None:
@@ -293,6 +303,14 @@ class QueueFrontendV02Test(unittest.TestCase):
         self.assertIn('ac.var.cmp "sgt"', lowered)
         self.assertIn("ac.feedback.yield", lowered)
         self.assertIn("ac.sink %current__feedback0", lowered)
+
+    def test_observation_only_use_does_not_insert_broadcast(self) -> None:
+        from agentic_circuit._queue_frontend import lower_queue_source
+
+        lowered = lower_queue_source(OBSERVE_SOURCE, "pipeline")
+        self.assertIn('ac.observe %input_queue name "observe_1"', lowered)
+        self.assertIn("ac.sink %input_queue", lowered)
+        self.assertNotIn("ac.broadcast", lowered)
 
     def test_latency_zero_and_unsupported_lambda_are_rejected(self) -> None:
         from agentic_circuit._queue_frontend import (

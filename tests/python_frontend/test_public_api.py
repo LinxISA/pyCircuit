@@ -29,6 +29,7 @@ PUBLIC = {
     "Endpoint",
     "source",
     "sink",
+    "observe",
 }
 
 
@@ -103,6 +104,7 @@ class PublicApiTest(unittest.TestCase):
             lambda: api.view(object(), "field"),
             lambda: api.source(int),
             lambda: api.sink(object()),
+            lambda: api.observe(object()),
         )
         for operation in operations:
             with self.subTest(operation=operation):

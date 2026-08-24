@@ -185,6 +185,12 @@ def ACIR_SinkOp : ACIR_Op<"sink", [
   let assemblyFormat = "$input attr-dict `:` qualified(type($input))";
 }
 
+def ACIR_ObserveOp : ACIR_Op<"observe"> {
+  let arguments = (ins ACIR_QueueType:$input, StrAttr:$name);
+  let hasVerifier = 1;
+  let assemblyFormat = "$input `name` $name attr-dict `:` qualified(type($input))";
+}
+
 def ACIR_BroadcastOp : ACIR_Op<"broadcast"> {
   let arguments = (ins ACIR_QueueType:$input,
                        DenseI64ArrayAttr:$output_depths,

@@ -39,6 +39,7 @@ EXACT_PUBLIC_API = {
     "Endpoint",
     "source",
     "sink",
+    "observe",
 }
 
 
@@ -206,6 +207,7 @@ def frontend_test_ledger() -> dict[str, CoverageRow]:
         "Endpoint": annotation_row,
         "source": CoverageRow((public_import,), (marker_negative,)),
         "sink": CoverageRow((public_import,), (marker_negative,)),
+        "observe": CoverageRow((public_import,), (marker_negative,)),
     }
 
 

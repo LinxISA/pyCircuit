@@ -96,6 +96,23 @@ TEST(QueueBlocksTest, SinkConsumesAtWorkAndPublishesAtXfer) {
   EXPECT_EQ(sink.received().front(), 13);
 }
 
+TEST(QueueBlocksTest, ObserveCommitsWithoutConsumingOrBackpressure) {
+  SimQueue<int> input("input", 1, nullptr, 2);
+  QueueObserve<int> observe("observe", 2, nullptr, input);
+  ASSERT_TRUE(input.proposePush(13));
+  input.doXfer({0, 0});
+  observe.doWork({1, 0});
+  EXPECT_EQ(input.committedSize(), 1u);
+  EXPECT_TRUE(observe.observed().empty());
+  observe.doXfer({1, 0});
+  ASSERT_EQ(observe.observed().size(), 1u);
+  EXPECT_EQ(observe.observed().front(), 13);
+  observe.doWork({2, 0});
+  observe.doXfer({2, 0});
+  EXPECT_EQ(observe.observed().size(), 1u);
+  EXPECT_EQ(input.committedSize(), 1u);
+}
+
 TEST(QueueBlocksTest, BroadcastWaitsForEveryOutput) {
   SimQueue<int> input("input", 1, nullptr, 1);
   SimQueue<int> left("left", 2, nullptr, 1);

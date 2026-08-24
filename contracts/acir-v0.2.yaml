@@ -56,6 +56,7 @@ operations:
   - ac.transform.yield
   - ac.source
   - ac.sink
+  - ac.observe
   - ac.broadcast
   - ac.route
   - ac.route.yield

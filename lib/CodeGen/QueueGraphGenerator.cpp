@@ -238,6 +238,8 @@ llvm::Expected<std::string> generateQueueGraphCpp(const QueueGraphPlan &plan) {
         return type.takeError();
       output << "  " << *type << ' ' << field.name << "{};\n";
     }
+    output << "  bool operator==(const " << payload.name
+           << " &) const = default;\n";
     output << "};\n\n";
   }
 
@@ -398,7 +400,7 @@ llvm::Expected<std::string> generateQueueGraphCpp(const QueueGraphPlan &plan) {
                              ", block_" + std::to_string(index) + "_state_, " +
                              queueMembers[block->outputs[0]] + ", " +
                              std::to_string(block->maxIterations) + ")");
-    } else if (block->kind == "sink") {
+    } else if (block->kind == "sink" || block->kind == "observe") {
       initializers.push_back(member + "(\"" + block->name + "\", " +
                              std::to_string(blockIds[key]) + ", " + *parent +
                              ", " + queueMembers[block->inputs[0]] + ")");
@@ -456,6 +458,7 @@ llvm::Expected<std::string> generateQueueGraphCpp(const QueueGraphPlan &plan) {
              << "; }\n";
     }
   sinkIndex = 0;
+  size_t observationIndex = 0;
   for (auto [index, block] : llvm::enumerate(runtimeBlocks))
     if (block->kind == "sink") {
       const QueuePlan *queue = findQueue(plan, block->inputs.front());
@@ -468,6 +471,17 @@ llvm::Expected<std::string> generateQueueGraphCpp(const QueueGraphPlan &plan) {
              << "_values() const { return block_" << index
              << "_.received(); }\n";
       ++sinkIndex;
+    } else if (block->kind == "observe") {
+      const QueuePlan *queue = findQueue(plan, block->inputs.front());
+      auto type = queue ? cppType(queue->payloadType)
+                        : llvm::Expected<std::string>(
+                              generatorError("observation Queue is missing"));
+      if (!type)
+        return type.takeError();
+      output << "  const std::vector<" << *type << "> &observation_"
+             << observationIndex << "_values() const { return block_" << index
+             << "_.observed(); }\n";
+      ++observationIndex;
     }
   output << "\n  std::array<gfsim::DispatchRow, " << nextId
          << "> dispatch_rows() {\n    return {\n";
@@ -554,15 +568,21 @@ llvm::Expected<std::string> generateQueueGraphCpp(const QueueGraphPlan &plan) {
       output << "  gfsim::QueueFeedback<" << *type << ", block_" << index
              << "_update_policy, block_" << index << "_condition_policy> block_"
              << index << "_;\n";
-    } else if (block->kind == "sink") {
+    } else if (block->kind == "sink" || block->kind == "observe") {
       const QueuePlan *input = findQueue(plan, block->inputs[0]);
       auto type = input ? cppType(input->payloadType)
                         : llvm::Expected<std::string>(
                               generatorError("sink input missing"));
       if (!type)
         return type.takeError();
-      output << "  gfsim::QueueSink<" << *type << "> block_" << index << "_;\n";
-      ++sinkIndex;
+      if (block->kind == "sink") {
+        output << "  gfsim::QueueSink<" << *type << "> block_" << index
+               << "_;\n";
+        ++sinkIndex;
+      } else {
+        output << "  gfsim::QueueObserve<" << *type << "> block_" << index
+               << "_;\n";
+      }
     }
   }
   output << "};\n\n} // namespace ac_generated\n";

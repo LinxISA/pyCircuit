@@ -48,6 +48,7 @@ __all__ = (
     "Endpoint",
     "source",
     "sink",
+    "observe",
 )
 
 
@@ -79,3 +80,7 @@ def source(payload: object, *, depth: int = 1, latency: int = 1) -> Never:
 
 def sink(value: object) -> Never:
     return _not_implemented("sink")
+
+
+def observe(value: object) -> Never:
+    return _not_implemented("observe")
