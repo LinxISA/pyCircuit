@@ -1,9 +1,9 @@
 Python3_add_library(agentic_circuit_native MODULE NativeModule.cpp)
-get_filename_component(ACIR_NATIVE_LLVM_LIB_DIR "${LLVM_DIR}/../.." ABSOLUTE)
+string(JOIN "|" ACIR_NATIVE_LLVM_LINK_FLAGS ${ACIR_LLVM_LINK_FLAGS})
 target_compile_definitions(agentic_circuit_native PRIVATE Py_LIMITED_API=0x030B0000)
 target_compile_definitions(agentic_circuit_native PRIVATE
   ACIR_NATIVE_CXX_COMPILER="${CMAKE_CXX_COMPILER}"
-  ACIR_NATIVE_LLVM_LIB_DIR="${ACIR_NATIVE_LLVM_LIB_DIR}"
+  ACIR_NATIVE_LLVM_LINK_FLAGS="${ACIR_NATIVE_LLVM_LINK_FLAGS}"
 )
 if(NOT LLVM_ENABLE_RTTI)
   target_compile_options(agentic_circuit_native PRIVATE -fno-rtti)

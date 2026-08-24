@@ -6,6 +6,26 @@ list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake/modules")
 include(cmake/LLVMToolchain.cmake)
 acir_configure_llvm()
 
+execute_process(
+  COMMAND "${LLVM_TOOLS_BINARY_DIR}/llvm-config"
+    --link-shared --ldflags --libs support --system-libs
+  OUTPUT_VARIABLE ACIR_LLVM_LINK_FLAGS_TEXT
+  OUTPUT_STRIP_TRAILING_WHITESPACE
+  RESULT_VARIABLE ACIR_LLVM_SHARED_LINK_RESULT
+)
+if(NOT ACIR_LLVM_SHARED_LINK_RESULT EQUAL 0)
+  execute_process(
+    COMMAND "${LLVM_TOOLS_BINARY_DIR}/llvm-config"
+      --link-static --ldflags --libs support --system-libs
+    OUTPUT_VARIABLE ACIR_LLVM_LINK_FLAGS_TEXT
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    COMMAND_ERROR_IS_FATAL ANY
+  )
+endif()
+separate_arguments(
+  ACIR_LLVM_LINK_FLAGS NATIVE_COMMAND "${ACIR_LLVM_LINK_FLAGS_TEXT}"
+)
+
 list(APPEND CMAKE_MODULE_PATH "${LLVM_DIR}" "${MLIR_DIR}")
 include(TableGen)
 include(AddLLVM)

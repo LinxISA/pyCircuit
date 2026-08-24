@@ -32,7 +32,9 @@ if sys.platform == "darwin":
 
 config.substitutions.append(("%binary_root", config.acir_binary_root))
 config.substitutions.append(("%cxx", config.acir_cxx))
-config.substitutions.append(("%llvm_lib_dir", config.acir_llvm_lib_dir))
+config.substitutions.append(
+    ("%llvm_linker_flags", config.acir_llvm_linker_flags)
+)
 config.substitutions.append(("%python", config.acir_python))
 config.substitutions.append(("%source_root", config.acir_source_root))
 
