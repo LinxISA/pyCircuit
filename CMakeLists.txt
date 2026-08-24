@@ -6,25 +6,65 @@ list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake/modules")
 include(cmake/LLVMToolchain.cmake)
 acir_configure_llvm()
 
-execute_process(
-  COMMAND "${LLVM_TOOLS_BINARY_DIR}/llvm-config"
-    --link-shared --ldflags --libs support --system-libs
-  OUTPUT_VARIABLE ACIR_LLVM_LINK_FLAGS_TEXT
-  OUTPUT_STRIP_TRAILING_WHITESPACE
-  RESULT_VARIABLE ACIR_LLVM_SHARED_LINK_RESULT
-)
-if(NOT ACIR_LLVM_SHARED_LINK_RESULT EQUAL 0)
-  execute_process(
-    COMMAND "${LLVM_TOOLS_BINARY_DIR}/llvm-config"
-      --link-static --ldflags --libs support --system-libs
-    OUTPUT_VARIABLE ACIR_LLVM_LINK_FLAGS_TEXT
-    OUTPUT_STRIP_TRAILING_WHITESPACE
-    COMMAND_ERROR_IS_FATAL ANY
-  )
+function(acir_append_llvm_link_flag flag)
+  set_property(GLOBAL APPEND PROPERTY ACIR_LLVM_LINK_FLAGS_PROPERTY "${flag}")
+endfunction()
+
+function(acir_collect_llvm_link_target target)
+  get_property(_visited GLOBAL PROPERTY ACIR_LLVM_LINK_TARGETS_PROPERTY)
+  if("${target}" IN_LIST _visited)
+    return()
+  endif()
+  set_property(GLOBAL APPEND PROPERTY ACIR_LLVM_LINK_TARGETS_PROPERTY "${target}")
+
+  get_target_property(_location "${target}" IMPORTED_LOCATION)
+  if(NOT _location OR _location MATCHES "-NOTFOUND$")
+    get_target_property(_configurations "${target}" IMPORTED_CONFIGURATIONS)
+    foreach(_configuration IN LISTS _configurations)
+      string(TOUPPER "${_configuration}" _configuration_upper)
+      get_target_property(
+        _candidate "${target}" "IMPORTED_LOCATION_${_configuration_upper}"
+      )
+      if(_candidate AND NOT _candidate MATCHES "-NOTFOUND$")
+        set(_location "${_candidate}")
+        break()
+      endif()
+    endforeach()
+  endif()
+  if(_location AND NOT _location MATCHES "-NOTFOUND$")
+    acir_append_llvm_link_flag("${_location}")
+  endif()
+
+  get_target_property(_dependencies "${target}" INTERFACE_LINK_LIBRARIES)
+  if(NOT _dependencies OR _dependencies MATCHES "-NOTFOUND$")
+    return()
+  endif()
+  foreach(_dependency IN LISTS _dependencies)
+    if(_dependency MATCHES "^\\$<LINK_ONLY:([^>]+)>$")
+      set(_dependency "${CMAKE_MATCH_1}")
+    elseif(_dependency MATCHES "^\\$<")
+      message(FATAL_ERROR
+        "unsupported LLVM link dependency expression: ${_dependency}"
+      )
+    endif()
+    if(TARGET "${_dependency}")
+      acir_collect_llvm_link_target("${_dependency}")
+    elseif(IS_ABSOLUTE "${_dependency}" OR _dependency MATCHES "^-")
+      acir_append_llvm_link_flag("${_dependency}")
+    else()
+      acir_append_llvm_link_flag("-l${_dependency}")
+    endif()
+  endforeach()
+endfunction()
+
+set_property(GLOBAL PROPERTY ACIR_LLVM_LINK_FLAGS_PROPERTY "")
+set_property(GLOBAL PROPERTY ACIR_LLVM_LINK_TARGETS_PROPERTY "")
+if(TARGET LLVM)
+  acir_collect_llvm_link_target(LLVM)
+else()
+  acir_collect_llvm_link_target(LLVMSupport)
 endif()
-separate_arguments(
-  ACIR_LLVM_LINK_FLAGS NATIVE_COMMAND "${ACIR_LLVM_LINK_FLAGS_TEXT}"
-)
+get_property(ACIR_LLVM_LINK_FLAGS GLOBAL PROPERTY ACIR_LLVM_LINK_FLAGS_PROPERTY)
 
 list(APPEND CMAKE_MODULE_PATH "${LLVM_DIR}" "${MLIR_DIR}")
 include(TableGen)
