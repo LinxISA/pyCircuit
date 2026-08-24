@@ -390,8 +390,78 @@ def pipeline() -> None:
     ac.sink(outgoing)
 """
 
+LOOP_CONTROL_SOURCE = """
+import agentic_circuit as ac
+
+@ac.struct
+class LoopItem:
+    remaining: ac.u4
+    stop: bool
+    skip: bool
+
+@ac.system
+def pipeline() -> None:
+    current = ac.source(LoopItem)
+    while current.remaining > 0:
+        if current.stop:
+            break
+        current = current.apply(
+            lambda item: item.with_fields(remaining=item.remaining - 1)
+        )
+        if current.skip:
+            continue
+    ac.sink(current)
+"""
+
+RECURSION_SOURCE = """
+import agentic_circuit as ac
+
+def stages(queue, count):
+    if count == 0:
+        return queue
+    return stages(
+        queue.apply(lambda item: item + 1, depth=2, latency=1),
+        count - 1,
+    )
+
+@ac.system
+def pipeline() -> None:
+    incoming = ac.source(int)
+    outgoing = stages(incoming, 3)
+    ac.sink(outgoing)
+"""
+
 
 class QueueFrontendV02Test(unittest.TestCase):
+    def test_compile_time_recursion_expands_to_frozen_queue_chain(self) -> None:
+        from agentic_circuit._queue_frontend import (
+            QueueFrontendError,
+            lower_queue_source,
+        )
+
+        lowered = lower_queue_source(RECURSION_SOURCE, "pipeline")
+        self.assertEqual(3, lowered.count(" = ac.transform "))
+        self.assertIn("%outgoing__rec0 = ac.transform %incoming", lowered)
+        self.assertIn("%outgoing__rec1 = ac.transform %outgoing__rec0", lowered)
+        self.assertIn("%outgoing = ac.transform %outgoing__rec1", lowered)
+        self.assertEqual(lowered, lower_queue_source(RECURSION_SOURCE, "pipeline"))
+        with self.assertRaisesRegex(QueueFrontendError, "recursion depth"):
+            lower_queue_source(
+                RECURSION_SOURCE.replace("stages(incoming, 3)", "stages(incoming, runtime)"),
+                "pipeline",
+            )
+
+    def test_bounded_loop_break_and_tail_continue_lower_to_feedback_edges(self) -> None:
+        from agentic_circuit._queue_frontend import lower_queue_source
+
+        lowered = lower_queue_source(LOOP_CONTROL_SOURCE, "pipeline")
+        self.assertIn("ac.feedback", lowered)
+        self.assertIn('field "stop"', lowered)
+        self.assertIn('field "skip"', lowered)
+        self.assertIn('ac.var.cmp "eq"', lowered)
+        self.assertIn("ac.var.mul", lowered)
+        self.assertIn("ac.feedback.yield", lowered)
+
     def test_python_firing_effects_normalize_to_standard_atomic_transform(self) -> None:
         from agentic_circuit._queue_frontend import (
             QueueFrontendError,

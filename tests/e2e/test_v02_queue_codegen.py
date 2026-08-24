@@ -229,7 +229,9 @@ int main() {{
             BARRIER_SOURCE,
             CREDIT_SOURCE,
             FIRING_SOURCE,
+            LOOP_CONTROL_SOURCE,
             MEMORY_SOURCE,
+            RECURSION_SOURCE,
             SELECT_SOURCE,
         )
 
@@ -244,7 +246,9 @@ int main() {{
                 ("credit", CREDIT_SOURCE, "gfsim::QueueCredit"),
                 ("feedback", FEEDBACK_SOURCE, "gfsim::QueueFeedback"),
                 ("firing", FIRING_SOURCE, "gfsim::QueueTransform"),
+                ("loop_control", LOOP_CONTROL_SOURCE, "gfsim::QueueFeedback"),
                 ("memory", MEMORY_SOURCE, "gfsim::QueueMemory"),
+                ("recursion", RECURSION_SOURCE, "gfsim::QueueTransform"),
                 ("select", SELECT_SOURCE, "gfsim::QueueSelect"),
             ):
                 python = root / f"{name}.py"

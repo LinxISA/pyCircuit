@@ -88,6 +88,10 @@ normalize to the standard atomic transform.
 official route, two branch transforms, and a mutually exclusive priority merge.
 `pyc_feedback_pipeline.py` verifies a bounded serial `while` as sequential
 feedback data, valid, and iteration state shared by PYC C++ and Verilog.
+`pyc_loop_control_pipeline.py` verifies a leading runtime `break` and tail
+`continue` normalize to explicit bounded feedback conditions.
+`pyc_recursive_pipeline.py` verifies bounded compile-time recursion expands to
+a frozen three-stage Queue chain before ACIR publication.
 `pyc_reorder_pipeline.py` verifies bounded key-ordered retirement with the same
 register-bank and handshake semantics in typed gfsim, PYC C++, and Verilog.
 `pyc_dependency_pipeline.py` verifies predecessor wakeup, execution countdown,

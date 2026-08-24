@@ -215,6 +215,15 @@ class StaticQueueCollection:
 
 
 @dataclass(frozen=True, slots=True)
+class RecursiveQueueHelper:
+    queue_parameter: str
+    count_parameter: str
+    argument: str
+    expression: ast.expr
+    apply_call: ast.Call
+
+
+@dataclass(frozen=True, slots=True)
 class CollectionBinding:
     name: str
     value: StaticQueueCollection
@@ -465,6 +474,73 @@ def parse_queue_program(text: str, system: str) -> QueueProgram:
     if function.args.args or function.args.posonlyargs or function.args.kwonlyargs:
         raise QueueFrontendError(
             "ACPY-QUEUE-001: a queue system infers boundaries and takes no parameters"
+        )
+    recursive_helpers: dict[str, RecursiveQueueHelper] = {}
+    for helper in tree.body:
+        if (
+            not isinstance(helper, ast.FunctionDef)
+            or helper is function
+            or helper.decorator_list
+            or len(helper.args.args) != 2
+            or helper.args.posonlyargs
+            or helper.args.kwonlyargs
+            or len(helper.body) != 2
+            or not isinstance(helper.body[0], ast.If)
+            or not isinstance(helper.body[1], ast.Return)
+        ):
+            continue
+        queue_parameter = helper.args.args[0].arg
+        count_parameter = helper.args.args[1].arg
+        base = helper.body[0]
+        recursive_return = helper.body[1]
+        if (
+            not isinstance(base.test, ast.Compare)
+            or len(base.test.ops) != 1
+            or not isinstance(base.test.ops[0], ast.Eq)
+            or len(base.test.comparators) != 1
+            or not isinstance(base.test.left, ast.Name)
+            or base.test.left.id != count_parameter
+            or not isinstance(base.test.comparators[0], ast.Constant)
+            or base.test.comparators[0].value != 0
+            or len(base.body) != 1
+            or not isinstance(base.body[0], ast.Return)
+            or not isinstance(base.body[0].value, ast.Name)
+            or base.body[0].value.id != queue_parameter
+            or base.orelse
+            or not isinstance(recursive_return.value, ast.Call)
+        ):
+            continue
+        recursive_call = recursive_return.value
+        if (
+            not isinstance(recursive_call.func, ast.Name)
+            or recursive_call.func.id != helper.name
+            or len(recursive_call.args) != 2
+            or recursive_call.keywords
+            or not isinstance(recursive_call.args[0], ast.Call)
+            or not isinstance(recursive_call.args[1], ast.BinOp)
+            or not isinstance(recursive_call.args[1].op, ast.Sub)
+            or not isinstance(recursive_call.args[1].left, ast.Name)
+            or recursive_call.args[1].left.id != count_parameter
+            or not isinstance(recursive_call.args[1].right, ast.Constant)
+            or recursive_call.args[1].right.value != 1
+        ):
+            continue
+        apply_call = recursive_call.args[0]
+        if (
+            not isinstance(apply_call.func, ast.Attribute)
+            or apply_call.func.attr != "apply"
+            or not isinstance(apply_call.func.value, ast.Name)
+            or apply_call.func.value.id != queue_parameter
+            or len(apply_call.args) != 1
+        ):
+            continue
+        argument, expression = _lambda(apply_call.args[0])
+        recursive_helpers[helper.name] = RecursiveQueueHelper(
+            queue_parameter,
+            count_parameter,
+            argument,
+            expression,
+            apply_call,
         )
     queues: list[QueueBinding] = []
     scopes: list[ScopeBinding] = []
@@ -1022,17 +1098,37 @@ def parse_queue_program(text: str, system: str) -> QueueProgram:
                     )
                 continue
             if isinstance(statement, ast.While) and not statement.orelse:
+                body = list(statement.body)
+                break_test: ast.expr | None = None
+                continue_test: ast.expr | None = None
                 if (
-                    len(statement.body) != 1
-                    or not isinstance(statement.body[0], ast.Assign)
-                    or len(statement.body[0].targets) != 1
-                    or not isinstance(statement.body[0].targets[0], ast.Name)
-                    or not isinstance(statement.body[0].value, ast.Call)
+                    body
+                    and isinstance(body[0], ast.If)
+                    and len(body[0].body) == 1
+                    and isinstance(body[0].body[0], ast.Break)
+                    and not body[0].orelse
+                ):
+                    break_test = body.pop(0).test
+                if (
+                    body
+                    and isinstance(body[-1], ast.If)
+                    and len(body[-1].body) == 1
+                    and isinstance(body[-1].body[0], ast.Continue)
+                    and not body[-1].orelse
+                ):
+                    continue_test = body.pop().test
+                if (
+                    len(body) != 1
+                    or not isinstance(body[0], ast.Assign)
+                    or len(body[0].targets) != 1
+                    or not isinstance(body[0].targets[0], ast.Name)
+                    or not isinstance(body[0].value, ast.Call)
                 ):
                     raise QueueFrontendError(
-                        "ACPY-QUEUE-007: runtime while requires one Queue update"
+                        "ACPY-QUEUE-007: runtime while requires optional break, "
+                        "one Queue update, and optional tail continue"
                     )
-                update_statement = statement.body[0]
+                update_statement = body[0]
                 variable = update_statement.targets[0].id
                 call = update_statement.value
                 incoming = by_name.get(variable)
@@ -1057,6 +1153,40 @@ def parse_queue_program(text: str, system: str) -> QueueProgram:
 
                 condition = QueueCondition().visit(copy.deepcopy(statement.test))
                 assert isinstance(condition, ast.expr)
+                if break_test is not None:
+                    rewritten_break = QueueCondition().visit(
+                        copy.deepcopy(break_test)
+                    )
+                    assert isinstance(rewritten_break, ast.expr)
+                    condition = ast.BoolOp(
+                        op=ast.And(),
+                        values=[
+                            condition,
+                            ast.UnaryOp(op=ast.Not(), operand=rewritten_break),
+                        ],
+                    )
+                if continue_test is not None:
+                    rewritten_continue = QueueCondition().visit(
+                        copy.deepcopy(continue_test)
+                    )
+                    if not isinstance(rewritten_continue, ast.expr):
+                        raise QueueFrontendError(
+                            "ACPY-QUEUE-007: continue condition is invalid"
+                        )
+                    continue_probe = ast.UnaryOp(
+                        op=ast.Not(), operand=rewritten_continue
+                    )
+                    condition = ast.BoolOp(
+                        op=ast.And(),
+                        values=[
+                            condition,
+                            ast.Compare(
+                                left=continue_probe,
+                                ops=[ast.Eq()],
+                                comparators=[copy.deepcopy(continue_probe)],
+                            ),
+                        ],
+                    )
                 output_name = f"{variable}__feedback{len(feedbacks)}"
                 depth = _positive_int(call, "depth", 1)
                 latency = _positive_int(call, "latency", 1)
@@ -1597,6 +1727,49 @@ def parse_queue_program(text: str, system: str) -> QueueProgram:
                 and isinstance(statement.value, ast.Call)
             ):
                 name, call = statement.targets[0].id, statement.value
+                if isinstance(call.func, ast.Name) and call.func.id in recursive_helpers:
+                    if (
+                        name in by_name
+                        or name in collections
+                        or len(call.args) != 2
+                        or call.keywords
+                    ):
+                        raise QueueFrontendError(
+                            "ACPY-QUEUE-020: recursive helper call is malformed"
+                        )
+                    input_name = queue_reference(call.args[0], aliases)
+                    extent = _static_int(call.args[1], {})
+                    if extent is None or extent < 0 or extent > 1024:
+                        raise QueueFrontendError(
+                            "ACPY-QUEUE-020: recursion depth must be a compile-time "
+                            "integer in [0, 1024]"
+                        )
+                    helper = recursive_helpers[call.func.id]
+                    incoming = by_name[input_name]
+                    if extent == 0:
+                        by_name[name] = incoming
+                        continue
+                    previous = incoming
+                    for index in range(extent):
+                        output_name = (
+                            name if index + 1 == extent else f"{name}__rec{index}"
+                        )
+                        binding = QueueBinding(
+                            output_name,
+                            incoming.payload,
+                            _positive_int(helper.apply_call, "depth", 1),
+                            _positive_int(helper.apply_call, "latency", 1),
+                            previous.name,
+                            helper.argument,
+                            copy.deepcopy(helper.expression),
+                            scope_path,
+                            current_order,
+                            atomic_group=atomic_group,
+                        )
+                        queues.append(binding)
+                        by_name[output_name] = binding
+                        previous = binding
+                    continue
                 if name in by_name or name in collections:
                     raise QueueFrontendError(
                         "ACPY-QUEUE-001: queue assignment requires one fresh name"
@@ -1972,6 +2145,44 @@ class _ExpressionEmitter:
                 f"    %{name} = ac.var.{opcode} %{left}, %{right} : !ac.var<{left_type}>"
             )
             return name, left_type
+        if isinstance(node, ast.BoolOp) and isinstance(node.op, ast.And):
+            if len(node.values) < 2:
+                raise QueueFrontendError(
+                    "ACPY-QUEUE-003: boolean and requires two operands"
+                )
+            current, current_type = self.emit(node.values[0], "i1")
+            if current_type != "i1":
+                raise QueueFrontendError(
+                    "ACPY-QUEUE-003: boolean operands must be i1"
+                )
+            for operand in node.values[1:]:
+                value, value_type = self.emit(operand, "i1")
+                if value_type != "i1":
+                    raise QueueFrontendError(
+                        "ACPY-QUEUE-003: boolean operands must be i1"
+                    )
+                name = self._new()
+                self.lines.append(
+                    f"    %{name} = ac.var.mul %{current}, %{value} : !ac.var<i1>"
+                )
+                current = name
+            return current, "i1"
+        if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not):
+            value, value_type = self.emit(node.operand, "i1")
+            if value_type != "i1":
+                raise QueueFrontendError(
+                    "ACPY-QUEUE-003: boolean not requires i1"
+                )
+            false_value = self._new()
+            self.lines.append(
+                f"    %{false_value} = ac.var.constant false as !ac.var<i1>"
+            )
+            name = self._new()
+            self.lines.append(
+                f'    %{name} = ac.var.cmp "eq" %{value}, %{false_value} : '
+                "!ac.var<i1> -> !ac.var<i1>"
+            )
+            return name, "i1"
         if (
             isinstance(node, ast.Compare)
             and len(node.ops) == len(node.comparators) == 1

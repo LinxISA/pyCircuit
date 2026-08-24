@@ -67,6 +67,10 @@ class _CppExpression:
                 type(node.op)
             ]
             return f"({self.emit(node.left)} {operator} {self.emit(node.right)})"
+        if isinstance(node, ast.BoolOp) and isinstance(node.op, ast.And):
+            return "(" + " && ".join(self.emit(value) for value in node.values) + ")"
+        if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not):
+            return f"(!{self.emit(node.operand)})"
         if isinstance(node, ast.Compare) and len(node.ops) == len(node.comparators) == 1:
             operators = {
                 ast.Eq: "==",

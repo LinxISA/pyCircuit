@@ -568,6 +568,24 @@ The current compiler freezes `max_iterations = 1024`. When the condition is
 false, the current token exits unchanged. When it is true, the immutable update
 is recirculated. Exceeding the bound reports `feedback_iteration_limit`.
 
+A bounded loop may place one runtime `break` guard before its Queue update and
+one runtime `continue` guard at the tail:
+
+```python
+while current.remaining > 0:
+    if current.stop:
+        break
+    current = current.apply(step)
+    if current.skip:
+        continue
+```
+
+The leading `break` becomes part of the explicit feedback continuation
+condition; a matching token exits unchanged. A tail `continue` targets the same
+feedback edge as normal loop fallthrough and is normalized to that edge. Other
+statement placement, loop `else`, and more than one Queue update remain
+deterministic errors.
+
 ### Static collections
 
 Queue collections have compile-time shape and membership.
@@ -628,6 +646,26 @@ if True:
 for index in range(2):
     ac.sink(lanes[index])
 ```
+
+One structurally decreasing Queue helper may recurse at compile time:
+
+```python
+def add_stages(queue, count):
+    if count == 0:
+        return queue
+    return add_stages(
+        queue.apply(lambda item: item + 1),
+        count - 1,
+    )
+
+outgoing = add_stages(incoming, 3)
+```
+
+The helper MUST have exactly one Queue parameter and one integer count, a
+`count == 0` identity base case, and one self-call whose count is `count - 1`.
+The call-site depth MUST be a compile-time integer in `[0, 1024]`. The frontend
+expands the helper before ACIR publication; no recursion, call stack, or dynamic
+module creation remains in either backend.
 
 A runtime Queue condition may use the symmetric form below. The condition MUST
 lower to `ac.var<i1>`, both branches MUST consume the same Queue through one
