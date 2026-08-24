@@ -31,6 +31,7 @@ class QueueBinding:
     expression: ast.expr | None = None
     scope: tuple[str, ...] = ()
     order: int = 0
+    route_output: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -48,11 +49,24 @@ class SinkBinding:
 
 
 @dataclass(frozen=True, slots=True)
+class RouteBinding:
+    input_name: str
+    outputs: tuple[str, ...]
+    argument: str
+    selector: ast.expr
+    depth: int
+    latency: int
+    scope: tuple[str, ...]
+    order: int
+
+
+@dataclass(frozen=True, slots=True)
 class QueueProgram:
     system: str
     payloads: tuple[Payload, ...]
     queues: tuple[QueueBinding, ...]
     scopes: tuple[ScopeBinding, ...]
+    routes: tuple[RouteBinding, ...]
     sinks: tuple[SinkBinding, ...]
 
 
@@ -148,6 +162,7 @@ def parse_queue_program(text: str, system: str) -> QueueProgram:
         raise QueueFrontendError("ACPY-QUEUE-001: a queue system infers boundaries and takes no parameters")
     queues: list[QueueBinding] = []
     scopes: list[ScopeBinding] = []
+    routes: list[RouteBinding] = []
     sinks: list[SinkBinding] = []
     by_name: dict[str, QueueBinding] = {}
     order = 0
@@ -194,6 +209,39 @@ def parse_queue_program(text: str, system: str) -> QueueProgram:
                 queues.append(binding)
                 by_name[name] = binding
                 continue
+            if (
+                isinstance(statement, ast.Assign)
+                and len(statement.targets) == 1
+                and isinstance(statement.targets[0], (ast.Tuple, ast.List))
+                and all(isinstance(item, ast.Name) for item in statement.targets[0].elts)
+                and isinstance(statement.value, ast.Call)
+                and isinstance(statement.value.func, ast.Attribute)
+                and statement.value.func.attr == "route"
+                and isinstance(statement.value.func.value, ast.Name)
+            ):
+                call = statement.value
+                input_name = call.func.value.id
+                incoming = by_name.get(input_name)
+                if incoming is None:
+                    raise QueueFrontendError(f"ACPY-QUEUE-001: input queue {input_name!r} is unbound")
+                output_count = _positive_int(call, "outputs", 0)
+                names = tuple(item.id for item in statement.targets[0].elts)
+                if output_count != len(names) or len(set(names)) != len(names):
+                    raise QueueFrontendError("ACPY-QUEUE-006: route outputs must match fresh tuple names")
+                key = [keyword.value for keyword in call.keywords if keyword.arg == "key"]
+                if len(key) != 1:
+                    raise QueueFrontendError("ACPY-QUEUE-006: route requires one key lambda")
+                argument, selector = _lambda(key[0])
+                depth = _positive_int(call, "depth", 1)
+                latency = _positive_int(call, "latency", 1)
+                for name in names:
+                    if name in by_name:
+                        raise QueueFrontendError("ACPY-QUEUE-006: route output name is already bound")
+                    output = QueueBinding(name, incoming.payload, depth, latency, None, scope=scope_path, order=current_order, route_output=True)
+                    queues.append(output)
+                    by_name[name] = output
+                routes.append(RouteBinding(input_name, names, argument, selector, depth, latency, scope_path, current_order))
+                continue
             if isinstance(statement, ast.Expr) and isinstance(statement.value, ast.Call) and isinstance(statement.value.func, ast.Name) and statement.value.func.id == "sink" and len(statement.value.args) == 1 and isinstance(statement.value.args[0], ast.Name):
                 name = statement.value.args[0].id
                 if name not in by_name:
@@ -207,7 +255,7 @@ def parse_queue_program(text: str, system: str) -> QueueProgram:
     visit(function.body, ())
     if not queues or not sinks:
         raise QueueFrontendError("ACPY-QUEUE-001: a queue system requires source and sink boundaries")
-    return QueueProgram(system, payloads, tuple(queues), tuple(scopes), tuple(sinks))
+    return QueueProgram(system, payloads, tuple(queues), tuple(scopes), tuple(routes), tuple(sinks))
 
 
 class _ExpressionEmitter:
@@ -338,6 +386,8 @@ def lower_queue_program(program: QueueProgram) -> str:
         uses[source_name].append(fanout_scope)
     for sink_binding in program.sinks:
         uses[sink_binding.queue].append(sink_binding.scope)
+    for route in program.routes:
+        uses[route.input_name].append(route.scope)
 
     def inside(container: tuple[str, ...], candidate: tuple[str, ...]) -> bool:
         return candidate[: len(container)] == container
@@ -407,7 +457,12 @@ def lower_queue_program(program: QueueProgram) -> str:
         events.extend(
             (queue.order, "queue", queue)
             for queue in program.queues
-            if queue.scope == path
+            if queue.scope == path and not queue.route_output
+        )
+        events.extend(
+            (route.order, "route", route)
+            for route in program.routes
+            if route.scope == path
         )
         events.extend(
             (min(visible_order(consumer) for consumer in group) - 0.5, "broadcast", source)
@@ -450,6 +505,37 @@ def lower_queue_program(program: QueueProgram) -> str:
                 )
                 for consumer, output in zip(group, outputs, strict=True):
                     mapping[effective_input[consumer.name]] = output
+            elif kind == "route":
+                route = item
+                assert isinstance(route, RouteBinding)
+                incoming = by_name[route.input_name]
+                emitter = _ExpressionEmitter(payloads, route.argument, incoming.payload)
+                selector, selector_type = emitter.emit(route.selector)
+                output_names = [
+                    name if not path else f"{name}__local" for name in route.outputs
+                ]
+                lhs = ", ".join(f"%{name}" for name in output_names)
+                depths = ", ".join(str(route.depth) for _ in output_names)
+                latencies = ", ".join(str(route.latency) for _ in output_names)
+                output_types = ", ".join(
+                    f"!ac.queue<{incoming.payload}>" for _ in output_names
+                )
+                lines.append(
+                    f"{indent}{lhs} = ac.route %{mapping[route.input_name]} "
+                    f"depths [{depths}] latencies [{latencies}] {{"
+                )
+                lines.append(
+                    f"{indent}^selector(%item: !ac.var<{incoming.payload}>):"
+                )
+                lines.extend(indent + line[2:] for line in emitter.lines)
+                lines.append(
+                    f"{indent}  ac.route.yield %{selector} : !ac.var<{selector_type}>"
+                )
+                lines.append(
+                    f"{indent}}} : !ac.queue<{incoming.payload}> -> ({output_types})"
+                )
+                for name, output in zip(route.outputs, output_names, strict=True):
+                    mapping[name] = output
             else:
                 sink_binding = item
                 assert isinstance(sink_binding, SinkBinding)

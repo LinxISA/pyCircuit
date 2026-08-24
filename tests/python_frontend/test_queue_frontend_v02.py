@@ -74,6 +74,27 @@ def pipeline() -> None:
     sink(right)
 """
 
+ROUTE_SOURCE = """
+from agentic_circuit import sink, source, struct, system
+
+@struct
+class Item:
+    value: int
+    route: int
+
+@system
+def pipeline() -> None:
+    input_queue = source(Item)
+    left, right = input_queue.route(
+        outputs=2,
+        key=lambda item: item.route,
+        depth=2,
+        latency=1,
+    )
+    sink(left)
+    sink(right)
+"""
+
 
 class QueueFrontendV02Test(unittest.TestCase):
     def test_simple_serial_python_lowers_to_typed_queue_graph(self) -> None:
@@ -151,6 +172,17 @@ class QueueFrontendV02Test(unittest.TestCase):
         self.assertIn(
             "^body(%input_queue__fanout0__in: !ac.queue<i64>):", lowered
         )
+
+    def test_tuple_route_lowers_selector_to_var_region(self) -> None:
+        from agentic_circuit._queue_frontend import lower_queue_source
+
+        lowered = lower_queue_source(ROUTE_SOURCE, "pipeline")
+        self.assertIn("%left, %right = ac.route %input_queue", lowered)
+        self.assertIn("depths [2, 2] latencies [1, 1]", lowered)
+        self.assertIn('ac.var.get %item field "route"', lowered)
+        self.assertIn("ac.route.yield", lowered)
+        self.assertIn("ac.sink %left", lowered)
+        self.assertIn("ac.sink %right", lowered)
 
     def test_latency_zero_and_unsupported_lambda_are_rejected(self) -> None:
         from agentic_circuit._queue_frontend import (
