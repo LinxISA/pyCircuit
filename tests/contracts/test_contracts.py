@@ -1,3 +1,4 @@
+import hashlib
 import importlib.util
 import json
 import re
@@ -787,6 +788,42 @@ class RepositoryContractsTest(unittest.TestCase):
         if "proposed Python" in readme or "No implementation contract is approved yet" in readme:
             offenders.append("README.md (stale specification-phase placeholder)")
         self.assertEqual([], offenders, f"placeholder content: {offenders}")
+
+    def test_davincioo_reference_snapshot_is_provenance_locked(self):
+        reference = ROOT / "examples/reference/davincioo-gfsim"
+        source = json.loads((reference / "SOURCE.json").read_text())
+        self.assertEqual(
+            "agentic-circuit-reference-source@0.1", source.get("schema")
+        )
+        self.assertEqual(
+            "https://github.com/hengliao1972/DavinciOO.git",
+            source.get("repository"),
+        )
+        self.assertEqual(
+            "a542b9cf705096288c615575be222b974b570a18",
+            source.get("commit"),
+        )
+        self.assertEqual("model", source.get("subtree"))
+        self.assertEqual("unresolved", source.get("license_status"))
+
+        manifest = {}
+        for line in (reference / "UPSTREAM_FILES.sha256").read_text().splitlines():
+            digest, separator, path = line.partition("  ")
+            self.assertEqual("  ", separator)
+            self.assertRegex(digest, r"^[0-9a-f]{64}$")
+            self.assertNotIn(path, manifest)
+            manifest[path] = digest
+
+        upstream = reference / "upstream"
+        actual = {
+            path.relative_to(reference).as_posix()
+            for path in upstream.rglob("*")
+            if path.is_file()
+        }
+        self.assertEqual(actual, set(manifest))
+        for relative, expected in manifest.items():
+            digest = hashlib.sha256((reference / relative).read_bytes()).hexdigest()
+            self.assertEqual(expected, digest, relative)
 
     def test_llvm_lock_is_exact_and_complete(self):
         lock = json.loads((ROOT / "toolchains/llvm.lock.json").read_text())

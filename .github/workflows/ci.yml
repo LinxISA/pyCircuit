@@ -78,7 +78,9 @@ jobs:
           python scripts/check-ir-coverage.py
 
       - name: Check clang-format on owned sources
-        run: git ls-files "*.cpp" "*.h" | xargs clang-format --dry-run --Werror
+        run: |
+          git ls-files "*.cpp" "*.h" ":!examples/reference/**" |
+            xargs clang-format --dry-run --Werror
 
       - name: Cache content-addressed LLVM source archive
         uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684

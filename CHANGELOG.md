@@ -22,3 +22,6 @@ release.
   completion, and in-order retirement.
 - Phase 5 replay, equivalent-root, legal Work-permutation, dependency-scan,
   installation, sanitizer, and end-to-end CI gates.
+- A provenance-locked DavinciOO gfsim C++ reference model under
+  `examples/reference`, with an executable smoke trace and an explicit
+  ACIR-to-gfsim generation boundary.
