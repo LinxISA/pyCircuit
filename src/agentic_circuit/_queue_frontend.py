@@ -34,6 +34,7 @@ class QueueBinding:
     order: int = 0
     route_output: bool = False
     feedback_output: bool = False
+    merge_output: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -77,6 +78,17 @@ class FeedbackBinding:
 
 
 @dataclass(frozen=True, slots=True)
+class MergeBinding:
+    inputs: tuple[str, ...]
+    output: str
+    policy: str
+    depth: int
+    latency: int
+    scope: tuple[str, ...]
+    order: int
+
+
+@dataclass(frozen=True, slots=True)
 class StaticQueueCollection:
     kind: str
     members: tuple[
@@ -92,6 +104,7 @@ class QueueProgram:
     scopes: tuple[ScopeBinding, ...]
     routes: tuple[RouteBinding, ...]
     feedbacks: tuple[FeedbackBinding, ...]
+    merges: tuple[MergeBinding, ...]
     sinks: tuple[SinkBinding, ...]
 
 
@@ -219,6 +232,7 @@ def parse_queue_program(text: str, system: str) -> QueueProgram:
     scopes: list[ScopeBinding] = []
     routes: list[RouteBinding] = []
     feedbacks: list[FeedbackBinding] = []
+    merges: list[MergeBinding] = []
     sinks: list[SinkBinding] = []
     by_name: dict[str, QueueBinding] = {}
     collections: dict[str, StaticQueueCollection] = {}
@@ -556,6 +570,74 @@ def parse_queue_program(text: str, system: str) -> QueueProgram:
                     )
                 )
                 continue
+            if (
+                isinstance(statement, ast.Assign)
+                and len(statement.targets) == 1
+                and isinstance(statement.targets[0], ast.Name)
+                and isinstance(statement.value, ast.Call)
+                and isinstance(statement.value.func, ast.Attribute)
+                and statement.value.func.attr == "merge"
+                and isinstance(statement.value.func.value, ast.Name)
+            ):
+                name = statement.targets[0].id
+                if name in by_name or name in collections:
+                    raise QueueFrontendError(
+                        "ACPY-QUEUE-008: merge output requires one fresh name"
+                    )
+                call = statement.value
+                operands = [call.func.value, *call.args]
+                inputs = tuple(queue_reference(operand, aliases) for operand in operands)
+                if len(inputs) < 2:
+                    raise QueueFrontendError(
+                        "ACPY-QUEUE-008: merge requires at least two Queues"
+                    )
+                payload = by_name[inputs[0]].payload
+                if any(by_name[input_name].payload != payload for input_name in inputs):
+                    raise QueueFrontendError(
+                        "ACPY-QUEUE-008: merge Queue payloads must match"
+                    )
+                policies = [
+                    keyword.value
+                    for keyword in call.keywords
+                    if keyword.arg == "policy"
+                ]
+                if len(policies) > 1 or (
+                    policies
+                    and (
+                        not isinstance(policies[0], ast.Constant)
+                        or policies[0].value not in {"round_robin", "priority"}
+                    )
+                ):
+                    raise QueueFrontendError(
+                        "ACPY-QUEUE-008: merge policy must be round_robin or priority"
+                    )
+                policy = policies[0].value if policies else "round_robin"
+                depth = _positive_int(call, "depth", 1)
+                latency = _positive_int(call, "latency", 1)
+                output = QueueBinding(
+                    name,
+                    payload,
+                    depth,
+                    latency,
+                    None,
+                    scope=scope_path,
+                    order=current_order,
+                    merge_output=True,
+                )
+                queues.append(output)
+                by_name[name] = output
+                merges.append(
+                    MergeBinding(
+                        inputs,
+                        name,
+                        policy,
+                        depth,
+                        latency,
+                        scope_path,
+                        current_order,
+                    )
+                )
+                continue
             if isinstance(statement, ast.Assign) and len(statement.targets) == 1 and isinstance(statement.targets[0], ast.Name) and isinstance(statement.value, ast.Call):
                 name, call = statement.targets[0].id, statement.value
                 if name in by_name or name in collections:
@@ -630,6 +712,7 @@ def parse_queue_program(text: str, system: str) -> QueueProgram:
         tuple(scopes),
         tuple(routes),
         tuple(feedbacks),
+        tuple(merges),
         tuple(sinks),
     )
 
@@ -791,6 +874,9 @@ def lower_queue_program(program: QueueProgram) -> str:
         uses[route.input_name].append(route.scope)
     for feedback in program.feedbacks:
         uses[feedback.input_name].append(feedback.scope)
+    for merge in program.merges:
+        for input_name in merge.inputs:
+            uses[input_name].append(merge.scope)
 
     def inside(container: tuple[str, ...], candidate: tuple[str, ...]) -> bool:
         return candidate[: len(container)] == container
@@ -863,11 +949,17 @@ def lower_queue_program(program: QueueProgram) -> str:
             if queue.scope == path
             and not queue.route_output
             and not queue.feedback_output
+            and not queue.merge_output
         )
         events.extend(
             (route.order, "route", route)
             for route in program.routes
             if route.scope == path
+        )
+        events.extend(
+            (merge.order, "merge", merge)
+            for merge in program.merges
+            if merge.scope == path
         )
         events.extend(
             (feedback.order, "feedback", feedback)
@@ -983,6 +1075,21 @@ def lower_queue_program(program: QueueProgram) -> str:
                     f"!ac.queue<{incoming.payload}>"
                 )
                 mapping[feedback.output_name] = output
+            elif kind == "merge":
+                merge = item
+                assert isinstance(merge, MergeBinding)
+                output = merge.output if not path else f"{merge.output}__local"
+                operands = ", ".join(f"%{mapping[name]}" for name in merge.inputs)
+                input_types = ", ".join(
+                    f"!ac.queue<{by_name[name].payload}>" for name in merge.inputs
+                )
+                payload = by_name[merge.output].payload
+                lines.append(
+                    f'{indent}%{output} = ac.merge {operands} policy "{merge.policy}" '
+                    f"depth {merge.depth} latency {merge.latency} : "
+                    f"({input_types}) -> !ac.queue<{payload}>"
+                )
+                mapping[merge.output] = output
             else:
                 sink_binding = item
                 assert isinstance(sink_binding, SinkBinding)

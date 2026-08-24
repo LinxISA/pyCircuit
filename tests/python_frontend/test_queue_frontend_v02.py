@@ -91,8 +91,8 @@ def pipeline() -> None:
         depth=2,
         latency=1,
     )
-    sink(left)
-    sink(right)
+    merged = left.merge(right, policy="round_robin", depth=3, latency=1)
+    sink(merged)
 """
 
 COLLECTION_SOURCE = """
@@ -231,8 +231,9 @@ class QueueFrontendV02Test(unittest.TestCase):
         self.assertIn("depths [2, 2] latencies [1, 1]", lowered)
         self.assertIn('ac.var.get %item field "route"', lowered)
         self.assertIn("ac.route.yield", lowered)
-        self.assertIn("ac.sink %left", lowered)
-        self.assertIn("ac.sink %right", lowered)
+        self.assertIn('%merged = ac.merge %left, %right policy "round_robin"', lowered)
+        self.assertIn("depth 3 latency 1", lowered)
+        self.assertIn("ac.sink %merged", lowered)
 
     def test_static_queue_collections_flatten_in_canonical_order(self) -> None:
         from agentic_circuit._queue_frontend import lower_queue_source
