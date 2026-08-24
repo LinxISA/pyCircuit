@@ -58,6 +58,9 @@ operations:
   - ac.broadcast
   - ac.route
   - ac.route.yield
+  - ac.merge
+  - ac.feedback
+  - ac.feedback.yield
   - ac.scope
   - ac.scope.yield
   - ac.firing

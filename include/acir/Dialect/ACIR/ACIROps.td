@@ -204,6 +204,40 @@ def ACIR_RouteYieldOp : ACIR_Op<"route.yield", [
   let assemblyFormat = "$selector attr-dict `:` qualified(type($selector))";
 }
 
+def ACIR_MergeOp : ACIR_Op<"merge"> {
+  let arguments = (ins Variadic<ACIR_QueueType>:$inputs, StrAttr:$policy,
+                       I64Attr:$depth, I64Attr:$latency);
+  let results = (outs ACIR_QueueType:$output);
+  let hasVerifier = 1;
+  let assemblyFormat = [{
+    $inputs `policy` $policy `depth` $depth `latency` $latency attr-dict
+    `:` functional-type($inputs, $output)
+  }];
+}
+
+def ACIR_FeedbackOp : ACIR_Op<"feedback", [SingleBlock]> {
+  let arguments = (ins ACIR_QueueType:$input, I64Attr:$depth,
+                       I64Attr:$latency, I64Attr:$max_iterations);
+  let results = (outs ACIR_QueueType:$output);
+  let regions = (region SizedRegion<1>:$body);
+  let hasVerifier = 1;
+  let assemblyFormat = [{
+    $input `depth` $depth `latency` $latency
+    `max_iterations` $max_iterations $body attr-dict `:`
+    qualified(type($input)) `->` qualified(type($output))
+  }];
+}
+
+def ACIR_FeedbackYieldOp : ACIR_Op<"feedback.yield", [
+    Pure, Terminator, HasParent<"FeedbackOp">
+  ]> {
+  let arguments = (ins ACIR_VarType:$value, ACIR_VarType:$continue_value);
+  let assemblyFormat = [{
+    $value `continue` $continue_value attr-dict `:`
+    qualified(type($value)) `,` qualified(type($continue_value))
+  }];
+}
+
 def ACIR_ScopeOp : ACIR_Op<"scope", [SingleBlock, RecursiveMemoryEffects]> {
   let arguments = (ins SymbolNameAttr:$sym_name,
                        Variadic<ACIR_QueueType>:$inputs);

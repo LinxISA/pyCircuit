@@ -141,6 +141,47 @@ LogicalResult RouteOp::verify() {
   return success();
 }
 
+LogicalResult MergeOp::verify() {
+  if (getInputs().size() < 2)
+    return emitOpError("requires at least two input queues");
+  for (auto [index, input] : llvm::enumerate(getInputs()))
+    if (input.getType() != getOutput().getType())
+      return emitOpError() << "input queue " << index
+                           << " must match output queue type";
+  if (getPolicy() != "round_robin" && getPolicy() != "priority")
+    return emitOpError("policy must be 'round_robin' or 'priority'");
+  if (getDepth() <= 0 || getLatency() <= 0)
+    return emitOpError("depth and latency must be positive");
+  return success();
+}
+
+LogicalResult FeedbackOp::verify() {
+  if (getInput().getType() != getOutput().getType())
+    return emitOpError("output queue must match input queue type");
+  if (getDepth() <= 0 || getLatency() <= 0 || getMaxIterations() <= 0)
+    return emitOpError("depth, latency, and max_iterations must be positive");
+
+  Block &block = getBody().front();
+  Type payload = cast<QueueType>(getInput().getType()).getElementType();
+  Type expectedValue = VarType::get(getContext(), payload);
+  if (block.getNumArguments() != 1 ||
+      block.getArgument(0).getType() != expectedValue)
+    return emitOpError("body argument must match queue payload Var");
+  for (Operation &operation : block.without_terminator())
+    if (!isMemoryEffectFree(&operation))
+      return emitOpError() << "body operation '" << operation.getName()
+                           << "' must be pure";
+  auto yield = dyn_cast<FeedbackYieldOp>(block.getTerminator());
+  if (!yield)
+    return emitOpError("body must terminate with ac.feedback.yield");
+  if (yield.getValue().getType() != expectedValue)
+    return emitOpError("yielded value must match queue payload Var");
+  if (yield.getContinueValue().getType() !=
+      VarType::get(getContext(), IntegerType::get(getContext(), 1)))
+    return emitOpError("continue value must be !ac.var<i1>");
+  return success();
+}
+
 LogicalResult ScopeOp::verify() {
   Block &block = getBody().front();
   if (block.getNumArguments() != getInputs().size())

@@ -7,7 +7,7 @@
 acir_contract_epoch: 0.2
 acsim_contract_epoch: 0.1
 
-## acir operations (75)
+## acir operations (78)
 
 | operation | source symbol | positive coverage | negative coverage |
 | --- | --- | --- | --- |
@@ -45,8 +45,8 @@ acsim_contract_epoch: 0.1
 | ac.record.create | ACIR_RecordCreateOp | test/ACIR/protocols-valid.mlir<br>test/ACIR/records-valid.mlir<br>test/ACIR/review-r1-valid.mlir | test/ACIR/records-invalid.mlir<br>test/ACIR/review-r2-invalid.mlir |
 | ac.record.get | ACIR_RecordGetOp | test/ACIR/protocols-valid.mlir<br>test/ACIR/records-valid.mlir<br>test/ACIR/review-r1-valid.mlir | test/ACIR/records-invalid.mlir<br>test/ACIR/review-r1-invalid.mlir |
 | ac.record.with | ACIR_RecordWithOp | test/ACIR/records-valid.mlir<br>test/ACIR/review-r1-valid.mlir | test/ACIR/records-invalid.mlir<br>test/ACIR/review-r1-invalid.mlir |
-| ac.var.constant | ACIR_VarConstantOp | test/ACIR/var-expressions-v0.2.mlir | test/ACIR/var-expressions-invalid-v0.2.mlir |
-| ac.var.add | ACIR_VarAddOp | test/ACIR/var-expressions-v0.2.mlir | test/ACIR/var-expressions-invalid-v0.2.mlir |
+| ac.var.constant | ACIR_VarConstantOp | test/ACIR/control-feedback-v0.2.mlir<br>test/ACIR/var-expressions-v0.2.mlir | test/ACIR/control-feedback-invalid-v0.2.mlir<br>test/ACIR/var-expressions-invalid-v0.2.mlir |
+| ac.var.add | ACIR_VarAddOp | test/ACIR/control-feedback-v0.2.mlir<br>test/ACIR/var-expressions-v0.2.mlir | test/ACIR/var-expressions-invalid-v0.2.mlir |
 | ac.var.sub | ACIR_VarSubOp | test/ACIR/var-expressions-v0.2.mlir | test/ACIR/var-expressions-invalid-v0.2.mlir |
 | ac.var.mul | ACIR_VarMulOp | test/ACIR/var-expressions-v0.2.mlir | test/ACIR/var-expressions-invalid-v0.2.mlir |
 | ac.var.get | ACIR_VarGetOp | test/ACIR/var-expressions-v0.2.mlir | test/ACIR/var-expressions-invalid-v0.2.mlir |
@@ -55,11 +55,14 @@ acsim_contract_epoch: 0.1
 | ac.packet.deserialize | ACIR_PacketDeserializeOp | test/ACIR/records-valid.mlir<br>test/ACIR/review-r1-valid.mlir | test/ACIR/records-invalid.mlir<br>test/ACIR/review-r1-invalid.mlir<br>test/ACIR/review-r2-invalid.mlir |
 | ac.transform | ACIR_TransformOp | test/ACIR/scope-v0.2.mlir<br>test/ACIR/transform-v0.2.mlir<br>test/ACIR/var-expressions-v0.2.mlir | test/ACIR/transform-invalid-v0.2.mlir |
 | ac.transform.yield | ACIR_TransformYieldOp | test/ACIR/scope-v0.2.mlir<br>test/ACIR/transform-v0.2.mlir<br>test/ACIR/var-expressions-v0.2.mlir | test/ACIR/transform-invalid-v0.2.mlir |
-| ac.source | ACIR_SourceOp | test/ACIR/broadcast-v0.2.mlir<br>test/ACIR/route-v0.2.mlir<br>test/ACIR/scope-v0.2.mlir<br>test/ACIR/source-sink-v0.2.mlir<br>test/ACIR/var-expressions-v0.2.mlir | test/ACIR/broadcast-invalid-v0.2.mlir<br>test/ACIR/route-invalid-v0.2.mlir<br>test/ACIR/scope-invalid-v0.2.mlir<br>test/ACIR/source-sink-invalid-v0.2.mlir |
-| ac.sink | ACIR_SinkOp | test/ACIR/broadcast-v0.2.mlir<br>test/ACIR/route-v0.2.mlir<br>test/ACIR/scope-v0.2.mlir<br>test/ACIR/source-sink-v0.2.mlir<br>test/ACIR/var-expressions-v0.2.mlir | test/ACIR/source-sink-invalid-v0.2.mlir |
+| ac.source | ACIR_SourceOp | test/ACIR/broadcast-v0.2.mlir<br>test/ACIR/control-feedback-v0.2.mlir<br>test/ACIR/route-v0.2.mlir<br>test/ACIR/scope-v0.2.mlir<br>test/ACIR/source-sink-v0.2.mlir<br>test/ACIR/var-expressions-v0.2.mlir | test/ACIR/broadcast-invalid-v0.2.mlir<br>test/ACIR/control-feedback-invalid-v0.2.mlir<br>test/ACIR/route-invalid-v0.2.mlir<br>test/ACIR/scope-invalid-v0.2.mlir<br>test/ACIR/source-sink-invalid-v0.2.mlir |
+| ac.sink | ACIR_SinkOp | test/ACIR/broadcast-v0.2.mlir<br>test/ACIR/control-feedback-v0.2.mlir<br>test/ACIR/route-v0.2.mlir<br>test/ACIR/scope-v0.2.mlir<br>test/ACIR/source-sink-v0.2.mlir<br>test/ACIR/var-expressions-v0.2.mlir | test/ACIR/source-sink-invalid-v0.2.mlir |
 | ac.broadcast | ACIR_BroadcastOp | test/ACIR/broadcast-v0.2.mlir | test/ACIR/broadcast-invalid-v0.2.mlir |
 | ac.route | ACIR_RouteOp | test/ACIR/route-v0.2.mlir | test/ACIR/route-invalid-v0.2.mlir |
 | ac.route.yield | ACIR_RouteYieldOp | test/ACIR/route-v0.2.mlir | test/ACIR/route-invalid-v0.2.mlir |
+| ac.merge | ACIR_MergeOp | test/ACIR/control-feedback-v0.2.mlir | test/ACIR/control-feedback-invalid-v0.2.mlir |
+| ac.feedback | ACIR_FeedbackOp | test/ACIR/control-feedback-v0.2.mlir | test/ACIR/control-feedback-invalid-v0.2.mlir |
+| ac.feedback.yield | ACIR_FeedbackYieldOp | test/ACIR/control-feedback-v0.2.mlir | test/ACIR/control-feedback-invalid-v0.2.mlir |
 | ac.scope | ACIR_ScopeOp | test/ACIR/scope-v0.2.mlir | test/ACIR/scope-invalid-v0.2.mlir |
 | ac.scope.yield | ACIR_ScopeYieldOp | test/ACIR/scope-v0.2.mlir | test/ACIR/scope-invalid-v0.2.mlir |
 | ac.firing | ACIR_FiringOp | test/ACIR/firing-v0.2.mlir | test/ACIR/firing-invalid-v0.2.mlir |
@@ -99,8 +102,8 @@ acsim_contract_epoch: 0.1
 | !ac.optional | ACIR_OptionalType | test/ACIR/types-valid.mlir | test/ACIR/review-r2-invalid.mlir<br>test/ACIR/route-invalid-v0.2.mlir<br>test/ACIR/topology-review-r1-invalid.mlir<br>test/ACIR/types-invalid.mlir<br>test/ACIR/var-expressions-invalid-v0.2.mlir |
 | !ac.list | ACIR_ListType | test/ACIR/review-r1-valid.mlir<br>test/ACIR/types-valid.mlir<br>test/Transforms/verify-model.mlir | test/ACIR/queue-var-types-invalid-v0.2.mlir<br>test/ACIR/review-r1-invalid.mlir<br>test/ACIR/review-r2-invalid.mlir<br>test/ACIR/topology-review-r1-invalid.mlir |
 | !ac.vector | ACIR_VectorType | test/ACIR/records-valid.mlir<br>test/ACIR/review-r1-valid.mlir<br>test/ACIR/types-valid.mlir | test/ACIR/records-invalid.mlir<br>test/ACIR/review-r1-invalid.mlir<br>test/ACIR/review-r2-invalid.mlir<br>test/ACIR/topology-review-r1-invalid.mlir<br>test/ACIR/types-invalid.mlir |
-| !ac.var | ACIR_VarType | test/ACIR/firing-v0.2.mlir<br>test/ACIR/queue-var-types-v0.2.mlir<br>test/ACIR/route-v0.2.mlir<br>test/ACIR/scope-v0.2.mlir<br>test/ACIR/transform-v0.2.mlir<br>test/ACIR/var-expressions-v0.2.mlir | test/ACIR/firing-invalid-v0.2.mlir<br>test/ACIR/queue-var-types-invalid-v0.2.mlir<br>test/ACIR/route-invalid-v0.2.mlir<br>test/ACIR/transform-invalid-v0.2.mlir<br>test/ACIR/var-expressions-invalid-v0.2.mlir |
-| !ac.queue | ACIR_QueueType | test/ACIR/broadcast-v0.2.mlir<br>test/ACIR/firing-v0.2.mlir<br>test/ACIR/queue-var-types-v0.2.mlir<br>test/ACIR/route-v0.2.mlir<br>test/ACIR/scope-v0.2.mlir<br>test/ACIR/source-sink-v0.2.mlir<br>test/ACIR/transform-v0.2.mlir<br>test/ACIR/var-expressions-v0.2.mlir | test/ACIR/broadcast-invalid-v0.2.mlir<br>test/ACIR/firing-invalid-v0.2.mlir<br>test/ACIR/queue-var-types-invalid-v0.2.mlir<br>test/ACIR/route-invalid-v0.2.mlir<br>test/ACIR/scope-invalid-v0.2.mlir<br>test/ACIR/source-sink-invalid-v0.2.mlir<br>test/ACIR/transform-invalid-v0.2.mlir |
+| !ac.var | ACIR_VarType | test/ACIR/control-feedback-v0.2.mlir<br>test/ACIR/firing-v0.2.mlir<br>test/ACIR/queue-var-types-v0.2.mlir<br>test/ACIR/route-v0.2.mlir<br>test/ACIR/scope-v0.2.mlir<br>test/ACIR/transform-v0.2.mlir<br>test/ACIR/var-expressions-v0.2.mlir | test/ACIR/control-feedback-invalid-v0.2.mlir<br>test/ACIR/firing-invalid-v0.2.mlir<br>test/ACIR/queue-var-types-invalid-v0.2.mlir<br>test/ACIR/route-invalid-v0.2.mlir<br>test/ACIR/transform-invalid-v0.2.mlir<br>test/ACIR/var-expressions-invalid-v0.2.mlir |
+| !ac.queue | ACIR_QueueType | test/ACIR/broadcast-v0.2.mlir<br>test/ACIR/control-feedback-v0.2.mlir<br>test/ACIR/firing-v0.2.mlir<br>test/ACIR/queue-var-types-v0.2.mlir<br>test/ACIR/route-v0.2.mlir<br>test/ACIR/scope-v0.2.mlir<br>test/ACIR/source-sink-v0.2.mlir<br>test/ACIR/transform-v0.2.mlir<br>test/ACIR/var-expressions-v0.2.mlir | test/ACIR/broadcast-invalid-v0.2.mlir<br>test/ACIR/control-feedback-invalid-v0.2.mlir<br>test/ACIR/firing-invalid-v0.2.mlir<br>test/ACIR/queue-var-types-invalid-v0.2.mlir<br>test/ACIR/route-invalid-v0.2.mlir<br>test/ACIR/scope-invalid-v0.2.mlir<br>test/ACIR/source-sink-invalid-v0.2.mlir<br>test/ACIR/transform-invalid-v0.2.mlir |
 | !ac.array | ACIR_ArrayType | test/ACIR/queue-var-types-v0.2.mlir | test/ACIR/queue-var-types-invalid-v0.2.mlir |
 | !ac.map | ACIR_MapType | test/ACIR/queue-var-types-v0.2.mlir | test/ACIR/queue-var-types-invalid-v0.2.mlir |
 | !ac.set | ACIR_SetType | test/ACIR/queue-var-types-v0.2.mlir | test/ACIR/queue-var-types-invalid-v0.2.mlir |
