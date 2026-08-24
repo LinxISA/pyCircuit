@@ -101,6 +101,18 @@ def pipeline() -> None:
     ac.sink(grid[1][0])
 """
 
+SCOPE_SOURCE = """
+import agentic_circuit as ac
+
+@ac.system
+def pipeline() -> None:
+    input_queue = ac.source(int)
+    with ac.scope("normalize"):
+        local = input_queue.apply(lambda item: item + 1)
+        exported = local.apply(lambda item: item * 2)
+    ac.sink(exported)
+"""
+
 
 class QueueCodegenV02Test(unittest.TestCase):
     def test_serial_python_generates_typed_queue_wired_cpp(self) -> None:
@@ -471,6 +483,78 @@ int main() {{
                  model.sink_0_values()[0] == 17
              ? 0
              : 2;
+}}
+''',
+                encoding="utf-8",
+            )
+            linked = subprocess.run(
+                (
+                    compiler,
+                    "-std=c++20",
+                    "-I",
+                    str(ROOT / "include"),
+                    str(harness),
+                    "-o",
+                    str(executable),
+                ),
+                cwd=root,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(0, linked.returncode, linked.stderr)
+            executed = subprocess.run(
+                (str(executable),),
+                cwd=root,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(0, executed.returncode, executed.stderr)
+
+    def test_scope_generates_hierarchy_with_lca_queue_ownership(self) -> None:
+        from agentic_circuit._queue_codegen import lower_queue_source_to_cpp
+
+        generated = lower_queue_source_to_cpp(SCOPE_SOURCE, "pipeline")
+        self.assertIn("gfsim::Module scope_normalize_;", generated)
+        self.assertIn("scope_normalize_.attachChild(local_);", generated)
+        self.assertIn("attachChild(exported_);", generated)
+        compiler = shutil.which("c++")
+        if compiler is None:
+            self.skipTest("C++ compiler is unavailable")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            model = root / "scope.cpp"
+            harness = root / "harness.cpp"
+            executable = root / "scope"
+            model.write_text(generated, encoding="utf-8")
+            harness.write_text(
+                f'''#include "{model.name}"
+#include <cstddef>
+
+int main() {{
+  ac_generated::Pipeline model;
+  auto *normalize = model.findChild("normalize");
+  if (normalize == nullptr || normalize->asModule() == nullptr ||
+      normalize->asModule()->findChild("local") == nullptr ||
+      model.findChild("exported") == nullptr)
+    return 1;
+  if (!model.input_queue().proposePush(10))
+    return 2;
+  auto rows = model.dispatch_rows();
+  for (std::size_t tick = 0; tick < 6; ++tick) {{
+    const gfsim::Epoch epoch{{tick, 0}};
+    for (auto &row : rows)
+      row.work(row.object, epoch);
+    for (auto &row : rows)
+      row.xfer(row.object, epoch, gfsim::XferPhase::Arbitrate);
+    for (auto &row : rows)
+      row.xfer(row.object, epoch, gfsim::XferPhase::Commit);
+  }}
+  return model.sink_0_values().size() == 1 &&
+                 model.sink_0_values()[0] == 22
+             ? 0
+             : 3;
 }}
 ''',
                 encoding="utf-8",

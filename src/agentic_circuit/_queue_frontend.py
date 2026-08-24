@@ -462,8 +462,7 @@ def parse_queue_program(text: str, system: str) -> QueueProgram:
                 if (
                     item.optional_vars is None
                     and isinstance(call, ast.Call)
-                    and isinstance(call.func, ast.Name)
-                    and call.func.id == "scope"
+                    and call_name(call) == "scope"
                     and len(call.args) == 1
                     and isinstance(call.args[0], ast.Constant)
                     and type(call.args[0].value) is str
