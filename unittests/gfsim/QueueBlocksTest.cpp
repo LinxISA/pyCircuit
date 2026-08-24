@@ -165,6 +165,39 @@ TEST(QueueBlocksTest, BroadcastWaitsForEveryOutput) {
   EXPECT_TRUE(left.isEmpty());
 }
 
+TEST(QueueBlocksTest, ForkDeliversOutputsIndependentlyBeforeInputPop) {
+  SimQueue<int> input("input", 1, nullptr, 1);
+  SimQueue<int> left("left", 2, nullptr, 1);
+  SimQueue<int> right("right", 3, nullptr, 1);
+  QueueFork<int, 2> fork("fork", 4, nullptr, input, {&left, &right});
+  ASSERT_TRUE(input.proposePush(9));
+  ASSERT_TRUE(right.proposePush(4));
+  input.doXfer({0, 0});
+  right.doXfer({0, 0});
+
+  fork.doWork({1, 0});
+  input.doXfer({1, 0});
+  left.doXfer({1, 0});
+  right.doXfer({1, 0});
+  fork.doXfer({1, 0});
+  ASSERT_NE(input.peek(), nullptr);
+  ASSERT_NE(left.peek(), nullptr);
+  EXPECT_EQ(*left.peek(), 9);
+  EXPECT_EQ(*right.peek(), 4);
+
+  right.proposePop();
+  right.doXfer({2, 0});
+  fork.doWork({2, 0});
+  input.doXfer({2, 0});
+  left.doXfer({2, 0});
+  right.doXfer({2, 0});
+  fork.doXfer({2, 0});
+  EXPECT_TRUE(input.isEmpty());
+  EXPECT_EQ(left.committedSize(), 1u);
+  ASSERT_NE(right.peek(), nullptr);
+  EXPECT_EQ(*right.peek(), 9);
+}
+
 TEST(QueueBlocksTest, RouteSelectsExactlyOneOutput) {
   SimQueue<int> input("input", 1, nullptr, 1);
   SimQueue<int> even("even", 2, nullptr, 1);

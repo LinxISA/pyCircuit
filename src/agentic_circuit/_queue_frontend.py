@@ -73,6 +73,16 @@ class RouteBinding:
 
 
 @dataclass(frozen=True, slots=True)
+class ForkBinding:
+    input_name: str
+    outputs: tuple[str, ...]
+    depth: int
+    latency: int
+    scope: tuple[str, ...]
+    order: int
+
+
+@dataclass(frozen=True, slots=True)
 class FeedbackBinding:
     input_name: str
     output_name: str
@@ -127,6 +137,7 @@ class QueueProgram:
     queues: tuple[QueueBinding, ...]
     scopes: tuple[ScopeBinding, ...]
     routes: tuple[RouteBinding, ...]
+    forks: tuple[ForkBinding, ...]
     feedbacks: tuple[FeedbackBinding, ...]
     merges: tuple[MergeBinding, ...]
     atomics: tuple[AtomicBinding, ...]
@@ -286,6 +297,7 @@ def parse_queue_program(text: str, system: str) -> QueueProgram:
     queues: list[QueueBinding] = []
     scopes: list[ScopeBinding] = []
     routes: list[RouteBinding] = []
+    forks: list[ForkBinding] = []
     feedbacks: list[FeedbackBinding] = []
     merges: list[MergeBinding] = []
     atomics: list[AtomicBinding] = []
@@ -553,6 +565,7 @@ def parse_queue_program(text: str, system: str) -> QueueProgram:
                     queue_start = len(queues)
                     scope_start = len(scopes)
                     route_start = len(routes)
+                    fork_start = len(forks)
                     merge_start = len(merges)
                     feedback_start = len(feedbacks)
                     sink_start = len(sinks)
@@ -564,6 +577,7 @@ def parse_queue_program(text: str, system: str) -> QueueProgram:
                         or any(queue.atomic_group != group for queue in created)
                         or len(scopes) != scope_start
                         or len(routes) != route_start
+                        or len(forks) != fork_start
                         or len(merges) != merge_start
                         or len(feedbacks) != feedback_start
                         or len(sinks) != sink_start
@@ -855,6 +869,57 @@ def parse_queue_program(text: str, system: str) -> QueueProgram:
                 routes.append(RouteBinding(incoming.name, names, argument, selector, depth, latency, scope_path, current_order))
                 continue
             if (
+                isinstance(statement, ast.Assign)
+                and len(statement.targets) == 1
+                and isinstance(statement.targets[0], (ast.Tuple, ast.List))
+                and all(isinstance(item, ast.Name) for item in statement.targets[0].elts)
+                and isinstance(statement.value, ast.Call)
+                and isinstance(statement.value.func, ast.Attribute)
+                and statement.value.func.attr == "fork"
+                and isinstance(statement.value.func.value, ast.Name)
+                and not statement.value.args
+            ):
+                call = statement.value
+                incoming = by_name.get(call.func.value.id)
+                if incoming is None:
+                    raise QueueFrontendError("ACPY-QUEUE-012: fork input is unbound")
+                output_count = _positive_int(call, "outputs", 0)
+                names = tuple(item.id for item in statement.targets[0].elts)
+                if output_count != len(names) or len(names) < 2:
+                    raise QueueFrontendError(
+                        "ACPY-QUEUE-012: fork outputs must match tuple arity"
+                    )
+                depth = _positive_int(call, "depth", 1)
+                latency = _positive_int(call, "latency", 1)
+                for name in names:
+                    if name in by_name:
+                        raise QueueFrontendError(
+                            "ACPY-QUEUE-012: fork output name is already bound"
+                        )
+                    output = QueueBinding(
+                        name,
+                        incoming.payload,
+                        depth,
+                        latency,
+                        None,
+                        scope=scope_path,
+                        order=current_order,
+                        route_output=True,
+                    )
+                    queues.append(output)
+                    by_name[name] = output
+                forks.append(
+                    ForkBinding(
+                        incoming.name,
+                        names,
+                        depth,
+                        latency,
+                        scope_path,
+                        current_order,
+                    )
+                )
+                continue
+            if (
                 isinstance(statement, ast.Expr)
                 and isinstance(statement.value, ast.Call)
                 and call_name(statement.value) == "observe"
@@ -889,6 +954,7 @@ def parse_queue_program(text: str, system: str) -> QueueProgram:
         tuple(queues),
         tuple(scopes),
         tuple(routes),
+        tuple(forks),
         tuple(feedbacks),
         tuple(merges),
         tuple(atomics),
@@ -1074,6 +1140,8 @@ def lower_queue_program(program: QueueProgram) -> str:
         uses[observation.queue].append(observation.scope)
     for route in program.routes:
         uses[route.input_name].append(route.scope)
+    for fork in program.forks:
+        uses[fork.input_name].append(fork.scope)
     for feedback in program.feedbacks:
         uses[feedback.input_name].append(feedback.scope)
     for merge in program.merges:
@@ -1160,6 +1228,11 @@ def lower_queue_program(program: QueueProgram) -> str:
             (atomic.order, "atomic", atomic)
             for atomic in program.atomics
             if atomic.scope == path
+        )
+        events.extend(
+            (fork.order, "fork", fork)
+            for fork in program.forks
+            if fork.scope == path
         )
         events.extend(
             (route.order, "route", route)
@@ -1256,6 +1329,27 @@ def lower_queue_program(program: QueueProgram) -> str:
                     f"!ac.queue<{incoming.payload}> -> ({output_types})"
                 )
                 for name, output in zip(route.outputs, output_names, strict=True):
+                    mapping[name] = output
+            elif kind == "fork":
+                fork = item
+                assert isinstance(fork, ForkBinding)
+                incoming = by_name[fork.input_name]
+                output_names = [
+                    name if not path else f"{name}__local" for name in fork.outputs
+                ]
+                lhs = ", ".join(f"%{name}" for name in output_names)
+                depths = ", ".join(str(fork.depth) for _ in output_names)
+                latencies = ", ".join(str(fork.latency) for _ in output_names)
+                output_types = ", ".join(
+                    f"!ac.queue<{incoming.payload}>" for _ in output_names
+                )
+                lines.append(
+                    f"{indent}{lhs} = ac.fork %{mapping[fork.input_name]} "
+                    f"depths [{depths}] latencies [{latencies}] "
+                    f"{{ac.output_names = {name_array(fork.outputs)}}} : "
+                    f"!ac.queue<{incoming.payload}> -> ({output_types})"
+                )
+                for name, output in zip(fork.outputs, output_names, strict=True):
                     mapping[name] = output
             elif kind == "feedback":
                 feedback = item

@@ -348,6 +348,25 @@ private:
         plan.blocks.push_back(std::move(blockPlan));
         continue;
       }
+      if (auto fork = mlir::dyn_cast<ac::ForkOp>(operation)) {
+        auto input = queueName(fork.getInput(), names);
+        if (!input)
+          return input.takeError();
+        std::vector<std::string> outputs;
+        if (auto error = addOutputs(fork, fork.getOutputs(),
+                                    fork.getOutputDepthsAttr().asArrayRef(),
+                                    fork.getOutputLatenciesAttr().asArrayRef(),
+                                    scope, outputs))
+          return error;
+        QueueBlockPlan blockPlan{
+            "fork", "fork_" + *input, scopePath(scope), {*input}, outputs};
+        for (int64_t value : fork.getOutputDepths())
+          blockPlan.depths.push_back(value);
+        for (int64_t value : fork.getOutputLatencies())
+          blockPlan.latencies.push_back(value);
+        plan.blocks.push_back(std::move(blockPlan));
+        continue;
+      }
       if (auto route = mlir::dyn_cast<ac::RouteOp>(operation)) {
         auto input = queueName(route.getInput(), names);
         if (!input)

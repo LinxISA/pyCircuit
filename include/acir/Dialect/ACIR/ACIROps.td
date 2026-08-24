@@ -203,6 +203,18 @@ def ACIR_BroadcastOp : ACIR_Op<"broadcast"> {
   }];
 }
 
+def ACIR_ForkOp : ACIR_Op<"fork"> {
+  let arguments = (ins ACIR_QueueType:$input,
+                       DenseI64ArrayAttr:$output_depths,
+                       DenseI64ArrayAttr:$output_latencies);
+  let results = (outs Variadic<ACIR_QueueType>:$outputs);
+  let hasVerifier = 1;
+  let assemblyFormat = [{
+    $input `depths` $output_depths `latencies` $output_latencies attr-dict
+    `:` qualified(type($input)) `->` `(` type($outputs) `)`
+  }];
+}
+
 def ACIR_RouteOp : ACIR_Op<"route", [SingleBlock]> {
   let arguments = (ins ACIR_QueueType:$input,
                        DenseI64ArrayAttr:$output_depths,

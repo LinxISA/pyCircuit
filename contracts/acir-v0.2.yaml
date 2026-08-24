@@ -58,6 +58,7 @@ operations:
   - ac.sink
   - ac.observe
   - ac.broadcast
+  - ac.fork
   - ac.route
   - ac.route.yield
   - ac.merge

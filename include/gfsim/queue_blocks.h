@@ -275,6 +275,95 @@ private:
   bool fired_ = false;
 };
 
+template <typename T, size_t Outputs> class QueueFork final : public SimObject {
+public:
+  static_assert(Outputs >= 2);
+  static constexpr std::string_view contractName = "ac.fork";
+  static constexpr ObjectKind componentKind = ObjectKind::Link;
+
+  QueueFork(std::string name, ObjectId id, SimObject *parent,
+            SimQueue<T> &input, std::array<SimQueue<T> *, Outputs> outputs,
+            ObservationSink *observations = nullptr)
+      : SimObject(componentKind, std::move(name), id, parent, observations),
+        input_(input), outputs_(outputs) {}
+
+  void doWork(Epoch) override {
+    if (proposal_)
+      return;
+    const T *token = pending_ ? &*pending_ : input_.peek();
+    if (token == nullptr)
+      return;
+    std::array<bool, Outputs> next = delivered_;
+    bool changed = !pending_.has_value();
+    for (size_t index = 0; index < Outputs; ++index) {
+      SimQueue<T> *output = outputs_[index];
+      if (next[index] || output == nullptr || !output->canProposePush())
+        continue;
+      if (!output->proposePush(*token))
+        continue;
+      next[index] = true;
+      changed = true;
+    }
+    const bool deliveredAll =
+        std::all_of(next.begin(), next.end(), [](bool value) { return value; });
+    bool complete = false;
+    if (deliveredAll && input_.canProposePop()) {
+      complete = input_.proposePop().has_value();
+      changed = changed || complete;
+    }
+    if (!changed)
+      return;
+    proposedToken_ = *token;
+    proposedDelivered_ = next;
+    proposedComplete_ = complete;
+    proposal_ = true;
+  }
+  void doXfer(Epoch) override {
+    if (!proposal_)
+      return;
+    if (proposedComplete_) {
+      pending_.reset();
+      delivered_.fill(false);
+    } else {
+      pending_ = std::move(proposedToken_);
+      delivered_ = proposedDelivered_;
+    }
+    proposedToken_.reset();
+    proposedDelivered_.fill(false);
+    proposedComplete_ = false;
+    proposal_ = false;
+  }
+  bool hasPendingCommit() const override { return proposal_; }
+  bool isRunnable(Epoch) const override {
+    if (proposal_ || (!pending_ && input_.peek() == nullptr))
+      return false;
+    for (size_t index = 0; index < Outputs; ++index)
+      if (!delivered_[index] && outputs_[index] != nullptr &&
+          outputs_[index]->canProposePush())
+        return true;
+    return false;
+  }
+  void reset() override {
+    pending_.reset();
+    proposedToken_.reset();
+    delivered_.fill(false);
+    proposedDelivered_.fill(false);
+    proposedComplete_ = false;
+    proposal_ = false;
+    clearRuntimeFailureCode();
+  }
+
+private:
+  SimQueue<T> &input_;
+  std::array<SimQueue<T> *, Outputs> outputs_;
+  std::optional<T> pending_;
+  std::optional<T> proposedToken_;
+  std::array<bool, Outputs> delivered_{};
+  std::array<bool, Outputs> proposedDelivered_{};
+  bool proposedComplete_ = false;
+  bool proposal_ = false;
+};
+
 template <typename T, size_t Outputs, typename Selector>
   requires std::invocable<const Selector &, const T &> &&
            std::integral<std::invoke_result_t<const Selector &, const T &>>

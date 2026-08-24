@@ -219,6 +219,17 @@ def pipeline() -> None:
     ac.sink(output_queue)
 """
 
+FORK_SOURCE = """
+import agentic_circuit as ac
+
+@ac.system
+def pipeline() -> None:
+    input_queue = ac.source(int)
+    left, right = input_queue.fork(outputs=2, depth=2, latency=1)
+    ac.sink(left)
+    ac.sink(right)
+"""
+
 
 class QueueFrontendV02Test(unittest.TestCase):
     def test_simple_serial_python_lowers_to_typed_queue_graph(self) -> None:
@@ -450,6 +461,16 @@ def pipeline() -> None:
         self.assertIn('{name = "remaining", type = i16}', lowered)
         self.assertIn('{name = "valid", type = i1}', lowered)
         self.assertIn("size = 12 : i64", lowered)
+
+    def test_explicit_fork_lowers_to_decoupled_fanout(self) -> None:
+        from agentic_circuit._queue_frontend import lower_queue_source
+
+        lowered = lower_queue_source(FORK_SOURCE, "pipeline")
+        self.assertIn(
+            "%left, %right = ac.fork %input_queue depths [2, 2] "
+            "latencies [1, 1]",
+            lowered,
+        )
 
     def test_latency_zero_and_unsupported_lambda_are_rejected(self) -> None:
         from agentic_circuit._queue_frontend import (

@@ -425,7 +425,8 @@ llvm::Expected<std::string> generateQueueGraphCpp(const QueueGraphPlan &plan) {
                                ", std::tuple{" + inputs + "}, std::tuple{" +
                                outputs + "})");
       }
-    } else if (block->kind == "broadcast" || block->kind == "route") {
+    } else if (block->kind == "broadcast" || block->kind == "fork" ||
+               block->kind == "route") {
       const QueuePlan *input = findQueue(plan, block->inputs[0]);
       auto type = input ? cppType(input->payloadType)
                         : llvm::Expected<std::string>(generatorError(
@@ -623,7 +624,8 @@ llvm::Expected<std::string> generateQueueGraphCpp(const QueueGraphPlan &plan) {
         }
         output << "> block_" << index << "_;\n";
       }
-    } else if (block->kind == "broadcast" || block->kind == "route") {
+    } else if (block->kind == "broadcast" || block->kind == "fork" ||
+               block->kind == "route") {
       const QueuePlan *input = findQueue(plan, block->inputs[0]);
       auto type = input ? cppType(input->payloadType)
                         : llvm::Expected<std::string>(
@@ -632,6 +634,9 @@ llvm::Expected<std::string> generateQueueGraphCpp(const QueueGraphPlan &plan) {
         return type.takeError();
       if (block->kind == "broadcast")
         output << "  gfsim::QueueBroadcast<" << *type << ", "
+               << block->outputs.size() << "> block_" << index << "_;\n";
+      else if (block->kind == "fork")
+        output << "  gfsim::QueueFork<" << *type << ", "
                << block->outputs.size() << "> block_" << index << "_;\n";
       else
         output << "  gfsim::QueueRoute<" << *type << ", "

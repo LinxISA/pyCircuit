@@ -272,11 +272,17 @@ llvm::Expected<std::string> generateQueueGraphPyc(const QueueGraphPlan &plan) {
     std::string valid;
     std::string type;
   };
+  struct ForkState {
+    std::vector<std::string> nextWires;
+    std::vector<std::string> enableWires;
+    std::vector<std::string> delivered;
+  };
   std::vector<const QueueBlockPlan *> sources;
   std::vector<const QueueBlockPlan *> sinks;
   std::vector<const QueueBlockPlan *> observations;
   llvm::StringMap<TransformProducer> transformByOutput;
   llvm::StringMap<const QueueBlockPlan *> broadcastByOutput;
+  llvm::StringMap<const QueueBlockPlan *> forkByOutput;
   llvm::StringMap<RouteProducer> routeByOutput;
   llvm::StringMap<const QueueBlockPlan *> mergeByOutput;
   for (const QueueBlockPlan &block : plan.blocks) {
@@ -303,6 +309,11 @@ llvm::Expected<std::string> generateQueueGraphPyc(const QueueGraphPlan &plan) {
         return pycError("broadcast arity is unsupported");
       for (const std::string &output : block.outputs)
         broadcastByOutput[output] = &block;
+    } else if (block.kind == "fork") {
+      if (block.inputs.size() != 1 || block.outputs.size() < 2)
+        return pycError("fork arity is unsupported");
+      for (const std::string &output : block.outputs)
+        forkByOutput[output] = &block;
     } else if (block.kind == "merge") {
       if (block.outputs.size() != 1 || block.inputs.size() < 2)
         return pycError("merge arity is unsupported");
@@ -311,7 +322,8 @@ llvm::Expected<std::string> generateQueueGraphPyc(const QueueGraphPlan &plan) {
       mergeByOutput[block.outputs.front()] = &block;
     } else {
       return pycError("initial PYC slice supports "
-                      "source/transform/broadcast/route/priority-merge/sink");
+                      "source/transform/broadcast/fork/route/priority-merge/"
+                      "sink");
     }
   }
   if (sources.empty() || sinks.empty())
@@ -363,6 +375,8 @@ llvm::Expected<std::string> generateQueueGraphPyc(const QueueGraphPlan &plan) {
   llvm::StringMap<std::string> routeCondition;
   llvm::StringMap<std::vector<std::string>> mergeGrants;
   llvm::StringMap<MergeState> mergeStates;
+  llvm::StringMap<ForkState> forkStates;
+  llvm::StringMap<std::string> forkOfferValid;
   std::ostringstream body;
   unsigned nextValue = 0;
   auto newValue = [&]() { return "%v" + std::to_string(nextValue++); };
@@ -407,6 +421,7 @@ llvm::Expected<std::string> generateQueueGraphPyc(const QueueGraphPlan &plan) {
     } else {
       auto transformProducer = transformByOutput.find(queue.name);
       auto broadcastProducer = broadcastByOutput.find(queue.name);
+      auto forkProducer = forkByOutput.find(queue.name);
       auto routeProducer = routeByOutput.find(queue.name);
       auto mergeProducer = mergeByOutput.find(queue.name);
       if (transformProducer != transformByOutput.end()) {
@@ -443,6 +458,41 @@ llvm::Expected<std::string> generateQueueGraphPyc(const QueueGraphPlan &plan) {
           return pycError(
               "broadcast input is not available in topological order");
         producerValid = valid->getValue();
+        producerData = data->getValue();
+      } else if (forkProducer != forkByOutput.end()) {
+        const QueueBlockPlan &fork = *forkProducer->getValue();
+        auto valid = outputValid.find(fork.inputs.front());
+        auto data = outputData.find(fork.inputs.front());
+        if (valid == outputValid.end() || data == outputData.end())
+          return pycError("fork input is not available in topological order");
+        auto state = forkStates.find(fork.name);
+        if (state == forkStates.end()) {
+          ForkState created;
+          std::string zero = emitConstant(0, "i1");
+          for (size_t index = 0; index < fork.outputs.size(); ++index) {
+            std::string nextWire = newValue();
+            std::string enableWire = newValue();
+            std::string delivered = newValue();
+            body << "    " << nextWire << " = pyc.wire : i1\n";
+            body << "    " << enableWire << " = pyc.wire : i1\n";
+            body << "    " << delivered << " = pyc.reg %clk, %rst, "
+                 << enableWire << ", " << nextWire << ", " << zero << " : i1\n";
+            created.nextWires.push_back(std::move(nextWire));
+            created.enableWires.push_back(std::move(enableWire));
+            created.delivered.push_back(std::move(delivered));
+          }
+          forkStates[fork.name] = std::move(created);
+          state = forkStates.find(fork.name);
+        }
+        auto output =
+            std::find(fork.outputs.begin(), fork.outputs.end(), queue.name);
+        if (output == fork.outputs.end())
+          return pycError("fork output identity is missing");
+        const size_t index = std::distance(fork.outputs.begin(), output);
+        std::string notDelivered = emitNot(state->getValue().delivered[index]);
+        producerValid =
+            emitBinary("and", valid->getValue(), notDelivered, "i1");
+        forkOfferValid[queue.name] = producerValid;
         producerData = data->getValue();
       } else if (routeProducer != routeByOutput.end()) {
         const RouteProducer &producer = routeProducer->getValue();
@@ -618,6 +668,34 @@ llvm::Expected<std::string> generateQueueGraphPyc(const QueueGraphPlan &plan) {
             emitBinary("and", allReady, inputReady[block.outputs[index]], "i1");
       body << "    pyc.assign " << readyWires[block.inputs.front()] << ", "
            << allReady << " : i1\n";
+    } else if (block.kind == "fork") {
+      auto state = forkStates.find(block.name);
+      auto inputValidValue = outputValid.find(block.inputs.front());
+      if (state == forkStates.end() || inputValidValue == outputValid.end())
+        return pycError("fork state or input valid is missing");
+      std::vector<std::string> deliveredNow;
+      for (auto [index, output] : llvm::enumerate(block.outputs)) {
+        std::string accepted =
+            emitBinary("and", forkOfferValid[output], inputReady[output], "i1");
+        deliveredNow.push_back(emitBinary(
+            "or", state->getValue().delivered[index], accepted, "i1"));
+      }
+      std::string deliveredAll = deliveredNow.front();
+      for (size_t index = 1; index < deliveredNow.size(); ++index)
+        deliveredAll =
+            emitBinary("and", deliveredAll, deliveredNow[index], "i1");
+      std::string complete =
+          emitBinary("and", inputValidValue->getValue(), deliveredAll, "i1");
+      body << "    pyc.assign " << readyWires[block.inputs.front()] << ", "
+           << complete << " : i1\n";
+      std::string zero = emitConstant(0, "i1");
+      for (size_t index = 0; index < block.outputs.size(); ++index) {
+        std::string next = emitMux(complete, zero, deliveredNow[index], "i1");
+        body << "    pyc.assign " << state->getValue().nextWires[index] << ", "
+             << next << " : i1\n";
+        body << "    pyc.assign " << state->getValue().enableWires[index]
+             << ", " << inputValidValue->getValue() << " : i1\n";
+      }
     } else if (block.kind == "route") {
       std::string selectedReady = emitConstant(0, "i1");
       for (size_t index = block.outputs.size(); index-- > 0;) {
