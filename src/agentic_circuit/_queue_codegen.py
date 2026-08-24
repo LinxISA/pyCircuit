@@ -6,10 +6,12 @@ import ast
 from dataclasses import dataclass
 
 from ._queue_frontend import (
+    CollectionBinding,
     Payload,
     QueueBinding,
     QueueFrontendError,
     QueueProgram,
+    StaticQueueCollection,
     parse_queue_program,
 )
 
@@ -137,6 +139,47 @@ def _fanouts(program: QueueProgram) -> tuple[_Fanout, ...]:
     return tuple(fanouts)
 
 
+def _collection_leaves(
+    value: StaticQueueCollection,
+    path: tuple[int, ...] = (),
+) -> tuple[tuple[str, tuple[int, ...]], ...]:
+    leaves: list[tuple[str, tuple[int, ...]]] = []
+    for index, (_, member) in enumerate(value.members):
+        member_path = (*path, index)
+        if isinstance(member, str):
+            leaves.append((member, member_path))
+        else:
+            leaves.extend(_collection_leaves(member, member_path))
+    return tuple(leaves)
+
+
+def _owning_arrays(program: QueueProgram) -> tuple[CollectionBinding, ...]:
+    queue_names = {queue.name for queue in program.queues}
+    result: list[CollectionBinding] = []
+    claimed: set[str] = set()
+    for collection in program.collections:
+        if collection.value.kind != "array":
+            continue
+        leaves = {name for name, _ in _collection_leaves(collection.value)}
+        if not leaves or not leaves.issubset(queue_names) or claimed.intersection(leaves):
+            continue
+        result.append(collection)
+        claimed.update(leaves)
+    return tuple(result)
+
+
+def _array_cpp_type(
+    value: StaticQueueCollection, queues: dict[str, QueueBinding]
+) -> str:
+    first = value.members[0][1]
+    element = (
+        f"gfsim::SimQueue<{_cpp_type(queues[first].payload)}>"
+        if isinstance(first, str)
+        else _array_cpp_type(first, queues)
+    )
+    return f"std::array<{element}, {len(value.members)}>"
+
+
 def _object_ids(program: QueueProgram, fanouts: tuple[_Fanout, ...]) -> _ObjectIds:
     next_id = 0
     queues: dict[str, int] = {}
@@ -184,7 +227,40 @@ def lower_queue_program_to_cpp(program: QueueProgram) -> str:
             "root Queue graphs"
         )
     fanouts = _fanouts(program)
+    arrays = _owning_arrays(program)
     ids = _object_ids(program, fanouts)
+    queues_by_name = {queue.name: queue for queue in program.queues}
+    array_leaf: dict[str, tuple[str, tuple[int, ...]]] = {
+        leaf: (collection.name, path)
+        for collection in arrays
+        for leaf, path in _collection_leaves(collection.value)
+    }
+
+    def queue_ref(name: str) -> str:
+        owner = array_leaf.get(name)
+        if owner is None:
+            return f"{name}_"
+        collection, path = owner
+        return f"{collection}_" + "".join(f"[{index}]" for index in path)
+
+    def queue_initializer(name: str) -> str:
+        queue = queues_by_name[name]
+        return (
+            f'gfsim::SimQueue<{_cpp_type(queue.payload)}>("{queue.name}", '
+            f"{ids.queues[queue.name]}, this, {queue.depth}, "
+            "std::numeric_limits<size_t>::max(), nullptr, "
+            f"{queue.latency})"
+        )
+
+    def array_initializer(value: StaticQueueCollection) -> str:
+        members = []
+        for _, member in value.members:
+            members.append(
+                queue_initializer(member)
+                if isinstance(member, str)
+                else array_initializer(member)
+            )
+        return "{{" + ", ".join(members) + "}}"
     effective_input = {
         consumer: output
         for fanout in fanouts
@@ -268,11 +344,17 @@ def lower_queue_program_to_cpp(program: QueueProgram) -> str:
     )
     initializers: list[str] = []
     for queue in program.queues:
+        if queue.name in array_leaf:
+            continue
         payload = _cpp_type(queue.payload)
         initializers.append(
             f'{queue.name}_("{queue.name}", {ids.queues[queue.name]}, this, '
             f"{queue.depth}, std::numeric_limits<size_t>::max(), nullptr, "
             f"{queue.latency})"
+        )
+    for collection in arrays:
+        initializers.append(
+            f"{collection.name}_" + array_initializer(collection.value)
         )
     for fanout in fanouts:
         for output in fanout.outputs:
@@ -295,10 +377,10 @@ def lower_queue_program_to_cpp(program: QueueProgram) -> str:
         )
     for index, fanout in enumerate(fanouts):
         payload = _cpp_type(fanout.payload)
-        outputs = ", ".join(f"&{name}_" for name in fanout.outputs)
+        outputs = ", ".join(f"&{queue_ref(name)}" for name in fanout.outputs)
         initializers.append(
             f'broadcast_{index}_block_("broadcast_{index}", '
-            f"{ids.broadcasts[index]}, this, {fanout.source}_, "
+            f"{ids.broadcasts[index]}, this, {queue_ref(fanout.source)}, "
             f"std::array<gfsim::SimQueue<{payload}> *, {len(fanout.outputs)}>"
             f"{{{outputs}}})"
         )
@@ -306,17 +388,17 @@ def lower_queue_program_to_cpp(program: QueueProgram) -> str:
         payload = _cpp_type(
             next(queue.payload for queue in program.queues if queue.name == route.input_name)
         )
-        outputs = ", ".join(f"&{name}_" for name in route.outputs)
+        outputs = ", ".join(f"&{queue_ref(name)}" for name in route.outputs)
         initializers.append(
             f'route_{index}_block_("route_{index}", {ids.routes[index]}, this, '
-            f"{route.input_name}_, std::array<gfsim::SimQueue<{payload}> *, "
+            f"{queue_ref(route.input_name)}, std::array<gfsim::SimQueue<{payload}> *, "
             f"{len(route.outputs)}>{{{outputs}}})"
         )
     for index, merge in enumerate(program.merges):
         payload = _cpp_type(
             next(queue.payload for queue in program.queues if queue.name == merge.output)
         )
-        inputs = ", ".join(f"&{name}_" for name in merge.inputs)
+        inputs = ", ".join(f"&{queue_ref(name)}" for name in merge.inputs)
         policy = (
             "gfsim::QueueMergePolicy::RoundRobin"
             if merge.policy == "round_robin"
@@ -325,13 +407,13 @@ def lower_queue_program_to_cpp(program: QueueProgram) -> str:
         initializers.append(
             f'merge_{index}_block_("merge_{index}", {ids.merges[index]}, this, '
             f"std::array<gfsim::SimQueue<{payload}> *, {len(merge.inputs)}>"
-            f"{{{inputs}}}, {merge.output}_, {policy})"
+            f"{{{inputs}}}, {queue_ref(merge.output)}, {policy})"
         )
     for index, feedback in enumerate(program.feedbacks):
         initializers.append(
             f'feedback_{index}_block_("feedback_{index}", '
-            f"{ids.feedbacks[index]}, this, {feedback.input_name}_, "
-            f"feedback_{index}_state_, {feedback.output_name}_, "
+            f"{ids.feedbacks[index]}, this, {queue_ref(feedback.input_name)}, "
+            f"feedback_{index}_state_, {queue_ref(feedback.output_name)}, "
             f"{feedback.max_iterations})"
         )
     for queue in program.queues:
@@ -340,20 +422,20 @@ def lower_queue_program_to_cpp(program: QueueProgram) -> str:
         input_name = effective_input.get(queue.name, queue.input_name)
         initializers.append(
             f'{queue.name}_block_("{queue.name}_transform", '
-            f"{ids.transforms[queue.name]}, this, {input_name}_, "
-            f"{queue.name}_)"
+            f"{ids.transforms[queue.name]}, this, {queue_ref(input_name)}, "
+            f"{queue_ref(queue.name)})"
         )
     for index, sink in enumerate(program.sinks):
         initializers.append(
             f'sink_{index}_("sink_{index}", {ids.sinks[index]}, this, '
-            f"{sink.queue}_)"
+            f"{queue_ref(sink.queue)})"
         )
     for index, initializer in enumerate(initializers):
         suffix = "," if index + 1 < len(initializers) else ""
         lines.append(f"        {initializer}{suffix}")
     lines.extend(("  {", f'    setPath("/{program.system}");'))
     for queue in program.queues:
-        lines.append(f"    attachChild({queue.name}_);")
+        lines.append(f"    attachChild({queue_ref(queue.name)});")
     for fanout in fanouts:
         for output in fanout.outputs:
             lines.append(f"    attachChild({output}_);")
@@ -377,7 +459,8 @@ def lower_queue_program_to_cpp(program: QueueProgram) -> str:
     for queue in source_queues:
         payload = _cpp_type(queue.payload)
         lines.append(
-            f"  gfsim::SimQueue<{payload}> &{queue.name}() {{ return {queue.name}_; }}"
+            f"  gfsim::SimQueue<{payload}> &{queue.name}() {{ "
+            f"return {queue_ref(queue.name)}; }}"
         )
     for index, sink in enumerate(program.sinks):
         payload = _cpp_type(next(q.payload for q in program.queues if q.name == sink.queue))
@@ -405,7 +488,7 @@ def lower_queue_program_to_cpp(program: QueueProgram) -> str:
     )
     rows: list[str] = []
     for queue in program.queues:
-        rows.append(f"gfsim::makeDispatchRow(&{queue.name}_)")
+        rows.append(f"gfsim::makeDispatchRow(&{queue_ref(queue.name)})")
     for fanout in fanouts:
         for output in fanout.outputs:
             rows.append(f"gfsim::makeDispatchRow(&{output}_)")
@@ -429,7 +512,14 @@ def lower_queue_program_to_cpp(program: QueueProgram) -> str:
         lines.append(f"        {row}{suffix}")
     lines.extend(("    };", "  }", "", "private:"))
     for queue in program.queues:
+        if queue.name in array_leaf:
+            continue
         lines.append(f"  gfsim::SimQueue<{_cpp_type(queue.payload)}> {queue.name}_;")
+    for collection in arrays:
+        lines.append(
+            f"  {_array_cpp_type(collection.value, queues_by_name)} "
+            f"{collection.name}_;"
+        )
     for fanout in fanouts:
         for output in fanout.outputs:
             lines.append(

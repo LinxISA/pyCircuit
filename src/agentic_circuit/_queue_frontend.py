@@ -97,6 +97,14 @@ class StaticQueueCollection:
 
 
 @dataclass(frozen=True, slots=True)
+class CollectionBinding:
+    name: str
+    value: StaticQueueCollection
+    scope: tuple[str, ...]
+    order: int
+
+
+@dataclass(frozen=True, slots=True)
 class QueueProgram:
     system: str
     payloads: tuple[Payload, ...]
@@ -105,6 +113,7 @@ class QueueProgram:
     routes: tuple[RouteBinding, ...]
     feedbacks: tuple[FeedbackBinding, ...]
     merges: tuple[MergeBinding, ...]
+    collections: tuple[CollectionBinding, ...]
     sinks: tuple[SinkBinding, ...]
 
 
@@ -236,6 +245,7 @@ def parse_queue_program(text: str, system: str) -> QueueProgram:
     sinks: list[SinkBinding] = []
     by_name: dict[str, QueueBinding] = {}
     collections: dict[str, StaticQueueCollection] = {}
+    collection_bindings: list[CollectionBinding] = []
     order = 0
 
     def call_name(call: ast.Call) -> str:
@@ -486,6 +496,9 @@ def parse_queue_program(text: str, system: str) -> QueueProgram:
                 )
                 assert collection is not None
                 collections[name] = collection
+                collection_bindings.append(
+                    CollectionBinding(name, collection, scope_path, current_order)
+                )
                 continue
             if (
                 isinstance(statement, ast.For)
@@ -713,6 +726,7 @@ def parse_queue_program(text: str, system: str) -> QueueProgram:
         tuple(routes),
         tuple(feedbacks),
         tuple(merges),
+        tuple(collection_bindings),
         tuple(sinks),
     )
 
