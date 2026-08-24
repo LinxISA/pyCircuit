@@ -840,6 +840,9 @@ def lower_queue_program(program: QueueProgram) -> str:
             )
         lines.append("  } {dlti.dl_spec = #dlti.dl_spec<" + ", ".join(layouts) + ">}")
     by_name = {item.name: item for item in program.queues}
+
+    def name_array(names: list[str] | tuple[str, ...]) -> str:
+        return "[" + ", ".join(f'"{name}"' for name in names) + "]"
     consumers: dict[str, list[QueueBinding]] = {}
     for queue in program.queues:
         if queue.input_name is not None:
@@ -918,7 +921,8 @@ def lower_queue_program(program: QueueProgram) -> str:
         if queue.input_name is None:
             lines.append(
                 f"{indent}%{output_ssa} = ac.source depth {queue.depth} "
-                f"latency {queue.latency} : !ac.queue<{queue.payload}>"
+                f'latency {queue.latency} {{ac.name = "{queue.name}"}} : '
+                f"!ac.queue<{queue.payload}>"
             )
             mapping[queue.name] = output_ssa
             return
@@ -941,7 +945,8 @@ def lower_queue_program(program: QueueProgram) -> str:
             f"{indent}  ac.transform.yield %{result} : !ac.var<{queue.payload}>"
         )
         lines.append(
-            f"{indent}}} : (!ac.queue<{queue.payload}>) -> "
+            f'{indent}}} {{ac.name = "{queue.name}"}} : '
+            f"(!ac.queue<{queue.payload}>) -> "
             f"!ac.queue<{queue.payload}>"
         )
         mapping[queue.name] = output_ssa
@@ -1015,7 +1020,9 @@ def lower_queue_program(program: QueueProgram) -> str:
                 output_types = ", ".join(f"!ac.queue<{payload}>" for _ in outputs)
                 lines.append(
                     f"{indent}{lhs} = ac.broadcast %{mapping[source]} depths "
-                    f"[{depths}] latencies [{depths}] : !ac.queue<{payload}> -> "
+                    f"[{depths}] latencies [{depths}] "
+                    f"{{ac.output_names = {name_array(outputs)}}} : "
+                    f"!ac.queue<{payload}> -> "
                     f"({output_types})"
                 )
                 for consumer, output in zip(group, outputs, strict=True):
@@ -1047,7 +1054,9 @@ def lower_queue_program(program: QueueProgram) -> str:
                     f"{indent}  ac.route.yield %{selector} : !ac.var<{selector_type}>"
                 )
                 lines.append(
-                    f"{indent}}} : !ac.queue<{incoming.payload}> -> ({output_types})"
+                    f"{indent}}} "
+                    f"{{ac.output_names = {name_array(route.outputs)}}} : "
+                    f"!ac.queue<{incoming.payload}> -> ({output_types})"
                 )
                 for name, output in zip(route.outputs, output_names, strict=True):
                     mapping[name] = output
@@ -1084,7 +1093,8 @@ def lower_queue_program(program: QueueProgram) -> str:
                     f"!ac.var<{incoming.payload}>, !ac.var<i1>"
                 )
                 lines.append(
-                    f"{indent}}} : !ac.queue<{incoming.payload}> -> "
+                    f'{indent}}} {{ac.name = "{feedback.output_name}"}} : '
+                    f"!ac.queue<{incoming.payload}> -> "
                     f"!ac.queue<{incoming.payload}>"
                 )
                 mapping[feedback.output_name] = output
@@ -1099,7 +1109,8 @@ def lower_queue_program(program: QueueProgram) -> str:
                 payload = by_name[merge.output].payload
                 lines.append(
                     f'{indent}%{output} = ac.merge {operands} policy "{merge.policy}" '
-                    f"depth {merge.depth} latency {merge.latency} : "
+                    f"depth {merge.depth} latency {merge.latency} "
+                    f'{{ac.name = "{merge.output}"}} : '
                     f"({input_types}) -> !ac.queue<{payload}>"
                 )
                 mapping[merge.output] = output
@@ -1108,7 +1119,8 @@ def lower_queue_program(program: QueueProgram) -> str:
                 assert isinstance(sink_binding, SinkBinding)
                 queue = by_name[sink_binding.queue]
                 lines.append(
-                    f"{indent}ac.sink %{mapping[sink_binding.queue]} : "
+                    f"{indent}ac.sink %{mapping[sink_binding.queue]} "
+                    f'{{ac.name = "sink_{sink_binding.order}"}} : '
                     f"!ac.queue<{queue.payload}>"
                 )
 

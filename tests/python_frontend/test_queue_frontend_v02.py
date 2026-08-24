@@ -152,12 +152,12 @@ class QueueFrontendV02Test(unittest.TestCase):
 
         self.assertEqual(
             """module attributes {ac.contract_epoch = "0.1"} {
-  %input_queue = ac.source depth 4 latency 1 : !ac.queue<i64>
+  %input_queue = ac.source depth 4 latency 1 {ac.name = "input_queue"} : !ac.queue<i64>
   %output_queue = ac.transform %input_queue depths [8] latencies [2] {
   ^transform(%item: !ac.var<i64>):
     ac.transform.yield %item : !ac.var<i64>
-  } : (!ac.queue<i64>) -> !ac.queue<i64>
-  ac.sink %output_queue : !ac.queue<i64>
+  } {ac.name = "output_queue"} : (!ac.queue<i64>) -> !ac.queue<i64>
+  ac.sink %output_queue {ac.name = "sink_2"} : !ac.queue<i64>
 }
 """,
             lower_queue_source(SOURCE, "pipeline"),
@@ -196,7 +196,9 @@ class QueueFrontendV02Test(unittest.TestCase):
             "%completed__inner = ac.scope @inner(%adjusted__local)", lowered,
         )
         self.assertIn("ac.scope.yield %completed__local", lowered)
-        self.assertIn("ac.sink %completed : !ac.queue<i64>", lowered)
+        self.assertIn(
+            'ac.sink %completed {ac.name = "sink_5"} : !ac.queue<i64>', lowered
+        )
 
     def test_multiple_consumers_insert_strict_atomic_broadcast(self) -> None:
         from agentic_circuit._queue_frontend import lower_queue_source
