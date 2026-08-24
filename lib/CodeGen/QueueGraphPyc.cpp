@@ -323,6 +323,24 @@ llvm::Expected<std::string> generateQueueGraphPyc(const QueueGraphPlan &plan) {
     std::vector<std::string> enableWires;
     std::vector<std::string> delivered;
   };
+  struct FeedbackState {
+    std::string validNext;
+    std::string validEnable;
+    std::string valid;
+    std::string dataNext;
+    std::string dataEnable;
+    std::string data;
+    std::string iterationNext;
+    std::string iterationEnable;
+    std::string iteration;
+    std::string selectedValid;
+    std::string selectedIteration;
+    std::string condition;
+    std::string updated;
+    std::string underLimit;
+    std::string dataType;
+    std::string iterationType;
+  };
   std::vector<const QueueBlockPlan *> sources;
   std::vector<const QueueBlockPlan *> sinks;
   std::vector<const QueueBlockPlan *> observations;
@@ -331,6 +349,7 @@ llvm::Expected<std::string> generateQueueGraphPyc(const QueueGraphPlan &plan) {
   llvm::StringMap<const QueueBlockPlan *> forkByOutput;
   llvm::StringMap<RouteProducer> routeByOutput;
   llvm::StringMap<const QueueBlockPlan *> mergeByOutput;
+  llvm::StringMap<const QueueBlockPlan *> feedbackByOutput;
   for (const QueueBlockPlan &block : plan.blocks) {
     if (block.kind == "source")
       sources.push_back(&block);
@@ -366,10 +385,14 @@ llvm::Expected<std::string> generateQueueGraphPyc(const QueueGraphPlan &plan) {
       if (block.policy != "priority" && block.policy != "round_robin")
         return pycError("PYC merge policy must be priority or round_robin");
       mergeByOutput[block.outputs.front()] = &block;
+    } else if (block.kind == "feedback") {
+      if (block.inputs.size() != 1 || block.outputs.size() != 1 ||
+          block.yields.size() != 2 || block.maxIterations == 0)
+        return pycError("feedback contract is unsupported");
+      feedbackByOutput[block.outputs.front()] = &block;
     } else {
-      return pycError("initial PYC slice supports "
-                      "source/transform/broadcast/fork/route/priority-merge/"
-                      "sink");
+      return pycError("PYC QueueGraph supports source/transform/broadcast/fork/"
+                      "route/merge/feedback/observe/sink");
     }
   }
   if (sources.empty() || sinks.empty())
@@ -422,6 +445,7 @@ llvm::Expected<std::string> generateQueueGraphPyc(const QueueGraphPlan &plan) {
   llvm::StringMap<std::vector<std::string>> mergeGrants;
   llvm::StringMap<MergeState> mergeStates;
   llvm::StringMap<ForkState> forkStates;
+  llvm::StringMap<FeedbackState> feedbackStates;
   llvm::StringMap<std::string> forkOfferValid;
   std::ostringstream body;
   unsigned nextValue = 0;
@@ -470,6 +494,7 @@ llvm::Expected<std::string> generateQueueGraphPyc(const QueueGraphPlan &plan) {
       auto forkProducer = forkByOutput.find(queue.name);
       auto routeProducer = routeByOutput.find(queue.name);
       auto mergeProducer = mergeByOutput.find(queue.name);
+      auto feedbackProducer = feedbackByOutput.find(queue.name);
       if (transformProducer != transformByOutput.end()) {
         const TransformProducer &producer = transformProducer->getValue();
         const QueueBlockPlan &transform = *producer.block;
@@ -649,6 +674,89 @@ llvm::Expected<std::string> generateQueueGraphPyc(const QueueGraphPlan &plan) {
         mergeGrants[merge.name] = grants;
         producerValid = any;
         producerData = selectedData;
+      } else if (feedbackProducer != feedbackByOutput.end()) {
+        const QueueBlockPlan &feedback = *feedbackProducer->getValue();
+        auto inputValidValue = outputValid.find(feedback.inputs.front());
+        auto inputDataValue = outputData.find(feedback.inputs.front());
+        const QueuePlan *inputQueue = findQueue(plan, feedback.inputs.front());
+        if (inputValidValue == outputValid.end() ||
+            inputDataValue == outputData.end() || !inputQueue)
+          return pycError(
+              "feedback input is not available in topological order");
+        auto dataType = pycType(plan, inputQueue->payloadType);
+        if (!dataType)
+          return dataType.takeError();
+        unsigned iterationWidth = 1;
+        while (iterationWidth < 64 &&
+               (uint64_t{1} << iterationWidth) <= feedback.maxIterations)
+          ++iterationWidth;
+        std::string iterationType = "i" + std::to_string(iterationWidth);
+        std::string zeroValid = emitConstant(0, "i1");
+        std::string zeroData = emitConstant(0, *dataType);
+        std::string zeroIteration = emitConstant(0, iterationType);
+        FeedbackState state;
+        state.validNext = newValue();
+        state.validEnable = newValue();
+        state.valid = newValue();
+        body << "    " << state.validNext << " = pyc.wire : i1\n";
+        body << "    " << state.validEnable << " = pyc.wire : i1\n";
+        body << "    " << state.valid << " = pyc.reg %clk, %rst, "
+             << state.validEnable << ", " << state.validNext << ", "
+             << zeroValid << " : i1\n";
+        state.dataNext = newValue();
+        state.dataEnable = newValue();
+        state.data = newValue();
+        body << "    " << state.dataNext << " = pyc.wire : " << *dataType
+             << "\n";
+        body << "    " << state.dataEnable << " = pyc.wire : i1\n";
+        body << "    " << state.data << " = pyc.reg %clk, %rst, "
+             << state.dataEnable << ", " << state.dataNext << ", " << zeroData
+             << " : " << *dataType << "\n";
+        state.iterationNext = newValue();
+        state.iterationEnable = newValue();
+        state.iteration = newValue();
+        body << "    " << state.iterationNext
+             << " = pyc.wire : " << iterationType << "\n";
+        body << "    " << state.iterationEnable << " = pyc.wire : i1\n";
+        body << "    " << state.iteration << " = pyc.reg %clk, %rst, "
+             << state.iterationEnable << ", " << state.iterationNext << ", "
+             << zeroIteration << " : " << iterationType << "\n";
+        std::string selectedData = emitMux(
+            state.valid, state.data, inputDataValue->getValue(), *dataType);
+        state.selectedValid =
+            emitBinary("or", state.valid, inputValidValue->getValue(), "i1");
+        state.selectedIteration =
+            emitMux(state.valid, state.iteration, zeroIteration, iterationType);
+        auto updated =
+            emitTransform(plan, feedback, {selectedData},
+                          {inputQueue->payloadType}, 0, nextValue, body);
+        if (!updated)
+          return updated.takeError();
+        state.updated = std::move(*updated);
+        auto condition =
+            emitTransform(plan, feedback, {selectedData},
+                          {inputQueue->payloadType}, 1, nextValue, body);
+        if (!condition)
+          return condition.takeError();
+        auto conditionType =
+            yieldedType(feedback, feedback.yields[1], inputQueue->payloadType);
+        if (!conditionType)
+          return conditionType.takeError();
+        auto conditionPycType = pycType(plan, *conditionType);
+        if (!conditionPycType)
+          return conditionPycType.takeError();
+        if (*conditionPycType != "i1")
+          return pycError("feedback condition must lower to i1");
+        state.condition = std::move(*condition);
+        std::string limit = emitConstant(feedback.maxIterations, iterationType);
+        state.underLimit =
+            emitBinary("ult", state.selectedIteration, limit, iterationType);
+        std::string done = emitNot(state.condition);
+        producerValid = emitBinary("and", state.selectedValid, done, "i1");
+        producerData = std::move(selectedData);
+        state.dataType = *dataType;
+        state.iterationType = std::move(iterationType);
+        feedbackStates[feedback.name] = std::move(state);
       } else {
         return pycError("Queue has no supported producer: '" + queue.name +
                         "'");
@@ -782,6 +890,47 @@ llvm::Expected<std::string> generateQueueGraphPyc(const QueueGraphPlan &plan) {
         body << "    pyc.assign " << state->getValue().nextWire << ", " << next
              << " : " << state->getValue().type << "\n";
       }
+    } else if (block.kind == "feedback") {
+      auto state = feedbackStates.find(block.name);
+      if (state == feedbackStates.end())
+        return pycError("feedback state is missing");
+      std::string notInternal = emitNot(state->getValue().valid);
+      std::string canProceed =
+          emitMux(state->getValue().condition, state->getValue().underLimit,
+                  inputReady[block.outputs.front()], "i1");
+      std::string accepted =
+          emitBinary("and", state->getValue().selectedValid, canProceed, "i1");
+      std::string externalReady =
+          emitBinary("and", notInternal, canProceed, "i1");
+      body << "    pyc.assign " << readyWires[block.inputs.front()] << ", "
+           << externalReady << " : i1\n";
+      std::string continueAccepted =
+          emitBinary("and", accepted, state->getValue().condition, "i1");
+      body << "    pyc.assign " << state->getValue().validNext << ", "
+           << state->getValue().condition << " : i1\n";
+      body << "    pyc.assign " << state->getValue().validEnable << ", "
+           << accepted << " : i1\n";
+      body << "    pyc.assign " << state->getValue().dataNext << ", "
+           << state->getValue().updated << " : " << state->getValue().dataType
+           << "\n";
+      body << "    pyc.assign " << state->getValue().dataEnable << ", "
+           << continueAccepted << " : i1\n";
+      std::string one = emitConstant(1, state->getValue().iterationType);
+      std::string nextIteration =
+          emitBinary("add", state->getValue().selectedIteration, one,
+                     state->getValue().iterationType);
+      body << "    pyc.assign " << state->getValue().iterationNext << ", "
+           << nextIteration << " : " << state->getValue().iterationType << "\n";
+      body << "    pyc.assign " << state->getValue().iterationEnable << ", "
+           << continueAccepted << " : i1\n";
+      std::string atLimit = emitNot(state->getValue().underLimit);
+      std::string limitCondition =
+          emitBinary("and", state->getValue().condition, atLimit, "i1");
+      std::string limitViolation = emitBinary(
+          "and", state->getValue().selectedValid, limitCondition, "i1");
+      std::string limitOk = emitNot(limitViolation);
+      body << "    pyc.assert " << limitOk
+           << " {msg = \"feedback_iteration_limit\"}\n";
     }
   }
   for (auto [index, sink] : llvm::enumerate(sinks))

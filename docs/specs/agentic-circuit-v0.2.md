@@ -670,13 +670,13 @@ The current hardware lowering maps:
 | route | selector decoder, valid demultiplexing, ready multiplexing |
 | priority merge | fixed-priority selection |
 | round-robin merge | selection plus committed cursor register |
+| bounded feedback | committed valid/data/iteration registers and limit assertion |
 | scope | static module hierarchy |
 | observe | non-functional probe boundary |
 
 PYC C++ and Verilog generated from the same PYC IR MUST be cycle equivalent.
-The current PYC lowering does not yet accept `ac.feedback`; that opcode is a
-documented backend gap rather than permission to implement divergent feedback
-semantics.
+Feedback uses explicit sequential state in PYC IR; it is not a combinational
+unroll or a backend-specific loop.
 
 ## Cross-backend refinement
 
@@ -935,8 +935,9 @@ The following v0.2 slices are implemented and tested:
   Queue `if` lowering through route/transform/merge;
 - canonical QueueGraph extraction;
 - typed gfsim C++ generation;
-- PYC/Verilog lowering for transform, broadcast, fork, route, merge, hierarchy,
-  packed structures, atomic handshakes, and exact Queue latency;
+- PYC/Verilog lowering for transform, broadcast, fork, route, merge, bounded
+  feedback, hierarchy, packed structures, atomic handshakes, and exact Queue
+  latency;
 - PYC C++ versus Verilog cycle equivalence and gfsim/PYC projected transaction
   comparison.
 
@@ -947,7 +948,7 @@ The following work remains before v0.2 is complete:
 - freeze the remaining common building-block inventory for state, memory,
   scheduling, reservation, credits, and barriers;
 - preserve explicit signedness semantics beyond integer width;
-- lower feedback and the remaining stateful blocks through PYC;
+- lower the remaining state, memory, and resource blocks through PYC;
 - complete the DavinciOO functional and performance refinement contract;
 - remove all transition-only provider and compatibility surfaces;
 - run the complete release, sanitizer, install, determinism, replay, PYC,

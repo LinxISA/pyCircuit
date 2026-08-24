@@ -259,5 +259,22 @@ TEST(QueueGraphPlanTest, ObservationDoesNotConsumeQueue) {
   EXPECT_EQ(plan->blocks[1].kind, "observe");
 }
 
+TEST(QueueGraphPlanTest, RejectsMalformedPycFeedbackContract) {
+  QueueGraphPlan plan;
+  plan.system = "bad_feedback";
+  plan.queues = {{"input", "i64", "/", 1, 1}, {"output", "i64", "/", 1, 1}};
+  plan.blocks.push_back({"source", "input", "/", {}, {"input"}, {1}, {1}});
+  QueueBlockPlan feedback{"feedback", "output", "/", {"input"}, {"output"}};
+  feedback.yields = {"item", "condition"};
+  feedback.maxIterations = 0;
+  plan.blocks.push_back(std::move(feedback));
+  plan.blocks.push_back({"sink", "sink_0", "/", {"output"}, {}});
+  auto pyc = generateQueueGraphPyc(plan);
+  ASSERT_FALSE(bool(pyc));
+  EXPECT_NE(
+      llvm::toString(pyc.takeError()).find("feedback contract is unsupported"),
+      std::string::npos);
+}
+
 } // namespace
 } // namespace acir::codegen
