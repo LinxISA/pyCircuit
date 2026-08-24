@@ -48,13 +48,25 @@ public:
   bool isFull() const { return !canProposePush(); }
   bool isEmpty() const { return committed_.empty(); }
   bool canProposePush(size_t count = 1) const {
-    const size_t occupied =
-        committed_.size() + delayed_.size() + pushProposals_.size();
-    return count <= entryCapacity_ && occupied <= entryCapacity_ - count &&
-           !exceedsByteCapacity(occupied + count);
+    return canProposePushWithAdditionalPops(count, 0);
+  }
+  bool canProposePushAfterPop(size_t count = 1) const {
+    return canProposePop() && canProposePushWithAdditionalPops(count, 1);
   }
   bool canProposePop() const { return popProposalCount_ < committed_.size(); }
 
+private:
+  bool canProposePushWithAdditionalPops(size_t count,
+                                        size_t additionalPops) const {
+    const size_t pops =
+        std::min(committed_.size(), popProposalCount_ + additionalPops);
+    const size_t occupied =
+        committed_.size() - pops + delayed_.size() + pushProposals_.size();
+    return count <= entryCapacity_ && occupied <= entryCapacity_ - count &&
+           !exceedsByteCapacity(occupied + count);
+  }
+
+public:
   // ── Proposal interface ──────────────────────────────────────────────
 
   /// Propose to enqueue an element. Returns false if capacity exceeded.

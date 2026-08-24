@@ -12,6 +12,20 @@ struct Increment {
   int operator()(const int &value) const { return value + 1; }
 };
 
+struct SelectParity {
+  size_t operator()(const int &value) const {
+    return static_cast<size_t>(value & 1);
+  }
+};
+
+struct Positive {
+  bool operator()(const int &value) const { return value > 0; }
+};
+
+struct Decrement {
+  int operator()(const int &value) const { return value - 1; }
+};
+
 TEST(QueueBlocksTest, TransformCommitsOnlyAcrossTheQueueBarrier) {
   SimQueue<int> input("input", 1, nullptr, 2);
   SimQueue<int> output("output", 2, nullptr, 2);
@@ -80,6 +94,85 @@ TEST(QueueBlocksTest, SinkConsumesAtWorkAndPublishesAtXfer) {
   sink.doXfer({1, 0});
   ASSERT_EQ(sink.received().size(), 1u);
   EXPECT_EQ(sink.received().front(), 13);
+}
+
+TEST(QueueBlocksTest, BroadcastWaitsForEveryOutput) {
+  SimQueue<int> input("input", 1, nullptr, 1);
+  SimQueue<int> left("left", 2, nullptr, 1);
+  SimQueue<int> right("right", 3, nullptr, 1);
+  QueueBroadcast<int, 2> broadcast("broadcast", 4, nullptr, input,
+                                   {&left, &right});
+  ASSERT_TRUE(input.proposePush(9));
+  ASSERT_TRUE(right.proposePush(4));
+  input.doXfer({0, 0});
+  right.doXfer({0, 0});
+  broadcast.doWork({1, 0});
+  input.doXfer({1, 0});
+  left.doXfer({1, 0});
+  ASSERT_NE(input.peek(), nullptr);
+  EXPECT_TRUE(left.isEmpty());
+}
+
+TEST(QueueBlocksTest, RouteSelectsExactlyOneOutput) {
+  SimQueue<int> input("input", 1, nullptr, 1);
+  SimQueue<int> even("even", 2, nullptr, 1);
+  SimQueue<int> odd("odd", 3, nullptr, 1);
+  QueueRoute<int, 2, SelectParity> route("route", 4, nullptr, input,
+                                         {&even, &odd});
+  ASSERT_TRUE(input.proposePush(7));
+  input.doXfer({0, 0});
+  route.doWork({1, 0});
+  input.doXfer({1, 0});
+  even.doXfer({1, 0});
+  odd.doXfer({1, 0});
+  EXPECT_TRUE(even.isEmpty());
+  ASSERT_NE(odd.peek(), nullptr);
+  EXPECT_EQ(*odd.peek(), 7);
+}
+
+TEST(QueueBlocksTest, MergeRoundRobinIgnoresWorkInsertionOrder) {
+  SimQueue<int> left("left", 1, nullptr, 2);
+  SimQueue<int> right("right", 2, nullptr, 2);
+  SimQueue<int> output("output", 3, nullptr, 2);
+  QueueMerge<int, 2> merge("merge", 4, nullptr, {&left, &right}, output);
+  ASSERT_TRUE(left.proposePush(10));
+  ASSERT_TRUE(right.proposePush(20));
+  left.doXfer({0, 0});
+  right.doXfer({0, 0});
+  merge.doWork({1, 0});
+  left.doXfer({1, 0});
+  right.doXfer({1, 0});
+  output.doXfer({1, 0});
+  merge.doXfer({1, 0});
+  ASSERT_NE(output.peek(), nullptr);
+  EXPECT_EQ(*output.peek(), 10);
+  output.proposePop();
+  output.doXfer({2, 0});
+  merge.doWork({2, 0});
+  right.doXfer({2, 0});
+  output.doXfer({2, 0});
+  ASSERT_NE(output.peek(), nullptr);
+  EXPECT_EQ(*output.peek(), 20);
+}
+
+TEST(QueueBlocksTest, FeedbackUsesParentOwnedStateQueue) {
+  using State = FeedbackToken<int>;
+  SimQueue<int> input("input", 1, nullptr, 1);
+  SimQueue<State> feedback("feedback", 2, nullptr, 1);
+  SimQueue<int> output("output", 3, nullptr, 1);
+  QueueFeedback<int, Decrement, Positive> loop("feedback_block", 4, nullptr,
+                                               input, feedback, output, 8);
+  ASSERT_TRUE(input.proposePush(3));
+  input.doXfer({0, 0});
+  for (uint64_t tick = 1; tick <= 4; ++tick) {
+    loop.doWork({tick, 0});
+    input.doXfer({tick, 0});
+    feedback.doXfer({tick, 0});
+    output.doXfer({tick, 0});
+    loop.doXfer({tick, 0});
+  }
+  ASSERT_NE(output.peek(), nullptr);
+  EXPECT_EQ(*output.peek(), 0);
 }
 
 } // namespace
