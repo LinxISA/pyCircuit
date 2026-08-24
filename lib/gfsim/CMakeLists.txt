@@ -13,4 +13,7 @@ target_include_directories(gfsim PUBLIC
 )
 target_compile_features(gfsim PUBLIC cxx_std_20)
 target_link_libraries(gfsim PUBLIC ACIRBindings)
+if(NOT LLVM_ENABLE_RTTI)
+  target_compile_options(gfsim PRIVATE -fno-rtti)
+endif()
 set_target_properties(gfsim PROPERTIES EXPORT_NAME Gfsim)
