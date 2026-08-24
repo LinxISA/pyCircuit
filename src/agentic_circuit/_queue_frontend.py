@@ -29,6 +29,22 @@ class QueueBinding:
     input_name: str | None
     argument: str | None = None
     expression: ast.expr | None = None
+    scope: tuple[str, ...] = ()
+    order: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class ScopeBinding:
+    name: str
+    path: tuple[str, ...]
+    order: int
+
+
+@dataclass(frozen=True, slots=True)
+class SinkBinding:
+    queue: str
+    scope: tuple[str, ...]
+    order: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -36,7 +52,8 @@ class QueueProgram:
     system: str
     payloads: tuple[Payload, ...]
     queues: tuple[QueueBinding, ...]
-    sinks: tuple[str, ...]
+    scopes: tuple[ScopeBinding, ...]
+    sinks: tuple[SinkBinding, ...]
 
 
 def _decorator_name(node: ast.expr) -> str:
@@ -130,39 +147,67 @@ def parse_queue_program(text: str, system: str) -> QueueProgram:
     if function.args.args or function.args.posonlyargs or function.args.kwonlyargs:
         raise QueueFrontendError("ACPY-QUEUE-001: a queue system infers boundaries and takes no parameters")
     queues: list[QueueBinding] = []
-    sinks: list[str] = []
+    scopes: list[ScopeBinding] = []
+    sinks: list[SinkBinding] = []
     by_name: dict[str, QueueBinding] = {}
-    for statement in function.body:
-        if isinstance(statement, ast.Assign) and len(statement.targets) == 1 and isinstance(statement.targets[0], ast.Name) and isinstance(statement.value, ast.Call):
-            name, call = statement.targets[0].id, statement.value
-            if name in by_name:
-                raise QueueFrontendError("ACPY-QUEUE-001: queue assignment requires one fresh name")
-            if isinstance(call.func, ast.Name) and call.func.id == "source" and len(call.args) == 1:
-                binding = QueueBinding(name, _payload(call.args[0], payload_map), _positive_int(call, "depth", 1), _positive_int(call, "latency", 1), None)
-            elif isinstance(call.func, ast.Attribute) and call.func.attr == "apply" and isinstance(call.func.value, ast.Name) and len(call.args) == 1:
-                input_name = call.func.value.id
-                incoming = by_name.get(input_name)
-                if incoming is None:
-                    raise QueueFrontendError(f"ACPY-QUEUE-001: input queue {input_name!r} is unbound")
-                argument, expression = _lambda(call.args[0])
-                binding = QueueBinding(name, incoming.payload, _positive_int(call, "depth", 1), _positive_int(call, "latency", 1), input_name, argument, expression)
-            else:
-                raise QueueFrontendError("ACPY-QUEUE-001: unsupported queue-producing call")
-            queues.append(binding)
-            by_name[name] = binding
-            continue
-        if isinstance(statement, ast.Expr) and isinstance(statement.value, ast.Call) and isinstance(statement.value.func, ast.Name) and statement.value.func.id == "sink" and len(statement.value.args) == 1 and isinstance(statement.value.args[0], ast.Name):
-            name = statement.value.args[0].id
-            if name not in by_name:
-                raise QueueFrontendError(f"ACPY-QUEUE-001: sink queue {name!r} is unbound")
-            sinks.append(name)
-            continue
-        if isinstance(statement, ast.Return) and statement.value is None:
-            continue
-        raise QueueFrontendError(f"ACPY-QUEUE-001: unsupported statement {type(statement).__name__}")
+    order = 0
+
+    def visit(statements: list[ast.stmt], scope_path: tuple[str, ...]) -> None:
+        nonlocal order
+        for statement in statements:
+            current_order = order
+            order += 1
+            if isinstance(statement, ast.With) and len(statement.items) == 1:
+                item = statement.items[0]
+                call = item.context_expr
+                if (
+                    item.optional_vars is None
+                    and isinstance(call, ast.Call)
+                    and isinstance(call.func, ast.Name)
+                    and call.func.id == "scope"
+                    and len(call.args) == 1
+                    and isinstance(call.args[0], ast.Constant)
+                    and type(call.args[0].value) is str
+                    and call.args[0].value
+                ):
+                    path = (*scope_path, call.args[0].value)
+                    if any(existing.path == path for existing in scopes):
+                        raise QueueFrontendError("ACPY-QUEUE-004: duplicate scope path")
+                    scopes.append(ScopeBinding(call.args[0].value, path, current_order))
+                    visit(statement.body, path)
+                    continue
+            if isinstance(statement, ast.Assign) and len(statement.targets) == 1 and isinstance(statement.targets[0], ast.Name) and isinstance(statement.value, ast.Call):
+                name, call = statement.targets[0].id, statement.value
+                if name in by_name:
+                    raise QueueFrontendError("ACPY-QUEUE-001: queue assignment requires one fresh name")
+                if isinstance(call.func, ast.Name) and call.func.id == "source" and len(call.args) == 1:
+                    binding = QueueBinding(name, _payload(call.args[0], payload_map), _positive_int(call, "depth", 1), _positive_int(call, "latency", 1), None, scope=scope_path, order=current_order)
+                elif isinstance(call.func, ast.Attribute) and call.func.attr == "apply" and isinstance(call.func.value, ast.Name) and len(call.args) == 1:
+                    input_name = call.func.value.id
+                    incoming = by_name.get(input_name)
+                    if incoming is None:
+                        raise QueueFrontendError(f"ACPY-QUEUE-001: input queue {input_name!r} is unbound")
+                    argument, expression = _lambda(call.args[0])
+                    binding = QueueBinding(name, incoming.payload, _positive_int(call, "depth", 1), _positive_int(call, "latency", 1), input_name, argument, expression, scope_path, current_order)
+                else:
+                    raise QueueFrontendError("ACPY-QUEUE-001: unsupported queue-producing call")
+                queues.append(binding)
+                by_name[name] = binding
+                continue
+            if isinstance(statement, ast.Expr) and isinstance(statement.value, ast.Call) and isinstance(statement.value.func, ast.Name) and statement.value.func.id == "sink" and len(statement.value.args) == 1 and isinstance(statement.value.args[0], ast.Name):
+                name = statement.value.args[0].id
+                if name not in by_name:
+                    raise QueueFrontendError(f"ACPY-QUEUE-001: sink queue {name!r} is unbound")
+                sinks.append(SinkBinding(name, scope_path, current_order))
+                continue
+            if isinstance(statement, ast.Return) and statement.value is None:
+                continue
+            raise QueueFrontendError(f"ACPY-QUEUE-001: unsupported statement {type(statement).__name__}")
+
+    visit(function.body, ())
     if not queues or not sinks:
         raise QueueFrontendError("ACPY-QUEUE-001: a queue system requires source and sink boundaries")
-    return QueueProgram(system, payloads, tuple(queues), tuple(sinks))
+    return QueueProgram(system, payloads, tuple(queues), tuple(scopes), tuple(sinks))
 
 
 class _ExpressionEmitter:
@@ -249,23 +294,141 @@ def lower_queue_program(program: QueueProgram) -> str:
                 f"preferred_alignment = {alignment} : i64, size = {total} : i64}}"
             )
         lines.append("  } {dlti.dl_spec = #dlti.dl_spec<" + ", ".join(layouts) + ">}")
+    by_name = {item.name: item for item in program.queues}
+    uses: dict[str, list[tuple[str, ...]]] = {name: [] for name in by_name}
     for queue in program.queues:
+        if queue.input_name is not None:
+            uses[queue.input_name].append(queue.scope)
+    for sink_binding in program.sinks:
+        uses[sink_binding.queue].append(sink_binding.scope)
+
+    def inside(container: tuple[str, ...], candidate: tuple[str, ...]) -> bool:
+        return candidate[: len(container)] == container
+
+    def scope_io(path: tuple[str, ...]) -> tuple[list[str], list[str]]:
+        inputs = [
+            queue.name
+            for queue in program.queues
+            if not inside(path, queue.scope)
+            and any(inside(path, use) for use in uses[queue.name])
+        ]
+        outputs = [
+            queue.name
+            for queue in program.queues
+            if inside(path, queue.scope)
+            and any(not inside(path, use) for use in uses[queue.name])
+        ]
+        return inputs, outputs
+
+    def emit_queue(
+        queue: QueueBinding,
+        output_ssa: str,
+        mapping: dict[str, str],
+        indent: str,
+    ) -> None:
         if queue.input_name is None:
-            lines.append(f"  %{queue.name} = ac.source depth {queue.depth} latency {queue.latency} : !ac.queue<{queue.payload}>")
-            continue
+            lines.append(
+                f"{indent}%{output_ssa} = ac.source depth {queue.depth} "
+                f"latency {queue.latency} : !ac.queue<{queue.payload}>"
+            )
+            mapping[queue.name] = output_ssa
+            return
         assert queue.argument is not None and queue.expression is not None
         emitter = _ExpressionEmitter(payloads, queue.argument, queue.payload)
         result, result_type = emitter.emit(queue.expression)
         if result_type != queue.payload:
-            raise QueueFrontendError("ACPY-QUEUE-003: lambda result must preserve Queue payload type")
-        lines.append(f"  %{queue.name} = ac.transform %{queue.input_name} depths [{queue.depth}] latencies [{queue.latency}] {{")
-        lines.append(f"  ^body(%item: !ac.var<{queue.payload}>):")
-        lines.extend(emitter.lines)
-        lines.append(f"    ac.transform.yield %{result} : !ac.var<{queue.payload}>")
-        lines.append(f"  }} : (!ac.queue<{queue.payload}>) -> !ac.queue<{queue.payload}>")
-    by_name = {item.name: item for item in program.queues}
-    for name in program.sinks:
-        lines.append(f"  ac.sink %{name} : !ac.queue<{by_name[name].payload}>")
+            raise QueueFrontendError(
+                "ACPY-QUEUE-003: lambda result must preserve Queue payload type"
+            )
+        input_ssa = mapping[queue.input_name]
+        lines.append(
+            f"{indent}%{output_ssa} = ac.transform %{input_ssa} "
+            f"depths [{queue.depth}] latencies [{queue.latency}] {{"
+        )
+        lines.append(f"{indent}^transform(%item: !ac.var<{queue.payload}>):")
+        lines.extend(indent + line[2:] for line in emitter.lines)
+        lines.append(
+            f"{indent}  ac.transform.yield %{result} : !ac.var<{queue.payload}>"
+        )
+        lines.append(
+            f"{indent}}} : (!ac.queue<{queue.payload}>) -> "
+            f"!ac.queue<{queue.payload}>"
+        )
+        mapping[queue.name] = output_ssa
+
+    def render_items(
+        path: tuple[str, ...], mapping: dict[str, str], indent: str
+    ) -> None:
+        events: list[tuple[int, str, object]] = []
+        events.extend(
+            (queue.order, "queue", queue)
+            for queue in program.queues
+            if queue.scope == path
+        )
+        events.extend(
+            (scope.order, "scope", scope)
+            for scope in program.scopes
+            if scope.path[:-1] == path
+        )
+        events.extend(
+            (sink_binding.order, "sink", sink_binding)
+            for sink_binding in program.sinks
+            if sink_binding.scope == path
+        )
+        for _, kind, item in sorted(events, key=lambda event: event[0]):
+            if kind == "queue":
+                queue = item
+                assert isinstance(queue, QueueBinding)
+                output = queue.name if not path else f"{queue.name}__local"
+                emit_queue(queue, output, mapping, indent)
+            elif kind == "scope":
+                scope = item
+                assert isinstance(scope, ScopeBinding)
+                render_scope(scope, mapping, indent)
+            else:
+                sink_binding = item
+                assert isinstance(sink_binding, SinkBinding)
+                queue = by_name[sink_binding.queue]
+                lines.append(
+                    f"{indent}ac.sink %{mapping[sink_binding.queue]} : "
+                    f"!ac.queue<{queue.payload}>"
+                )
+
+    def render_scope(
+        scope: ScopeBinding, parent_mapping: dict[str, str], indent: str
+    ) -> None:
+        inputs, outputs = scope_io(scope.path)
+        result_names = [
+            name if len(scope.path) == 1 else f"{name}__inner" for name in outputs
+        ]
+        lhs = "" if not result_names else ", ".join(f"%{name}" for name in result_names) + " = "
+        operands = ", ".join(f"%{parent_mapping[name]}" for name in inputs)
+        input_types = ", ".join(f"!ac.queue<{by_name[name].payload}>" for name in inputs)
+        output_types = ", ".join(f"!ac.queue<{by_name[name].payload}>" for name in outputs)
+        lines.append(f"{indent}{lhs}ac.scope @{scope.name}({operands}) {{")
+        local_mapping = dict(parent_mapping)
+        if inputs:
+            args = ", ".join(
+                f"%{name}__in: !ac.queue<{by_name[name].payload}>" for name in inputs
+            )
+            lines.append(f"{indent}^body({args}):")
+            for name in inputs:
+                local_mapping[name] = f"{name}__in"
+        else:
+            lines.append(f"{indent}^body:")
+        render_items(scope.path, local_mapping, indent + "  ")
+        yielded = ", ".join(f"%{local_mapping[name]}" for name in outputs)
+        yield_types = ", ".join(f"!ac.queue<{by_name[name].payload}>" for name in outputs)
+        lines.append(
+            f"{indent}  ac.scope.yield"
+            + (f" {yielded} : {yield_types}" if outputs else "")
+        )
+        result_signature = output_types if len(outputs) == 1 else f"({output_types})"
+        lines.append(f"{indent}}} : ({input_types}) -> {result_signature}")
+        for name, result in zip(outputs, result_names, strict=True):
+            parent_mapping[name] = result
+
+    render_items((), {}, "  ")
     lines.append("}")
     return "\n".join(lines) + "\n"
 

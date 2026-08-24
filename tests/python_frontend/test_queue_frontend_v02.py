@@ -35,6 +35,19 @@ def pipeline() -> None:
     sink(output_queue)
 """
 
+SCOPE_SOURCE = """
+from agentic_circuit import scope, sink, source, system
+
+@system
+def pipeline() -> None:
+    input_queue = source(int, depth=4, latency=1)
+    with scope("frontend"):
+        adjusted = input_queue.apply(lambda item: item + 1)
+        with scope("inner"):
+            completed = adjusted.apply(lambda item: item * 2)
+    sink(completed)
+"""
+
 
 class QueueFrontendV02Test(unittest.TestCase):
     def test_simple_serial_python_lowers_to_typed_queue_graph(self) -> None:
@@ -44,7 +57,7 @@ class QueueFrontendV02Test(unittest.TestCase):
             """module attributes {ac.contract_epoch = "0.1"} {
   %input_queue = ac.source depth 4 latency 1 : !ac.queue<i64>
   %output_queue = ac.transform %input_queue depths [8] latencies [2] {
-  ^body(%item: !ac.var<i64>):
+  ^transform(%item: !ac.var<i64>):
     ac.transform.yield %item : !ac.var<i64>
   } : (!ac.queue<i64>) -> !ac.queue<i64>
   ac.sink %output_queue : !ac.queue<i64>
@@ -75,6 +88,18 @@ class QueueFrontendV02Test(unittest.TestCase):
         self.assertIn("ac.var.sub", lowered)
         self.assertIn('ac.var.with', lowered)
         self.assertIn('field "remaining"', lowered)
+
+    def test_nested_scope_infers_borrowed_local_and_exported_queues(self) -> None:
+        from agentic_circuit._queue_frontend import lower_queue_source
+
+        lowered = lower_queue_source(SCOPE_SOURCE, "pipeline")
+        self.assertIn("%completed = ac.scope @frontend(%input_queue)", lowered)
+        self.assertIn("^body(%input_queue__in: !ac.queue<i64>):", lowered)
+        self.assertIn(
+            "%completed__inner = ac.scope @inner(%adjusted__local)", lowered,
+        )
+        self.assertIn("ac.scope.yield %completed__local", lowered)
+        self.assertIn("ac.sink %completed : !ac.queue<i64>", lowered)
 
     def test_latency_zero_and_unsupported_lambda_are_rejected(self) -> None:
         from agentic_circuit._queue_frontend import (
