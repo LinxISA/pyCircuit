@@ -18,6 +18,12 @@ struct SelectParity {
   }
 };
 
+struct SelectIndex {
+  size_t operator()(const int &value) const {
+    return static_cast<size_t>(value);
+  }
+};
+
 struct Positive {
   bool operator()(const int &value) const { return value > 0; }
 };
@@ -573,6 +579,47 @@ TEST(QueueBlocksTest, RouteSelectsExactlyOneOutput) {
   EXPECT_TRUE(even.isEmpty());
   ASSERT_NE(odd.peek(), nullptr);
   EXPECT_EQ(*odd.peek(), 7);
+}
+
+TEST(QueueBlocksTest, SelectConsumesControlAndChosenInputOnly) {
+  SimQueue<int> control("control", 1, nullptr, 1);
+  SimQueue<int> left("left", 2, nullptr, 1);
+  SimQueue<int> right("right", 3, nullptr, 1);
+  SimQueue<int> output("output", 4, nullptr, 1);
+  QueueSelect<int, int, 2, SelectIndex> select("select", 5, nullptr, control,
+                                               {&left, &right}, output);
+  ASSERT_TRUE(control.proposePush(1));
+  ASSERT_TRUE(left.proposePush(10));
+  ASSERT_TRUE(right.proposePush(20));
+  control.doXfer({0, 0});
+  left.doXfer({0, 0});
+  right.doXfer({0, 0});
+  select.doWork({1, 0});
+  control.doXfer({1, 0});
+  left.doXfer({1, 0});
+  right.doXfer({1, 0});
+  output.doXfer({1, 0});
+  select.doXfer({1, 0});
+  EXPECT_TRUE(control.isEmpty());
+  ASSERT_NE(left.peek(), nullptr);
+  EXPECT_EQ(*left.peek(), 10);
+  EXPECT_TRUE(right.isEmpty());
+  ASSERT_NE(output.peek(), nullptr);
+  EXPECT_EQ(*output.peek(), 20);
+}
+
+TEST(QueueBlocksTest, SelectRejectsOutOfRangeSelector) {
+  SimQueue<int> control("control", 1, nullptr, 1);
+  SimQueue<int> left("left", 2, nullptr, 1);
+  SimQueue<int> right("right", 3, nullptr, 1);
+  SimQueue<int> output("output", 4, nullptr, 1);
+  QueueSelect<int, int, 2, SelectIndex> select("select", 5, nullptr, control,
+                                               {&left, &right}, output);
+  ASSERT_TRUE(control.proposePush(2));
+  control.doXfer({0, 0});
+  select.doWork({1, 0});
+  EXPECT_EQ(select.runtimeFailureCode(), "select_selector_out_of_range");
+  EXPECT_FALSE(select.hasPendingCommit());
 }
 
 TEST(QueueBlocksTest, MergeRoundRobinIgnoresWorkInsertionOrder) {

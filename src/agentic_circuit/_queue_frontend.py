@@ -40,6 +40,7 @@ class QueueBinding:
     credit_output: bool = False
     memory_output: bool = False
     barrier_output: bool = False
+    select_output: bool = False
     atomic_group: int | None = None
 
 
@@ -169,6 +170,19 @@ class BarrierBinding:
 
 
 @dataclass(frozen=True, slots=True)
+class SelectBinding:
+    control: str
+    inputs: tuple[str, ...]
+    output: str
+    argument: str
+    selector: ast.expr
+    depth: int
+    latency: int
+    scope: tuple[str, ...]
+    order: int
+
+
+@dataclass(frozen=True, slots=True)
 class MemoryBinding:
     input_name: str
     output_name: str
@@ -221,6 +235,7 @@ class QueueProgram:
     dependencies: tuple[DependencyBinding, ...]
     credits: tuple[CreditBinding, ...]
     barriers: tuple[BarrierBinding, ...]
+    selects: tuple[SelectBinding, ...]
     memories: tuple[MemoryBinding, ...]
     atomics: tuple[AtomicBinding, ...]
     collections: tuple[CollectionBinding, ...]
@@ -416,6 +431,7 @@ def parse_queue_program(text: str, system: str) -> QueueProgram:
     dependencies: list[DependencyBinding] = []
     credits: list[CreditBinding] = []
     barriers: list[BarrierBinding] = []
+    selects: list[SelectBinding] = []
     memories: list[MemoryBinding] = []
     atomics: list[AtomicBinding] = []
     sinks: list[SinkBinding] = []
@@ -847,6 +863,7 @@ def parse_queue_program(text: str, system: str) -> QueueProgram:
                     dependency_start = len(dependencies)
                     credit_start = len(credits)
                     barrier_start = len(barriers)
+                    select_start = len(selects)
                     memory_start = len(memories)
                     feedback_start = len(feedbacks)
                     sink_start = len(sinks)
@@ -864,6 +881,7 @@ def parse_queue_program(text: str, system: str) -> QueueProgram:
                         or len(dependencies) != dependency_start
                         or len(credits) != credit_start
                         or len(barriers) != barrier_start
+                        or len(selects) != select_start
                         or len(memories) != memory_start
                         or len(feedbacks) != feedback_start
                         or len(sinks) != sink_start
@@ -1258,6 +1276,86 @@ def parse_queue_program(text: str, system: str) -> QueueProgram:
                         capacity,
                         resources,
                         no_dependency,
+                        depth,
+                        latency,
+                        scope_path,
+                        current_order,
+                    )
+                )
+                continue
+            if (
+                isinstance(statement, ast.Assign)
+                and len(statement.targets) == 1
+                and isinstance(statement.targets[0], ast.Name)
+                and isinstance(statement.value, ast.Call)
+                and isinstance(statement.value.func, ast.Attribute)
+                and statement.value.func.attr == "select"
+                and isinstance(statement.value.func.value, ast.Name)
+                and statement.value.func.value.id in collections
+            ):
+                name = statement.targets[0].id
+                if name in by_name or name in collections:
+                    raise QueueFrontendError(
+                        "ACPY-QUEUE-018: select output requires one fresh name"
+                    )
+                call = statement.value
+                if len(call.args) != 1 or any(
+                    keyword.arg is None
+                    or keyword.arg not in {"key", "depth", "latency"}
+                    for keyword in call.keywords
+                ):
+                    raise QueueFrontendError(
+                        "ACPY-QUEUE-018: select requires one control Queue"
+                    )
+                control = queue_reference(call.args[0], aliases)
+                collection = collections[call.func.value.id]
+                if any(not isinstance(member, str) for _, member in collection.members):
+                    raise QueueFrontendError(
+                        "ACPY-QUEUE-018: select requires a flat Queue collection"
+                    )
+                inputs = tuple(
+                    member
+                    for _, member in collection.members
+                    if isinstance(member, str)
+                )
+                if len(inputs) < 2 or control in inputs:
+                    raise QueueFrontendError(
+                        "ACPY-QUEUE-018: select requires two unique data Queues"
+                    )
+                payload = by_name[inputs[0]].payload
+                if any(by_name[input_name].payload != payload for input_name in inputs):
+                    raise QueueFrontendError(
+                        "ACPY-QUEUE-018: select data Queue payloads must match"
+                    )
+                keys = [
+                    keyword.value for keyword in call.keywords if keyword.arg == "key"
+                ]
+                if len(keys) != 1:
+                    raise QueueFrontendError(
+                        "ACPY-QUEUE-018: select requires one key lambda"
+                    )
+                argument, selector = _lambda(keys[0])
+                depth = _positive_int(call, "depth", 1)
+                latency = _positive_int(call, "latency", 1)
+                output = QueueBinding(
+                    name,
+                    payload,
+                    depth,
+                    latency,
+                    None,
+                    scope=scope_path,
+                    order=current_order,
+                    select_output=True,
+                )
+                queues.append(output)
+                by_name[name] = output
+                selects.append(
+                    SelectBinding(
+                        control,
+                        inputs,
+                        name,
+                        argument,
+                        selector,
                         depth,
                         latency,
                         scope_path,
@@ -1722,6 +1820,7 @@ def parse_queue_program(text: str, system: str) -> QueueProgram:
         tuple(dependencies),
         tuple(credits),
         tuple(barriers),
+        tuple(selects),
         tuple(memories),
         tuple(atomics),
         tuple(collection_bindings),
@@ -1961,6 +2060,10 @@ def lower_queue_program(program: QueueProgram) -> str:
     for barrier in program.barriers:
         for input_name in barrier.inputs:
             uses[input_name].append(barrier.scope)
+    for select in program.selects:
+        uses[select.control].append(select.scope)
+        for input_name in select.inputs:
+            uses[input_name].append(select.scope)
     for memory in program.memories:
         uses[memory.input_name].append(memory.scope)
 
@@ -2045,6 +2148,7 @@ def lower_queue_program(program: QueueProgram) -> str:
             and not queue.credit_output
             and not queue.memory_output
             and not queue.barrier_output
+            and not queue.select_output
             and queue.atomic_group is None
         )
         events.extend(
@@ -2089,6 +2193,11 @@ def lower_queue_program(program: QueueProgram) -> str:
             (barrier.order, "barrier", barrier)
             for barrier in program.barriers
             if barrier.scope == path
+        )
+        events.extend(
+            (select.order, "select", select)
+            for select in program.selects
+            if select.scope == path
         )
         events.extend(
             (memory.order, "memory", memory)
@@ -2180,6 +2289,45 @@ def lower_queue_program(program: QueueProgram) -> str:
                     barrier.outputs, output_names, strict=True
                 ):
                     mapping[name] = output
+            elif kind == "select":
+                select = item
+                assert isinstance(select, SelectBinding)
+                control = by_name[select.control]
+                emitter = _ExpressionEmitter(
+                    payloads, select.argument, control.payload
+                )
+                selector, selector_type = emitter.emit(select.selector)
+                if not selector_type.startswith("i"):
+                    raise QueueFrontendError(
+                        "ACPY-QUEUE-018: select key must lower to an integer"
+                    )
+                output = (
+                    select.output if not path else f"{select.output}__local"
+                )
+                operands = ", ".join(
+                    f"%{mapping[name]}" for name in (select.control, *select.inputs)
+                )
+                input_types = ", ".join(
+                    f"!ac.queue<{by_name[name].payload}>"
+                    for name in (select.control, *select.inputs)
+                )
+                lines.append(
+                    f"{indent}%{output} = ac.select {operands} "
+                    f"depth {select.depth} latency {select.latency} key {{"
+                )
+                lines.append(
+                    f"{indent}^key(%item: !ac.var<{control.payload}>):"
+                )
+                lines.extend(indent + line[2:] for line in emitter.lines)
+                lines.append(
+                    f"{indent}  ac.select.yield %{selector} : "
+                    f"!ac.var<{selector_type}>"
+                )
+                lines.append(
+                    f'{indent}}} {{ac.name = "{select.output}"}} : '
+                    f"({input_types}) -> !ac.queue<{by_name[select.output].payload}>"
+                )
+                mapping[select.output] = output
             elif kind == "route":
                 route = item
                 assert isinstance(route, RouteBinding)

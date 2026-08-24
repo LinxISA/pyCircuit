@@ -172,6 +172,8 @@ llvm::Error extractExpressions(mlir::Region &region, QueueBlockPlan &plan) {
       yielded.append(yield.getValues().begin(), yield.getValues().end());
     else if (auto yield = mlir::dyn_cast<ac::RouteYieldOp>(operation))
       yielded.push_back(yield.getSelector());
+    else if (auto yield = mlir::dyn_cast<ac::SelectYieldOp>(operation))
+      yielded.push_back(yield.getSelector());
     else if (auto yield = mlir::dyn_cast<ac::ReorderYieldOp>(operation))
       yielded.push_back(yield.getKey());
     else if (auto yield = mlir::dyn_cast<ac::DependencyYieldOp>(operation))
@@ -379,6 +381,28 @@ private:
           blockPlan.latencies.push_back(value);
         blockPlan.region = printRegion(route.getSelector());
         if (auto error = extractExpressions(route.getSelector(), blockPlan))
+          return error;
+        plan.blocks.push_back(std::move(blockPlan));
+        continue;
+      }
+      if (auto select = mlir::dyn_cast<ac::SelectOp>(operation)) {
+        auto inputs = queueNames(select.getInputs(), names);
+        if (!inputs)
+          return inputs.takeError();
+        std::vector<std::string> outputs;
+        if (auto error = addOutputs(
+                select, select->getResults(), {int64_t(select.getDepth())},
+                {int64_t(select.getLatency())}, scope, outputs))
+          return error;
+        QueueBlockPlan blockPlan{"select",
+                                 outputs.front(),
+                                 scopePath(scope),
+                                 std::move(*inputs),
+                                 outputs,
+                                 {uint64_t(select.getDepth())},
+                                 {uint64_t(select.getLatency())}};
+        blockPlan.region = printRegion(select.getKey());
+        if (auto error = extractExpressions(select.getKey(), blockPlan))
           return error;
         plan.blocks.push_back(std::move(blockPlan));
         continue;

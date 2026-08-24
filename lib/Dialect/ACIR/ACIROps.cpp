@@ -165,6 +165,45 @@ LogicalResult RouteOp::verify() {
   return success();
 }
 
+LogicalResult SelectOp::verify() {
+  if (getInputs().size() < 3)
+    return emitOpError("requires one control and at least two data queues");
+  llvm::DenseSet<Value> uniqueInputs;
+  for (Value input : getInputs())
+    if (!uniqueInputs.insert(input).second)
+      return emitOpError("input queue operands must be unique");
+  for (auto [index, input] : llvm::enumerate(getInputs().drop_front()))
+    if (input.getType() != getOutput().getType())
+      return emitOpError() << "data input queue " << index
+                           << " must match output queue type";
+  if (getDepth() <= 0 || getLatency() <= 0)
+    return emitOpError("depth and latency must be positive");
+
+  Block &block = getKey().front();
+  Type controlPayload =
+      cast<QueueType>(getInputs().front().getType()).getElementType();
+  Type expected = VarType::get(getContext(), controlPayload);
+  if (block.getNumArguments() != 1 ||
+      block.getArgument(0).getType() != expected)
+    return emitOpError("key argument must match control queue payload Var");
+  for (Operation &operation : block.without_terminator())
+    if (!isMemoryEffectFree(&operation))
+      return emitOpError() << "key operation '" << operation.getName()
+                           << "' must be pure";
+  auto yield = dyn_cast<SelectYieldOp>(block.getTerminator());
+  if (!yield)
+    return emitOpError("key must terminate with ac.select.yield");
+  Type selector = cast<VarType>(yield.getSelector().getType()).getElementType();
+  auto integer = dyn_cast<IntegerType>(selector);
+  if (!integer || integer.getWidth() > 64)
+    return emitOpError("key must yield an integer Var with width at most 64");
+  const uint64_t candidates = getInputs().size() - 1;
+  if (integer.getWidth() < 64 &&
+      candidates > (uint64_t{1} << integer.getWidth()))
+    return emitOpError("data input count must fit selector width");
+  return success();
+}
+
 LogicalResult MergeOp::verify() {
   if (getInputs().size() < 2)
     return emitOpError("requires at least two input queues");

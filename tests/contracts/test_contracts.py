@@ -115,6 +115,7 @@ class RepositoryContractsTest(unittest.TestCase):
             "ac.reorder",
             "ac.route",
             "ac.scope",
+            "ac.select",
             "ac.sink",
             "ac.source",
             "ac.transform",

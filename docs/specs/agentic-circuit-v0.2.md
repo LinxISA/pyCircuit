@@ -558,6 +558,24 @@ for lane in active:
     ac.sink(lane)
 ```
 
+Runtime selection from a flat Queue collection uses one explicit control Queue
+and lowers to the official `ac.select` mux. It never creates a runtime Queue
+handle.
+
+```python
+control = ac.source(SelectControl)
+lanes = ac.array(2, lambda index: ac.source(int))
+selected = lanes.select(
+    control,
+    key=lambda item: item.route,
+)
+ac.sink(selected)
+```
+
+The control token and exactly one selected data token transfer atomically. An
+out-of-range selector produces `select_selector_out_of_range`. Nested
+collections MUST first be statically flattened to a flat collection.
+
 The current frontend supports:
 
 - `ac.array(extent, lambda index: ...)` with positive static extent;
@@ -661,6 +679,7 @@ has both a typed gfsim realization and a PYC realization.
 | `ac.broadcast` | design | one to two or more | output depths and latencies | strict atomic fanout |
 | `ac.fork` | design | one to two or more | output depths and latencies | decoupled exactly-once fanout |
 | `ac.route` | design | one to two or more | output depths and latencies | selector-controlled demultiplexing |
+| `ac.select` | design | one control plus two or more data inputs to one | `depth`, `latency` | selector-controlled data Queue mux |
 | `ac.merge` | design | two or more to one | `policy`, `depth`, `latency` | priority or round-robin arbitration |
 | `ac.barrier` | design | two or more to the same count | output depths and latencies | positionally typed atomic synchronization |
 | `ac.credit` | design | one to one | `credits`, `depth`, `latency` | bounded parallel cost countdown and completion |
@@ -957,6 +976,7 @@ The current hardware lowering maps:
 | broadcast | all-output ready conjunction |
 | fork | delivered-mask registers and independent output handshakes |
 | route | selector decoder, valid demultiplexing, ready multiplexing |
+| select | selector mux, selected-input ready, and control/data atomic handshake |
 | priority merge | fixed-priority selection |
 | round-robin merge | selection plus committed cursor register |
 | barrier | all-input-valid/all-output-ready atomic handshake |
@@ -1230,14 +1250,15 @@ The following v0.2 slices are implemented and tested:
 - transform, strict broadcast, decoupled fork, route, merge, atomic barrier,
   bounded credit, typed memory, dependency, reorder, observe, sink, explicit
   atomic transform, and bounded feedback;
-- static arrays, maps, sets, static `if`, static loops, and symmetric runtime
-  Queue `if` lowering through route/transform/merge;
+- static arrays, maps, sets, runtime flat-collection selection, static `if`,
+  static loops, and symmetric runtime Queue `if` lowering through
+  route/transform/merge;
 - canonical QueueGraph extraction;
 - typed gfsim C++ generation;
-- PYC/Verilog lowering for transform, broadcast, fork, route, merge, atomic
-  barrier, bounded credit, typed synchronous memory, dependency, reorder,
-  bounded feedback, elaboration-time scope flattening, packed structures,
-  atomic handshakes, and exact Queue latency;
+- PYC/Verilog lowering for transform, broadcast, fork, route, select, merge,
+  atomic barrier, bounded credit, typed synchronous memory, dependency,
+  reorder, bounded feedback, elaboration-time scope flattening, packed
+  structures, atomic handshakes, and exact Queue latency;
 - PYC C++ versus Verilog cycle equivalence and gfsim/PYC projected transaction
   comparison.
 

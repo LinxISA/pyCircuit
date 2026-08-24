@@ -229,6 +229,7 @@ int main() {{
             BARRIER_SOURCE,
             CREDIT_SOURCE,
             MEMORY_SOURCE,
+            SELECT_SOURCE,
         )
 
         compiler = shutil.which("c++")
@@ -242,6 +243,7 @@ int main() {{
                 ("credit", CREDIT_SOURCE, "gfsim::QueueCredit"),
                 ("feedback", FEEDBACK_SOURCE, "gfsim::QueueFeedback"),
                 ("memory", MEMORY_SOURCE, "gfsim::QueueMemory"),
+                ("select", SELECT_SOURCE, "gfsim::QueueSelect"),
             ):
                 python = root / f"{name}.py"
                 model = root / f"{name}.cpp"

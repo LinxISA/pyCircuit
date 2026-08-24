@@ -208,6 +208,10 @@ llvm::Expected<std::string> generateQueueGraphCpp(const QueueGraphPlan &plan) {
          block.depths.size() != block.outputs.size() ||
          block.latencies.size() != block.outputs.size()))
       return generatorError("barrier contract is unsupported");
+    if (block.kind == "select" &&
+        (block.inputs.size() < 3 || block.outputs.size() != 1 ||
+         block.yields.size() != 1))
+      return generatorError("select contract is unsupported");
     if (block.kind == "memory" &&
         (block.inputs.size() != 1 || block.outputs.size() != 1 ||
          block.yields.size() != 3 || block.entries == 0 || block.init != 0 ||
@@ -296,9 +300,9 @@ llvm::Expected<std::string> generateQueueGraphCpp(const QueueGraphPlan &plan) {
 
   for (auto [index, block] : llvm::enumerate(runtimeBlocks)) {
     if (block->kind != "transform" && block->kind != "route" &&
-        block->kind != "dependency" && block->kind != "credit" &&
-        block->kind != "memory" && block->kind != "reorder" &&
-        block->kind != "feedback")
+        block->kind != "select" && block->kind != "dependency" &&
+        block->kind != "credit" && block->kind != "memory" &&
+        block->kind != "reorder" && block->kind != "feedback")
       continue;
     if (block->kind == "dependency") {
       const QueuePlan *input = findQueue(plan, block->inputs.front());
@@ -424,7 +428,8 @@ llvm::Expected<std::string> generateQueueGraphCpp(const QueueGraphPlan &plan) {
       continue;
     }
     const size_t expectedYields = block->kind == "feedback" ? 2 : 1;
-    if (block->yields.size() != expectedYields || block->inputs.size() != 1)
+    if (block->yields.size() != expectedYields ||
+        (block->kind != "select" && block->inputs.size() != 1))
       return generatorError("Queue policy arity is unsupported");
     const QueuePlan *input = findQueue(plan, block->inputs.front());
     if (!input)
@@ -436,7 +441,7 @@ llvm::Expected<std::string> generateQueueGraphCpp(const QueueGraphPlan &plan) {
         "block_" + std::to_string(index) +
         (block->kind == "feedback" ? "_update_policy" : "_policy");
     output << "struct " << policy << " {\n  ";
-    if (block->kind == "route")
+    if (block->kind == "route" || block->kind == "select")
       output << "size_t";
     else if (block->kind == "reorder" || block->kind == "credit") {
       llvm::StringRef keyType = input->payloadType;
@@ -467,7 +472,7 @@ llvm::Expected<std::string> generateQueueGraphCpp(const QueueGraphPlan &plan) {
     auto body = emitExpressionBody(*block, block->yields.front(), 4);
     if (!body)
       return body.takeError();
-    if (block->kind == "route")
+    if (block->kind == "route" || block->kind == "select")
       output << "    return static_cast<size_t>([&]() {\n"
              << *body << "    }());\n";
     else
@@ -584,6 +589,25 @@ llvm::Expected<std::string> generateQueueGraphCpp(const QueueGraphPlan &plan) {
                              ", std::array<gfsim::SimQueue<" + *type + "> *, " +
                              std::to_string(block->outputs.size()) + ">{" +
                              outputs + "})");
+    } else if (block->kind == "select") {
+      const QueuePlan *result = findQueue(plan, block->outputs[0]);
+      auto type = result ? cppType(result->payloadType)
+                         : llvm::Expected<std::string>(generatorError(
+                               "select output Queue is missing"));
+      if (!type)
+        return type.takeError();
+      std::string inputs;
+      for (size_t input = 1; input < block->inputs.size(); ++input) {
+        if (input > 1)
+          inputs.append(", ");
+        inputs.append("&").append(queueMembers[block->inputs[input]]);
+      }
+      initializers.push_back(
+          member + "(\"" + instanceName + "\", " +
+          std::to_string(blockIds[key]) + ", " + *parent + ", " +
+          queueMembers[block->inputs[0]] + ", std::array<gfsim::SimQueue<" +
+          *type + "> *, " + std::to_string(block->inputs.size() - 1) + ">{" +
+          inputs + "}, " + queueMembers[block->outputs[0]] + ")");
     } else if (block->kind == "merge") {
       const QueuePlan *result = findQueue(plan, block->outputs[0]);
       auto type = result ? cppType(result->payloadType)
@@ -839,6 +863,22 @@ llvm::Expected<std::string> generateQueueGraphCpp(const QueueGraphPlan &plan) {
         output << "  gfsim::QueueRoute<" << *type << ", "
                << block->outputs.size() << ", block_" << index
                << "_policy> block_" << index << "_;\n";
+    } else if (block->kind == "select") {
+      const QueuePlan *control = findQueue(plan, block->inputs[0]);
+      const QueuePlan *result = findQueue(plan, block->outputs[0]);
+      auto controlType = control ? cppType(control->payloadType)
+                                 : llvm::Expected<std::string>(generatorError(
+                                       "select control input missing"));
+      auto dataType = result ? cppType(result->payloadType)
+                             : llvm::Expected<std::string>(
+                                   generatorError("select output missing"));
+      if (!controlType)
+        return controlType.takeError();
+      if (!dataType)
+        return dataType.takeError();
+      output << "  gfsim::QueueSelect<" << *controlType << ", " << *dataType
+             << ", " << block->inputs.size() - 1 << ", block_" << index
+             << "_policy> block_" << index << "_;\n";
     } else if (block->kind == "merge") {
       const QueuePlan *result = findQueue(plan, block->outputs[0]);
       auto type = result ? cppType(result->payloadType)

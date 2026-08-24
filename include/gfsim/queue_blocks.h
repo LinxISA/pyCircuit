@@ -1034,6 +1034,68 @@ private:
   bool fired_ = false;
 };
 
+template <typename Control, typename T, size_t Inputs, typename Selector>
+  requires std::invocable<const Selector &, const Control &> &&
+           std::integral<
+               std::invoke_result_t<const Selector &, const Control &>>
+class QueueSelect final : public SimObject {
+public:
+  static_assert(Inputs >= 2);
+  static constexpr std::string_view contractName = "ac.select";
+  static constexpr ObjectKind componentKind = ObjectKind::Link;
+
+  QueueSelect(std::string name, ObjectId id, SimObject *parent,
+              SimQueue<Control> &control,
+              std::array<SimQueue<T> *, Inputs> inputs, SimQueue<T> &output,
+              Selector selector = {}, ObservationSink *observations = nullptr)
+      : SimObject(componentKind, std::move(name), id, parent, observations),
+        control_(control), inputs_(inputs), output_(output),
+        selector_(std::move(selector)) {}
+
+  void doWork(Epoch) override {
+    if (fired_ || !control_.canProposePop() || !output_.canProposePush())
+      return;
+    const Control *control = control_.peek();
+    if (control == nullptr)
+      return;
+    auto selected = std::invoke(std::as_const(selector_), *control);
+    if constexpr (std::signed_integral<decltype(selected)>)
+      if (selected < 0) {
+        setRuntimeFailureCode("select_selector_out_of_range");
+        return;
+      }
+    const size_t index = static_cast<size_t>(selected);
+    if (index >= Inputs || inputs_[index] == nullptr) {
+      setRuntimeFailureCode("select_selector_out_of_range");
+      return;
+    }
+    SimQueue<T> &input = *inputs_[index];
+    const T *head = input.peek();
+    if (!input.canProposePop() || head == nullptr)
+      return;
+    if (!output_.proposePush(*head) || !input.proposePop() ||
+        !control_.proposePop())
+      return;
+    fired_ = true;
+  }
+  void doXfer(Epoch) override { fired_ = false; }
+  bool hasPendingCommit() const override { return fired_; }
+  bool isRunnable(Epoch) const override {
+    return !fired_ && control_.canProposePop() && output_.canProposePush();
+  }
+  void reset() override {
+    fired_ = false;
+    clearRuntimeFailureCode();
+  }
+
+private:
+  SimQueue<Control> &control_;
+  std::array<SimQueue<T> *, Inputs> inputs_;
+  SimQueue<T> &output_;
+  [[no_unique_address]] Selector selector_;
+  bool fired_ = false;
+};
+
 enum class QueueMergePolicy { RoundRobin, Priority };
 
 template <typename T, size_t Inputs> class QueueMerge final : public SimObject {

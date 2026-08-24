@@ -239,6 +239,34 @@ TEST(QueueGraphPlanTest, EmitsHeterogeneousBarrierForBothBackends) {
   EXPECT_NE(pyc->find("%out1_ready"), std::string::npos);
 }
 
+TEST(QueueGraphPlanTest, EmitsStaticQueueCollectionSelectForBothBackends) {
+  QueueGraphPlan plan;
+  plan.system = "select";
+  plan.queues = {{"control", "i8", "/", 1, 1},
+                 {"left", "i16", "/", 1, 1},
+                 {"right", "i16", "/", 1, 1},
+                 {"selected", "i16", "/", 2, 1}};
+  plan.blocks.push_back({"source", "control", "/", {}, {"control"}, {1}, {1}});
+  plan.blocks.push_back({"source", "left", "/", {}, {"left"}, {1}, {1}});
+  plan.blocks.push_back({"source", "right", "/", {}, {"right"}, {1}, {1}});
+  QueueBlockPlan select{
+      "select",     "selected", "/", {"control", "left", "right"},
+      {"selected"}, {2},        {1}};
+  select.yields = {"item"};
+  plan.blocks.push_back(std::move(select));
+  plan.blocks.push_back({"sink", "sink_0", "/", {"selected"}, {}});
+
+  auto cpp = generateQueueGraphCpp(plan);
+  ASSERT_TRUE(bool(cpp)) << llvm::toString(cpp.takeError());
+  EXPECT_NE(cpp->find("gfsim::QueueSelect<std::uint8_t, std::uint16_t, 2"),
+            std::string::npos);
+
+  auto pyc = generateQueueGraphPyc(plan);
+  ASSERT_TRUE(bool(pyc)) << llvm::toString(pyc.takeError());
+  EXPECT_NE(pyc->find("select_selector_out_of_range"), std::string::npos);
+  EXPECT_NE(pyc->find("pyc.mux"), std::string::npos);
+}
+
 TEST(QueueGraphPlanTest, EmitsTypedReorderForBothBackends) {
   QueueGraphPlan plan;
   plan.system = "ordered";

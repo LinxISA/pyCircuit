@@ -352,8 +352,41 @@ def pipeline() -> None:
     ac.sink(right_ready)
 """
 
+SELECT_SOURCE = """
+import agentic_circuit as ac
+
+@ac.struct
+class Control:
+    route: ac.u1
+
+@ac.system
+def pipeline() -> None:
+    control = ac.source(Control)
+    lanes = ac.array(2, lambda index: ac.source(int))
+    selected = lanes.select(
+        control,
+        key=lambda item: item.route,
+        depth=2,
+        latency=1,
+    )
+    ac.sink(selected)
+"""
+
 
 class QueueFrontendV02Test(unittest.TestCase):
+    def test_runtime_queue_collection_index_lowers_to_official_select(self) -> None:
+        from agentic_circuit._queue_frontend import lower_queue_source
+
+        lowered = lower_queue_source(SELECT_SOURCE, "pipeline")
+        self.assertIn(
+            "%selected = ac.select %control, %lanes__0, %lanes__1 "
+            "depth 2 latency 1 key",
+            lowered,
+        )
+        self.assertIn('ac.var.get %item field "route"', lowered)
+        self.assertIn("ac.select.yield", lowered)
+        self.assertNotIn("dynamic", lowered)
+
     def test_barrier_lowers_multi_queue_atomic_synchronization(self) -> None:
         from agentic_circuit._queue_frontend import (
             QueueFrontendError,

@@ -92,7 +92,8 @@
             "observe_input_payload",
             "positionally_equal_boundary_payloads",
             "positionally_equal_input_output_payloads",
-            "region_yields_match_output_payloads"
+            "region_yields_match_output_payloads",
+            "selected_data_payload_matches_output"
           ]
         },
         "pyc": {"$ref": "#/$defs/backend"},

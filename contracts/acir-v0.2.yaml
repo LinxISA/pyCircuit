@@ -61,6 +61,8 @@ operations:
   - ac.fork
   - ac.route
   - ac.route.yield
+  - ac.select
+  - ac.select.yield
   - ac.merge
   - ac.barrier
   - ac.credit

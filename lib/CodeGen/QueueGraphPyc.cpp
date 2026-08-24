@@ -317,6 +317,12 @@ llvm::Expected<std::string> generateQueueGraphPyc(const QueueGraphPlan &plan) {
     const QueueBlockPlan *block = nullptr;
     size_t index = 0;
   };
+  struct SelectState {
+    std::vector<std::string> conditions;
+    std::string controlValid;
+    std::string selectedValid;
+    std::string selectorSafe;
+  };
   struct MergeState {
     std::string nextWire;
     std::string enableWire;
@@ -448,6 +454,7 @@ llvm::Expected<std::string> generateQueueGraphPyc(const QueueGraphPlan &plan) {
   llvm::StringMap<const QueueBlockPlan *> broadcastByOutput;
   llvm::StringMap<const QueueBlockPlan *> forkByOutput;
   llvm::StringMap<RouteProducer> routeByOutput;
+  llvm::StringMap<const QueueBlockPlan *> selectByOutput;
   llvm::StringMap<const QueueBlockPlan *> mergeByOutput;
   llvm::StringMap<const QueueBlockPlan *> creditByOutput;
   llvm::StringMap<const QueueBlockPlan *> memoryByOutput;
@@ -476,6 +483,11 @@ llvm::Expected<std::string> generateQueueGraphPyc(const QueueGraphPlan &plan) {
         return pycError("route arity is unsupported");
       for (auto [index, output] : llvm::enumerate(block.outputs))
         routeByOutput[output] = RouteProducer{&block, index};
+    } else if (block.kind == "select") {
+      if (block.inputs.size() < 3 || block.outputs.size() != 1 ||
+          block.yields.size() != 1)
+        return pycError("select contract is unsupported");
+      selectByOutput[block.outputs.front()] = &block;
     } else if (block.kind == "broadcast") {
       if (block.inputs.size() != 1 || block.outputs.size() < 2)
         return pycError("broadcast arity is unsupported");
@@ -526,9 +538,10 @@ llvm::Expected<std::string> generateQueueGraphPyc(const QueueGraphPlan &plan) {
         return pycError("feedback contract is unsupported");
       feedbackByOutput[block.outputs.front()] = &block;
     } else {
-      return pycError(
-          "PYC QueueGraph supports source/transform/broadcast/fork/route/merge/"
-          "barrier/credit/memory/dependency/reorder/feedback/observe/sink");
+      return pycError("PYC QueueGraph supports "
+                      "source/transform/broadcast/fork/route/select/"
+                      "merge/barrier/credit/memory/dependency/reorder/feedback/"
+                      "observe/sink");
     }
   }
   if (auto error = verifyQueueGraphPlan(plan))
@@ -580,6 +593,7 @@ llvm::Expected<std::string> generateQueueGraphPyc(const QueueGraphPlan &plan) {
   llvm::StringMap<std::string> outputData;
   llvm::StringMap<std::string> routeSelector;
   llvm::StringMap<std::string> routeCondition;
+  llvm::StringMap<SelectState> selectStates;
   llvm::StringMap<std::string> atomicTransformValid;
   llvm::StringMap<std::vector<std::string>> mergeGrants;
   llvm::StringMap<MergeState> mergeStates;
@@ -728,6 +742,7 @@ llvm::Expected<std::string> generateQueueGraphPyc(const QueueGraphPlan &plan) {
       auto broadcastProducer = broadcastByOutput.find(queue.name);
       auto forkProducer = forkByOutput.find(queue.name);
       auto routeProducer = routeByOutput.find(queue.name);
+      auto selectProducer = selectByOutput.find(queue.name);
       auto mergeProducer = mergeByOutput.find(queue.name);
       auto creditProducer = creditByOutput.find(queue.name);
       auto memoryProducer = memoryByOutput.find(queue.name);
@@ -858,6 +873,62 @@ llvm::Expected<std::string> generateQueueGraphPyc(const QueueGraphPlan &plan) {
         routeCondition[queue.name] = condition;
         producerValid = emitBinary("and", valid->getValue(), condition, "i1");
         producerData = data->getValue();
+      } else if (selectProducer != selectByOutput.end()) {
+        const QueueBlockPlan &select = *selectProducer->getValue();
+        auto controlValid = outputValid.find(select.inputs.front());
+        auto controlData = outputData.find(select.inputs.front());
+        const QueuePlan *controlQueue = findQueue(plan, select.inputs.front());
+        if (controlValid == outputValid.end() ||
+            controlData == outputData.end() || !controlQueue)
+          return pycError(
+              "select control is not available in topological order");
+        auto selector =
+            emitTransform(plan, select, {controlData->getValue()},
+                          {controlQueue->payloadType}, 0, nextValue, body);
+        if (!selector)
+          return selector.takeError();
+        auto selectorType = yieldedType(select, select.yields.front(),
+                                        controlQueue->payloadType);
+        if (!selectorType)
+          return selectorType.takeError();
+        auto selectorPycType = pycType(plan, *selectorType);
+        if (!selectorPycType)
+          return selectorPycType.takeError();
+        auto outputType = pycType(plan, queue.payloadType);
+        if (!outputType)
+          return outputType.takeError();
+
+        SelectState state;
+        state.controlValid = controlValid->getValue();
+        std::vector<std::string> selectedValidTerms;
+        std::vector<std::string> dataValues;
+        for (size_t index = 1; index < select.inputs.size(); ++index) {
+          auto valid = outputValid.find(select.inputs[index]);
+          auto data = outputData.find(select.inputs[index]);
+          if (valid == outputValid.end() || data == outputData.end())
+            return pycError(
+                "select data input is not available in topological order");
+          std::string indexValue = emitConstant(index - 1, *selectorPycType);
+          std::string condition =
+              emitBinary("eq", *selector, indexValue, *selectorPycType);
+          state.conditions.push_back(condition);
+          selectedValidTerms.push_back(
+              emitBinary("and", valid->getValue(), condition, "i1"));
+          dataValues.push_back(data->getValue());
+        }
+        state.selectedValid = reduceBalanced("or", selectedValidTerms, "i1");
+        std::string selectedData = dataValues.back();
+        for (size_t index = dataValues.size() - 1; index-- > 0;)
+          selectedData = emitMux(state.conditions[index], dataValues[index],
+                                 selectedData, *outputType);
+        std::string anyCondition = reduceBalanced("or", state.conditions, "i1");
+        std::string invalidSelector =
+            emitBinary("and", state.controlValid, emitNot(anyCondition), "i1");
+        state.selectorSafe = emitNot(invalidSelector);
+        producerValid =
+            emitBinary("and", state.controlValid, state.selectedValid, "i1");
+        producerData = std::move(selectedData);
+        selectStates[select.name] = std::move(state);
       } else if (mergeProducer != mergeByOutput.end()) {
         const QueueBlockPlan &merge = *mergeProducer->getValue();
         std::vector<std::string> valids;
@@ -1637,6 +1708,25 @@ llvm::Expected<std::string> generateQueueGraphPyc(const QueueGraphPlan &plan) {
       }
       body << "    pyc.assign " << readyWires[block.inputs.front()] << ", "
            << selectedReady << " : i1\n";
+    } else if (block.kind == "select") {
+      auto state = selectStates.find(block.name);
+      if (state == selectStates.end())
+        return pycError("select state is missing");
+      const std::string &outputReady = inputReady[block.outputs.front()];
+      std::string controlReady =
+          emitBinary("and", outputReady, state->getValue().selectedValid, "i1");
+      body << "    pyc.assign " << readyWires[block.inputs.front()] << ", "
+           << controlReady << " : i1\n";
+      body << "    pyc.assert " << state->getValue().selectorSafe
+           << " {msg = \"select_selector_out_of_range\"}\n";
+      for (size_t index = 1; index < block.inputs.size(); ++index) {
+        std::string selected =
+            emitBinary("and", state->getValue().controlValid,
+                       state->getValue().conditions[index - 1], "i1");
+        std::string ready = emitBinary("and", outputReady, selected, "i1");
+        body << "    pyc.assign " << readyWires[block.inputs[index]] << ", "
+             << ready << " : i1\n";
+      }
     } else if (block.kind == "merge") {
       auto grants = mergeGrants.find(block.name);
       if (grants == mergeGrants.end() ||

@@ -235,6 +235,25 @@ def ACIR_RouteYieldOp : ACIR_Op<"route.yield", [
   let assemblyFormat = "$selector attr-dict `:` qualified(type($selector))";
 }
 
+def ACIR_SelectOp : ACIR_Op<"select", [SingleBlock]> {
+  let arguments = (ins Variadic<ACIR_QueueType>:$inputs,
+                       I64Attr:$depth, I64Attr:$latency);
+  let results = (outs ACIR_QueueType:$output);
+  let regions = (region SizedRegion<1>:$key);
+  let hasVerifier = 1;
+  let assemblyFormat = [{
+    $inputs `depth` $depth `latency` $latency `key` $key attr-dict `:`
+    functional-type($inputs, $output)
+  }];
+}
+
+def ACIR_SelectYieldOp : ACIR_Op<"select.yield", [
+    Pure, Terminator, HasParent<"SelectOp">
+  ]> {
+  let arguments = (ins ACIR_VarType:$selector);
+  let assemblyFormat = "$selector attr-dict `:` qualified(type($selector))";
+}
+
 def ACIR_MergeOp : ACIR_Op<"merge"> {
   let arguments = (ins Variadic<ACIR_QueueType>:$inputs, StrAttr:$policy,
                        I64Attr:$depth, I64Attr:$latency);

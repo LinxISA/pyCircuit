@@ -16,6 +16,7 @@
 // CHECK-SAME: "operation":"ac{{\.}}reorder"
 // CHECK-SAME: "operation":"ac{{\.}}route"
 // CHECK-SAME: "operation":"ac{{\.}}scope"
+// CHECK-SAME: "operation":"ac{{\.}}select"
 // CHECK-SAME: "operation":"ac{{\.}}sink"
 // CHECK-SAME: "operation":"ac{{\.}}source"
 // CHECK-SAME: "operation":"ac{{\.}}transform"
