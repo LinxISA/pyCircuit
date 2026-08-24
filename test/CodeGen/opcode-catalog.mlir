@@ -5,6 +5,7 @@
 
 // CHECK: "contract_epoch":"0.2"
 // CHECK-SAME: "operation":"ac{{\.}}broadcast"
+// CHECK-SAME: "operation":"ac{{\.}}dependency"
 // CHECK-SAME: "operation":"ac{{\.}}feedback"
 // CHECK-SAME: "operation":"ac{{\.}}fork"
 // CHECK-SAME: "operation":"ac{{\.}}merge"

@@ -273,8 +273,53 @@ def pipeline() -> None:
     ac.sink(retired)
 """
 
+DEPENDENCY_SOURCE = """
+import agentic_circuit as ac
+
+@ac.struct
+class Token:
+    sequence: ac.u8
+    waits_for: ac.u8
+    cycles: ac.u16
+
+@ac.system
+def pipeline() -> None:
+    issued = ac.source(Token)
+    completed = issued.depend(
+        key=lambda item: item.sequence,
+        waits_for=lambda item: item.waits_for,
+        cost=lambda item: item.cycles,
+        capacity=16,
+        no_dependency=255,
+        depth=8,
+        latency=1,
+    )
+    ac.sink(completed)
+"""
+
 
 class QueueFrontendV02Test(unittest.TestCase):
+    def test_dependency_lowers_three_pure_policies(self) -> None:
+        from agentic_circuit._queue_frontend import (
+            QueueFrontendError,
+            lower_queue_source,
+        )
+
+        lowered = lower_queue_source(DEPENDENCY_SOURCE, "pipeline")
+        self.assertIn(
+            "%completed = ac.dependency %issued capacity 16 "
+            "no_dependency 255 depth 8 latency 1 key",
+            lowered,
+        )
+        self.assertIn("} waits_for {", lowered)
+        self.assertIn("} cost {", lowered)
+        self.assertEqual(3, lowered.count("ac.dependency.yield"))
+        with self.assertRaisesRegex(QueueFrontendError, "requires one cost lambda"):
+            lower_queue_source(
+                DEPENDENCY_SOURCE.replace("cost=lambda item: item.cycles,", ""),
+                "pipeline",
+            )
+
     def test_reorder_lowers_sequence_key_and_static_capacity(self) -> None:
         from agentic_circuit._queue_frontend import (
             QueueFrontendError,

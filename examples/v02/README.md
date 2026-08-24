@@ -6,9 +6,8 @@ by these examples.
 
 `davincioo_queue_model.py` is the first executable v0.2 topology generated
 from serial Python. It uses only repository-owned common building blocks:
-`ac.source`, `ac.transform`, `ac.route`, `ac.feedback`, `ac.merge`,
-`ac.observe`, `ac.reorder`, and `ac.sink`, connected by typed `ac.queue`
-values.
+`ac.source`, `ac.transform`, `ac.dependency`, `ac.route`, `ac.merge`,
+`ac.observe`, `ac.reorder`, and `ac.sink`, connected by typed `ac.queue` values.
 
 Generate one canonical typed C++ model:
 
@@ -31,24 +30,24 @@ Queue references; they do not allocate or own sibling interconnect.
 The example models the reference shape at building-block level:
 
 ```text
-trace -> frontend -> 4-way dispatch
-                         | scalar
-                         | vector
-                         | cube
-                         | tma
-                    merge -> retire -> sink
+trace -> frontend -> dependency window -> 4-way dispatch
+                                              | scalar
+                                              | vector
+                                              | cube
+                                              | tma
+                                         merge -> reorder -> retire -> sink
 ```
 
 The checked-in
 [`davincioo-softmax-projection.json`](davincioo-softmax-projection.json) binds
 this generated topology to the provenance-locked 15-record softmax trace. It
-records opcode identities, engine routes, projected execution/dependency
-budgets, out-of-order completion order, in-order retirement, architectural
-values, and the 453-cycle oracle.
+records opcode identities, engine routes, reference execution costs, explicit
+predecessors, fixed boundary-cycle compensation, out-of-order completion order,
+in-order retirement, architectural values, and the 453-cycle oracle.
 
-The generated model uses four official bounded feedback engines, round-robin
-merge, committed observations, and the official `ac.reorder` block. The same
-serial Python and frozen ACIR now pass all of these gates:
+The generated model uses the official bounded `ac.dependency` window,
+round-robin merge, committed observations, and the official `ac.reorder` block.
+The same serial Python and frozen ACIR now pass all of these gates:
 
 - typed gfsim consumes all 15 projected records and finishes in 453 cycles;
 - opcode counts and completion/retirement order match the reference projection;
@@ -57,10 +56,12 @@ serial Python and frozen ACIR now pass all of these gates:
 - PYC C++ and Verilator produce cycle-identical ready/valid/data observations;
 - gfsim, PYC C++, and Verilog produce the same projected output transactions.
 
-The projection deliberately folds reference dependency-wait time into the
-per-token bounded feedback budget. This closes the bounded softmax behavior
-gate without claiming that the current generated topology exposes the
-reference model's internal rename tables, issue queues, or ROB occupancy.
+Dependency wait is no longer folded into token latency. `ac.dependency` tracks
+predecessor completion explicitly and counts the reference execution cost. The
+projection applies only a documented 5-cycle ingress and 4-cycle drain
+compensation for the different Queue boundaries. It does not yet claim that the
+generated topology exposes the reference model's internal rename tables,
+resource reservation, issue queues, or ROB occupancy.
 
 ## PYC and Verilog slice
 
@@ -84,3 +85,5 @@ official route, two branch transforms, and a mutually exclusive priority merge.
 feedback data, valid, and iteration state shared by PYC C++ and Verilog.
 `pyc_reorder_pipeline.py` verifies bounded key-ordered retirement with the same
 register-bank and handshake semantics in typed gfsim, PYC C++, and Verilog.
+`pyc_dependency_pipeline.py` verifies predecessor wakeup, execution countdown,
+out-of-order completion, and PYC C++/Verilator cycle equivalence.

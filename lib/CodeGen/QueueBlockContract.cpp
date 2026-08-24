@@ -10,6 +10,22 @@ namespace acir::codegen {
 namespace {
 
 const std::vector<QueueBlockContract> Contracts = {
+    {"dependency",
+     "ac.dependency",
+     "scheduling",
+     "design",
+     "stateful",
+     1,
+     1,
+     1,
+     1,
+     "input_output_payload_equal",
+     {"capacity", "no_dependency", "depth", "latency"},
+     true,
+     "gfsim::QueueDependency<T,Key,Dependency,Cost>",
+     true,
+     "packed_dependency_window_and_countdown",
+     {"accepted_transaction", "issued_transaction", "completed_transaction"}},
     {"source",
      "ac.source",
      "boundary",

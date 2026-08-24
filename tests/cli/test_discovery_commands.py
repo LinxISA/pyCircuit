@@ -101,6 +101,7 @@ class DiscoveryCommandTest(unittest.TestCase):
         self.assertTrue(reorder["pyc"]["available"])
         opcode_names = json.loads(opcode_listing.stdout)["items"]
         self.assertEqual(sorted(opcode_names), opcode_names)
+        self.assertIn("ac.dependency", opcode_names)
         self.assertIn("ac.reorder", opcode_names)
         self.assertIn("ac.transform", opcode_names)
 

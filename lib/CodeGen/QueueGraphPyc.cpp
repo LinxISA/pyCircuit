@@ -372,6 +372,37 @@ llvm::Expected<std::string> generateQueueGraphPyc(const QueueGraphPlan &plan) {
     std::string dataType;
     std::string slotType;
   };
+  struct DependencySlotState {
+    std::string next;
+    std::string enable;
+    std::string state;
+    std::string valid;
+    std::string phase;
+    std::string key;
+    std::string predecessor;
+    std::string remaining;
+    std::string cost;
+    std::string data;
+    std::string free;
+    std::string done;
+  };
+  struct DependencyState {
+    std::vector<DependencySlotState> slots;
+    std::string inputKey;
+    std::string inputPredecessor;
+    std::string inputCost;
+    std::string anyFree;
+    std::string freeIndex;
+    std::string freeIndexType;
+    std::string outputDone;
+    std::string doneIndex;
+    std::string safeAdmission;
+    std::string keyType;
+    std::string costType;
+    std::string dataType;
+    std::string slotType;
+    uint64_t noDependency = 0;
+  };
   std::vector<const QueueBlockPlan *> sources;
   std::vector<const QueueBlockPlan *> sinks;
   std::vector<const QueueBlockPlan *> observations;
@@ -380,6 +411,7 @@ llvm::Expected<std::string> generateQueueGraphPyc(const QueueGraphPlan &plan) {
   llvm::StringMap<const QueueBlockPlan *> forkByOutput;
   llvm::StringMap<RouteProducer> routeByOutput;
   llvm::StringMap<const QueueBlockPlan *> mergeByOutput;
+  llvm::StringMap<const QueueBlockPlan *> dependencyByOutput;
   llvm::StringMap<const QueueBlockPlan *> reorderByOutput;
   llvm::StringMap<const QueueBlockPlan *> feedbackByOutput;
   for (const QueueBlockPlan &block : plan.blocks) {
@@ -425,6 +457,11 @@ llvm::Expected<std::string> generateQueueGraphPyc(const QueueGraphPlan &plan) {
           block.yields.size() != 1 || block.capacity == 0)
         return pycError("reorder contract is unsupported");
       reorderByOutput[block.outputs.front()] = &block;
+    } else if (block.kind == "dependency") {
+      if (block.inputs.size() != 1 || block.outputs.size() != 1 ||
+          block.yields.size() != 3 || block.capacity == 0)
+        return pycError("dependency contract is unsupported");
+      dependencyByOutput[block.outputs.front()] = &block;
     } else if (block.kind == "feedback") {
       if (block.inputs.size() != 1 || block.outputs.size() != 1 ||
           block.yields.size() != 2 || block.maxIterations == 0)
@@ -432,7 +469,7 @@ llvm::Expected<std::string> generateQueueGraphPyc(const QueueGraphPlan &plan) {
       feedbackByOutput[block.outputs.front()] = &block;
     } else {
       return pycError("PYC QueueGraph supports source/transform/broadcast/fork/"
-                      "route/merge/reorder/feedback/observe/sink");
+                      "route/merge/dependency/reorder/feedback/observe/sink");
     }
   }
   if (sources.empty() || sinks.empty())
@@ -487,6 +524,7 @@ llvm::Expected<std::string> generateQueueGraphPyc(const QueueGraphPlan &plan) {
   llvm::StringMap<MergeState> mergeStates;
   llvm::StringMap<ForkState> forkStates;
   llvm::StringMap<FeedbackState> feedbackStates;
+  llvm::StringMap<DependencyState> dependencyStates;
   llvm::StringMap<ReorderState> reorderStates;
   llvm::StringMap<std::string> forkOfferValid;
   std::ostringstream body;
@@ -516,6 +554,15 @@ llvm::Expected<std::string> generateQueueGraphPyc(const QueueGraphPlan &plan) {
     body << "    " << result << " = pyc.mux " << select.str() << ", "
          << trueValue.str() << ", " << falseValue.str() << " : " << type.str()
          << "\n";
+    return result;
+  };
+  auto emitExtract = [&](llvm::StringRef value, uint64_t lsb,
+                         llvm::StringRef inputType,
+                         llvm::StringRef resultType) {
+    std::string result = newValue();
+    body << "    " << result << " = pyc.extract " << value.str()
+         << " {lsb = " << lsb << "} : " << inputType.str() << " -> "
+         << resultType.str() << "\n";
     return result;
   };
   auto reduceBalanced = [&](llvm::StringRef operation,
@@ -577,6 +624,7 @@ llvm::Expected<std::string> generateQueueGraphPyc(const QueueGraphPlan &plan) {
       auto forkProducer = forkByOutput.find(queue.name);
       auto routeProducer = routeByOutput.find(queue.name);
       auto mergeProducer = mergeByOutput.find(queue.name);
+      auto dependencyProducer = dependencyByOutput.find(queue.name);
       auto reorderProducer = reorderByOutput.find(queue.name);
       auto feedbackProducer = feedbackByOutput.find(queue.name);
       if (transformProducer != transformByOutput.end()) {
@@ -764,6 +812,145 @@ llvm::Expected<std::string> generateQueueGraphPyc(const QueueGraphPlan &plan) {
         mergeGrants[merge.name] = grants;
         producerValid = any;
         producerData = selectedData;
+      } else if (dependencyProducer != dependencyByOutput.end()) {
+        const QueueBlockPlan &dependency = *dependencyProducer->getValue();
+        auto inputValidValue = outputValid.find(dependency.inputs.front());
+        auto inputDataValue = outputData.find(dependency.inputs.front());
+        const QueuePlan *inputQueue =
+            findQueue(plan, dependency.inputs.front());
+        if (inputValidValue == outputValid.end() ||
+            inputDataValue == outputData.end() || !inputQueue)
+          return pycError(
+              "dependency input is not available in topological order");
+        auto dataType = pycType(plan, inputQueue->payloadType);
+        auto dataWidth = typeWidth(plan, inputQueue->payloadType);
+        if (!dataType)
+          return dataType.takeError();
+        if (!dataWidth)
+          return dataWidth.takeError();
+
+        std::vector<std::string> policyValues;
+        std::vector<std::string> policyTypes;
+        std::vector<unsigned> policyWidths;
+        for (size_t index = 0; index < dependency.yields.size(); ++index) {
+          auto value =
+              emitTransform(plan, dependency, {inputDataValue->getValue()},
+                            {inputQueue->payloadType}, index, nextValue, body);
+          if (!value)
+            return value.takeError();
+          auto type = yieldedType(dependency, dependency.yields[index],
+                                  inputQueue->payloadType);
+          if (!type)
+            return type.takeError();
+          auto pycType = ::acir::codegen::pycType(plan, *type);
+          auto width = typeWidth(plan, *type);
+          if (!pycType)
+            return pycType.takeError();
+          if (!width)
+            return width.takeError();
+          if (*width == 0 || *width > 64)
+            return pycError("dependency policy width is unsupported");
+          policyValues.push_back(std::move(*value));
+          policyTypes.push_back(std::move(*pycType));
+          policyWidths.push_back(*width);
+        }
+        if (policyTypes[0] != policyTypes[1])
+          return pycError("dependency key/predecessor types must match");
+        if (policyWidths[1] < 64 &&
+            dependency.noDependency >= (uint64_t{1} << policyWidths[1]))
+          return pycError("dependency sentinel does not fit predecessor type");
+
+        DependencyState state;
+        state.inputKey = policyValues[0];
+        state.inputPredecessor = policyValues[1];
+        state.inputCost = policyValues[2];
+        state.keyType = policyTypes[0];
+        state.costType = policyTypes[2];
+        state.dataType = *dataType;
+        state.noDependency = dependency.noDependency;
+        const uint64_t slotWidth =
+            1 + 2 + 2 * policyWidths[0] + 2 * policyWidths[2] + *dataWidth;
+        state.slotType = "i" + std::to_string(slotWidth);
+        std::string zeroSlot = emitConstant(0, state.slotType);
+        std::string donePhase = emitConstant(2, "i2");
+
+        const uint64_t costLsb = *dataWidth;
+        const uint64_t remainingLsb = costLsb + policyWidths[2];
+        const uint64_t predecessorLsb = remainingLsb + policyWidths[2];
+        const uint64_t keyLsb = predecessorLsb + policyWidths[0];
+        const uint64_t phaseLsb = keyLsb + policyWidths[0];
+        const uint64_t validLsb = phaseLsb + 2;
+        std::vector<std::string> freeValues;
+        std::vector<std::string> doneValues;
+        std::vector<std::string> dataValues;
+        std::vector<std::string> duplicateValues;
+        for (uint64_t index = 0; index < dependency.capacity; ++index) {
+          DependencySlotState slot;
+          slot.next = newValue();
+          slot.enable = newValue();
+          slot.state = newValue();
+          body << "    " << slot.next << " = pyc.wire : " << state.slotType
+               << "\n";
+          body << "    " << slot.enable << " = pyc.wire : i1\n";
+          body << "    " << slot.state << " = pyc.reg %clk, %rst, "
+               << slot.enable << ", " << slot.next << ", " << zeroSlot << " : "
+               << state.slotType << "\n";
+          slot.valid = emitExtract(slot.state, validLsb, state.slotType, "i1");
+          slot.phase = emitExtract(slot.state, phaseLsb, state.slotType, "i2");
+          slot.key =
+              emitExtract(slot.state, keyLsb, state.slotType, state.keyType);
+          slot.predecessor = emitExtract(slot.state, predecessorLsb,
+                                         state.slotType, state.keyType);
+          slot.remaining = emitExtract(slot.state, remainingLsb, state.slotType,
+                                       state.costType);
+          slot.cost =
+              emitExtract(slot.state, costLsb, state.slotType, state.costType);
+          slot.data =
+              emitExtract(slot.state, 0, state.slotType, state.dataType);
+          slot.free = emitNot(slot.valid);
+          freeValues.push_back(slot.free);
+          std::string isDone = emitBinary("eq", slot.phase, donePhase, "i2");
+          slot.done = emitBinary("and", slot.valid, isDone, "i1");
+          doneValues.push_back(slot.done);
+          dataValues.push_back(slot.data);
+          std::string sameInput =
+              emitBinary("eq", slot.key, state.inputKey, state.keyType);
+          duplicateValues.push_back(
+              emitBinary("and", slot.valid, sameInput, "i1"));
+          state.slots.push_back(std::move(slot));
+        }
+
+        unsigned indexWidth = 1;
+        while ((uint64_t{1} << indexWidth) < dependency.capacity)
+          ++indexWidth;
+        state.freeIndexType = "i" + std::to_string(indexWidth);
+        std::vector<std::string> indices;
+        indices.reserve(dependency.capacity);
+        for (uint64_t index = 0; index < dependency.capacity; ++index)
+          indices.push_back(emitConstant(index, state.freeIndexType));
+        auto selectedFree =
+            selectBalanced(freeValues, indices, state.freeIndexType);
+        state.anyFree = std::move(selectedFree.first);
+        state.freeIndex = std::move(selectedFree.second);
+        auto selectedDoneIndex =
+            selectBalanced(doneValues, indices, state.freeIndexType);
+        state.doneIndex = std::move(selectedDoneIndex.second);
+        auto selectedDoneData =
+            selectBalanced(doneValues, dataValues, state.dataType);
+        state.outputDone = std::move(selectedDoneData.first);
+        std::string selectedData = std::move(selectedDoneData.second);
+        std::string duplicate = reduceBalanced("or", duplicateValues, "i1");
+        std::string zeroCost = emitConstant(0, state.costType);
+        std::string costIsZero =
+            emitBinary("eq", state.inputCost, zeroCost, state.costType);
+        std::string invalidInput =
+            emitBinary("or", duplicate, costIsZero, "i1");
+        std::string invalidAdmission =
+            emitBinary("and", inputValidValue->getValue(), invalidInput, "i1");
+        state.safeAdmission = emitNot(invalidAdmission);
+        producerValid = state.outputDone;
+        producerData = std::move(selectedData);
+        dependencyStates[dependency.name] = std::move(state);
       } else if (reorderProducer != reorderByOutput.end()) {
         const QueueBlockPlan &reorder = *reorderProducer->getValue();
         auto inputValidValue = outputValid.find(reorder.inputs.front());
@@ -1118,6 +1305,123 @@ llvm::Expected<std::string> generateQueueGraphPyc(const QueueGraphPlan &plan) {
         }
         body << "    pyc.assign " << state->getValue().nextWire << ", " << next
              << " : " << state->getValue().type << "\n";
+      }
+    } else if (block.kind == "dependency") {
+      auto state = dependencyStates.find(block.name);
+      auto inputValidValue = outputValid.find(block.inputs.front());
+      auto inputDataValue = outputData.find(block.inputs.front());
+      if (state == dependencyStates.end() ||
+          inputValidValue == outputValid.end() ||
+          inputDataValue == outputData.end())
+        return pycError("dependency state or input is missing");
+      const std::string &outputReady = inputReady[block.outputs.front()];
+      std::string retire =
+          emitBinary("and", state->getValue().outputDone, outputReady, "i1");
+      std::string inputReadyValue =
+          emitBinary("and", state->getValue().anyFree,
+                     state->getValue().safeAdmission, "i1");
+      body << "    pyc.assign " << readyWires[block.inputs.front()] << ", "
+           << inputReadyValue << " : i1\n";
+      std::string admit =
+          emitBinary("and", inputValidValue->getValue(), inputReadyValue, "i1");
+      std::string zeroValid = emitConstant(0, "i1");
+      std::string oneValid = emitConstant(1, "i1");
+      std::string waitingPhase = emitConstant(0, "i2");
+      std::string executingPhase = emitConstant(1, "i2");
+      std::string donePhase = emitConstant(2, "i2");
+      std::string zeroCost = emitConstant(0, state->getValue().costType);
+      std::string oneCost = emitConstant(1, state->getValue().costType);
+      std::string noDependency = emitConstant(state->getValue().noDependency,
+                                              state->getValue().keyType);
+
+      std::vector<std::string> freeGrants;
+      std::vector<std::string> doneGrants;
+      freeGrants.reserve(state->getValue().slots.size());
+      doneGrants.reserve(state->getValue().slots.size());
+      for (size_t index = 0; index < state->getValue().slots.size(); ++index) {
+        std::string indexValue =
+            emitConstant(index, state->getValue().freeIndexType);
+        freeGrants.push_back(emitBinary("eq", state->getValue().freeIndex,
+                                        indexValue,
+                                        state->getValue().freeIndexType));
+        doneGrants.push_back(emitBinary("eq", state->getValue().doneIndex,
+                                        indexValue,
+                                        state->getValue().freeIndexType));
+      }
+
+      for (auto [index, slot] : llvm::enumerate(state->getValue().slots)) {
+        std::string admitSlot =
+            emitBinary("and", admit, freeGrants[index], "i1");
+        std::string retireSlot =
+            emitBinary("and", retire, doneGrants[index], "i1");
+        std::string isWaiting =
+            emitBinary("eq", slot.phase, waitingPhase, "i2");
+        isWaiting = emitBinary("and", slot.valid, isWaiting, "i1");
+        std::string isExecuting =
+            emitBinary("eq", slot.phase, executingPhase, "i2");
+        isExecuting = emitBinary("and", slot.valid, isExecuting, "i1");
+        std::string sentinel = emitBinary("eq", slot.predecessor, noDependency,
+                                          state->getValue().keyType);
+        std::vector<std::string> predecessorMatches;
+        predecessorMatches.reserve(state->getValue().slots.size());
+        for (const DependencySlotState &candidate : state->getValue().slots) {
+          std::string same = emitBinary("eq", candidate.key, slot.predecessor,
+                                        state->getValue().keyType);
+          predecessorMatches.push_back(
+              emitBinary("and", candidate.done, same, "i1"));
+        }
+        std::string predecessorDone =
+            reduceBalanced("or", predecessorMatches, "i1");
+        std::string dependencyReady =
+            emitBinary("or", sentinel, predecessorDone, "i1");
+        std::string issue = emitBinary("and", isWaiting, dependencyReady, "i1");
+        std::string atOne = emitBinary("eq", slot.remaining, oneCost,
+                                       state->getValue().costType);
+        std::string complete = emitBinary("and", isExecuting, atOne, "i1");
+        std::string notAtOne = emitNot(atOne);
+        std::string decrement = emitBinary("and", isExecuting, notAtOne, "i1");
+        std::string decremented = emitBinary("sub", slot.remaining, oneCost,
+                                             state->getValue().costType);
+
+        std::string nextValid =
+            emitMux(retireSlot, zeroValid, slot.valid, "i1");
+        nextValid = emitMux(admitSlot, oneValid, nextValid, "i1");
+        std::string nextPhase = emitMux(complete, donePhase, slot.phase, "i2");
+        nextPhase = emitMux(issue, executingPhase, nextPhase, "i2");
+        nextPhase = emitMux(admitSlot, waitingPhase, nextPhase, "i2");
+        std::string nextRemaining = emitMux(
+            decrement, decremented, slot.remaining, state->getValue().costType);
+        nextRemaining = emitMux(complete, zeroCost, nextRemaining,
+                                state->getValue().costType);
+        nextRemaining = emitMux(issue, slot.cost, nextRemaining,
+                                state->getValue().costType);
+        nextRemaining = emitMux(admitSlot, zeroCost, nextRemaining,
+                                state->getValue().costType);
+        std::string nextKey = emitMux(admitSlot, state->getValue().inputKey,
+                                      slot.key, state->getValue().keyType);
+        std::string nextPredecessor =
+            emitMux(admitSlot, state->getValue().inputPredecessor,
+                    slot.predecessor, state->getValue().keyType);
+        std::string nextCost = emitMux(admitSlot, state->getValue().inputCost,
+                                       slot.cost, state->getValue().costType);
+        std::string nextData = emitMux(admitSlot, inputDataValue->getValue(),
+                                       slot.data, state->getValue().dataType);
+        std::string nextState = newValue();
+        body << "    " << nextState << " = pyc.concat(" << nextValid << ", "
+             << nextPhase << ", " << nextKey << ", " << nextPredecessor << ", "
+             << nextRemaining << ", " << nextCost << ", " << nextData
+             << ") : (i1, i2, " << state->getValue().keyType << ", "
+             << state->getValue().keyType << ", " << state->getValue().costType
+             << ", " << state->getValue().costType << ", "
+             << state->getValue().dataType << ") -> "
+             << state->getValue().slotType << "\n";
+        std::vector<std::string> changes = {admitSlot, retireSlot, issue,
+                                            complete, decrement};
+        std::string changed = reduceBalanced("or", changes, "i1");
+        body << "    pyc.assign " << slot.next << ", " << nextState << " : "
+             << state->getValue().slotType << "\n";
+        body << "    pyc.assign " << slot.enable << ", " << changed
+             << " : i1\n";
       }
     } else if (block.kind == "reorder") {
       auto state = reorderStates.find(block.name);

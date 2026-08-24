@@ -53,6 +53,7 @@ struct QueueBlockPlan {
   std::vector<std::string> yields;
   uint64_t capacity = 0;
   uint64_t start = 0;
+  uint64_t noDependency = 0;
 };
 
 struct QueueGraphPlan {

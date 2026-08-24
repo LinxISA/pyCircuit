@@ -18,6 +18,7 @@ STRUCT_EXAMPLE = ROOT / "examples" / "v02" / "pyc_struct_pipeline.py"
 ROUTE_EXAMPLE = ROOT / "examples" / "v02" / "pyc_route_merge_pipeline.py"
 ATOMIC_EXAMPLE = ROOT / "examples" / "v02" / "pyc_atomic_pipeline.py"
 REORDER_EXAMPLE = ROOT / "examples" / "v02" / "pyc_reorder_pipeline.py"
+DEPENDENCY_EXAMPLE = ROOT / "examples" / "v02" / "pyc_dependency_pipeline.py"
 FORK_EXAMPLE = ROOT / "examples" / "v02" / "pyc_fork_pipeline.py"
 CONDITIONAL_EXAMPLE = ROOT / "examples" / "v02" / "pyc_conditional_pipeline.py"
 FEEDBACK_EXAMPLE = ROOT / "examples" / "v02" / "pyc_feedback_pipeline.py"
@@ -476,6 +477,213 @@ int main() {{
             self.assertIn("%out1_ready", pyc)
             self.assertIn("result_names = [\"out0_valid\"", pyc)
 
+    def test_dependency_is_cycle_equivalent_in_pyc_cpp_and_verilog(self) -> None:
+        toolchain = Path(os.environ.get("PYC_V02_TOOLCHAIN_ROOT", DEFAULT_TOOLCHAIN))
+        pycc = toolchain / "bin" / "pycc"
+        metadata = toolchain / "share" / "pycircuit" / "toolchain-metadata.json"
+        cxx = shutil.which("c++")
+        verilator = shutil.which("verilator")
+        if not pycc.is_file() or not metadata.is_file() or cxx is None or verilator is None:
+            self.skipTest("pinned pyCircuit toolchain, C++, or Verilator is unavailable")
+        source = DEPENDENCY_EXAMPLE.read_text(encoding="utf-8")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            raw = root / "dependency.raw.ac.mlir"
+            frozen = root / "dependency.frozen.ac.mlir"
+            output = root / "output"
+            raw.write_text(
+                lower_queue_source(source, "pyc_dependency_pipeline"),
+                encoding="utf-8",
+            )
+            optimized = subprocess.run(
+                (str(ROOT / "build/dev-llvm22/bin/acir-opt"), str(raw)),
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(0, optimized.returncode, optimized.stderr)
+            frozen.write_text(optimized.stdout, encoding="utf-8")
+            completed = subprocess.run(
+                (
+                    str(ROOT / "tools/ac-queue-pyc-build.py"),
+                    str(frozen),
+                    "--pycgen-tool",
+                    str(ROOT / "build/dev-llvm22/bin/acir-queue-pycgen"),
+                    "--pycc",
+                    str(pycc),
+                    "--toolchain-lock",
+                    str(ROOT / "toolchains/pyc-v0.2.lock.json"),
+                    "--toolchain-metadata",
+                    str(metadata),
+                    "--cxx",
+                    cxx,
+                    "--verilator",
+                    verilator,
+                    "--pyc-output",
+                    str(output / "model.pyc"),
+                    "--cpp-output-dir",
+                    str(output / "cpp"),
+                    "--verilog-output-dir",
+                    str(output / "verilog"),
+                    "--manifest",
+                    str(output / "manifest.json"),
+                ),
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(0, completed.returncode, completed.stderr)
+            pyc = (output / "model.pyc").read_text(encoding="utf-8")
+            self.assertEqual(4, pyc.count("pyc.reg"))
+            self.assertIn("pyc.sub", pyc)
+            manifest = json.loads((output / "manifest.json").read_text())
+            self.assertEqual(
+                ["ac.dependency", "ac.sink", "ac.source"],
+                manifest["opcode_lowering_inventory"],
+            )
+
+            cpp_harness = root / "cpp_harness.cpp"
+            cpp_executable = root / "cpp_model"
+            cpp_harness.write_text(
+                '''#include "pyc_dependency_pipeline.hpp"
+#include <array>
+#include <cstdint>
+#include <iostream>
+
+int main() {
+  pyc::gen::pyc_dependency_pipeline dut;
+  const std::array<std::uint64_t, 3> input{
+      (0ULL << 24) | (15ULL << 20) | (3ULL << 16) | 10,
+      (1ULL << 24) | (15ULL << 20) | (1ULL << 16) | 20,
+      (2ULL << 24) | (0ULL << 20) | (1ULL << 16) | 30};
+  std::size_t cursor = 0;
+  for (std::uint64_t cycle = 0; cycle < 24; ++cycle) {
+    const bool offering = cycle != 0 && cursor < input.size();
+    dut.rst = pyc::cpp::Wire<1>(cycle == 0 ? 1 : 0);
+    dut.in_valid = pyc::cpp::Wire<1>(offering ? 1 : 0);
+    dut.in_data = pyc::cpp::Wire<28>(offering ? input[cursor] : 0);
+    dut.out_ready = pyc::cpp::Wire<1>(1);
+    dut.clk = pyc::cpp::Wire<1>(0);
+    dut.step();
+    dut.clk = pyc::cpp::Wire<1>(1);
+    dut.step();
+    std::cout << cycle << " " << dut.out_valid.value() << " "
+              << dut.out_data.value() << " " << dut.in_ready.value() << "\\n";
+    if (offering && dut.in_ready.value() != 0)
+      ++cursor;
+    dut.clk = pyc::cpp::Wire<1>(0);
+    dut.step();
+  }
+}
+''',
+                encoding="utf-8",
+            )
+            cpp_build = subprocess.run(
+                (
+                    cxx,
+                    "-std=c++17",
+                    "-I",
+                    str(output / "cpp"),
+                    "-I",
+                    str(toolchain / "include"),
+                    str(output / "cpp/pyc_dependency_pipeline.cpp"),
+                    str(cpp_harness),
+                    str(toolchain / "lib/libpyc4_runtime.a"),
+                    "-o",
+                    str(cpp_executable),
+                ),
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(0, cpp_build.returncode, cpp_build.stderr)
+            cpp_run = subprocess.run(
+                (str(cpp_executable),),
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(0, cpp_run.returncode, cpp_run.stderr)
+
+            verilator_harness = root / "verilator_harness.cpp"
+            verilator_harness.write_text(
+                '''#include "Vpyc_dependency_pipeline.h"
+#include <array>
+#include <cstdint>
+#include <iostream>
+
+int main() {
+  Vpyc_dependency_pipeline dut;
+  const std::array<std::uint64_t, 3> input{
+      (0ULL << 24) | (15ULL << 20) | (3ULL << 16) | 10,
+      (1ULL << 24) | (15ULL << 20) | (1ULL << 16) | 20,
+      (2ULL << 24) | (0ULL << 20) | (1ULL << 16) | 30};
+  std::size_t cursor = 0;
+  for (std::uint64_t cycle = 0; cycle < 24; ++cycle) {
+    const bool offering = cycle != 0 && cursor < input.size();
+    dut.rst = cycle == 0 ? 1 : 0;
+    dut.in_valid = offering ? 1 : 0;
+    dut.in_data = offering ? input[cursor] : 0;
+    dut.out_ready = 1;
+    dut.clk = 0;
+    dut.eval();
+    dut.clk = 1;
+    dut.eval();
+    std::cout << cycle << " " << unsigned(dut.out_valid) << " "
+              << dut.out_data << " " << unsigned(dut.in_ready) << "\\n";
+    if (offering && dut.in_ready != 0)
+      ++cursor;
+    dut.clk = 0;
+    dut.eval();
+  }
+}
+''',
+                encoding="utf-8",
+            )
+            object_dir = root / "verilator_obj"
+            verilator_build = subprocess.run(
+                (
+                    verilator,
+                    "--cc",
+                    "--exe",
+                    "--build",
+                    "-Wno-fatal",
+                    "--top-module",
+                    "pyc_dependency_pipeline",
+                    "--Mdir",
+                    str(object_dir),
+                    str(output / "verilog/pyc_primitives.v"),
+                    str(output / "verilog/pyc_dependency_pipeline.v"),
+                    str(verilator_harness),
+                ),
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(0, verilator_build.returncode, verilator_build.stderr)
+            verilator_run = subprocess.run(
+                (str(object_dir / "Vpyc_dependency_pipeline"),),
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(0, verilator_run.returncode, verilator_run.stderr)
+            self.assertEqual(cpp_run.stdout, verilator_run.stdout)
+            transactions = [
+                int(fields[2])
+                for line in cpp_run.stdout.splitlines()
+                if len(fields := line.split()) == 4 and fields[1] == "1"
+            ]
+            self.assertEqual(
+                [
+                    (1 << 24) | (15 << 20) | (1 << 16) | 20,
+                    (0 << 24) | (15 << 20) | (3 << 16) | 10,
+                    (2 << 24) | (0 << 20) | (1 << 16) | 30,
+                ],
+                transactions,
+            )
+
     def test_reorder_is_cycle_equivalent_in_pyc_cpp_and_verilog(self) -> None:
         toolchain = Path(os.environ.get("PYC_V02_TOOLCHAIN_ROOT", DEFAULT_TOOLCHAIN))
         pycc = toolchain / "bin" / "pycc"
@@ -736,10 +944,10 @@ int main() {
             )
             self.assertEqual(0, completed.returncode, completed.stderr)
             pyc = (output / "model.pyc").read_text(encoding="utf-8")
-            self.assertIn("%in_data: i98", pyc)
+            self.assertIn("%in_data: i106", pyc)
             self.assertIn("pyc.reg", pyc)
             self.assertIn(": i2", pyc)
-            self.assertGreaterEqual(pyc.count("pyc.fifo"), 17)
+            self.assertGreaterEqual(pyc.count("pyc.fifo"), 14)
             self.assertGreaterEqual(pyc.count("pyc.reg"), 50)
             self.assertTrue(
                 (output / "verilog/davincioo_queue_model.v").is_file()
@@ -747,7 +955,7 @@ int main() {
             manifest = json.loads((output / "manifest.json").read_text())
             self.assertEqual(
                 [
-                    "ac.feedback",
+                    "ac.dependency",
                     "ac.merge",
                     "ac.observe",
                     "ac.reorder",
@@ -774,15 +982,17 @@ int main() {
                 sequence = row["sequence_id"]
                 opcode = projection["opcode_ids"][row["opcode"]]
                 route = projection["routes"][row["opcode"]]
-                remaining = projection["projected_cycles"][row["opcode"]]
+                waits_for = projection["waits_for"][sequence]
+                cycles = projection["model_cost"][row["opcode"]]
                 high = (
-                    remaining
-                    | (route << 16)
-                    | (opcode << 18)
-                    | (sequence << 26)
+                    cycles
+                    | (waits_for << 16)
+                    | (route << 24)
+                    | (opcode << 26)
+                    | (sequence << 34)
                 )
                 packed_inputs.append((sequence * 10, high))
-                output_high = (route << 16) | (opcode << 18) | (sequence << 26)
+                output_high = high
                 packed_outputs.append((value, output_high))
             input_rows = ",\n      ".join(
                 f"Packed{{{low}ULL, {high}ULL}}" for low, high in packed_inputs
@@ -809,8 +1019,8 @@ int main() {{
     dut.rst = pyc::cpp::Wire<1>(cycle == 0 ? 1 : 0);
     dut.in_valid = pyc::cpp::Wire<1>(offering ? 1 : 0);
     dut.in_data = offering
-                      ? pyc::cpp::Wire<98>{{input[cursor].low, input[cursor].high}}
-                      : pyc::cpp::Wire<98>{{}};
+                      ? pyc::cpp::Wire<106>{{input[cursor].low, input[cursor].high}}
+                      : pyc::cpp::Wire<106>{{}};
     dut.out_ready = pyc::cpp::Wire<1>(1);
     dut.clk = pyc::cpp::Wire<1>(0);
     dut.step();

@@ -36,6 +36,7 @@ class QueueBinding:
     feedback_output: bool = False
     merge_output: bool = False
     reorder_output: bool = False
+    dependency_output: bool = False
     atomic_group: int | None = None
 
 
@@ -124,6 +125,22 @@ class ReorderBinding:
 
 
 @dataclass(frozen=True, slots=True)
+class DependencyBinding:
+    input_name: str
+    output_name: str
+    argument: str
+    key: ast.expr
+    waits_for: ast.expr
+    cost: ast.expr
+    capacity: int
+    no_dependency: int
+    depth: int
+    latency: int
+    scope: tuple[str, ...]
+    order: int
+
+
+@dataclass(frozen=True, slots=True)
 class AtomicBinding:
     queues: tuple[str, ...]
     scope: tuple[str, ...]
@@ -157,6 +174,7 @@ class QueueProgram:
     feedbacks: tuple[FeedbackBinding, ...]
     merges: tuple[MergeBinding, ...]
     reorders: tuple[ReorderBinding, ...]
+    dependencies: tuple[DependencyBinding, ...]
     atomics: tuple[AtomicBinding, ...]
     collections: tuple[CollectionBinding, ...]
     observations: tuple[ObservationBinding, ...]
@@ -339,6 +357,7 @@ def parse_queue_program(text: str, system: str) -> QueueProgram:
     feedbacks: list[FeedbackBinding] = []
     merges: list[MergeBinding] = []
     reorders: list[ReorderBinding] = []
+    dependencies: list[DependencyBinding] = []
     atomics: list[AtomicBinding] = []
     sinks: list[SinkBinding] = []
     observations: list[ObservationBinding] = []
@@ -769,6 +788,7 @@ def parse_queue_program(text: str, system: str) -> QueueProgram:
                     fork_start = len(forks)
                     merge_start = len(merges)
                     reorder_start = len(reorders)
+                    dependency_start = len(dependencies)
                     feedback_start = len(feedbacks)
                     sink_start = len(sinks)
                     observation_start = len(observations)
@@ -782,6 +802,7 @@ def parse_queue_program(text: str, system: str) -> QueueProgram:
                         or len(forks) != fork_start
                         or len(merges) != merge_start
                         or len(reorders) != reorder_start
+                        or len(dependencies) != dependency_start
                         or len(feedbacks) != feedback_start
                         or len(sinks) != sink_start
                         or len(observations) != observation_start
@@ -1075,6 +1096,95 @@ def parse_queue_program(text: str, system: str) -> QueueProgram:
                     )
                 )
                 continue
+            if (
+                isinstance(statement, ast.Assign)
+                and len(statement.targets) == 1
+                and isinstance(statement.targets[0], ast.Name)
+                and isinstance(statement.value, ast.Call)
+                and isinstance(statement.value.func, ast.Attribute)
+                and statement.value.func.attr == "depend"
+                and isinstance(statement.value.func.value, ast.Name)
+                and not statement.value.args
+            ):
+                name = statement.targets[0].id
+                if name in by_name or name in collections:
+                    raise QueueFrontendError(
+                        "ACPY-QUEUE-014: dependency output requires one fresh name"
+                    )
+                call = statement.value
+                incoming = by_name.get(call.func.value.id)
+                if incoming is None:
+                    raise QueueFrontendError(
+                        "ACPY-QUEUE-014: dependency input is unbound"
+                    )
+                allowed_keywords = {
+                    "key",
+                    "waits_for",
+                    "cost",
+                    "capacity",
+                    "no_dependency",
+                    "depth",
+                    "latency",
+                }
+                if any(
+                    keyword.arg is None or keyword.arg not in allowed_keywords
+                    for keyword in call.keywords
+                ):
+                    raise QueueFrontendError(
+                        "ACPY-QUEUE-014: dependency has an unsupported keyword"
+                    )
+                policies: dict[str, ast.expr] = {}
+                for policy in ("key", "waits_for", "cost"):
+                    values = [
+                        keyword.value
+                        for keyword in call.keywords
+                        if keyword.arg == policy
+                    ]
+                    if len(values) != 1:
+                        raise QueueFrontendError(
+                            f"ACPY-QUEUE-014: dependency requires one {policy} lambda"
+                        )
+                    policies[policy] = values[0]
+                key_argument, key = _lambda(policies["key"])
+                waits_argument, waits_for = _lambda(policies["waits_for"])
+                cost_argument, cost = _lambda(policies["cost"])
+                if len({key_argument, waits_argument, cost_argument}) != 1:
+                    raise QueueFrontendError(
+                        "ACPY-QUEUE-014: dependency lambdas require one argument name"
+                    )
+                capacity = _positive_int(call, "capacity", 16)
+                no_dependency = _nonnegative_int(call, "no_dependency", 255)
+                depth = _positive_int(call, "depth", 1)
+                latency = _positive_int(call, "latency", 1)
+                output = QueueBinding(
+                    name,
+                    incoming.payload,
+                    depth,
+                    latency,
+                    None,
+                    scope=scope_path,
+                    order=current_order,
+                    dependency_output=True,
+                )
+                queues.append(output)
+                by_name[name] = output
+                dependencies.append(
+                    DependencyBinding(
+                        incoming.name,
+                        name,
+                        key_argument,
+                        key,
+                        waits_for,
+                        cost,
+                        capacity,
+                        no_dependency,
+                        depth,
+                        latency,
+                        scope_path,
+                        current_order,
+                    )
+                )
+                continue
             if isinstance(statement, ast.Assign) and len(statement.targets) == 1 and isinstance(statement.targets[0], ast.Name) and isinstance(statement.value, ast.Call):
                 name, call = statement.targets[0].id, statement.value
                 if name in by_name or name in collections:
@@ -1227,6 +1337,7 @@ def parse_queue_program(text: str, system: str) -> QueueProgram:
         tuple(feedbacks),
         tuple(merges),
         tuple(reorders),
+        tuple(dependencies),
         tuple(atomics),
         tuple(collection_bindings),
         tuple(observations),
@@ -1419,6 +1530,8 @@ def lower_queue_program(program: QueueProgram) -> str:
             uses[input_name].append(merge.scope)
     for reorder in program.reorders:
         uses[reorder.input_name].append(reorder.scope)
+    for dependency in program.dependencies:
+        uses[dependency.input_name].append(dependency.scope)
 
     def inside(container: tuple[str, ...], candidate: tuple[str, ...]) -> bool:
         return candidate[: len(container)] == container
@@ -1495,6 +1608,7 @@ def lower_queue_program(program: QueueProgram) -> str:
             and not queue.feedback_output
             and not queue.merge_output
             and not queue.reorder_output
+            and not queue.dependency_output
             and queue.atomic_group is None
         )
         events.extend(
@@ -1526,6 +1640,11 @@ def lower_queue_program(program: QueueProgram) -> str:
             (reorder.order, "reorder", reorder)
             for reorder in program.reorders
             if reorder.scope == path
+        )
+        events.extend(
+            (dependency.order, "dependency", dependency)
+            for dependency in program.dependencies
+            if dependency.scope == path
         )
         events.extend(
             (min(visible_order(consumer) for consumer in group) - 0.5, "broadcast", source)
@@ -1707,6 +1826,60 @@ def lower_queue_program(program: QueueProgram) -> str:
                     f"!ac.queue<{incoming.payload}>"
                 )
                 mapping[reorder.output_name] = output
+            elif kind == "dependency":
+                dependency = item
+                assert isinstance(dependency, DependencyBinding)
+                incoming = by_name[dependency.input_name]
+                policies = (
+                    ("key", dependency.key),
+                    ("waits_for", dependency.waits_for),
+                    ("cost", dependency.cost),
+                )
+                emitted: list[tuple[str, str, list[str]]] = []
+                for policy_name, expression in policies:
+                    emitter = _ExpressionEmitter(
+                        payloads, dependency.argument, incoming.payload
+                    )
+                    value, value_type = emitter.emit(expression)
+                    if not value_type.startswith("i"):
+                        raise QueueFrontendError(
+                            "ACPY-QUEUE-014: dependency policies must lower to integers"
+                        )
+                    emitted.append((value, value_type, emitter.lines))
+                if emitted[0][1] != emitted[1][1]:
+                    raise QueueFrontendError(
+                        "ACPY-QUEUE-014: key and waits_for types must match"
+                    )
+                output = (
+                    dependency.output_name
+                    if not path
+                    else f"{dependency.output_name}__local"
+                )
+                lines.append(
+                    f"{indent}%{output} = ac.dependency "
+                    f"%{mapping[dependency.input_name]} capacity "
+                    f"{dependency.capacity} no_dependency "
+                    f"{dependency.no_dependency} depth {dependency.depth} "
+                    f"latency {dependency.latency} key {{"
+                )
+                for index, policy_name in enumerate(("key", "waits_for", "cost")):
+                    if index:
+                        lines.append(f"{indent}}} {policy_name} {{")
+                    lines.append(
+                        f"{indent}^{policy_name}(%item: !ac.var<{incoming.payload}>):"
+                    )
+                    value, value_type, policy_lines = emitted[index]
+                    lines.extend(indent + line[2:] for line in policy_lines)
+                    lines.append(
+                        f"{indent}  ac.dependency.yield %{value} : "
+                        f"!ac.var<{value_type}>"
+                    )
+                lines.append(
+                    f'{indent}}} {{ac.name = "{dependency.output_name}"}} : '
+                    f"!ac.queue<{incoming.payload}> -> "
+                    f"!ac.queue<{incoming.payload}>"
+                )
+                mapping[dependency.output_name] = output
             elif kind == "atomic":
                 atomic = item
                 assert isinstance(atomic, AtomicBinding)

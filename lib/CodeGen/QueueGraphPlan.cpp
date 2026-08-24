@@ -174,6 +174,8 @@ llvm::Error extractExpressions(mlir::Region &region, QueueBlockPlan &plan) {
       yielded.push_back(yield.getSelector());
     else if (auto yield = mlir::dyn_cast<ac::ReorderYieldOp>(operation))
       yielded.push_back(yield.getKey());
+    else if (auto yield = mlir::dyn_cast<ac::DependencyYieldOp>(operation))
+      yielded.push_back(yield.getValue());
     else if (auto yield = mlir::dyn_cast<ac::FeedbackYieldOp>(operation)) {
       yielded.push_back(yield.getValue());
       yielded.push_back(yield.getContinueValue());
@@ -440,6 +442,40 @@ private:
         plan.blocks.push_back(std::move(blockPlan));
         continue;
       }
+      if (auto dependency = mlir::dyn_cast<ac::DependencyOp>(operation)) {
+        auto input = queueName(dependency.getInput(), names);
+        if (!input)
+          return input.takeError();
+        std::vector<std::string> outputs;
+        if (auto error =
+                addOutputs(dependency, dependency->getResults(),
+                           {int64_t(dependency.getDepth())},
+                           {int64_t(dependency.getLatency())}, scope, outputs))
+          return error;
+        QueueBlockPlan blockPlan{"dependency",
+                                 outputs.front(),
+                                 scopePath(scope),
+                                 {*input},
+                                 outputs,
+                                 {uint64_t(dependency.getDepth())},
+                                 {uint64_t(dependency.getLatency())}};
+        blockPlan.capacity = dependency.getCapacity();
+        blockPlan.noDependency = dependency.getNoDependency();
+        blockPlan.region = printRegion(dependency.getKey());
+        std::vector<std::string> policyYields;
+        for (mlir::Region *policy :
+             {&dependency.getKey(), &dependency.getWaitsFor(),
+              &dependency.getCost()}) {
+          if (auto error = extractExpressions(*policy, blockPlan))
+            return error;
+          if (blockPlan.yields.size() != 1)
+            return planError("dependency policy must yield one value");
+          policyYields.push_back(blockPlan.yields.front());
+        }
+        blockPlan.yields = std::move(policyYields);
+        plan.blocks.push_back(std::move(blockPlan));
+        continue;
+      }
       if (auto feedback = mlir::dyn_cast<ac::FeedbackOp>(operation)) {
         auto input = queueName(feedback.getInput(), names);
         if (!input)
@@ -603,6 +639,7 @@ llvm::Expected<std::string> QueueGraphPlan::canonicalJson() const {
                            {"latencies", std::move(latencies)},
                            {"max_iterations", block.maxIterations},
                            {"name", block.name},
+                           {"no_dependency", block.noDependency},
                            {"outputs", std::move(outputs)},
                            {"policy", block.policy},
                            {"region", block.region},

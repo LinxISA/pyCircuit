@@ -27,16 +27,31 @@
     "TROWEXPANDDIV": 1,
     "TSTORE": 3
   },
-  "projected_cycles": {
+  "execution_cycles": {
     "TASSIGN": 1,
     "TLOAD": 128,
-    "TROWMAX": 259,
+    "TROWMAX": 139,
     "TROWEXPANDSUB": 12,
     "TEXP": 12,
     "TROWSUM": 12,
     "TROWEXPANDDIV": 12,
-    "TSTORE": 313
+    "TSTORE": 128
   },
+  "model_cost": {
+    "TASSIGN": 1,
+    "TLOAD": 123,
+    "TROWMAX": 139,
+    "TROWEXPANDSUB": 12,
+    "TEXP": 12,
+    "TROWSUM": 12,
+    "TROWEXPANDDIV": 12,
+    "TSTORE": 124
+  },
+  "boundary_cycle_compensation": {
+    "ingress": 5,
+    "drain": 4
+  },
+  "waits_for": [255, 255, 255, 255, 1, 255, 4, 255, 6, 255, 255, 8, 255, 11, 13],
   "opcode_counts": {
     "TASSIGN": 8,
     "TEXP": 1,
@@ -50,6 +65,7 @@
   "completion_order": [0, 2, 3, 5, 7, 9, 10, 12, 1, 4, 6, 8, 11, 13, 14],
   "retirement_order": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14],
   "reorder_capacity": 64,
+  "dependency_capacity": 8,
   "architectural_values": [102, 115, 122, 132, 143, 152, 163, 172, 183, 192, 202, 213, 222, 233, 245],
   "simulated_cycles": 453
 }

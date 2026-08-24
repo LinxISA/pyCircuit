@@ -61,6 +61,32 @@ struct SignedSequenceKey {
   }
 };
 
+struct DependencyValue {
+  uint64_t sequence = 0;
+  uint64_t predecessor = 255;
+  uint64_t cycles = 1;
+
+  bool operator==(const DependencyValue &) const = default;
+};
+
+struct DependencyKey {
+  uint64_t operator()(const DependencyValue &value) const {
+    return value.sequence;
+  }
+};
+
+struct DependencyPredecessor {
+  uint64_t operator()(const DependencyValue &value) const {
+    return value.predecessor;
+  }
+};
+
+struct DependencyCost {
+  uint64_t operator()(const DependencyValue &value) const {
+    return value.cycles;
+  }
+};
+
 TEST(QueueBlocksTest, TransformCommitsOnlyAcrossTheQueueBarrier) {
   SimQueue<int> input("input", 1, nullptr, 2);
   SimQueue<int> output("output", 2, nullptr, 2);
@@ -214,6 +240,48 @@ TEST(QueueBlocksTest, ReorderRejectsNegativeSequenceKey) {
   reorder.doWork({1, 0});
   EXPECT_EQ(reorder.runtimeFailureCode(), "reorder_negative_key");
   EXPECT_FALSE(reorder.hasPendingCommit());
+  EXPECT_TRUE(output.isEmpty());
+}
+
+TEST(QueueBlocksTest, DependencyCompletesReadyTokensOutOfOrder) {
+  SimQueue<DependencyValue> input("input", 1, nullptr, 4);
+  SimQueue<DependencyValue> output("output", 2, nullptr, 4);
+  QueueDependency<DependencyValue, DependencyKey, DependencyPredecessor,
+                  DependencyCost>
+      dependency("dependency", 3, nullptr, input, output, 4, 255);
+  QueueSink<DependencyValue> sink("sink", 4, nullptr, output);
+  ASSERT_TRUE(input.proposePush({0, 255, 3}));
+  ASSERT_TRUE(input.proposePush({1, 255, 1}));
+  ASSERT_TRUE(input.proposePush({2, 0, 1}));
+  input.doXfer({0, 0});
+
+  for (uint64_t tick = 1; tick < 16; ++tick) {
+    const Epoch epoch{tick, 0};
+    dependency.doWork(epoch);
+    sink.doWork(epoch);
+    input.doXfer(epoch);
+    output.doXfer(epoch);
+    dependency.doXfer(epoch);
+    sink.doXfer(epoch);
+  }
+
+  ASSERT_EQ(sink.received().size(), 3u);
+  EXPECT_EQ(sink.received()[0].sequence, 1u);
+  EXPECT_EQ(sink.received()[1].sequence, 0u);
+  EXPECT_EQ(sink.received()[2].sequence, 2u);
+}
+
+TEST(QueueBlocksTest, DependencyRejectsZeroExecutionCost) {
+  SimQueue<DependencyValue> input("input", 1, nullptr, 1);
+  SimQueue<DependencyValue> output("output", 2, nullptr, 1);
+  QueueDependency<DependencyValue, DependencyKey, DependencyPredecessor,
+                  DependencyCost>
+      dependency("dependency", 3, nullptr, input, output, 1, 255);
+  ASSERT_TRUE(input.proposePush({0, 255, 0}));
+  input.doXfer({0, 0});
+  dependency.doWork({1, 0});
+  EXPECT_EQ(dependency.runtimeFailureCode(), "dependency_nonpositive_cost");
+  EXPECT_FALSE(dependency.hasPendingCommit());
   EXPECT_TRUE(output.isEmpty());
 }
 

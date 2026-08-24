@@ -104,6 +104,7 @@ class RepositoryContractsTest(unittest.TestCase):
         Draft202012Validator(schema).validate(catalog)
         expected = {
             "ac.broadcast",
+            "ac.dependency",
             "ac.feedback",
             "ac.fork",
             "ac.merge",

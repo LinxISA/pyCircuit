@@ -335,9 +335,9 @@ int main() {{
             content = model.read_text(encoding="utf-8")
             plan_document = json.loads(plan.read_text(encoding="utf-8"))
             self.assertEqual("davincioo_queue_model", plan_document["system"])
-            self.assertEqual(7, len(plan_document["scopes"]))
-            self.assertEqual(17, len(plan_document["queues"]))
-            self.assertEqual(18, len(plan_document["blocks"]))
+            self.assertEqual(8, len(plan_document["scopes"]))
+            self.assertEqual(14, len(plan_document["queues"]))
+            self.assertEqual(16, len(plan_document["blocks"]))
             copied_source = root / "copied_model.py"
             copied_model = root / "copied_model.cpp"
             copied_acir = root / "copied_model.ac.mlir"
@@ -384,6 +384,7 @@ int main() {{
             self.assertEqual(content, copied_model.read_text(encoding="utf-8"))
             for scope in (
                 "frontend",
+                "dependency",
                 "dispatch",
                 "scalar_engine",
                 "vector_engine",
@@ -394,7 +395,8 @@ int main() {{
                 self.assertIn(f'("{scope}", gfsim::kInvalidObjectId', content)
             self.assertIn("gfsim::QueueRoute<WorkItem, 4", content)
             self.assertIn("gfsim::QueueMerge<WorkItem, 4>", content)
-            self.assertEqual(4, content.count("gfsim::QueueFeedback<WorkItem"))
+            self.assertNotIn("gfsim::QueueFeedback<WorkItem", content)
+            self.assertIn("gfsim::QueueDependency<WorkItem", content)
             self.assertIn("gfsim::QueueReorder<WorkItem", content)
 
             records = [
@@ -405,14 +407,15 @@ int main() {{
             self.assertEqual(list(range(15)), [row["sequence_id"] for row in records])
             projection = json.loads(DAVINCIOO_PROJECTION.read_text(encoding="utf-8"))
             opcode_ids = projection["opcode_ids"]
-            projected_cycles = projection["projected_cycles"]
+            model_cost = projection["model_cost"]
             routes = projection["routes"]
             items = [
                 (
                     row["sequence_id"],
                     opcode_ids[row["opcode"]],
                     routes[row["opcode"]],
-                    projected_cycles[row["opcode"]],
+                    projection["waits_for"][row["sequence_id"]],
+                    model_cost[row["opcode"]],
                     row["sequence_id"] * 10,
                 )
                 for row in records
@@ -460,6 +463,7 @@ int main() {{
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <iostream>
 
 int main() {{
   ac_generated::DavinciooQueueModel model;
@@ -484,8 +488,10 @@ int main() {{
       break;
     }}
   }}
-  if (simulatedCycles != {projection["simulated_cycles"]})
+  if (simulatedCycles != {projection["simulated_cycles"]}) {{
+    std::cerr << "simulated_cycles=" << simulatedCycles << "\\n";
     return 2;
+  }}
   const auto &values = model.sink_0_values();
   if (values.size() != input.size())
     return 3;
@@ -495,7 +501,8 @@ int main() {{
   for (std::size_t index = 0; index < values.size(); ++index) {{
     const auto &value = values[index];
     if (value.sequence_id != index || value.opcode != input[index].opcode ||
-        value.remaining != 0)
+        value.waits_for != input[index].waits_for ||
+        value.cycles != input[index].cycles)
       return 4;
     if (value.value != architecturalValues[index])
       return 5;
@@ -506,7 +513,7 @@ int main() {{
     return 6;
   const std::array<std::uint8_t, 15> completionOrder{{
       {completion_order_text}}};
-  const auto &completed = model.observation_2_values();
+  const auto &completed = model.observation_0_values();
   if (completed.size() != completionOrder.size())
     return 7;
   for (std::size_t index = 0; index < completed.size(); ++index)

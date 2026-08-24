@@ -234,6 +234,35 @@ TEST(QueueGraphPlanTest, EmitsTypedReorderForBothBackends) {
   EXPECT_GE(std::count(pyc->begin(), pyc->end(), '\n'), 40);
 }
 
+TEST(QueueGraphPlanTest, EmitsTypedDependencyForBothBackends) {
+  QueueGraphPlan plan;
+  plan.system = "dependent";
+  plan.queues = {{"input", "i8", "/", 4, 1}, {"output", "i8", "/", 4, 1}};
+  plan.blocks.push_back({"source", "input", "/", {}, {"input"}, {4}, {1}});
+  QueueBlockPlan dependency{"dependency", "output", "/", {"input"},
+                            {"output"},   {4},      {1}};
+  dependency.expressions = {
+      {"v0", "constant", "i8", {}, "", "", "255 : i8"},
+      {"v1", "constant", "i8", {}, "", "", "1 : i8"},
+  };
+  dependency.yields = {"item", "v0", "v1"};
+  dependency.capacity = 4;
+  dependency.noDependency = 255;
+  plan.blocks.push_back(std::move(dependency));
+  plan.blocks.push_back({"sink", "sink_0", "/", {"output"}, {}});
+
+  auto cpp = generateQueueGraphCpp(plan);
+  ASSERT_TRUE(bool(cpp)) << llvm::toString(cpp.takeError());
+  EXPECT_NE(cpp->find("gfsim::QueueDependency<std::uint8_t"),
+            std::string::npos);
+  EXPECT_NE(cpp->find(", input_, output_, 4, 255)"), std::string::npos);
+
+  auto pyc = generateQueueGraphPyc(plan);
+  ASSERT_TRUE(bool(pyc)) << llvm::toString(pyc.takeError());
+  EXPECT_NE(pyc->find("pyc.reg"), std::string::npos);
+  EXPECT_NE(pyc->find("pyc.sub"), std::string::npos);
+}
+
 TEST(QueueGraphPlanTest, EmitsQueuePredicateAsPycComparison) {
   struct Case {
     llvm::StringLiteral predicate;

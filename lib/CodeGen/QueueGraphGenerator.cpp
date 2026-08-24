@@ -193,6 +193,10 @@ llvm::Expected<std::string> generateQueueGraphCpp(const QueueGraphPlan &plan) {
         (block.inputs.size() != 1 || block.outputs.size() != 1 ||
          block.yields.size() != 1 || block.capacity == 0))
       return generatorError("reorder contract is unsupported");
+    if (block.kind == "dependency" &&
+        (block.inputs.size() != 1 || block.outputs.size() != 1 ||
+         block.yields.size() != 3 || block.capacity == 0))
+      return generatorError("dependency contract is unsupported");
   }
 
   llvm::StringMap<std::string> queueMembers;
@@ -274,8 +278,43 @@ llvm::Expected<std::string> generateQueueGraphCpp(const QueueGraphPlan &plan) {
 
   for (auto [index, block] : llvm::enumerate(runtimeBlocks)) {
     if (block->kind != "transform" && block->kind != "route" &&
-        block->kind != "reorder" && block->kind != "feedback")
+        block->kind != "dependency" && block->kind != "reorder" &&
+        block->kind != "feedback")
       continue;
+    if (block->kind == "dependency") {
+      const QueuePlan *input = findQueue(plan, block->inputs.front());
+      if (!input)
+        return generatorError("dependency input Queue is missing");
+      auto inputType = cppType(input->payloadType);
+      if (!inputType)
+        return inputType.takeError();
+      constexpr llvm::StringLiteral policyNames[] = {"key", "dependency",
+                                                     "cost"};
+      for (auto [policyIndex, policyName] : llvm::enumerate(policyNames)) {
+        llvm::StringRef resultType = input->payloadType;
+        if (block->yields[policyIndex] != "item") {
+          auto expression = std::find_if(
+              block->expressions.begin(), block->expressions.end(),
+              [&](const QueueExpressionPlan &candidate) {
+                return candidate.result == block->yields[policyIndex];
+              });
+          if (expression == block->expressions.end())
+            return generatorError("dependency policy yield type is missing");
+          resultType = expression->type;
+        }
+        auto resultCppType = cppType(resultType);
+        if (!resultCppType)
+          return resultCppType.takeError();
+        output << "struct block_" << index << '_' << policyName.str()
+               << "_policy {\n  " << *resultCppType << " operator()(const "
+               << *inputType << " &item) const {\n";
+        auto body = emitExpressionBody(*block, block->yields[policyIndex], 4);
+        if (!body)
+          return body.takeError();
+        output << *body << "  }\n};\n\n";
+      }
+      continue;
+    }
     if (block->kind == "transform" &&
         (block->inputs.size() != 1 || block->outputs.size() != 1)) {
       if (block->inputs.empty() || block->outputs.empty() ||
@@ -516,6 +555,13 @@ llvm::Expected<std::string> generateQueueGraphCpp(const QueueGraphPlan &plan) {
                              queueMembers[block->outputs[0]] + ", " +
                              std::to_string(block->capacity) + ", " +
                              std::to_string(block->start) + ")");
+    } else if (block->kind == "dependency") {
+      initializers.push_back(member + "(\"" + block->name + "\", " +
+                             std::to_string(blockIds[key]) + ", " + *parent +
+                             ", " + queueMembers[block->inputs[0]] + ", " +
+                             queueMembers[block->outputs[0]] + ", " +
+                             std::to_string(block->capacity) + ", " +
+                             std::to_string(block->noDependency) + ")");
     } else if (block->kind == "feedback") {
       initializers.push_back(member + "(\"" + block->name + "\", " +
                              std::to_string(blockIds[key]) + ", " + *parent +
@@ -724,6 +770,16 @@ llvm::Expected<std::string> generateQueueGraphCpp(const QueueGraphPlan &plan) {
         return type.takeError();
       output << "  gfsim::QueueReorder<" << *type << ", block_" << index
              << "_policy> block_" << index << "_;\n";
+    } else if (block->kind == "dependency") {
+      const QueuePlan *input = findQueue(plan, block->inputs[0]);
+      auto type = input ? cppType(input->payloadType)
+                        : llvm::Expected<std::string>(
+                              generatorError("dependency input missing"));
+      if (!type)
+        return type.takeError();
+      output << "  gfsim::QueueDependency<" << *type << ", block_" << index
+             << "_key_policy, block_" << index << "_dependency_policy, block_"
+             << index << "_cost_policy> block_" << index << "_;\n";
     } else if (block->kind == "feedback") {
       const QueuePlan *input = findQueue(plan, block->inputs[0]);
       auto type = input ? cppType(input->payloadType)

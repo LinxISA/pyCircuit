@@ -210,6 +210,59 @@ LogicalResult ReorderOp::verify() {
   return success();
 }
 
+LogicalResult DependencyOp::verify() {
+  if (getInput().getType() != getOutput().getType())
+    return emitOpError("output queue must match input queue type");
+  if (getCapacity() <= 0 || getDepth() <= 0 || getLatency() <= 0)
+    return emitOpError("capacity, depth, and latency must be positive");
+  if (getNoDependency() < 0)
+    return emitOpError("no_dependency must be non-negative");
+
+  Type payload = cast<QueueType>(getInput().getType()).getElementType();
+  Type argumentType = VarType::get(getContext(), payload);
+  auto verifyPolicy = [&](Region &region,
+                          StringRef name) -> FailureOr<IntegerType> {
+    Block &block = region.front();
+    if (block.getNumArguments() != 1 ||
+        block.getArgument(0).getType() != argumentType) {
+      emitOpError() << name << " argument must match queue payload Var";
+      return failure();
+    }
+    for (Operation &operation : block.without_terminator())
+      if (!isMemoryEffectFree(&operation)) {
+        emitOpError() << name << " operation '" << operation.getName()
+                      << "' must be pure";
+        return failure();
+      }
+    auto yield = dyn_cast<DependencyYieldOp>(block.getTerminator());
+    if (!yield) {
+      emitOpError() << name << " must terminate with ac.dependency.yield";
+      return failure();
+    }
+    auto value = cast<VarType>(yield.getValue().getType()).getElementType();
+    auto integer = dyn_cast<IntegerType>(value);
+    if (!integer || integer.getWidth() > 64) {
+      emitOpError() << name
+                    << " must yield an integer Var with width at most 64";
+      return failure();
+    }
+    return integer;
+  };
+
+  FailureOr<IntegerType> key = verifyPolicy(getKey(), "key");
+  FailureOr<IntegerType> dependency = verifyPolicy(getWaitsFor(), "waits_for");
+  FailureOr<IntegerType> cost = verifyPolicy(getCost(), "cost");
+  if (failed(key) || failed(dependency) || failed(cost))
+    return failure();
+  if (*key != *dependency)
+    return emitOpError("key and waits_for must use the same integer Var type");
+  if (dependency->getWidth() < 64 &&
+      static_cast<uint64_t>(getNoDependency()) >=
+          (uint64_t{1} << dependency->getWidth()))
+    return emitOpError("no_dependency must fit dependency width");
+  return success();
+}
+
 LogicalResult FeedbackOp::verify() {
   if (getInput().getType() != getOutput().getType())
     return emitOpError("output queue must match input queue type");

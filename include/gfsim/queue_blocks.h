@@ -10,6 +10,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <limits>
 #include <map>
 #include <optional>
 #include <tuple>
@@ -232,6 +233,195 @@ private:
   std::map<uint64_t, T> entries_;
   std::optional<std::pair<uint64_t, T>> pendingInput_;
   std::optional<uint64_t> pendingOutputKey_;
+};
+
+template <typename T, typename Key, typename Dependency, typename Cost>
+  requires std::invocable<const Key &, const T &> &&
+           std::integral<std::invoke_result_t<const Key &, const T &>> &&
+           std::invocable<const Dependency &, const T &> &&
+           std::integral<std::invoke_result_t<const Dependency &, const T &>> &&
+           std::invocable<const Cost &, const T &> &&
+           std::integral<std::invoke_result_t<const Cost &, const T &>>
+class QueueDependency final : public SimObject {
+public:
+  static constexpr std::string_view contractName = "ac.dependency";
+  static constexpr ObjectKind componentKind = ObjectKind::Scheduler;
+
+  QueueDependency(std::string name, ObjectId id, SimObject *parent,
+                  SimQueue<T> &input, SimQueue<T> &output, size_t capacity,
+                  uint64_t noDependency, Key key = {},
+                  Dependency dependency = {}, Cost cost = {},
+                  ObservationSink *observations = nullptr)
+      : SimObject(componentKind, std::move(name), id, parent, observations),
+        input_(input), output_(output), capacity_(capacity),
+        noDependency_(noDependency), key_(std::move(key)),
+        dependency_(std::move(dependency)), cost_(std::move(cost)) {}
+
+  void doWork(Epoch epoch) override {
+    if (proposed_)
+      return;
+    if (entries_.size() < capacity_ && input_.canProposePop()) {
+      const T *head = input_.peek();
+      if (head != nullptr && !proposeInput(*head))
+        return;
+    }
+
+    const Entry *completed = nullptr;
+    for (const auto &[key, entry] : entries_)
+      if (entry.state == State::Done &&
+          (completed == nullptr || entry.ready < completed->ready ||
+           (entry.ready == completed->ready && key < completed->key)))
+        completed = &entry;
+    if (completed != nullptr && output_.canProposePush() &&
+        output_.proposePush(completed->value))
+      pendingOutputKey_ = completed->key;
+
+    for (const auto &[key, entry] : entries_) {
+      if (entry.state == State::Executing && entry.ready <= epoch)
+        pendingCompletions_.push_back(key);
+      else if (entry.state == State::Waiting && dependencyReady(entry))
+        pendingIssues_.push_back(key);
+    }
+    proposed_ = pendingInput_.has_value() || pendingOutputKey_.has_value() ||
+                !pendingIssues_.empty() || !pendingCompletions_.empty();
+  }
+
+  void doXfer(Epoch epoch) override {
+    if (!proposed_)
+      return;
+    if (pendingOutputKey_)
+      entries_.erase(*pendingOutputKey_);
+    for (uint64_t key : pendingCompletions_)
+      if (auto found = entries_.find(key); found != entries_.end())
+        found->second.state = State::Done;
+    for (uint64_t key : pendingIssues_)
+      if (auto found = entries_.find(key); found != entries_.end()) {
+        if (epoch.time >
+            std::numeric_limits<uint64_t>::max() - found->second.cost) {
+          setRuntimeFailureCode("dependency_time_overflow");
+          continue;
+        }
+        found->second.state = State::Executing;
+        found->second.ready = {epoch.time + found->second.cost, 0};
+      }
+    if (pendingInput_) {
+      Entry entry;
+      entry.key = pendingInput_->key;
+      entry.dependency = pendingInput_->dependency;
+      entry.cost = pendingInput_->cost;
+      entry.value = std::move(pendingInput_->value);
+      entries_.emplace(entry.key, std::move(entry));
+    }
+    pendingInput_.reset();
+    pendingOutputKey_.reset();
+    pendingIssues_.clear();
+    pendingCompletions_.clear();
+    proposed_ = false;
+  }
+  bool hasPendingCommit() const override { return proposed_; }
+  bool isRunnable(Epoch epoch) const override {
+    if (proposed_)
+      return false;
+    if (entries_.size() < capacity_ && input_.canProposePop())
+      return true;
+    for (const auto &[key, entry] : entries_) {
+      (void)key;
+      if ((entry.state == State::Done && output_.canProposePush()) ||
+          (entry.state == State::Executing && entry.ready <= epoch) ||
+          (entry.state == State::Waiting && dependencyReady(entry)))
+        return true;
+    }
+    return false;
+  }
+  size_t active() const { return entries_.size(); }
+  void reset() override {
+    entries_.clear();
+    pendingInput_.reset();
+    pendingOutputKey_.reset();
+    pendingIssues_.clear();
+    pendingCompletions_.clear();
+    proposed_ = false;
+    clearRuntimeFailureCode();
+  }
+
+private:
+  enum class State : uint8_t { Waiting, Executing, Done };
+  struct Entry {
+    uint64_t key = 0;
+    uint64_t dependency = 0;
+    uint64_t cost = 0;
+    T value{};
+    State state = State::Waiting;
+    Epoch ready{};
+  };
+  struct PendingInput {
+    uint64_t key = 0;
+    uint64_t dependency = 0;
+    uint64_t cost = 0;
+    T value;
+  };
+
+  bool dependencyReady(const Entry &entry) const {
+    if (entry.dependency == noDependency_)
+      return true;
+    auto found = entries_.find(entry.dependency);
+    return found != entries_.end() && found->second.state == State::Done;
+  }
+  bool proposeInput(const T &value) {
+    using KeyResult = std::invoke_result_t<const Key &, const T &>;
+    using DependencyResult =
+        std::invoke_result_t<const Dependency &, const T &>;
+    using CostResult = std::invoke_result_t<const Cost &, const T &>;
+    const KeyResult rawKey = std::invoke(std::as_const(key_), value);
+    const DependencyResult rawDependency =
+        std::invoke(std::as_const(dependency_), value);
+    const CostResult rawCost = std::invoke(std::as_const(cost_), value);
+    if constexpr (std::signed_integral<KeyResult>)
+      if (rawKey < 0) {
+        setRuntimeFailureCode("dependency_negative_key");
+        return false;
+      }
+    if constexpr (std::signed_integral<DependencyResult>)
+      if (rawDependency < 0) {
+        setRuntimeFailureCode("dependency_negative_predecessor");
+        return false;
+      }
+    if constexpr (std::signed_integral<CostResult>)
+      if (rawCost <= 0) {
+        setRuntimeFailureCode("dependency_nonpositive_cost");
+        return false;
+      }
+    if constexpr (std::unsigned_integral<CostResult>)
+      if (rawCost == 0) {
+        setRuntimeFailureCode("dependency_nonpositive_cost");
+        return false;
+      }
+    const uint64_t key = static_cast<uint64_t>(rawKey);
+    const uint64_t predecessor = static_cast<uint64_t>(rawDependency);
+    const uint64_t cost = static_cast<uint64_t>(rawCost);
+    if (entries_.contains(key)) {
+      setRuntimeFailureCode("dependency_duplicate_key");
+      return false;
+    }
+    if (!input_.proposePop())
+      return true;
+    pendingInput_ = PendingInput{key, predecessor, cost, value};
+    return true;
+  }
+
+  SimQueue<T> &input_;
+  SimQueue<T> &output_;
+  size_t capacity_;
+  uint64_t noDependency_;
+  [[no_unique_address]] Key key_;
+  [[no_unique_address]] Dependency dependency_;
+  [[no_unique_address]] Cost cost_;
+  std::map<uint64_t, Entry> entries_;
+  std::optional<PendingInput> pendingInput_;
+  std::optional<uint64_t> pendingOutputKey_;
+  std::vector<uint64_t> pendingIssues_;
+  std::vector<uint64_t> pendingCompletions_;
+  bool proposed_ = false;
 };
 
 template <typename T> class QueueSink final : public SimObject {

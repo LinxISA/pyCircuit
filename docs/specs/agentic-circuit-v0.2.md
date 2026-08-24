@@ -343,6 +343,30 @@ Supported policies are:
 
 The output Queue applies ordinary capacity and latency rules.
 
+### Dependency scheduling
+
+`depend` is the generic bounded dependency window. It admits typed tokens,
+starts a token when its predecessor is complete, counts its declared execution
+cost, and emits tokens in completion order.
+
+```python
+completed = issued.depend(
+    key=lambda item: item.sequence_id,
+    waits_for=lambda item: item.waits_for,
+    cost=lambda item: item.cycles,
+    capacity=8,
+    no_dependency=255,
+    depth=8,
+    latency=1,
+)
+```
+
+The three lambdas are pure Var regions. `key` and `waits_for` MUST return the
+same integer Var type, no wider than 64 bits. `no_dependency` MUST fit that
+type. `cost` MUST return a positive integer at runtime. Dependencies refer to
+tokens retained in the bounded window; a missing predecessor blocks the token
+and can participate in deadlock diagnostics.
+
 ### Reorder
 
 `reorder` accepts out-of-order completions and releases them in monotonically
@@ -543,6 +567,7 @@ has both a typed gfsim realization and a PYC realization.
 | `ac.fork` | design | one to two or more | output depths and latencies | decoupled exactly-once fanout |
 | `ac.route` | design | one to two or more | output depths and latencies | selector-controlled demultiplexing |
 | `ac.merge` | design | two or more to one | `policy`, `depth`, `latency` | priority or round-robin arbitration |
+| `ac.dependency` | design | one to one | `capacity`, `no_dependency`, `depth`, `latency` | bounded predecessor tracking and execution countdown |
 | `ac.reorder` | design | one to one | `capacity`, `start`, `depth`, `latency` | bounded key-ordered retirement |
 | `ac.feedback` | design | one to one | `depth`, `latency`, `max_iterations` | bounded stateful loop |
 | `ac.scope` | design | variadic to variadic | symbol name | hierarchy boundary; PYC elaboration flattens it |
@@ -991,15 +1016,15 @@ The following v0.2 slices are implemented and tested:
 - immutable scalar and structure payloads;
 - Queue/Var types and pure Var expressions;
 - scopes with inferred Queue boundaries;
-- transform, strict broadcast, decoupled fork, route, merge, reorder, observe,
-  sink, explicit atomic transform, and bounded feedback;
+- transform, strict broadcast, decoupled fork, route, merge, dependency,
+  reorder, observe, sink, explicit atomic transform, and bounded feedback;
 - static arrays, maps, sets, static `if`, static loops, and symmetric runtime
   Queue `if` lowering through route/transform/merge;
 - canonical QueueGraph extraction;
 - typed gfsim C++ generation;
-- PYC/Verilog lowering for transform, broadcast, fork, route, merge, reorder,
-  bounded feedback, elaboration-time scope flattening, packed structures,
-  atomic handshakes, and exact Queue latency;
+- PYC/Verilog lowering for transform, broadcast, fork, route, merge,
+  dependency, reorder, bounded feedback, elaboration-time scope flattening,
+  packed structures, atomic handshakes, and exact Queue latency;
 - PYC C++ versus Verilog cycle equivalence and gfsim/PYC projected transaction
   comparison.
 
@@ -1008,7 +1033,7 @@ The following work remains before v0.2 is complete:
 - finish lowercase component naming and removal of the remaining provider
   surfaces after the epoch and `ac.std.*` hard break;
 - freeze the remaining common building-block inventory for state, memory,
-  scheduling, reservation, credits, and barriers;
+  resource reservation, credits, and barriers;
 - preserve explicit signedness semantics beyond integer width;
 - lower the remaining state, memory, and resource blocks through PYC;
 - complete the DavinciOO functional and performance refinement contract;
@@ -1020,9 +1045,11 @@ The checked-in DavinciOO-like model now proves topology, typed payloads, finite
 Queues, backpressure, deterministic C++ generation, the 15-record softmax
 opcode/completion/retirement projection, and the 453-cycle bounded oracle. The
 same frozen ACIR produces PYC C++ and Verilog with cycle-identical hardware
-observations and the same projected output transactions. Dependency-wait time
-is currently carried as an explicit per-token feedback budget; internal
-rename/issue/ROB occupancy equivalence remains a future refinement layer.
+observations and the same projected output transactions. Dependency readiness
+and execution countdown are now explicit `ac.dependency` state. The projection
+retains only a fixed 5-cycle ingress and 4-cycle drain compensation for the
+different model boundaries; internal resource reservation and issue/ROB
+occupancy equivalence remain future refinement layers.
 
 ## Contributor checklist
 
