@@ -45,6 +45,8 @@ operations:
   - ac.record.with
   - ac.packet.serialize
   - ac.packet.deserialize
+  - ac.transform
+  - ac.transform.yield
   - ac.try_send
   - ac.try_recv
   - ac.schedule

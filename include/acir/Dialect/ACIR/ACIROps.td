@@ -87,6 +87,26 @@ def ACIR_PacketDeserializeOp : ACIR_Op<"packet.deserialize", [Pure]> {
   let hasVerifier = 1;
 }
 
+def ACIR_TransformOp : ACIR_Op<"transform", [SingleBlock]> {
+  let arguments = (ins Variadic<ACIR_QueueType>:$inputs,
+                       DenseI64ArrayAttr:$output_depths,
+                       DenseI64ArrayAttr:$output_latencies);
+  let results = (outs Variadic<ACIR_QueueType>:$outputs);
+  let regions = (region SizedRegion<1>:$body);
+  let hasVerifier = 1;
+  let assemblyFormat = [{
+    $inputs `depths` $output_depths `latencies` $output_latencies
+    $body attr-dict `:` functional-type($inputs, $outputs)
+  }];
+}
+
+def ACIR_TransformYieldOp : ACIR_Op<"transform.yield", [
+    Pure, Terminator, HasParent<"TransformOp">
+  ]> {
+  let arguments = (ins Variadic<ACIR_VarType>:$values);
+  let assemblyFormat = "attr-dict ($values^ `:` type($values))?";
+}
+
 def ACIR_InterfaceOp : ACIR_Op<"interface", [
     Symbol, SymbolTable, SingleBlock, NoTerminator, IsolatedFromAbove,
     RegionKindInterface, HasOnlyGraphRegion, ACIR_InterfaceContainer

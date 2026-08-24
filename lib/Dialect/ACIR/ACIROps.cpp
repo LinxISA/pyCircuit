@@ -30,6 +30,59 @@ thread_local detail::ProcessLivenessWork *processLivenessWorkCollector =
 
 } // namespace
 
+LogicalResult TransformOp::verify() {
+  if (getInputs().empty())
+    return emitOpError("requires at least one input queue");
+  if (getOutputs().empty())
+    return emitOpError("requires at least one output queue");
+
+  ArrayRef<int64_t> depths = getOutputDepthsAttr().asArrayRef();
+  ArrayRef<int64_t> latencies = getOutputLatenciesAttr().asArrayRef();
+  if (depths.size() != getOutputs().size())
+    return emitOpError("output depth count must match result count");
+  if (latencies.size() != getOutputs().size())
+    return emitOpError("output latency count must match result count");
+  if (llvm::any_of(depths, [](int64_t value) { return value <= 0; }))
+    return emitOpError("output depths must be positive");
+  if (llvm::any_of(latencies, [](int64_t value) { return value <= 0; }))
+    return emitOpError("output latencies must be positive");
+
+  Block &block = getBody().front();
+  if (block.getNumArguments() != getInputs().size())
+    return emitOpError("body argument count must match input queue count");
+  for (size_t index = 0; index < getInputs().size(); ++index) {
+    Value input = getInputs()[index];
+    BlockArgument argument = block.getArgument(index);
+    auto queue = cast<QueueType>(input.getType());
+    Type expected = VarType::get(getContext(), queue.getElementType());
+    if (argument.getType() != expected)
+      return emitOpError() << "body argument " << index << " must be "
+                           << expected;
+  }
+
+  for (Operation &operation : block.without_terminator()) {
+    if (!isMemoryEffectFree(&operation))
+      return emitOpError() << "body operation '" << operation.getName()
+                           << "' must be pure";
+  }
+
+  auto yield = dyn_cast<TransformYieldOp>(block.getTerminator());
+  if (!yield)
+    return emitOpError("body must terminate with ac.transform.yield");
+  if (yield.getValues().size() != getOutputs().size())
+    return emitOpError("yielded value count must match output queue count");
+  for (size_t index = 0; index < getOutputs().size(); ++index) {
+    Value output = getOutputs()[index];
+    Value value = yield.getValues()[index];
+    auto queue = cast<QueueType>(output.getType());
+    Type expected = VarType::get(getContext(), queue.getElementType());
+    if (value.getType() != expected)
+      return emitOpError() << "yielded value " << index << " must be "
+                           << expected;
+  }
+  return success();
+}
+
 namespace detail {
 
 ScopedProcessLivenessWorkCollector::ScopedProcessLivenessWorkCollector(
