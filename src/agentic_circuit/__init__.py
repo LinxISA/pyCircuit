@@ -46,6 +46,8 @@ __all__ = (
     "Static",
     "Flow",
     "Endpoint",
+    "source",
+    "sink",
 )
 
 
@@ -69,3 +71,11 @@ def instances(*values: object) -> Never:
 
 def view(value: object, *selectors: object) -> Never:
     return _not_implemented("view")
+
+
+def source(payload: object, *, depth: int = 1, latency: int = 1) -> Never:
+    return _not_implemented("source")
+
+
+def sink(value: object) -> Never:
+    return _not_implemented("sink")

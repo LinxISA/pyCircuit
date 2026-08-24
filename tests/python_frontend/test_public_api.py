@@ -27,6 +27,8 @@ PUBLIC = {
     "Static",
     "Flow",
     "Endpoint",
+    "source",
+    "sink",
 }
 
 
@@ -99,6 +101,8 @@ class PublicApiTest(unittest.TestCase):
             lambda: api.array(1, 2),
             lambda: api.instances(1, 2),
             lambda: api.view(object(), "field"),
+            lambda: api.source(int),
+            lambda: api.sink(object()),
         )
         for operation in operations:
             with self.subTest(operation=operation):
