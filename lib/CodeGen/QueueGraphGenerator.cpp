@@ -52,6 +52,34 @@ std::string className(llvm::StringRef value) {
   return result;
 }
 
+std::string cppStringLiteral(llvm::StringRef value) {
+  std::string result = "\"";
+  for (char character : value) {
+    switch (character) {
+    case '\\':
+      result.append("\\\\");
+      break;
+    case '"':
+      result.append("\\\"");
+      break;
+    case '\n':
+      result.append("\\n");
+      break;
+    case '\r':
+      result.append("\\r");
+      break;
+    case '\t':
+      result.append("\\t");
+      break;
+    default:
+      result.push_back(character);
+      break;
+    }
+  }
+  result.push_back('"');
+  return result;
+}
+
 llvm::Expected<std::string> cppType(llvm::StringRef type) {
   if (type.starts_with('i')) {
     unsigned width = 0;
@@ -212,6 +240,10 @@ llvm::Expected<std::string> generateQueueGraphCpp(const QueueGraphPlan &plan) {
         (block.inputs.size() < 3 || block.outputs.size() != 1 ||
          block.yields.size() != 1))
       return generatorError("select contract is unsupported");
+    if (block.kind == "expect" &&
+        (block.inputs.size() != 1 || !block.outputs.empty() ||
+         block.yields.size() != 1 || block.message.empty()))
+      return generatorError("expect contract is unsupported");
     if (block.kind == "memory" &&
         (block.inputs.size() != 1 || block.outputs.size() != 1 ||
          block.yields.size() != 3 || block.entries == 0 || block.init != 0 ||
@@ -300,9 +332,10 @@ llvm::Expected<std::string> generateQueueGraphCpp(const QueueGraphPlan &plan) {
 
   for (auto [index, block] : llvm::enumerate(runtimeBlocks)) {
     if (block->kind != "transform" && block->kind != "route" &&
-        block->kind != "select" && block->kind != "dependency" &&
-        block->kind != "credit" && block->kind != "memory" &&
-        block->kind != "reorder" && block->kind != "feedback")
+        block->kind != "select" && block->kind != "expect" &&
+        block->kind != "dependency" && block->kind != "credit" &&
+        block->kind != "memory" && block->kind != "reorder" &&
+        block->kind != "feedback")
       continue;
     if (block->kind == "dependency") {
       const QueuePlan *input = findQueue(plan, block->inputs.front());
@@ -443,6 +476,8 @@ llvm::Expected<std::string> generateQueueGraphCpp(const QueueGraphPlan &plan) {
     output << "struct " << policy << " {\n  ";
     if (block->kind == "route" || block->kind == "select")
       output << "size_t";
+    else if (block->kind == "expect")
+      output << "bool";
     else if (block->kind == "reorder" || block->kind == "credit") {
       llvm::StringRef keyType = input->payloadType;
       if (block->yields.front() != "item") {
@@ -680,6 +715,11 @@ llvm::Expected<std::string> generateQueueGraphCpp(const QueueGraphPlan &plan) {
                              ", block_" + std::to_string(index) + "_state_, " +
                              queueMembers[block->outputs[0]] + ", " +
                              std::to_string(block->maxIterations) + ")");
+    } else if (block->kind == "expect") {
+      initializers.push_back(member + "(\"" + instanceName + "\", " +
+                             std::to_string(blockIds[key]) + ", " + *parent +
+                             ", " + queueMembers[block->inputs[0]] + ", " +
+                             cppStringLiteral(block->message) + ")");
     } else if (block->kind == "sink" || block->kind == "observe") {
       initializers.push_back(member + "(\"" + instanceName + "\", " +
                              std::to_string(blockIds[key]) + ", " + *parent +
@@ -962,6 +1002,15 @@ llvm::Expected<std::string> generateQueueGraphCpp(const QueueGraphPlan &plan) {
       output << "  gfsim::QueueFeedback<" << *type << ", block_" << index
              << "_update_policy, block_" << index << "_condition_policy> block_"
              << index << "_;\n";
+    } else if (block->kind == "expect") {
+      const QueuePlan *input = findQueue(plan, block->inputs[0]);
+      auto type = input ? cppType(input->payloadType)
+                        : llvm::Expected<std::string>(
+                              generatorError("expect input missing"));
+      if (!type)
+        return type.takeError();
+      output << "  gfsim::QueueExpect<" << *type << ", block_" << index
+             << "_policy> block_" << index << "_;\n";
     } else if (block->kind == "sink" || block->kind == "observe") {
       const QueuePlan *input = findQueue(plan, block->inputs[0]);
       auto type = input ? cppType(input->payloadType)

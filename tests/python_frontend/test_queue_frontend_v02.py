@@ -431,8 +431,41 @@ def pipeline() -> None:
     ac.sink(outgoing)
 """
 
+EXPECT_SOURCE = """
+import agentic_circuit as ac
+
+@ac.struct
+class ExpectedItem:
+    value: ac.u16
+
+@ac.system
+def pipeline() -> None:
+    incoming = ac.source(ExpectedItem)
+    ac.expect(
+        incoming,
+        predicate=lambda item: item.value > 0,
+        message="value must be positive",
+    )
+    ac.sink(incoming)
+"""
+
 
 class QueueFrontendV02Test(unittest.TestCase):
+    def test_verification_expect_is_non_consuming_and_role_explicit(self) -> None:
+        from agentic_circuit._queue_frontend import (
+            QueueFrontendError,
+            lower_queue_source,
+        )
+
+        lowered = lower_queue_source(EXPECT_SOURCE, "pipeline")
+        self.assertIn("ac.expect %incoming message", lowered)
+        self.assertIn("ac.expect.yield", lowered)
+        self.assertIn("ac.sink %incoming", lowered)
+        with self.assertRaisesRegex(QueueFrontendError, "predicate must lower to bool"):
+            lower_queue_source(
+                EXPECT_SOURCE.replace("item.value > 0", "item.value"), "pipeline"
+            )
+
     def test_compile_time_recursion_expands_to_frozen_queue_chain(self) -> None:
         from agentic_circuit._queue_frontend import (
             QueueFrontendError,

@@ -463,6 +463,10 @@ llvm::Expected<std::string> generateQueueGraphPyc(const QueueGraphPlan &plan) {
   llvm::StringMap<const QueueBlockPlan *> feedbackByOutput;
   for (const QueueBlockPlan &block : plan.blocks) {
     const QueueBlockContract *contract = findQueueBlockContract(block.kind);
+    if (contract && contract->role == "verification")
+      return pycError("verification-only opcode '" + contract->operation +
+                      "' cannot appear in a design hierarchy; place it at "
+                      "the PYC testbench boundary");
     if (!contract || !contract->pycAvailable)
       return pycError("official opcode has no PYC lowering: '" + block.kind +
                       "'");

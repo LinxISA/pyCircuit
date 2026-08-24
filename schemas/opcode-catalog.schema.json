@@ -70,7 +70,7 @@
         },
         "constants": {"$ref": "#/$defs/nameList"},
         "effect": {
-          "enum": ["atomic", "observation", "stateful", "structural"]
+          "enum": ["atomic", "observation", "stateful", "structural", "verification"]
         },
         "gfsim": {"$ref": "#/$defs/backend"},
         "inputs": {"$ref": "#/$defs/arity"},

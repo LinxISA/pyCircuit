@@ -8,6 +8,7 @@
 // CHECK-SAME: "operation":"ac{{\.}}broadcast"
 // CHECK-SAME: "operation":"ac{{\.}}credit"
 // CHECK-SAME: "operation":"ac{{\.}}dependency"
+// CHECK-SAME: "operation":"ac{{\.}}expect"
 // CHECK-SAME: "operation":"ac{{\.}}feedback"
 // CHECK-SAME: "operation":"ac{{\.}}fork"
 // CHECK-SAME: "operation":"ac{{\.}}memory"

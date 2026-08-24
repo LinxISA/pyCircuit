@@ -59,6 +59,7 @@ struct QueueBlockPlan {
   uint64_t entries = 0;
   uint64_t init = 0;
   std::string resultField;
+  std::string message;
 };
 
 struct QueueGraphPlan {

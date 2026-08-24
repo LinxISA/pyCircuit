@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ast
 import copy
+import json
 from dataclasses import dataclass
 
 
@@ -63,6 +64,16 @@ class SinkBinding:
 class ObservationBinding:
     queue: str
     name: str
+    scope: tuple[str, ...]
+    order: int
+
+
+@dataclass(frozen=True, slots=True)
+class ExpectBinding:
+    queue: str
+    argument: str
+    predicate: ast.expr
+    message: str
     scope: tuple[str, ...]
     order: int
 
@@ -250,6 +261,7 @@ class QueueProgram:
     atomics: tuple[AtomicBinding, ...]
     collections: tuple[CollectionBinding, ...]
     observations: tuple[ObservationBinding, ...]
+    expectations: tuple[ExpectBinding, ...]
     sinks: tuple[SinkBinding, ...]
 
 
@@ -557,6 +569,7 @@ def parse_queue_program(text: str, system: str) -> QueueProgram:
     atomics: list[AtomicBinding] = []
     sinks: list[SinkBinding] = []
     observations: list[ObservationBinding] = []
+    expectations: list[ExpectBinding] = []
     by_name: dict[str, QueueBinding] = {}
     collections: dict[str, StaticQueueCollection] = {}
     collection_bindings: list[CollectionBinding] = []
@@ -989,6 +1002,7 @@ def parse_queue_program(text: str, system: str) -> QueueProgram:
                     feedback_start = len(feedbacks)
                     sink_start = len(sinks)
                     observation_start = len(observations)
+                    expectation_start = len(expectations)
                     visit(statement.body, scope_path, aliases, group)
                     created = queues[queue_start:]
                     if (
@@ -1007,6 +1021,7 @@ def parse_queue_program(text: str, system: str) -> QueueProgram:
                         or len(feedbacks) != feedback_start
                         or len(sinks) != sink_start
                         or len(observations) != observation_start
+                        or len(expectations) != expectation_start
                     ):
                         raise QueueFrontendError(
                             "ACPY-QUEUE-009: atomic requires at least two direct "
@@ -1999,6 +2014,55 @@ def parse_queue_program(text: str, system: str) -> QueueProgram:
             if (
                 isinstance(statement, ast.Expr)
                 and isinstance(statement.value, ast.Call)
+                and call_name(statement.value) == "expect"
+                and len(statement.value.args) == 1
+            ):
+                call = statement.value
+                if any(
+                    keyword.arg is None
+                    or keyword.arg not in {"predicate", "message"}
+                    for keyword in call.keywords
+                ):
+                    raise QueueFrontendError(
+                        "ACPY-QUEUE-021: expect has an unsupported keyword"
+                    )
+                predicates = [
+                    keyword.value
+                    for keyword in call.keywords
+                    if keyword.arg == "predicate"
+                ]
+                messages = [
+                    keyword.value
+                    for keyword in call.keywords
+                    if keyword.arg == "message"
+                ]
+                if len(predicates) != 1 or len(messages) != 1:
+                    raise QueueFrontendError(
+                        "ACPY-QUEUE-021: expect requires predicate and message"
+                    )
+                if (
+                    not isinstance(messages[0], ast.Constant)
+                    or type(messages[0].value) is not str
+                    or not messages[0].value
+                ):
+                    raise QueueFrontendError(
+                        "ACPY-QUEUE-021: expect message must be a static string"
+                    )
+                argument, predicate = _lambda(predicates[0])
+                expectations.append(
+                    ExpectBinding(
+                        queue_reference(call.args[0], aliases),
+                        argument,
+                        predicate,
+                        messages[0].value,
+                        scope_path,
+                        current_order,
+                    )
+                )
+                continue
+            if (
+                isinstance(statement, ast.Expr)
+                and isinstance(statement.value, ast.Call)
                 and call_name(statement.value) == "observe"
                 and len(statement.value.args) == 1
             ):
@@ -2047,6 +2111,7 @@ def parse_queue_program(text: str, system: str) -> QueueProgram:
         tuple(atomics),
         tuple(collection_bindings),
         tuple(observations),
+        tuple(expectations),
         tuple(sinks),
     )
 
@@ -2326,6 +2391,8 @@ def lower_queue_program(program: QueueProgram) -> str:
         uses[sink_binding.queue].append(sink_binding.scope)
     for observation in program.observations:
         uses[observation.queue].append(observation.scope)
+    for expectation in program.expectations:
+        uses[expectation.queue].append(expectation.scope)
     for route in program.routes:
         uses[route.input_name].append(route.scope)
     for fork in program.forks:
@@ -2511,6 +2578,11 @@ def lower_queue_program(program: QueueProgram) -> str:
             (observation.order, "observe", observation)
             for observation in program.observations
             if observation.scope == path
+        )
+        events.extend(
+            (expectation.order, "expect", expectation)
+            for expectation in program.expectations
+            if expectation.scope == path
         )
         events.extend(
             (sink_binding.order, "sink", sink_binding)
@@ -2969,6 +3041,33 @@ def lower_queue_program(program: QueueProgram) -> str:
                     f"({input_types}) -> !ac.queue<{payload}>"
                 )
                 mapping[merge.output] = output
+            elif kind == "expect":
+                expectation = item
+                assert isinstance(expectation, ExpectBinding)
+                queue = by_name[expectation.queue]
+                emitter = _ExpressionEmitter(
+                    payloads, expectation.argument, queue.payload
+                )
+                condition, condition_type = emitter.emit(expectation.predicate)
+                if condition_type != "i1":
+                    raise QueueFrontendError(
+                        "ACPY-QUEUE-021: expect predicate must lower to bool"
+                    )
+                lines.append(
+                    f"{indent}ac.expect %{mapping[expectation.queue]} message "
+                    f"{json.dumps(expectation.message)} {{"
+                )
+                lines.append(
+                    f"{indent}^predicate(%item: !ac.var<{queue.payload}>):"
+                )
+                lines.extend(indent + line[2:] for line in emitter.lines)
+                lines.append(
+                    f"{indent}  ac.expect.yield %{condition} : !ac.var<i1>"
+                )
+                lines.append(
+                    f'{indent}}} {{ac.name = "expect_{expectation.order}"}} : '
+                    f"!ac.queue<{queue.payload}>"
+                )
             elif kind == "observe":
                 observation = item
                 assert isinstance(observation, ObservationBinding)

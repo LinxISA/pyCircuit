@@ -493,6 +493,33 @@ TEST(QueueGraphPlanTest, ObservationDoesNotConsumeQueue) {
   EXPECT_EQ(plan->blocks[1].kind, "observe");
 }
 
+TEST(QueueGraphPlanTest, VerificationLeafRunsInGfsimAndRejectsPycDesign) {
+  QueueGraphPlan plan;
+  plan.system = "verified";
+  plan.queues = {{"input", "i8", "/", 1, 1}};
+  plan.blocks.push_back({"source", "input", "/", {}, {"input"}, {1}, {1}});
+  QueueBlockPlan expect{"expect", "expect_1", "/", {"input"}, {}};
+  expect.expressions = {
+      {"v0", "constant", "i8", {}, "", "", "0 : i8"},
+      {"v1", "cmp", "i1", {"item", "v0"}, "", "sgt", ""},
+  };
+  expect.yields = {"v1"};
+  expect.message = "positive";
+  plan.blocks.push_back(std::move(expect));
+  plan.blocks.push_back({"sink", "sink_0", "/", {"input"}, {}});
+
+  auto cpp = generateQueueGraphCpp(plan);
+  ASSERT_TRUE(bool(cpp)) << llvm::toString(cpp.takeError());
+  EXPECT_NE(cpp->find("gfsim::QueueExpect<std::uint8_t, block_0_policy>"),
+            std::string::npos);
+
+  auto pyc = generateQueueGraphPyc(plan);
+  ASSERT_FALSE(bool(pyc));
+  EXPECT_NE(llvm::toString(pyc.takeError())
+                .find("cannot appear in a design hierarchy"),
+            std::string::npos);
+}
+
 TEST(QueueGraphPlanTest, RejectsMalformedPycFeedbackContract) {
   QueueGraphPlan plan;
   plan.system = "bad_feedback";

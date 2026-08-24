@@ -57,6 +57,8 @@ operations:
   - ac.source
   - ac.sink
   - ac.observe
+  - ac.expect
+  - ac.expect.yield
   - ac.broadcast
   - ac.fork
   - ac.route

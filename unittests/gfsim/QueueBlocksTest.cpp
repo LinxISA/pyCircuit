@@ -514,6 +514,32 @@ TEST(QueueBlocksTest, ObserveCommitsWithoutConsumingOrBackpressure) {
   EXPECT_EQ(input.committedSize(), 1u);
 }
 
+TEST(QueueBlocksTest, ExpectChecksHeadWithoutConsumingIt) {
+  SimQueue<int> input("input", 1, nullptr, 2);
+  QueueExpect<int, Positive> expect("expect", 2, nullptr, input,
+                                    "must be positive");
+  ASSERT_TRUE(input.proposePush(7));
+  input.doXfer({0, 0});
+  expect.doWork({1, 0});
+  EXPECT_TRUE(expect.hasPendingCommit());
+  expect.doXfer({1, 0});
+  EXPECT_EQ(input.committedSize(), 1u);
+  EXPECT_TRUE(expect.runtimeFailureCode().empty());
+  EXPECT_EQ(expect.message(), "must be positive");
+}
+
+TEST(QueueBlocksTest, ExpectReportsPredicateFailure) {
+  SimQueue<int> input("input", 1, nullptr, 1);
+  QueueExpect<int, Positive> expect("expect", 2, nullptr, input,
+                                    "must be positive");
+  ASSERT_TRUE(input.proposePush(-1));
+  input.doXfer({0, 0});
+  expect.doWork({1, 0});
+  EXPECT_EQ(expect.runtimeFailureCode(), "expectation_failed");
+  EXPECT_FALSE(expect.hasPendingCommit());
+  EXPECT_EQ(input.committedSize(), 1u);
+}
+
 TEST(QueueBlocksTest, BroadcastWaitsForEveryOutput) {
   SimQueue<int> input("input", 1, nullptr, 1);
   SimQueue<int> left("left", 2, nullptr, 1);

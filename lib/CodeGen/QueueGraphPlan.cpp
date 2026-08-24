@@ -182,6 +182,8 @@ llvm::Error extractExpressions(mlir::Region &region, QueueBlockPlan &plan) {
       yielded.push_back(yield.getCost());
     else if (auto yield = mlir::dyn_cast<ac::MemoryYieldOp>(operation))
       yielded.push_back(yield.getValue());
+    else if (auto yield = mlir::dyn_cast<ac::ExpectYieldOp>(operation))
+      yielded.push_back(yield.getCondition());
     else if (auto yield = mlir::dyn_cast<ac::FeedbackYieldOp>(operation)) {
       yielded.push_back(yield.getValue());
       yielded.push_back(yield.getContinueValue());
@@ -640,6 +642,23 @@ private:
                                {}});
         continue;
       }
+      auto expect = mlir::dyn_cast<ac::ExpectOp>(operation);
+      if (expect) {
+        auto input = queueName(expect.getInput(), names);
+        if (!input)
+          return input.takeError();
+        auto name = expect->getAttrOfType<mlir::StringAttr>("ac.name");
+        if (!name || name.getValue().empty())
+          return planError("expect requires frozen ac.name");
+        QueueBlockPlan blockPlan{
+            "expect", name.getValue().str(), scopePath(scope), {*input}, {}};
+        blockPlan.message = expect.getMessage().str();
+        blockPlan.region = printRegion(expect.getPredicate());
+        if (auto error = extractExpressions(expect.getPredicate(), blockPlan))
+          return error;
+        plan.blocks.push_back(std::move(blockPlan));
+        continue;
+      }
       if (mlir::isa<ac::ScopeYieldOp>(operation) ||
           operation.hasTrait<mlir::OpTrait::IsTerminator>() ||
           mlir::isa<ac::TypeScopeOp>(operation))
@@ -692,7 +711,7 @@ llvm::Error verifyQueueGraphPlan(const QueueGraphPlan &plan) {
                          "'");
       ++producers[output];
     }
-    if (block.kind != "observe")
+    if (block.kind != "observe" && block.kind != "expect")
       for (const std::string &input : block.inputs)
         ++consumers[input];
     for (const std::string &input : block.inputs)
@@ -796,6 +815,7 @@ llvm::Expected<std::string> QueueGraphPlan::canonicalJson() const {
                            {"kind", block.kind},
                            {"latencies", std::move(latencies)},
                            {"max_iterations", block.maxIterations},
+                           {"message", block.message},
                            {"name", block.name},
                            {"no_dependency", block.noDependency},
                            {"outputs", std::move(outputs)},

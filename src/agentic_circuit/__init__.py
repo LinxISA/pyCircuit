@@ -53,6 +53,8 @@ __all__ = (
     "process",
     "scope",
     "array",
+    "map",
+    "set",
     "instances",
     "view",
     "queue",
@@ -65,6 +67,7 @@ __all__ = (
     "source",
     "sink",
     "observe",
+    "expect",
     "atomic",
     "u1",
     "u2",
@@ -94,6 +97,14 @@ def array(*values: object) -> Never:
     return _not_implemented("array")
 
 
+def map(*values: object) -> Never:
+    return _not_implemented("map")
+
+
+def set(*values: object) -> Never:
+    return _not_implemented("set")
+
+
 def instances(*values: object) -> Never:
     return _not_implemented("instances")
 
@@ -112,6 +123,10 @@ def sink(value: object) -> Never:
 
 def observe(value: object) -> Never:
     return _not_implemented("observe")
+
+
+def expect(value: object, *, predicate: object, message: str) -> Never:
+    return _not_implemented("expect")
 
 
 def atomic() -> Never:

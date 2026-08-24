@@ -499,6 +499,26 @@ An observation-only use does not cause broadcast insertion. Observations may
 record a new head when the token or committed pop count changes, but MUST NOT
 alter functional state.
 
+### Verification expectation
+
+`ac.expect` is a non-consuming verification leaf for gfsim and PYC testbench
+boundaries.
+
+```python
+ac.expect(
+    completed,
+    predicate=lambda item: item.value > 0,
+    message="value must be positive",
+)
+```
+
+The predicate MUST be pure and return bool. gfsim evaluates each new committed
+head and reports `expectation_failed` without consuming or backpressuring the
+Queue. `ac.expect` is verification-role, not design-role: PYC design emission
+rejects it with an explicit instruction to place the check at the testbench
+boundary. `ac.observe` remains observation-role and may enter design lowering
+because it cannot change functional state.
+
 ### Atomic group
 
 Each ordinary `apply` is an atomic input-pop/output-push firing. Use
@@ -731,14 +751,16 @@ or another supported static collection with a valid fixed shape.
 
 ### Implemented common building blocks
 
-The official graph-level catalog contains exactly these operations. Every entry
-has both a typed gfsim realization and a PYC realization.
+The official graph-level catalog contains exactly these operations. Every
+design entry has both a typed gfsim realization and a PYC realization;
+verification entries declare their permitted boundary explicitly.
 
 | Operation | Role | Queue arity | Static parameters | Core behavior |
 | --- | --- | --- | --- | --- |
 | `ac.source` | design | none to one | `depth`, `latency` | boundary producer |
 | `ac.sink` | design | one to none | none | consuming boundary |
 | `ac.observe` | observation | one to none | `name` | non-consuming, non-backpressuring probe |
+| `ac.expect` | verification | one to none | `message` | non-consuming predicate check; PYC testbench only |
 | `ac.transform` | design | one or more to one or more | output depths and latencies | pure Var region plus atomic Queue transfer |
 | `ac.broadcast` | design | one to two or more | output depths and latencies | strict atomic fanout |
 | `ac.fork` | design | one to two or more | output depths and latencies | decoupled exactly-once fanout |
@@ -1051,6 +1073,7 @@ The current hardware lowering maps:
 | bounded feedback | committed valid/data/iteration registers and limit assertion |
 | scope | static module hierarchy |
 | observe | non-functional probe boundary |
+| expect | rejected in design hierarchy; permitted only at the PYC testbench boundary |
 
 PYC C++ and Verilog generated from the same PYC IR MUST be cycle equivalent.
 Memory uses the PYC synchronous 1R1W primitive. The lowering retains the
@@ -1059,6 +1082,10 @@ only when the request handshake fires, and enables every byte lane of the
 integer data word. The primitive's read-during-write rule is old data.
 Feedback uses explicit sequential state in PYC IR; it is not a combinational
 unroll or a backend-specific loop.
+
+Before lowering, role placement is checked against the shared opcode catalog.
+A verification-only leaf in the design graph fails deterministically; an
+observation leaf remains non-state-changing and cannot affect ready/valid.
 
 ## Cross-backend refinement
 

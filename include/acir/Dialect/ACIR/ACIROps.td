@@ -191,6 +191,22 @@ def ACIR_ObserveOp : ACIR_Op<"observe"> {
   let assemblyFormat = "$input `name` $name attr-dict `:` qualified(type($input))";
 }
 
+def ACIR_ExpectOp : ACIR_Op<"expect", [SingleBlock]> {
+  let arguments = (ins ACIR_QueueType:$input, StrAttr:$message);
+  let regions = (region SizedRegion<1>:$predicate);
+  let hasVerifier = 1;
+  let assemblyFormat = [{
+    $input `message` $message $predicate attr-dict `:` qualified(type($input))
+  }];
+}
+
+def ACIR_ExpectYieldOp : ACIR_Op<"expect.yield", [
+    Pure, Terminator, HasParent<"ExpectOp">
+  ]> {
+  let arguments = (ins ACIR_VarType:$condition);
+  let assemblyFormat = "$condition attr-dict `:` qualified(type($condition))";
+}
+
 def ACIR_BroadcastOp : ACIR_Op<"broadcast"> {
   let arguments = (ins ACIR_QueueType:$input,
                        DenseI64ArrayAttr:$output_depths,

@@ -97,6 +97,27 @@ LogicalResult ObserveOp::verify() {
   return success();
 }
 
+LogicalResult ExpectOp::verify() {
+  if (getMessage().empty())
+    return emitOpError("message must be non-empty");
+  Block &block = getPredicate().front();
+  Type payload = cast<QueueType>(getInput().getType()).getElementType();
+  Type expected = VarType::get(getContext(), payload);
+  if (block.getNumArguments() != 1 ||
+      block.getArgument(0).getType() != expected)
+    return emitOpError("predicate argument must match queue payload Var");
+  for (Operation &operation : block.without_terminator())
+    if (!isMemoryEffectFree(&operation))
+      return emitOpError() << "predicate operation '" << operation.getName()
+                           << "' must be pure";
+  auto yield = dyn_cast<ExpectYieldOp>(block.getTerminator());
+  if (!yield || !cast<VarType>(yield.getCondition().getType())
+                     .getElementType()
+                     .isInteger(1))
+    return emitOpError("predicate must terminate with an i1 ac.expect.yield");
+  return success();
+}
+
 LogicalResult BroadcastOp::verify() {
   if (getOutputs().size() < 2)
     return emitOpError("requires at least two output queues");

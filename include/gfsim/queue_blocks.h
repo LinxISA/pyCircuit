@@ -844,6 +844,66 @@ private:
   uint64_t pendingPopCount_ = 0;
 };
 
+template <typename T, typename Predicate>
+  requires std::equality_comparable<T> &&
+           std::predicate<const Predicate &, const T &>
+class QueueExpect final : public SimObject {
+public:
+  static constexpr std::string_view contractName = "ac.expect";
+  static constexpr ObjectKind componentKind = ObjectKind::Probe;
+
+  QueueExpect(std::string name, ObjectId id, SimObject *parent,
+              SimQueue<T> &input, std::string message, Predicate predicate = {},
+              ObservationSink *observations = nullptr)
+      : SimObject(componentKind, std::move(name), id, parent, observations),
+        input_(input), message_(std::move(message)),
+        predicate_(std::move(predicate)) {}
+
+  void doWork(Epoch) override {
+    const T *head = input_.peek();
+    if (pending_ || head == nullptr)
+      return;
+    if (last_ && input_.totalPops() == lastPopCount_ && *last_ == *head)
+      return;
+    if (!std::invoke(std::as_const(predicate_), *head)) {
+      setRuntimeFailureCode("expectation_failed");
+      return;
+    }
+    pending_ = *head;
+    pendingPopCount_ = input_.totalPops();
+  }
+  void doXfer(Epoch) override {
+    if (!pending_)
+      return;
+    last_ = std::move(pending_);
+    pending_.reset();
+    lastPopCount_ = pendingPopCount_;
+  }
+  bool hasPendingCommit() const override { return pending_.has_value(); }
+  bool isRunnable(Epoch) const override {
+    const T *head = input_.peek();
+    return !pending_ && head != nullptr &&
+           (!last_ || input_.totalPops() != lastPopCount_ || *last_ != *head);
+  }
+  std::string_view message() const { return message_; }
+  void reset() override {
+    pending_.reset();
+    last_.reset();
+    lastPopCount_ = 0;
+    pendingPopCount_ = 0;
+    clearRuntimeFailureCode();
+  }
+
+private:
+  SimQueue<T> &input_;
+  std::string message_;
+  [[no_unique_address]] Predicate predicate_;
+  std::optional<T> pending_;
+  std::optional<T> last_;
+  uint64_t lastPopCount_ = 0;
+  uint64_t pendingPopCount_ = 0;
+};
+
 template <typename T, size_t Outputs>
 class QueueBroadcast final : public SimObject {
 public:

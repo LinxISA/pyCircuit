@@ -107,6 +107,7 @@ class RepositoryContractsTest(unittest.TestCase):
             "ac.broadcast",
             "ac.credit",
             "ac.dependency",
+            "ac.expect",
             "ac.feedback",
             "ac.fork",
             "ac.merge",
@@ -127,7 +128,8 @@ class RepositoryContractsTest(unittest.TestCase):
         for entry in catalog["entries"]:
             self.assertEqual(entry["kind"], entry["operation"].removeprefix("ac."))
             self.assertTrue(entry["gfsim"]["available"])
-            self.assertTrue(entry["pyc"]["available"])
+            if entry["role"] == "design":
+                self.assertTrue(entry["pyc"]["available"])
             self.assertTrue(entry["gfsim"]["realization"])
             self.assertTrue(entry["pyc"]["realization"])
             self.assertTrue(entry["refinement_observations"])
@@ -140,11 +142,12 @@ class RepositoryContractsTest(unittest.TestCase):
                 self.assertGreaterEqual(maximum_outputs, entry["outputs"]["min"])
         roles = {entry["operation"]: entry["role"] for entry in catalog["entries"]}
         self.assertEqual("observation", roles["ac.observe"])
+        self.assertEqual("verification", roles["ac.expect"])
         self.assertTrue(
             all(
                 role == "design"
                 for operation, role in roles.items()
-                if operation != "ac.observe"
+                if operation not in {"ac.observe", "ac.expect"}
             )
         )
 

@@ -83,6 +83,8 @@ Queue collection without dynamic Queue pointers.
 `pyc_atomic_pipeline.py` verifies multi-source/multi-sink atomic firing.
 `pyc_firing_pipeline.py` verifies explicit Python `peek`/`pop`/`push` effects
 normalize to the standard atomic transform.
+`gfsim_expect_pipeline.py` verifies a verification-role leaf executes in gfsim
+and is rejected from PYC design hierarchy with testbench-boundary guidance.
 `pyc_fork_pipeline.py` verifies decoupled fanout with per-output delivered state.
 `pyc_conditional_pipeline.py` verifies that a serial runtime `if` becomes an
 official route, two branch transforms, and a mutually exclusive priority merge.
