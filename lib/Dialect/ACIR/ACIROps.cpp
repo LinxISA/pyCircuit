@@ -83,6 +83,80 @@ LogicalResult TransformOp::verify() {
   return success();
 }
 
+LogicalResult QueuePeekOp::verify() {
+  auto queue = cast<QueueType>(getQueue().getType());
+  Type expected = VarType::get(getContext(), queue.getElementType());
+  if (getValue().getType() != expected)
+    return emitOpError() << "result must be " << expected;
+  return success();
+}
+
+LogicalResult QueuePopOp::verify() {
+  auto queue = cast<QueueType>(getQueue().getType());
+  Type expected = VarType::get(getContext(), queue.getElementType());
+  if (getValue().getType() != expected)
+    return emitOpError() << "result must be " << expected;
+  return success();
+}
+
+LogicalResult QueuePushOp::verify() {
+  auto queue = cast<QueueType>(getQueue().getType());
+  Type expected = VarType::get(getContext(), queue.getElementType());
+  if (getValue().getType() != expected)
+    return emitOpError() << "value must be " << expected;
+  return success();
+}
+
+LogicalResult FiringOp::verify() {
+  llvm::DenseSet<Value> listed;
+  for (Value queue : getQueues())
+    if (!listed.insert(queue).second)
+      return emitOpError("queue operands must be unique");
+
+  llvm::DenseSet<Value> popped;
+  llvm::DenseSet<Value> pushed;
+  size_t stateEffects = 0;
+  for (Operation &operation : getBody().front()) {
+    Value queue;
+    bool isPop = false;
+    bool isPush = false;
+    if (auto peek = dyn_cast<QueuePeekOp>(operation)) {
+      queue = peek.getQueue();
+    } else if (auto pop = dyn_cast<QueuePopOp>(operation)) {
+      queue = pop.getQueue();
+      isPop = true;
+    } else if (auto push = dyn_cast<QueuePushOp>(operation)) {
+      queue = push.getQueue();
+      isPush = true;
+    } else if (isa<FiringYieldOp>(operation)) {
+      continue;
+    } else if (isMemoryEffectFree(&operation)) {
+      continue;
+    } else {
+      return emitOpError() << "body operation '" << operation.getName()
+                           << "' is not a queue effect or pure computation";
+    }
+
+    if (!listed.contains(queue))
+      return emitOpError("queue effect references an unlisted firing operand");
+    if (isPop) {
+      if (!popped.insert(queue).second)
+        return emitOpError("queue may be popped at most once per firing");
+      ++stateEffects;
+    }
+    if (isPush) {
+      if (!pushed.insert(queue).second)
+        return emitOpError("queue may be pushed at most once per firing");
+      ++stateEffects;
+    }
+  }
+  if (stateEffects == 0)
+    return emitOpError("requires at least one queue state effect");
+  if (!isa<FiringYieldOp>(getBody().front().getTerminator()))
+    return emitOpError("body must terminate with ac.firing.yield");
+  return success();
+}
+
 namespace detail {
 
 ScopedProcessLivenessWorkCollector::ScopedProcessLivenessWorkCollector(

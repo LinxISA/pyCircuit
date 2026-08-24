@@ -92,6 +92,48 @@ TEST(ACIROpsTest, PublicBuildersConstructEveryTaskFourOperation) {
   EXPECT_TRUE(mlir::isMemoryEffectFree(deserialize.getOperation()));
 }
 
+TEST(ACIROpsTest, V02QueueEffectsAreAttachedToExactSSAQueueHandles) {
+  mlir::MLIRContext context;
+  context.loadDialect<ACIRDialect>();
+  auto module = mlir::parseSourceString<mlir::ModuleOp>(R"mlir(
+    module attributes {ac.contract_epoch = "0.1"} {
+      %input = "builtin.unrealized_conversion_cast"() : () -> !ac.queue<i32>
+      %output = "builtin.unrealized_conversion_cast"() : () -> !ac.queue<i32>
+      ac.firing(%input, %output) {
+        %peeked = ac.queue.peek %input : !ac.queue<i32> -> !ac.var<i32>
+        %popped = ac.queue.pop %input : !ac.queue<i32> -> !ac.var<i32>
+        ac.queue.push %output, %popped : !ac.queue<i32>, !ac.var<i32>
+        ac.firing.yield
+      } : (!ac.queue<i32>, !ac.queue<i32>)
+    }
+  )mlir",
+                                                        &context);
+  ASSERT_TRUE(module);
+
+  auto checkEffect = [&](mlir::Operation *operation, mlir::Value queue,
+                         mlir::MemoryEffects::Effect *expected) {
+    llvm::SmallVector<mlir::MemoryEffects::EffectInstance> effects;
+    mlir::cast<mlir::MemoryEffectOpInterface>(operation).getEffects(effects);
+    ASSERT_EQ(effects.size(), 1u);
+    EXPECT_EQ(effects.front().getEffect(), expected);
+    EXPECT_EQ(effects.front().getValue(), queue);
+    EXPECT_EQ(effects.front().getResource(), QueueStateResource::get());
+  };
+
+  module->walk([&](QueuePeekOp operation) {
+    checkEffect(operation, operation.getQueue(),
+                mlir::MemoryEffects::Read::get());
+  });
+  module->walk([&](QueuePopOp operation) {
+    checkEffect(operation, operation.getQueue(),
+                mlir::MemoryEffects::Write::get());
+  });
+  module->walk([&](QueuePushOp operation) {
+    checkEffect(operation, operation.getQueue(),
+                mlir::MemoryEffects::Write::get());
+  });
+}
+
 TEST(ACIROpsTest, LayoutAndEffectsAreDeclaredThroughMLIRInterfaces) {
   mlir::MLIRContext context;
   context.loadDialect<ACIRDialect>();
@@ -241,7 +283,7 @@ TEST(ACIROpsTest, PublicBuildersConstructEveryTaskFiveOperation) {
   EXPECT_TRUE(mlir::succeeded(mlir::verify(module)));
 }
 
-TEST(ACIROpsTest, TaskFiveRegistryContainsExactlyTheRequiredNewOperations) {
+TEST(ACIROpsTest, RegistryContainsExactV02QueueVarOperations) {
   mlir::MLIRContext context;
   context.loadDialect<ACIRDialect>();
   const std::array<llvm::StringLiteral, 8> names = {
@@ -268,6 +310,8 @@ TEST(ACIROpsTest, TaskFiveRegistryContainsExactlyTheRequiredNewOperations) {
       "ac.ensure",
       "ac.event",
       "ac.event_queue",
+      "ac.firing",
+      "ac.firing.yield",
       "ac.guarantee",
       "ac.interface",
       "ac.instance",
@@ -284,6 +328,9 @@ TEST(ACIROpsTest, TaskFiveRegistryContainsExactlyTheRequiredNewOperations) {
       "ac.process",
       "ac.protocol",
       "ac.queue",
+      "ac.queue.peek",
+      "ac.queue.pop",
+      "ac.queue.push",
       "ac.record.create",
       "ac.record.get",
       "ac.record.with",
@@ -299,6 +346,8 @@ TEST(ACIROpsTest, TaskFiveRegistryContainsExactlyTheRequiredNewOperations) {
       "ac.time_domain",
       "ac.transaction",
       "ac.transition",
+      "ac.transform",
+      "ac.transform.yield",
       "ac.trace.decode",
       "ac.trace.eof",
       "ac.trace.next",
@@ -658,7 +707,7 @@ TEST(ACIROpsTest, UnresolvedRuntimeReferencesDoNotInventEffects) {
   EXPECT_TRUE(effects.empty());
 }
 
-TEST(ACIROpsTest, TaskEightRegistryDeltaIsExactlyTwentyOperations) {
+TEST(ACIROpsTest, RuntimeAndV02QueueVarRegistryIsExact) {
   mlir::MLIRContext context;
   context.loadDialect<ACIRDialect>();
   const std::array<llvm::StringLiteral, 20> names = {
@@ -675,7 +724,14 @@ TEST(ACIROpsTest, TaskEightRegistryDeltaIsExactlyTwentyOperations) {
         << name.str();
   EXPECT_FALSE(mlir::OperationName("ac.try_issue", &context).isRegistered());
   EXPECT_FALSE(mlir::OperationName("ac.connect", &context).isRegistered());
-  EXPECT_EQ(context.getRegisteredOperationsByDialect("ac").size(), 55u);
+  const std::array<llvm::StringLiteral, 7> v02Names = {
+      "ac.transform",  "ac.transform.yield", "ac.firing",     "ac.firing.yield",
+      "ac.queue.peek", "ac.queue.pop",       "ac.queue.push",
+  };
+  for (llvm::StringLiteral name : v02Names)
+    EXPECT_TRUE(mlir::OperationName(name, &context).isRegistered())
+        << name.str();
+  EXPECT_EQ(context.getRegisteredOperationsByDialect("ac").size(), 62u);
 }
 
 TEST(ACIROpsTest, ProcessLinearLivenessDoesNotRescanBlockPerValue) {

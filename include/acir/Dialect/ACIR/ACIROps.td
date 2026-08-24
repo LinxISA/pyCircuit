@@ -107,6 +107,58 @@ def ACIR_TransformYieldOp : ACIR_Op<"transform.yield", [
   let assemblyFormat = "attr-dict ($values^ `:` type($values))?";
 }
 
+def ACIR_FiringOp : ACIR_Op<"firing", [
+    SingleBlock, RecursiveMemoryEffects
+  ]> {
+  let arguments = (ins Variadic<ACIR_QueueType>:$queues);
+  let regions = (region SizedRegion<1>:$body);
+  let hasVerifier = 1;
+  let assemblyFormat = [{
+    `(` $queues `)` $body attr-dict `:` `(` type($queues) `)`
+  }];
+}
+
+def ACIR_FiringYieldOp : ACIR_Op<"firing.yield", [
+    Pure, Terminator, HasParent<"FiringOp">
+  ]> {
+  let assemblyFormat = "attr-dict";
+}
+
+class ACIR_QueueEffectOp<string mnemonic>
+    : ACIR_Op<mnemonic, [
+        HasParent<"FiringOp">,
+        DeclareOpInterfaceMethods<MemoryEffectsOpInterface>
+      ]>;
+
+def ACIR_QueuePeekOp : ACIR_QueueEffectOp<"queue.peek"> {
+  let arguments = (ins ACIR_QueueType:$queue);
+  let results = (outs ACIR_VarType:$value);
+  let hasVerifier = 1;
+  let assemblyFormat = [{
+    $queue attr-dict `:` qualified(type($queue)) `->`
+    qualified(type($value))
+  }];
+}
+
+def ACIR_QueuePopOp : ACIR_QueueEffectOp<"queue.pop"> {
+  let arguments = (ins ACIR_QueueType:$queue);
+  let results = (outs ACIR_VarType:$value);
+  let hasVerifier = 1;
+  let assemblyFormat = [{
+    $queue attr-dict `:` qualified(type($queue)) `->`
+    qualified(type($value))
+  }];
+}
+
+def ACIR_QueuePushOp : ACIR_QueueEffectOp<"queue.push"> {
+  let arguments = (ins ACIR_QueueType:$queue, ACIR_VarType:$value);
+  let hasVerifier = 1;
+  let assemblyFormat = [{
+    $queue `,` $value attr-dict `:` qualified(type($queue)) `,`
+    qualified(type($value))
+  }];
+}
+
 def ACIR_InterfaceOp : ACIR_Op<"interface", [
     Symbol, SymbolTable, SingleBlock, NoTerminator, IsolatedFromAbove,
     RegionKindInterface, HasOnlyGraphRegion, ACIR_InterfaceContainer

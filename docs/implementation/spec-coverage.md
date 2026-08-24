@@ -7,7 +7,7 @@
 acir_contract_epoch: 0.2
 acsim_contract_epoch: 0.1
 
-## acir operations (57)
+## acir operations (62)
 
 | operation | source symbol | positive coverage | negative coverage |
 | --- | --- | --- | --- |
@@ -49,6 +49,11 @@ acsim_contract_epoch: 0.1
 | ac.packet.deserialize | ACIR_PacketDeserializeOp | test/ACIR/records-valid.mlir<br>test/ACIR/review-r1-valid.mlir | test/ACIR/records-invalid.mlir<br>test/ACIR/review-r1-invalid.mlir<br>test/ACIR/review-r2-invalid.mlir |
 | ac.transform | ACIR_TransformOp | test/ACIR/transform-v0.2.mlir | test/ACIR/transform-invalid-v0.2.mlir |
 | ac.transform.yield | ACIR_TransformYieldOp | test/ACIR/transform-v0.2.mlir | test/ACIR/transform-invalid-v0.2.mlir |
+| ac.firing | ACIR_FiringOp | test/ACIR/firing-v0.2.mlir | test/ACIR/firing-invalid-v0.2.mlir |
+| ac.firing.yield | ACIR_FiringYieldOp | test/ACIR/firing-v0.2.mlir | test/ACIR/firing-invalid-v0.2.mlir |
+| ac.queue.peek | ACIR_QueuePeekOp | test/ACIR/firing-v0.2.mlir | test/ACIR/firing-invalid-v0.2.mlir |
+| ac.queue.pop | ACIR_QueuePopOp | test/ACIR/firing-v0.2.mlir | test/ACIR/firing-invalid-v0.2.mlir |
+| ac.queue.push | ACIR_QueuePushOp | test/ACIR/firing-v0.2.mlir | test/ACIR/firing-invalid-v0.2.mlir |
 | ac.try_send | ACIR_TrySendOp | test/ACIR/process-valid.mlir | test/ACIR/contracts-invalid.mlir<br>test/ACIR/runtime-references-invalid.mlir |
 | ac.try_recv | ACIR_TryRecvOp | test/ACIR/process-valid.mlir | test/ACIR/process-invalid.mlir |
 | ac.schedule | ACIR_ScheduleOp | test/ACIR/process-valid.mlir | test/ACIR/contracts-invalid.mlir<br>test/ACIR/process-invalid.mlir<br>test/ACIR/runtime-references-invalid.mlir |
@@ -63,7 +68,7 @@ acsim_contract_epoch: 0.1
 | ac.trace.position | ACIR_TracePositionOp | test/ACIR/trace-valid.mlir | test/ACIR/trace-invalid.mlir |
 | ac.require | ACIR_RequireOp | test/ACIR/contracts-valid.mlir<br>test/Transforms/freeze-topology.mlir | test/ACIR/contracts-invalid.mlir |
 | ac.ensure | ACIR_EnsureOp | test/ACIR/contracts-valid.mlir<br>test/Transforms/freeze-topology.mlir | test/ACIR/contracts-invalid.mlir |
-| ac.assert | ACIR_AssertOp | test/ACIR/contracts-valid.mlir<br>test/ACIR/process-valid.mlir<br>test/Transforms/verify-model.mlir | test/ACIR/contracts-invalid.mlir<br>test/ACIR/transform-invalid-v0.2.mlir |
+| ac.assert | ACIR_AssertOp | test/ACIR/contracts-valid.mlir<br>test/ACIR/process-valid.mlir<br>test/Transforms/verify-model.mlir | test/ACIR/contracts-invalid.mlir<br>test/ACIR/firing-invalid-v0.2.mlir<br>test/ACIR/transform-invalid-v0.2.mlir |
 | ac.probe | ACIR_ProbeOp | test/ACIR/contracts-valid.mlir<br>test/ACIR/trace-valid.mlir<br>test/Transforms/verify-model.mlir | test/ACIR/contracts-invalid.mlir<br>test/ACIR/runtime-references-invalid.mlir |
 | ac.stat | ACIR_StatOp | test/ACIR/contracts-valid.mlir<br>test/ACIR/trace-valid.mlir<br>test/Transforms/deterministic-canonicalization.mlir<br>test/Transforms/freeze-topology.mlir<br>test/Transforms/verify-model.mlir | test/ACIR/contracts-invalid.mlir<br>test/ACIR/process-invalid.mlir<br>test/ACIR/runtime-references-invalid.mlir |
 | ac.stat.add | ACIR_StatAddOp | test/ACIR/contracts-valid.mlir<br>test/ACIR/trace-valid.mlir<br>test/Transforms/freeze-topology.mlir | test/ACIR/runtime-references-invalid.mlir |
@@ -81,8 +86,8 @@ acsim_contract_epoch: 0.1
 | !ac.optional | ACIR_OptionalType | test/ACIR/types-valid.mlir | test/ACIR/review-r2-invalid.mlir<br>test/ACIR/topology-review-r1-invalid.mlir<br>test/ACIR/types-invalid.mlir |
 | !ac.list | ACIR_ListType | test/ACIR/review-r1-valid.mlir<br>test/ACIR/types-valid.mlir<br>test/Transforms/verify-model.mlir | test/ACIR/queue-var-types-invalid-v0.2.mlir<br>test/ACIR/review-r1-invalid.mlir<br>test/ACIR/review-r2-invalid.mlir<br>test/ACIR/topology-review-r1-invalid.mlir |
 | !ac.vector | ACIR_VectorType | test/ACIR/records-valid.mlir<br>test/ACIR/review-r1-valid.mlir<br>test/ACIR/types-valid.mlir | test/ACIR/records-invalid.mlir<br>test/ACIR/review-r1-invalid.mlir<br>test/ACIR/review-r2-invalid.mlir<br>test/ACIR/topology-review-r1-invalid.mlir<br>test/ACIR/types-invalid.mlir |
-| !ac.var | ACIR_VarType | test/ACIR/queue-var-types-v0.2.mlir<br>test/ACIR/transform-v0.2.mlir | test/ACIR/queue-var-types-invalid-v0.2.mlir<br>test/ACIR/transform-invalid-v0.2.mlir |
-| !ac.queue | ACIR_QueueType | test/ACIR/queue-var-types-v0.2.mlir<br>test/ACIR/transform-v0.2.mlir | test/ACIR/queue-var-types-invalid-v0.2.mlir<br>test/ACIR/transform-invalid-v0.2.mlir |
+| !ac.var | ACIR_VarType | test/ACIR/firing-v0.2.mlir<br>test/ACIR/queue-var-types-v0.2.mlir<br>test/ACIR/transform-v0.2.mlir | test/ACIR/firing-invalid-v0.2.mlir<br>test/ACIR/queue-var-types-invalid-v0.2.mlir<br>test/ACIR/transform-invalid-v0.2.mlir |
+| !ac.queue | ACIR_QueueType | test/ACIR/firing-v0.2.mlir<br>test/ACIR/queue-var-types-v0.2.mlir<br>test/ACIR/transform-v0.2.mlir | test/ACIR/firing-invalid-v0.2.mlir<br>test/ACIR/queue-var-types-invalid-v0.2.mlir<br>test/ACIR/transform-invalid-v0.2.mlir |
 | !ac.array | ACIR_ArrayType | test/ACIR/queue-var-types-v0.2.mlir | test/ACIR/queue-var-types-invalid-v0.2.mlir |
 | !ac.map | ACIR_MapType | test/ACIR/queue-var-types-v0.2.mlir | test/ACIR/queue-var-types-invalid-v0.2.mlir |
 | !ac.set | ACIR_SetType | test/ACIR/queue-var-types-v0.2.mlir | test/ACIR/queue-var-types-invalid-v0.2.mlir |

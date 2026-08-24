@@ -47,6 +47,11 @@ operations:
   - ac.packet.deserialize
   - ac.transform
   - ac.transform.yield
+  - ac.firing
+  - ac.firing.yield
+  - ac.queue.peek
+  - ac.queue.pop
+  - ac.queue.push
   - ac.try_send
   - ac.try_recv
   - ac.schedule
