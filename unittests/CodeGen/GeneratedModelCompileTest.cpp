@@ -148,6 +148,8 @@ TEST(GeneratedModelCompileTest,
       "-I" ACIR_TEST_SOURCE_DIR "/include"};
   for (const std::string &include : test::llvmIncludeDirectories())
     ownedArguments.push_back("-I" + include);
+  if (llvm::StringRef(ACIR_TEST_RTTI_FLAG).size())
+    ownedArguments.push_back(ACIR_TEST_RTTI_FLAG);
   if (llvm::StringRef(ACIR_TEST_SANITIZER_FLAG).size())
     ownedArguments.push_back(ACIR_TEST_SANITIZER_FLAG);
   for (const GeneratedFile &file : bundle->files) {
