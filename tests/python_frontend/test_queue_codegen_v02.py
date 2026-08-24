@@ -32,6 +32,48 @@ def pipeline() -> None:
     sink(updated)
 """
 
+ROUTE_MERGE_SOURCE = """
+from agentic_circuit import sink, source, struct, system
+
+@struct
+class Item:
+    value: int
+    route: int
+
+@system
+def pipeline() -> None:
+    input_queue = source(Item, depth=2)
+    left, right = input_queue.route(
+        outputs=2,
+        key=lambda item: item.route,
+        depth=1,
+        latency=1,
+    )
+    merged = left.merge(right, policy="round_robin", depth=2, latency=1)
+    sink(merged)
+"""
+
+FEEDBACK_SOURCE = """
+from agentic_circuit import sink, source, struct, system
+
+@struct
+class Item:
+    value: int
+    remaining: int
+
+@system
+def pipeline() -> None:
+    current = source(Item)
+    while current.remaining > 0:
+        current = current.apply(
+            lambda item: item.with_fields(
+                value=item.value + 1,
+                remaining=item.remaining - 1,
+            )
+        )
+    sink(current)
+"""
+
 
 class QueueCodegenV02Test(unittest.TestCase):
     def test_serial_python_generates_typed_queue_wired_cpp(self) -> None:
@@ -45,6 +87,88 @@ class QueueCodegenV02Test(unittest.TestCase):
         self.assertIn("result.value = (item.value + 1);", generated)
         self.assertIn("gfsim::QueueSink<Item> sink_0_;", generated)
         self.assertEqual(generated, lower_queue_source_to_cpp(SOURCE, "pipeline"))
+
+    def test_route_and_merge_generate_standard_typed_blocks(self) -> None:
+        from agentic_circuit._queue_codegen import lower_queue_source_to_cpp
+
+        generated = lower_queue_source_to_cpp(ROUTE_MERGE_SOURCE, "pipeline")
+        self.assertIn("gfsim::QueueRoute<Item, 2, route_0_policy>", generated)
+        self.assertIn("return static_cast<size_t>(item.route);", generated)
+        self.assertIn("gfsim::QueueMerge<Item, 2>", generated)
+        self.assertIn("gfsim::QueueMergePolicy::RoundRobin", generated)
+        compiler = shutil.which("c++")
+        if compiler is None:
+            self.skipTest("C++ compiler is unavailable")
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "route_merge.cpp"
+            output.write_text(generated, encoding="utf-8")
+            compiled = subprocess.run(
+                (
+                    compiler,
+                    "-std=c++20",
+                    "-I",
+                    str(ROOT / "include"),
+                    "-fsyntax-only",
+                    str(output),
+                ),
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(0, compiled.returncode, compiled.stderr)
+            harness = Path(directory) / "route_merge_harness.cpp"
+            executable = Path(directory) / "route_merge"
+            harness.write_text(
+                f'''#include "{output.name}"
+#include <cstddef>
+
+int main() {{
+  ac_generated::Pipeline model;
+  if (!model.input_queue().proposePush(ac_generated::Item{{7, 1}}))
+    return 1;
+  auto rows = model.dispatch_rows();
+  for (std::size_t tick = 0; tick < 5; ++tick) {{
+    const gfsim::Epoch epoch{{tick, 0}};
+    for (auto &row : rows)
+      row.work(row.object, epoch);
+    for (auto &row : rows)
+      row.xfer(row.object, epoch, gfsim::XferPhase::Arbitrate);
+    for (auto &row : rows)
+      row.xfer(row.object, epoch, gfsim::XferPhase::Commit);
+  }}
+  const auto &values = model.sink_0_values();
+  return values.size() == 1 && values[0].value == 7 && values[0].route == 1
+             ? 0
+             : 2;
+}}
+''',
+                encoding="utf-8",
+            )
+            linked = subprocess.run(
+                (
+                    compiler,
+                    "-std=c++20",
+                    "-I",
+                    str(ROOT / "include"),
+                    str(harness),
+                    "-o",
+                    str(executable),
+                ),
+                cwd=Path(directory),
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(0, linked.returncode, linked.stderr)
+            executed = subprocess.run(
+                (str(executable),),
+                cwd=Path(directory),
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(0, executed.returncode, executed.stderr)
 
     def test_explicit_tool_writes_cpp_accepted_by_cxx20_compiler(self) -> None:
         compiler = shutil.which("c++")
@@ -112,6 +236,74 @@ int main() {{
   const auto &values = model.sink_0_values();
   return values.size() == 1 && values[0].value == 42 &&
                  values[0].remaining == 2
+             ? 0
+             : 2;
+}}
+''',
+                encoding="utf-8",
+            )
+            linked = subprocess.run(
+                (
+                    compiler,
+                    "-std=c++20",
+                    "-I",
+                    str(ROOT / "include"),
+                    str(harness),
+                    "-o",
+                    str(executable),
+                ),
+                cwd=root,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(0, linked.returncode, linked.stderr)
+            executed = subprocess.run(
+                (str(executable),),
+                cwd=root,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(0, executed.returncode, executed.stderr)
+
+    def test_serial_while_generates_parent_owned_feedback_queue(self) -> None:
+        from agentic_circuit._queue_codegen import lower_queue_source_to_cpp
+
+        generated = lower_queue_source_to_cpp(FEEDBACK_SOURCE, "pipeline")
+        self.assertIn("gfsim::SimQueue<gfsim::FeedbackToken<Item>>", generated)
+        self.assertIn("gfsim::QueueFeedback<Item", generated)
+        self.assertIn("return (item.remaining > 0);", generated)
+        compiler = shutil.which("c++")
+        if compiler is None:
+            self.skipTest("C++ compiler is unavailable")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            model = root / "feedback.cpp"
+            harness = root / "harness.cpp"
+            executable = root / "feedback"
+            model.write_text(generated, encoding="utf-8")
+            harness.write_text(
+                f'''#include "{model.name}"
+#include <cstddef>
+
+int main() {{
+  ac_generated::Pipeline model;
+  if (!model.current().proposePush(ac_generated::Item{{10, 3}}))
+    return 1;
+  auto rows = model.dispatch_rows();
+  for (std::size_t tick = 0; tick < 8; ++tick) {{
+    const gfsim::Epoch epoch{{tick, 0}};
+    for (auto &row : rows)
+      row.work(row.object, epoch);
+    for (auto &row : rows)
+      row.xfer(row.object, epoch, gfsim::XferPhase::Arbitrate);
+    for (auto &row : rows)
+      row.xfer(row.object, epoch, gfsim::XferPhase::Commit);
+  }}
+  const auto &values = model.sink_0_values();
+  return values.size() == 1 && values[0].value == 13 &&
+                 values[0].remaining == 0
              ? 0
              : 2;
 }}
