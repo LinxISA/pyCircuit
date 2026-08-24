@@ -64,6 +64,8 @@ operations:
   - ac.merge
   - ac.dependency
   - ac.dependency.yield
+  - ac.memory
+  - ac.memory.yield
   - ac.reorder
   - ac.reorder.yield
   - ac.feedback

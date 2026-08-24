@@ -265,6 +265,45 @@ TEST(QueueGraphPlanTest, EmitsTypedDependencyForBothBackends) {
   EXPECT_NE(pyc->find("pyc.sub"), std::string::npos);
 }
 
+TEST(QueueGraphPlanTest, EmitsOldDataMemoryForBothBackends) {
+  QueueGraphPlan plan;
+  plan.system = "memory_pipeline";
+  plan.payloads = {
+      {"MemoryRequest",
+       {{"address", "i4"}, {"write", "i1"}, {"data", "i16"}, {"tag", "i8"}}}};
+  constexpr llvm::StringLiteral requestType =
+      "!ac.struct<@types::@MemoryRequest>";
+  plan.queues = {{"input", requestType.str(), "/", 4, 1},
+                 {"output", requestType.str(), "/", 4, 1}};
+  plan.blocks.push_back({"source", "input", "/", {}, {"input"}, {4}, {1}});
+  QueueBlockPlan memory{"memory",   "output", "/", {"input"},
+                        {"output"}, {4},      {1}};
+  memory.expressions = {
+      {"v0", "get", "i4", {"item"}, "address", "", ""},
+      {"v1", "get", "i1", {"item"}, "write", "", ""},
+      {"v2", "get", "i16", {"item"}, "data", "", ""},
+  };
+  memory.yields = {"v0", "v1", "v2"};
+  memory.entries = 16;
+  memory.init = 0;
+  memory.resultField = "data";
+  plan.blocks.push_back(std::move(memory));
+  plan.blocks.push_back({"sink", "sink_0", "/", {"output"}, {}});
+
+  auto cpp = generateQueueGraphCpp(plan);
+  ASSERT_TRUE(bool(cpp)) << llvm::toString(cpp.takeError());
+  EXPECT_NE(cpp->find("gfsim::QueueMemory<MemoryRequest, std::uint16_t"),
+            std::string::npos);
+  EXPECT_NE(cpp->find("result.data = old_data"), std::string::npos);
+  EXPECT_NE(cpp->find(", input_, output_, 16, 0)"), std::string::npos);
+
+  auto pyc = generateQueueGraphPyc(plan);
+  ASSERT_TRUE(bool(pyc)) << llvm::toString(pyc.takeError());
+  EXPECT_NE(pyc->find("pyc.sync_mem"), std::string::npos);
+  EXPECT_NE(pyc->find("{depth = 16, name = \"output\"}"), std::string::npos);
+  EXPECT_NE(pyc->find("pyc.concat"), std::string::npos);
+}
+
 TEST(QueueGraphPlanTest, EmitsQueuePredicateAsPycComparison) {
   struct Case {
     llvm::StringLiteral predicate;

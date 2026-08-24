@@ -108,6 +108,7 @@ class RepositoryContractsTest(unittest.TestCase):
             "ac.feedback",
             "ac.fork",
             "ac.merge",
+            "ac.memory",
             "ac.observe",
             "ac.reorder",
             "ac.route",

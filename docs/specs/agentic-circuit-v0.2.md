@@ -371,6 +371,48 @@ integer at runtime. Dependencies refer to tokens retained in the bounded
 window; a missing predecessor blocks the token and can participate in deadlock
 diagnostics.
 
+### Typed memory
+
+`memory` is the common single-read/single-write state block. The request and
+response use the same structure type. Three pure lambdas select the address,
+write enable, and write data; `result_field` names the response field replaced
+with the value read from memory.
+
+```python
+@ac.struct
+class MemoryRequest:
+    address: ac.u4
+    write: ac.u1
+    data: ac.u16
+    tag: ac.u8
+
+
+requests = ac.source(MemoryRequest, depth=4, latency=1)
+responses = requests.memory(
+    address=lambda item: item.address,
+    write=lambda item: item.write,
+    data=lambda item: item.data,
+    entries=16,
+    init=0,
+    result_field="data",
+    depth=4,
+    latency=1,
+)
+ac.sink(responses)
+```
+
+`entries`, `init`, `result_field`, `depth`, and `latency` are compile-time
+constants. `entries`, `depth`, and `latency` MUST be positive. The address MUST
+be an integer Var no wider than 64 bits and wide enough to represent every
+entry. The write policy MUST return `!ac.var<i1>`. The data policy and result
+field MUST have the same integer type, no wider than 64 bits. v0.2 supports
+deterministic zero initialization only, so `init` MUST equal zero.
+
+Every accepted request performs a read. A response preserves the request's
+other fields and replaces `result_field` with the pre-transfer memory value. A
+write commits at Xfer. Therefore a read and write to the same address in one
+request returns old data and makes the new data visible to a later request.
+
 ### Reorder
 
 `reorder` accepts out-of-order completions and releases them in monotonically
@@ -571,6 +613,7 @@ has both a typed gfsim realization and a PYC realization.
 | `ac.fork` | design | one to two or more | output depths and latencies | decoupled exactly-once fanout |
 | `ac.route` | design | one to two or more | output depths and latencies | selector-controlled demultiplexing |
 | `ac.merge` | design | two or more to one | `policy`, `depth`, `latency` | priority or round-robin arbitration |
+| `ac.memory` | design | one to one | `entries`, `init`, `result_field`, `depth`, `latency` | synchronous old-data read and commit-time write |
 | `ac.dependency` | design | one to one | `capacity`, `resources`, `no_dependency`, `depth`, `latency` | bounded predecessor tracking, resource reservation, and execution countdown |
 | `ac.reorder` | design | one to one | `capacity`, `start`, `depth`, `latency` | bounded key-ordered retirement |
 | `ac.feedback` | design | one to one | `depth`, `latency`, `max_iterations` | bounded stateful loop |
@@ -624,6 +667,37 @@ consumes both heads and publishes the sum as one atomic transaction:
 Neither backend may consume only one input or publish a partial output set.
 The transform fires only when every input is valid and every output can accept
 its corresponding result.
+
+### Memory example
+
+The Python memory call lowers to one typed `ac.memory` with three pure policy
+regions. The input and output Queue payload types are identical.
+
+```mlir
+%response = ac.memory %request
+    entries 16 init 0 result_field "data" depth 4 latency 1
+    address {
+  ^address(%item: !ac.var<!ac.struct<@types::@MemoryRequest>>):
+    %address = ac.var.get %item field "address"
+      : !ac.var<!ac.struct<@types::@MemoryRequest>> -> !ac.var<i4>
+    ac.memory.yield %address : !ac.var<i4>
+} write {
+  ^write(%item: !ac.var<!ac.struct<@types::@MemoryRequest>>):
+    %write = ac.var.get %item field "write"
+      : !ac.var<!ac.struct<@types::@MemoryRequest>> -> !ac.var<i1>
+    ac.memory.yield %write : !ac.var<i1>
+} data {
+  ^data(%item: !ac.var<!ac.struct<@types::@MemoryRequest>>):
+    %data = ac.var.get %item field "data"
+      : !ac.var<!ac.struct<@types::@MemoryRequest>> -> !ac.var<i16>
+    ac.memory.yield %data : !ac.var<i16>
+} : !ac.queue<!ac.struct<@types::@MemoryRequest>>
+    -> !ac.queue<!ac.struct<@types::@MemoryRequest>>
+```
+
+The three regions MUST each contain one block argument matching the request
+payload, contain only pure Var operations, and terminate with exactly one
+`ac.memory.yield`.
 
 ### Explicit firing example
 
@@ -717,6 +791,19 @@ Xfer.
 No legal lowering may commit an input pop while a required output push is
 rejected.
 
+### Memory transfer
+
+Memory reads observe committed state before the current Xfer. The memory block
+stages an optional write only after its response push and request pop are both
+accepted. Xfer commits the staged write and the Queue effects together. A
+rejected response push MUST leave the request and memory unchanged.
+
+Model construction and replay start from the deterministic v0.2 zero image.
+gfsim `reset()` restores that image so the same model instance can replay
+deterministically. The raw PYC primitive does not clear memory on its reset
+port, so mid-run reset of memory contents is outside the v0.2 refinement
+contract; a PYC replay MUST instantiate a fresh model.
+
 ## Typed gfsim C++ lowering
 
 The C++ backend MUST generate statically typed, queue-wired code.
@@ -737,7 +824,8 @@ blocks borrow typed Queue references. Sibling blocks MUST NOT own duplicate
 instances of the same interconnect.
 
 The implementation currently provides reusable templates for transform,
-atomic transform, sink, observe, broadcast, fork, route, merge, and feedback.
+atomic transform, sink, observe, broadcast, fork, route, merge, memory,
+dependency, reorder, and feedback.
 Generated dispatch is static; generated runtime code MUST NOT discover opcodes
 by strings, walk schemas, construct topology dynamically, or depend on Python
 or MLIR libraries.
@@ -761,11 +849,18 @@ The current hardware lowering maps:
 | route | selector decoder, valid demultiplexing, ready multiplexing |
 | priority merge | fixed-priority selection |
 | round-robin merge | selection plus committed cursor register |
+| memory | `pyc.sync_mem` plus an aligned pending request/valid register |
+| dependency | fixed register window, predecessor wakeup, countdown, and resource grants |
+| reorder | fixed register window and committed next-key register |
 | bounded feedback | committed valid/data/iteration registers and limit assertion |
 | scope | static module hierarchy |
 | observe | non-functional probe boundary |
 
 PYC C++ and Verilog generated from the same PYC IR MUST be cycle equivalent.
+Memory uses the PYC synchronous 1R1W primitive. The lowering retains the
+request until its registered read data is aligned and accepted, drives writes
+only when the request handshake fires, and enables every byte lane of the
+integer data word. The primitive's read-during-write rule is old data.
 Feedback uses explicit sequential state in PYC IR; it is not a combinational
 unroll or a backend-specific loop.
 
@@ -1020,15 +1115,17 @@ The following v0.2 slices are implemented and tested:
 - immutable scalar and structure payloads;
 - Queue/Var types and pure Var expressions;
 - scopes with inferred Queue boundaries;
-- transform, strict broadcast, decoupled fork, route, merge, dependency,
-  reorder, observe, sink, explicit atomic transform, and bounded feedback;
+- transform, strict broadcast, decoupled fork, route, merge, typed memory,
+  dependency, reorder, observe, sink, explicit atomic transform, and bounded
+  feedback;
 - static arrays, maps, sets, static `if`, static loops, and symmetric runtime
   Queue `if` lowering through route/transform/merge;
 - canonical QueueGraph extraction;
 - typed gfsim C++ generation;
-- PYC/Verilog lowering for transform, broadcast, fork, route, merge,
-  dependency, reorder, bounded feedback, elaboration-time scope flattening,
-  packed structures, atomic handshakes, and exact Queue latency;
+- PYC/Verilog lowering for transform, broadcast, fork, route, merge, typed
+  synchronous memory, dependency, reorder, bounded feedback, elaboration-time
+  scope flattening, packed structures, atomic handshakes, and exact Queue
+  latency;
 - PYC C++ versus Verilog cycle equivalence and gfsim/PYC projected transaction
   comparison.
 
@@ -1036,10 +1133,10 @@ The following work remains before v0.2 is complete:
 
 - finish lowercase component naming and removal of the remaining provider
   surfaces after the epoch and `ac.std.*` hard break;
-- freeze the remaining common building-block inventory for state, memory,
+- freeze the remaining common building-block inventory for general state,
   credits, and barriers;
 - preserve explicit signedness semantics beyond integer width;
-- lower the remaining state, memory, and resource blocks through PYC;
+- lower the remaining general state and resource blocks through PYC;
 - complete the DavinciOO functional and performance refinement contract;
 - remove all transition-only provider and compatibility surfaces;
 - run the complete release, sanitizer, install, determinism, replay, PYC,

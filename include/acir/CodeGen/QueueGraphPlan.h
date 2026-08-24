@@ -55,6 +55,9 @@ struct QueueBlockPlan {
   uint64_t start = 0;
   uint64_t noDependency = 0;
   uint64_t resources = 0;
+  uint64_t entries = 0;
+  uint64_t init = 0;
+  std::string resultField;
 };
 
 struct QueueGraphPlan {

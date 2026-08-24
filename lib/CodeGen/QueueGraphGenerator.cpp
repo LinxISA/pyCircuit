@@ -198,6 +198,11 @@ llvm::Expected<std::string> generateQueueGraphCpp(const QueueGraphPlan &plan) {
          block.yields.size() != 4 || block.capacity == 0 ||
          block.resources == 0))
       return generatorError("dependency contract is unsupported");
+    if (block.kind == "memory" &&
+        (block.inputs.size() != 1 || block.outputs.size() != 1 ||
+         block.yields.size() != 3 || block.entries == 0 || block.init != 0 ||
+         block.resultField.empty()))
+      return generatorError("memory contract is unsupported");
   }
 
   llvm::StringMap<std::string> queueMembers;
@@ -279,8 +284,8 @@ llvm::Expected<std::string> generateQueueGraphCpp(const QueueGraphPlan &plan) {
 
   for (auto [index, block] : llvm::enumerate(runtimeBlocks)) {
     if (block->kind != "transform" && block->kind != "route" &&
-        block->kind != "dependency" && block->kind != "reorder" &&
-        block->kind != "feedback")
+        block->kind != "dependency" && block->kind != "memory" &&
+        block->kind != "reorder" && block->kind != "feedback")
       continue;
     if (block->kind == "dependency") {
       const QueuePlan *input = findQueue(plan, block->inputs.front());
@@ -314,6 +319,44 @@ llvm::Expected<std::string> generateQueueGraphCpp(const QueueGraphPlan &plan) {
           return body.takeError();
         output << *body << "  }\n};\n\n";
       }
+      continue;
+    }
+    if (block->kind == "memory") {
+      const QueuePlan *input = findQueue(plan, block->inputs.front());
+      if (!input)
+        return generatorError("memory input Queue is missing");
+      auto inputType = cppType(input->payloadType);
+      if (!inputType)
+        return inputType.takeError();
+      constexpr llvm::StringLiteral policyNames[] = {"address", "write",
+                                                     "data"};
+      std::vector<std::string> resultTypes;
+      for (auto [policyIndex, policyName] : llvm::enumerate(policyNames)) {
+        auto expression = std::find_if(
+            block->expressions.begin(), block->expressions.end(),
+            [&](const QueueExpressionPlan &candidate) {
+              return candidate.result == block->yields[policyIndex];
+            });
+        if (expression == block->expressions.end())
+          return generatorError("memory policy yield type is missing");
+        auto resultType = cppType(expression->type);
+        if (!resultType)
+          return resultType.takeError();
+        resultTypes.push_back(*resultType);
+        output << "struct block_" << index << '_' << policyName.str()
+               << "_policy {\n  " << *resultType << " operator()(const "
+               << *inputType << " &item) const {\n";
+        auto body = emitExpressionBody(*block, block->yields[policyIndex], 4);
+        if (!body)
+          return body.takeError();
+        output << *body << "  }\n};\n\n";
+      }
+      output << "struct block_" << index << "_response_policy {\n  "
+             << *inputType << " operator()(const " << *inputType
+             << " &item, const " << resultTypes[2]
+             << " &old_data) const {\n    auto result = item;\n    result."
+             << block->resultField
+             << " = old_data;\n    return result;\n  }\n};\n\n";
       continue;
     }
     if (block->kind == "transform" &&
@@ -564,6 +607,13 @@ llvm::Expected<std::string> generateQueueGraphCpp(const QueueGraphPlan &plan) {
                              std::to_string(block->capacity) + ", " +
                              std::to_string(block->resources) + ", " +
                              std::to_string(block->noDependency) + ")");
+    } else if (block->kind == "memory") {
+      initializers.push_back(member + "(\"" + block->name + "\", " +
+                             std::to_string(blockIds[key]) + ", " + *parent +
+                             ", " + queueMembers[block->inputs[0]] + ", " +
+                             queueMembers[block->outputs[0]] + ", " +
+                             std::to_string(block->entries) + ", " +
+                             std::to_string(block->init) + ")");
     } else if (block->kind == "feedback") {
       initializers.push_back(member + "(\"" + block->name + "\", " +
                              std::to_string(blockIds[key]) + ", " + *parent +
@@ -783,6 +833,27 @@ llvm::Expected<std::string> generateQueueGraphCpp(const QueueGraphPlan &plan) {
              << "_key_policy, block_" << index << "_dependency_policy, block_"
              << index << "_resource_policy, block_" << index
              << "_cost_policy> block_" << index << "_;\n";
+    } else if (block->kind == "memory") {
+      const QueuePlan *input = findQueue(plan, block->inputs[0]);
+      auto type = input ? cppType(input->payloadType)
+                        : llvm::Expected<std::string>(
+                              generatorError("memory input missing"));
+      if (!type)
+        return type.takeError();
+      auto dataExpression =
+          std::find_if(block->expressions.begin(), block->expressions.end(),
+                       [&](const QueueExpressionPlan &candidate) {
+                         return candidate.result == block->yields[2];
+                       });
+      if (dataExpression == block->expressions.end())
+        return generatorError("memory data yield type is missing");
+      auto dataType = cppType(dataExpression->type);
+      if (!dataType)
+        return dataType.takeError();
+      output << "  gfsim::QueueMemory<" << *type << ", " << *dataType
+             << ", block_" << index << "_address_policy, block_" << index
+             << "_write_policy, block_" << index << "_data_policy, block_"
+             << index << "_response_policy> block_" << index << "_;\n";
     } else if (block->kind == "feedback") {
       const QueuePlan *input = findQueue(plan, block->inputs[0]);
       auto type = input ? cppType(input->payloadType)

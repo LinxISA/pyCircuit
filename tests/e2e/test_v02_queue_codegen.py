@@ -220,11 +220,12 @@ int main() {{
             )
             self.assertEqual(0, executed.returncode, executed.stderr)
 
-    def test_native_frozen_acir_codegen_covers_broadcast_and_feedback(self) -> None:
+    def test_native_frozen_acir_codegen_covers_common_state_blocks(self) -> None:
         from tests.python_frontend.test_queue_codegen_v02 import (
             BROADCAST_SOURCE,
             FEEDBACK_SOURCE,
         )
+        from tests.python_frontend.test_queue_frontend_v02 import MEMORY_SOURCE
 
         compiler = shutil.which("c++")
         if compiler is None:
@@ -234,6 +235,7 @@ int main() {{
             for name, source, expected in (
                 ("broadcast", BROADCAST_SOURCE, "gfsim::QueueBroadcast"),
                 ("feedback", FEEDBACK_SOURCE, "gfsim::QueueFeedback"),
+                ("memory", MEMORY_SOURCE, "gfsim::QueueMemory"),
             ):
                 python = root / f"{name}.py"
                 model = root / f"{name}.cpp"

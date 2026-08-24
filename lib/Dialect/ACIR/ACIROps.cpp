@@ -1044,6 +1044,69 @@ LogicalResult VarWithOp::verify() {
   return success();
 }
 
+LogicalResult MemoryOp::verify() {
+  if (getInput().getType() != getOutput().getType())
+    return emitOpError("output queue must match input queue type");
+  if (getEntries() <= 0 || getDepth() <= 0 || getLatency() <= 0)
+    return emitOpError("entries, depth, and latency must be positive");
+  if (getInit() != 0)
+    return emitOpError("v0.2 memory init must be zero");
+
+  Type payload = cast<QueueType>(getInput().getType()).getElementType();
+  Operation *declaration = recordDecl(*this, payload);
+  if (!declaration)
+    return emitOpError("requires a record-like Queue payload");
+  auto fieldIndex = findField(declaration, getResultField());
+  if (!fieldIndex)
+    return emitOpError() << "unknown result_field '" << getResultField() << "'";
+  Type dataType = fieldType(declaration, *fieldIndex);
+  auto dataInteger = dyn_cast<IntegerType>(dataType);
+  if (!dataInteger || dataInteger.getWidth() > 64)
+    return emitOpError(
+        "result_field must carry an integer no wider than 64 bits");
+
+  Type argumentType = VarType::get(getContext(), payload);
+  auto verifyPolicy = [&](Region &region, StringRef name) -> FailureOr<Type> {
+    Block &block = region.front();
+    if (block.getNumArguments() != 1 ||
+        block.getArgument(0).getType() != argumentType) {
+      emitOpError() << name << " argument must match queue payload Var";
+      return failure();
+    }
+    for (Operation &operation : block.without_terminator())
+      if (!isMemoryEffectFree(&operation)) {
+        emitOpError() << name << " operation '" << operation.getName()
+                      << "' must be pure";
+        return failure();
+      }
+    auto yield = dyn_cast<MemoryYieldOp>(block.getTerminator());
+    if (!yield) {
+      emitOpError() << name << " must terminate with ac.memory.yield";
+      return failure();
+    }
+    return cast<VarType>(yield.getValue().getType()).getElementType();
+  };
+
+  FailureOr<Type> address = verifyPolicy(getAddress(), "address");
+  FailureOr<Type> write = verifyPolicy(getWrite(), "write");
+  FailureOr<Type> data = verifyPolicy(getData(), "data");
+  if (failed(address) || failed(write) || failed(data))
+    return failure();
+  auto addressInteger = dyn_cast<IntegerType>(*address);
+  if (!addressInteger || addressInteger.getWidth() > 64)
+    return emitOpError(
+        "address must yield an integer Var no wider than 64 bits");
+  if (addressInteger.getWidth() < 64 &&
+      static_cast<uint64_t>(getEntries()) >
+          (uint64_t{1} << addressInteger.getWidth()))
+    return emitOpError("entries must fit address width");
+  if (!write->isInteger(1))
+    return emitOpError("write must yield !ac.var<i1>");
+  if (*data != dataType)
+    return emitOpError("data must match result_field type");
+  return success();
+}
+
 LogicalResult PacketSerializeOp::verify() {
   auto packetType = dyn_cast<PacketType>(getPacketValue().getType());
   if (!packetType)

@@ -465,6 +465,96 @@ private:
   bool proposed_ = false;
 };
 
+template <typename T, typename Data, typename Address, typename Write,
+          typename WriteData, typename Response>
+  requires std::invocable<const Address &, const T &> &&
+           std::integral<std::invoke_result_t<const Address &, const T &>> &&
+           std::invocable<const Write &, const T &> &&
+           std::convertible_to<std::invoke_result_t<const Write &, const T &>,
+                               bool> &&
+           std::invocable<const WriteData &, const T &> &&
+           std::convertible_to<
+               std::invoke_result_t<const WriteData &, const T &>, Data> &&
+           std::invocable<const Response &, const T &, const Data &> &&
+           std::convertible_to<
+               std::invoke_result_t<const Response &, const T &, const Data &>,
+               T>
+class QueueMemory final : public SimObject {
+public:
+  static constexpr std::string_view contractName = "ac.memory";
+  static constexpr ObjectKind componentKind = ObjectKind::Memory;
+
+  QueueMemory(std::string name, ObjectId id, SimObject *parent,
+              SimQueue<T> &input, SimQueue<T> &output, size_t entries,
+              Data init = {}, Address address = {}, Write write = {},
+              WriteData writeData = {}, Response response = {},
+              ObservationSink *observations = nullptr)
+      : SimObject(componentKind, std::move(name), id, parent, observations),
+        input_(input), output_(output), init_(init), storage_(entries, init),
+        address_(std::move(address)), write_(std::move(write)),
+        writeData_(std::move(writeData)), response_(std::move(response)) {}
+
+  void doWork(Epoch) override {
+    if (fired_ || !input_.canProposePop() || !output_.canProposePush())
+      return;
+    const T *head = input_.peek();
+    if (head == nullptr)
+      return;
+    using AddressResult = std::invoke_result_t<const Address &, const T &>;
+    const AddressResult rawAddress =
+        std::invoke(std::as_const(address_), *head);
+    if constexpr (std::signed_integral<AddressResult>)
+      if (rawAddress < 0) {
+        setRuntimeFailureCode("memory_address_out_of_range");
+        return;
+      }
+    const uint64_t address = static_cast<uint64_t>(rawAddress);
+    if (address >= storage_.size()) {
+      setRuntimeFailureCode("memory_address_out_of_range");
+      return;
+    }
+    const Data oldData = storage_[address];
+    T response = std::invoke(std::as_const(response_), *head, oldData);
+    if (!output_.proposePush(std::move(response)) || !input_.proposePop())
+      return;
+    if (static_cast<bool>(std::invoke(std::as_const(write_), *head)))
+      pendingWrite_ = std::pair<size_t, Data>{
+          static_cast<size_t>(address),
+          static_cast<Data>(std::invoke(std::as_const(writeData_), *head))};
+    fired_ = true;
+  }
+  void doXfer(Epoch) override {
+    if (pendingWrite_) {
+      storage_[pendingWrite_->first] = std::move(pendingWrite_->second);
+      pendingWrite_.reset();
+    }
+    fired_ = false;
+  }
+  bool hasPendingCommit() const override { return fired_; }
+  bool isRunnable(Epoch) const override {
+    return !fired_ && input_.canProposePop() && output_.canProposePush();
+  }
+  const Data &at(size_t address) const { return storage_.at(address); }
+  void reset() override {
+    std::fill(storage_.begin(), storage_.end(), init_);
+    pendingWrite_.reset();
+    fired_ = false;
+    clearRuntimeFailureCode();
+  }
+
+private:
+  SimQueue<T> &input_;
+  SimQueue<T> &output_;
+  Data init_;
+  std::vector<Data> storage_;
+  [[no_unique_address]] Address address_;
+  [[no_unique_address]] Write write_;
+  [[no_unique_address]] WriteData writeData_;
+  [[no_unique_address]] Response response_;
+  std::optional<std::pair<size_t, Data>> pendingWrite_;
+  bool fired_ = false;
+};
+
 template <typename T> class QueueSink final : public SimObject {
 public:
   static constexpr std::string_view contractName = "ac.sink";

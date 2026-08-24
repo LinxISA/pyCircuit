@@ -94,6 +94,39 @@ struct DependencyResource {
   }
 };
 
+struct MemoryRequest {
+  uint8_t address = 0;
+  bool write = false;
+  uint16_t data = 0;
+
+  bool operator==(const MemoryRequest &) const = default;
+};
+
+struct MemoryAddress {
+  uint8_t operator()(const MemoryRequest &request) const {
+    return request.address;
+  }
+};
+
+struct MemoryWrite {
+  bool operator()(const MemoryRequest &request) const { return request.write; }
+};
+
+struct MemoryWriteData {
+  uint16_t operator()(const MemoryRequest &request) const {
+    return request.data;
+  }
+};
+
+struct MemoryResponse {
+  MemoryRequest operator()(const MemoryRequest &request,
+                           const uint16_t &oldData) const {
+    MemoryRequest response = request;
+    response.data = oldData;
+    return response;
+  }
+};
+
 TEST(QueueBlocksTest, TransformCommitsOnlyAcrossTheQueueBarrier) {
   SimQueue<int> input("input", 1, nullptr, 2);
   SimQueue<int> output("output", 2, nullptr, 2);
@@ -306,6 +339,47 @@ TEST(QueueBlocksTest, DependencyRejectsOutOfRangeResource) {
   EXPECT_EQ(dependency.runtimeFailureCode(),
             "dependency_resource_out_of_range");
   EXPECT_FALSE(dependency.hasPendingCommit());
+  EXPECT_TRUE(output.isEmpty());
+}
+
+TEST(QueueBlocksTest, MemoryReturnsOldDataAndCommitsWriteAtXfer) {
+  SimQueue<MemoryRequest> input("input", 1, nullptr, 2);
+  SimQueue<MemoryRequest> output("output", 2, nullptr, 2);
+  QueueMemory<MemoryRequest, uint16_t, MemoryAddress, MemoryWrite,
+              MemoryWriteData, MemoryResponse>
+      memory("memory", 3, nullptr, input, output, 16);
+  QueueSink<MemoryRequest> sink("sink", 4, nullptr, output);
+  ASSERT_TRUE(input.proposePush({3, true, 42}));
+  ASSERT_TRUE(input.proposePush({3, false, 0}));
+  input.doXfer({0, 0});
+
+  for (uint64_t tick = 1; tick < 8; ++tick) {
+    const Epoch epoch{tick, 0};
+    memory.doWork(epoch);
+    sink.doWork(epoch);
+    input.doXfer(epoch);
+    output.doXfer(epoch);
+    memory.doXfer(epoch);
+    sink.doXfer(epoch);
+  }
+
+  ASSERT_EQ(sink.received().size(), 2u);
+  EXPECT_EQ(sink.received()[0].data, 0u);
+  EXPECT_EQ(sink.received()[1].data, 42u);
+  EXPECT_EQ(memory.at(3), 42u);
+}
+
+TEST(QueueBlocksTest, MemoryRejectsOutOfRangeAddress) {
+  SimQueue<MemoryRequest> input("input", 1, nullptr, 1);
+  SimQueue<MemoryRequest> output("output", 2, nullptr, 1);
+  QueueMemory<MemoryRequest, uint16_t, MemoryAddress, MemoryWrite,
+              MemoryWriteData, MemoryResponse>
+      memory("memory", 3, nullptr, input, output, 4);
+  ASSERT_TRUE(input.proposePush({4, false, 0}));
+  input.doXfer({0, 0});
+  memory.doWork({1, 0});
+  EXPECT_EQ(memory.runtimeFailureCode(), "memory_address_out_of_range");
+  EXPECT_FALSE(memory.hasPendingCommit());
   EXPECT_TRUE(output.isEmpty());
 }
 

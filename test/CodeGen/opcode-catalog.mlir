@@ -8,6 +8,7 @@
 // CHECK-SAME: "operation":"ac{{\.}}dependency"
 // CHECK-SAME: "operation":"ac{{\.}}feedback"
 // CHECK-SAME: "operation":"ac{{\.}}fork"
+// CHECK-SAME: "operation":"ac{{\.}}memory"
 // CHECK-SAME: "operation":"ac{{\.}}merge"
 // CHECK-SAME: "operation":"ac{{\.}}observe"
 // CHECK-SAME: "operation":"ac{{\.}}reorder"

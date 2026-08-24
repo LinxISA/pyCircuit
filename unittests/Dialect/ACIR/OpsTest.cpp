@@ -336,6 +336,8 @@ TEST(ACIROpsTest, RegistryContainsExactV02QueueVarOperations) {
       "ac.module.extern",
       "ac.module.generated",
       "ac.merge",
+      "ac.memory",
+      "ac.memory.yield",
       "ac.reorder",
       "ac.reorder.yield",
       "ac.observe",
@@ -756,22 +758,23 @@ TEST(ACIROpsTest, RuntimeAndV02QueueVarRegistryIsExact) {
         << name.str();
   EXPECT_FALSE(mlir::OperationName("ac.try_issue", &context).isRegistered());
   EXPECT_FALSE(mlir::OperationName("ac.connect", &context).isRegistered());
-  const std::array<llvm::StringLiteral, 30> v02Names = {
-      "ac.transform",      "ac.transform.yield", "ac.firing",
-      "ac.firing.yield",   "ac.queue.peek",      "ac.queue.pop",
-      "ac.queue.push",     "ac.source",          "ac.sink",
-      "ac.var.constant",   "ac.var.add",         "ac.var.sub",
-      "ac.var.mul",        "ac.var.get",         "ac.var.with",
-      "ac.scope",          "ac.scope.yield",     "ac.broadcast",
-      "ac.route",          "ac.route.yield",     "ac.fork",
-      "ac.merge",          "ac.dependency",      "ac.dependency.yield",
-      "ac.reorder",        "ac.reorder.yield",   "ac.feedback",
-      "ac.feedback.yield", "ac.observe",         "ac.var.cmp",
+  const std::array<llvm::StringLiteral, 32> v02Names = {
+      "ac.transform",     "ac.transform.yield", "ac.firing",
+      "ac.firing.yield",  "ac.queue.peek",      "ac.queue.pop",
+      "ac.queue.push",    "ac.source",          "ac.sink",
+      "ac.var.constant",  "ac.var.add",         "ac.var.sub",
+      "ac.var.mul",       "ac.var.get",         "ac.var.with",
+      "ac.scope",         "ac.scope.yield",     "ac.broadcast",
+      "ac.route",         "ac.route.yield",     "ac.fork",
+      "ac.merge",         "ac.dependency",      "ac.dependency.yield",
+      "ac.memory",        "ac.memory.yield",    "ac.reorder",
+      "ac.reorder.yield", "ac.feedback",        "ac.feedback.yield",
+      "ac.observe",       "ac.var.cmp",
   };
   for (llvm::StringLiteral name : v02Names)
     EXPECT_TRUE(mlir::OperationName(name, &context).isRegistered())
         << name.str();
-  EXPECT_EQ(context.getRegisteredOperationsByDialect("ac").size(), 85u);
+  EXPECT_EQ(context.getRegisteredOperationsByDialect("ac").size(), 87u);
 }
 
 TEST(ACIROpsTest, ProcessLinearLivenessDoesNotRescanBlockPerValue) {

@@ -292,6 +292,30 @@ def ACIR_DependencyYieldOp : ACIR_Op<"dependency.yield", [
   let assemblyFormat = "$value attr-dict `:` qualified(type($value))";
 }
 
+def ACIR_MemoryOp : ACIR_Op<"memory", [SingleBlock]> {
+  let arguments = (ins ACIR_QueueType:$input, I64Attr:$entries,
+                       I64Attr:$init, StrAttr:$result_field,
+                       I64Attr:$depth, I64Attr:$latency);
+  let results = (outs ACIR_QueueType:$output);
+  let regions = (region SizedRegion<1>:$address,
+                        SizedRegion<1>:$write,
+                        SizedRegion<1>:$data);
+  let hasVerifier = 1;
+  let assemblyFormat = [{
+    $input `entries` $entries `init` $init `result_field` $result_field
+    `depth` $depth `latency` $latency `address` $address
+    `write` $write `data` $data attr-dict `:` qualified(type($input)) `->`
+    qualified(type($output))
+  }];
+}
+
+def ACIR_MemoryYieldOp : ACIR_Op<"memory.yield", [
+    Pure, Terminator, HasParent<"MemoryOp">
+  ]> {
+  let arguments = (ins ACIR_VarType:$value);
+  let assemblyFormat = "$value attr-dict `:` qualified(type($value))";
+}
+
 def ACIR_FeedbackOp : ACIR_Op<"feedback", [SingleBlock]> {
   let arguments = (ins ACIR_QueueType:$input, I64Attr:$depth,
                        I64Attr:$latency, I64Attr:$max_iterations);

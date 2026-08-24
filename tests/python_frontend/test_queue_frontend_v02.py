@@ -300,8 +300,51 @@ def pipeline() -> None:
     ac.sink(completed)
 """
 
+MEMORY_SOURCE = """
+import agentic_circuit as ac
+
+@ac.struct
+class Request:
+    address: ac.u8
+    write: bool
+    data: ac.u16
+
+@ac.system
+def pipeline() -> None:
+    requests = ac.source(Request)
+    responses = requests.memory(
+        address=lambda item: item.address,
+        write=lambda item: item.write,
+        data=lambda item: item.data,
+        entries=16,
+        init=0,
+        result_field="data",
+        depth=4,
+        latency=1,
+    )
+    ac.sink(responses)
+"""
+
 
 class QueueFrontendV02Test(unittest.TestCase):
+    def test_memory_lowers_old_data_request_response_contract(self) -> None:
+        from agentic_circuit._queue_frontend import (
+            QueueFrontendError,
+            lower_queue_source,
+        )
+
+        lowered = lower_queue_source(MEMORY_SOURCE, "pipeline")
+        self.assertIn(
+            "%responses = ac.memory %requests entries 16 init 0 "
+            'result_field "data" depth 4 latency 1 address',
+            lowered,
+        )
+        self.assertIn("} write {", lowered)
+        self.assertIn("} data {", lowered)
+        self.assertEqual(3, lowered.count("ac.memory.yield"))
+        with self.assertRaisesRegex(QueueFrontendError, "memory init must be zero"):
+            lower_queue_source(MEMORY_SOURCE.replace("init=0", "init=1"), "pipeline")
+
     def test_dependency_lowers_four_pure_policies(self) -> None:
         from agentic_circuit._queue_frontend import (
             QueueFrontendError,
@@ -338,7 +381,9 @@ class QueueFrontendV02Test(unittest.TestCase):
         self.assertIn('ac.var.get %item field "sequence"', lowered)
         self.assertIn("ac.reorder.yield", lowered)
         with self.assertRaisesRegex(QueueFrontendError, "capacity must be positive"):
-            lower_queue_source(REORDER_SOURCE.replace("capacity=16", "capacity=0"), "pipeline")
+            lower_queue_source(
+                REORDER_SOURCE.replace("capacity=16", "capacity=0"), "pipeline"
+            )
 
     def test_simple_serial_python_lowers_to_typed_queue_graph(self) -> None:
         from agentic_circuit._queue_frontend import lower_queue_source
@@ -376,7 +421,7 @@ class QueueFrontendV02Test(unittest.TestCase):
         self.assertIn("ac.var.add", lowered)
         self.assertIn("ac.var.mul", lowered)
         self.assertIn("ac.var.sub", lowered)
-        self.assertIn('ac.var.with', lowered)
+        self.assertIn("ac.var.with", lowered)
         self.assertIn('field "remaining"', lowered)
 
     def test_nested_scope_infers_borrowed_local_and_exported_queues(self) -> None:
@@ -386,7 +431,8 @@ class QueueFrontendV02Test(unittest.TestCase):
         self.assertIn("%completed = ac.scope @frontend(%input_queue)", lowered)
         self.assertIn("^body(%input_queue__in: !ac.queue<i64>):", lowered)
         self.assertIn(
-            "%completed__inner = ac.scope @inner(%adjusted__local)", lowered,
+            "%completed__inner = ac.scope @inner(%adjusted__local)",
+            lowered,
         )
         self.assertIn("ac.scope.yield %completed__local", lowered)
         self.assertIn(
@@ -414,9 +460,7 @@ class QueueFrontendV02Test(unittest.TestCase):
         right_scope = lowered.index("ac.scope @right(%input_queue__fanout1)")
         self.assertLess(broadcast, left_scope)
         self.assertLess(broadcast, right_scope)
-        self.assertIn(
-            "^body(%input_queue__fanout0__in: !ac.queue<i64>):", lowered
-        )
+        self.assertIn("^body(%input_queue__fanout0__in: !ac.queue<i64>):", lowered)
 
     def test_tuple_route_lowers_selector_to_var_region(self) -> None:
         from agentic_circuit._queue_frontend import lower_queue_source
@@ -502,10 +546,10 @@ class QueueFrontendV02Test(unittest.TestCase):
         )
 
         lowered = lower_queue_source(ATOMIC_SOURCE, "pipeline")
+        self.assertIn("%left_next, %right_next = ac.transform %left, %right", lowered)
         self.assertIn(
-            "%left_next, %right_next = ac.transform %left, %right", lowered
+            "^transform(%item0: !ac.var<i64>, %item1: !ac.var<i64>):", lowered
         )
-        self.assertIn("^transform(%item0: !ac.var<i64>, %item1: !ac.var<i64>):", lowered)
         self.assertIn("ac.transform.yield", lowered)
         self.assertIn('ac.output_names = ["left_next", "right_next"]', lowered)
         with self.assertRaisesRegex(QueueFrontendError, "inputs must be unique"):
@@ -523,7 +567,7 @@ class QueueFrontendV02Test(unittest.TestCase):
         )
 
         lowered = lower_queue_source(STATIC_CONTROL_SOURCE, "pipeline")
-        self.assertIn("ac.name = \"selected\"", lowered)
+        self.assertIn('ac.name = "selected"', lowered)
         self.assertNotIn("unreachable", lowered)
         self.assertIn("ac.sink %lanes__0", lowered)
         self.assertIn("ac.sink %lanes__1", lowered)
@@ -575,8 +619,7 @@ def pipeline() -> None:
 
         lowered = lower_queue_source(FORK_SOURCE, "pipeline")
         self.assertIn(
-            "%left, %right = ac.fork %input_queue depths [2, 2] "
-            "latencies [1, 1]",
+            "%left, %right = ac.fork %input_queue depths [2, 2] latencies [1, 1]",
             lowered,
         )
 
@@ -584,9 +627,7 @@ def pipeline() -> None:
         from agentic_circuit._queue_frontend import lower_queue_source
 
         lowered = lower_queue_source(RUNTIME_IF_SOURCE, "pipeline")
-        self.assertEqual(
-            lowered, lower_queue_source(RUNTIME_IF_SOURCE, "pipeline")
-        )
+        self.assertEqual(lowered, lower_queue_source(RUNTIME_IF_SOURCE, "pipeline"))
         self.assertIn(
             "%output_queue__if_false0_in, %output_queue__if_true0_in = "
             "ac.route %input_queue",
@@ -598,7 +639,7 @@ def pipeline() -> None:
         self.assertIn("ac.transform %output_queue__if_true0_in", lowered)
         self.assertIn(
             "%output_queue = ac.merge %output_queue__if_false0, "
-            "%output_queue__if_true0 policy \"priority\"",
+            '%output_queue__if_true0 policy "priority"',
             lowered,
         )
 

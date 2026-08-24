@@ -407,6 +407,16 @@ llvm::Expected<std::string> generateQueueGraphPyc(const QueueGraphPlan &plan) {
     uint64_t noDependency = 0;
     uint64_t resources = 0;
   };
+  struct MemoryState {
+    std::string issue;
+    std::string pendingValidNext;
+    std::string pendingValidEnable;
+    std::string pendingValid;
+    std::string pendingDataNext;
+    std::string pendingDataEnable;
+    std::string pendingData;
+    std::string dataType;
+  };
   std::vector<const QueueBlockPlan *> sources;
   std::vector<const QueueBlockPlan *> sinks;
   std::vector<const QueueBlockPlan *> observations;
@@ -415,6 +425,7 @@ llvm::Expected<std::string> generateQueueGraphPyc(const QueueGraphPlan &plan) {
   llvm::StringMap<const QueueBlockPlan *> forkByOutput;
   llvm::StringMap<RouteProducer> routeByOutput;
   llvm::StringMap<const QueueBlockPlan *> mergeByOutput;
+  llvm::StringMap<const QueueBlockPlan *> memoryByOutput;
   llvm::StringMap<const QueueBlockPlan *> dependencyByOutput;
   llvm::StringMap<const QueueBlockPlan *> reorderByOutput;
   llvm::StringMap<const QueueBlockPlan *> feedbackByOutput;
@@ -456,6 +467,12 @@ llvm::Expected<std::string> generateQueueGraphPyc(const QueueGraphPlan &plan) {
       if (block.policy != "priority" && block.policy != "round_robin")
         return pycError("PYC merge policy must be priority or round_robin");
       mergeByOutput[block.outputs.front()] = &block;
+    } else if (block.kind == "memory") {
+      if (block.inputs.size() != 1 || block.outputs.size() != 1 ||
+          block.yields.size() != 3 || block.entries == 0 || block.init != 0 ||
+          block.resultField.empty())
+        return pycError("memory contract is unsupported");
+      memoryByOutput[block.outputs.front()] = &block;
     } else if (block.kind == "reorder") {
       if (block.inputs.size() != 1 || block.outputs.size() != 1 ||
           block.yields.size() != 1 || block.capacity == 0)
@@ -473,8 +490,9 @@ llvm::Expected<std::string> generateQueueGraphPyc(const QueueGraphPlan &plan) {
         return pycError("feedback contract is unsupported");
       feedbackByOutput[block.outputs.front()] = &block;
     } else {
-      return pycError("PYC QueueGraph supports source/transform/broadcast/fork/"
-                      "route/merge/dependency/reorder/feedback/observe/sink");
+      return pycError(
+          "PYC QueueGraph supports source/transform/broadcast/fork/route/merge/"
+          "memory/dependency/reorder/feedback/observe/sink");
     }
   }
   if (sources.empty() || sinks.empty())
@@ -529,6 +547,7 @@ llvm::Expected<std::string> generateQueueGraphPyc(const QueueGraphPlan &plan) {
   llvm::StringMap<MergeState> mergeStates;
   llvm::StringMap<ForkState> forkStates;
   llvm::StringMap<FeedbackState> feedbackStates;
+  llvm::StringMap<MemoryState> memoryStates;
   llvm::StringMap<DependencyState> dependencyStates;
   llvm::StringMap<ReorderState> reorderStates;
   llvm::StringMap<std::string> forkOfferValid;
@@ -568,6 +587,47 @@ llvm::Expected<std::string> generateQueueGraphPyc(const QueueGraphPlan &plan) {
     body << "    " << result << " = pyc.extract " << value.str()
          << " {lsb = " << lsb << "} : " << inputType.str() << " -> "
          << resultType.str() << "\n";
+    return result;
+  };
+  auto emitFieldReplace =
+      [&](llvm::StringRef record, llvm::StringRef recordType,
+          llvm::StringRef field,
+          llvm::StringRef replacement) -> llvm::Expected<std::string> {
+    auto layout = fieldLayout(plan, recordType, field);
+    auto totalWidth = typeWidth(plan, recordType);
+    if (!layout)
+      return layout.takeError();
+    if (!totalWidth)
+      return totalWidth.takeError();
+    std::vector<std::pair<std::string, unsigned>> parts;
+    const unsigned highWidth = *totalWidth - layout->lsb - layout->width;
+    if (highWidth > 0)
+      parts.emplace_back(emitExtract(record, layout->lsb + layout->width,
+                                     "i" + std::to_string(*totalWidth),
+                                     "i" + std::to_string(highWidth)),
+                         highWidth);
+    parts.emplace_back(replacement.str(), layout->width);
+    if (layout->lsb > 0)
+      parts.emplace_back(emitExtract(record, 0,
+                                     "i" + std::to_string(*totalWidth),
+                                     "i" + std::to_string(layout->lsb)),
+                         layout->lsb);
+    if (parts.size() == 1)
+      return parts.front().first;
+    std::string result = newValue();
+    body << "    " << result << " = pyc.concat(";
+    for (auto [index, part] : llvm::enumerate(parts)) {
+      if (index)
+        body << ", ";
+      body << part.first;
+    }
+    body << ") : (";
+    for (auto [index, part] : llvm::enumerate(parts)) {
+      if (index)
+        body << ", ";
+      body << 'i' << part.second;
+    }
+    body << ") -> i" << *totalWidth << "\n";
     return result;
   };
   auto reduceBalanced = [&](llvm::StringRef operation,
@@ -629,6 +689,7 @@ llvm::Expected<std::string> generateQueueGraphPyc(const QueueGraphPlan &plan) {
       auto forkProducer = forkByOutput.find(queue.name);
       auto routeProducer = routeByOutput.find(queue.name);
       auto mergeProducer = mergeByOutput.find(queue.name);
+      auto memoryProducer = memoryByOutput.find(queue.name);
       auto dependencyProducer = dependencyByOutput.find(queue.name);
       auto reorderProducer = reorderByOutput.find(queue.name);
       auto feedbackProducer = feedbackByOutput.find(queue.name);
@@ -817,6 +878,93 @@ llvm::Expected<std::string> generateQueueGraphPyc(const QueueGraphPlan &plan) {
         mergeGrants[merge.name] = grants;
         producerValid = any;
         producerData = selectedData;
+      } else if (memoryProducer != memoryByOutput.end()) {
+        const QueueBlockPlan &memory = *memoryProducer->getValue();
+        auto inputValidValue = outputValid.find(memory.inputs.front());
+        auto inputDataValue = outputData.find(memory.inputs.front());
+        const QueuePlan *inputQueue = findQueue(plan, memory.inputs.front());
+        if (inputValidValue == outputValid.end() ||
+            inputDataValue == outputData.end() || !inputQueue)
+          return pycError("memory input is not available in topological order");
+        auto requestType = pycType(plan, inputQueue->payloadType);
+        if (!requestType)
+          return requestType.takeError();
+        std::vector<std::string> policies;
+        std::vector<std::string> policyTypes;
+        std::vector<unsigned> policyWidths;
+        for (size_t index = 0; index < memory.yields.size(); ++index) {
+          auto value =
+              emitTransform(plan, memory, {inputDataValue->getValue()},
+                            {inputQueue->payloadType}, index, nextValue, body);
+          if (!value)
+            return value.takeError();
+          auto type = yieldedType(memory, memory.yields[index],
+                                  inputQueue->payloadType);
+          if (!type)
+            return type.takeError();
+          auto loweredType = pycType(plan, *type);
+          auto width = typeWidth(plan, *type);
+          if (!loweredType)
+            return loweredType.takeError();
+          if (!width)
+            return width.takeError();
+          policies.push_back(std::move(*value));
+          policyTypes.push_back(std::move(*loweredType));
+          policyWidths.push_back(*width);
+        }
+        if (policyTypes[1] != "i1")
+          return pycError("memory write policy must lower to i1");
+        auto resultLayout =
+            fieldLayout(plan, inputQueue->payloadType, memory.resultField);
+        if (!resultLayout)
+          return resultLayout.takeError();
+        if (policyWidths[2] != resultLayout->width)
+          return pycError("memory data width must match result field width");
+
+        MemoryState state;
+        state.issue = newValue();
+        body << "    " << state.issue << " = pyc.wire : i1\n";
+        state.pendingValidNext = newValue();
+        state.pendingValidEnable = newValue();
+        body << "    " << state.pendingValidNext << " = pyc.wire : i1\n";
+        body << "    " << state.pendingValidEnable << " = pyc.wire : i1\n";
+        std::string zeroValid = emitConstant(0, "i1");
+        state.pendingValid = newValue();
+        body << "    " << state.pendingValid << " = pyc.reg %clk, %rst, "
+             << state.pendingValidEnable << ", " << state.pendingValidNext
+             << ", " << zeroValid << " : i1\n";
+        state.pendingDataNext = newValue();
+        state.pendingDataEnable = newValue();
+        body << "    " << state.pendingDataNext
+             << " = pyc.wire : " << *requestType << "\n";
+        body << "    " << state.pendingDataEnable << " = pyc.wire : i1\n";
+        std::string zeroData = emitConstant(0, *requestType);
+        state.pendingData = newValue();
+        body << "    " << state.pendingData << " = pyc.reg %clk, %rst, "
+             << state.pendingDataEnable << ", " << state.pendingDataNext << ", "
+             << zeroData << " : " << *requestType << "\n";
+        std::string writeValid =
+            emitBinary("and", state.issue, policies[1], "i1");
+        const unsigned strobeWidth = (policyWidths[2] + 7) / 8;
+        const uint64_t strobeValue = (uint64_t{1} << strobeWidth) - 1;
+        std::string strobeType = "i" + std::to_string(strobeWidth);
+        std::string strobe = emitConstant(strobeValue, strobeType);
+        std::string readData = newValue();
+        body << "    " << readData << " = pyc.sync_mem %clk, %rst, "
+             << state.issue << ", " << policies[0] << ", " << writeValid << ", "
+             << policies[0] << ", " << policies[2] << ", " << strobe
+             << " {depth = " << memory.entries << ", name = \"" << memory.name
+             << "\"} : " << policyTypes[0] << ", " << policyTypes[2] << ", "
+             << strobeType << "\n";
+        auto response =
+            emitFieldReplace(state.pendingData, inputQueue->payloadType,
+                             memory.resultField, readData);
+        if (!response)
+          return response.takeError();
+        producerValid = state.pendingValid;
+        producerData = std::move(*response);
+        state.dataType = *requestType;
+        memoryStates[memory.name] = std::move(state);
       } else if (dependencyProducer != dependencyByOutput.end()) {
         const QueueBlockPlan &dependency = *dependencyProducer->getValue();
         auto inputValidValue = outputValid.find(dependency.inputs.front());
@@ -1331,6 +1479,37 @@ llvm::Expected<std::string> generateQueueGraphPyc(const QueueGraphPlan &plan) {
         body << "    pyc.assign " << state->getValue().nextWire << ", " << next
              << " : " << state->getValue().type << "\n";
       }
+    } else if (block.kind == "memory") {
+      auto state = memoryStates.find(block.name);
+      auto inputValidValue = outputValid.find(block.inputs.front());
+      auto inputDataValue = outputData.find(block.inputs.front());
+      if (state == memoryStates.end() || inputValidValue == outputValid.end() ||
+          inputDataValue == outputData.end())
+        return pycError("memory state or input is missing");
+      const std::string &outputReady = inputReady[block.outputs.front()];
+      std::string accepted =
+          emitBinary("and", state->getValue().pendingValid, outputReady, "i1");
+      std::string canIssue = emitBinary(
+          "or", emitNot(state->getValue().pendingValid), accepted, "i1");
+      body << "    pyc.assign " << readyWires[block.inputs.front()] << ", "
+           << canIssue << " : i1\n";
+      std::string issue =
+          emitBinary("and", inputValidValue->getValue(), canIssue, "i1");
+      body << "    pyc.assign " << state->getValue().issue << ", " << issue
+           << " : i1\n";
+      std::string retained = emitBinary("and", state->getValue().pendingValid,
+                                        emitNot(accepted), "i1");
+      std::string nextValid = emitBinary("or", retained, issue, "i1");
+      std::string validEnable = emitBinary("or", accepted, issue, "i1");
+      body << "    pyc.assign " << state->getValue().pendingValidNext << ", "
+           << nextValid << " : i1\n";
+      body << "    pyc.assign " << state->getValue().pendingValidEnable << ", "
+           << validEnable << " : i1\n";
+      body << "    pyc.assign " << state->getValue().pendingDataNext << ", "
+           << inputDataValue->getValue() << " : " << state->getValue().dataType
+           << "\n";
+      body << "    pyc.assign " << state->getValue().pendingDataEnable << ", "
+           << issue << " : i1\n";
     } else if (block.kind == "dependency") {
       auto state = dependencyStates.find(block.name);
       auto inputValidValue = outputValid.find(block.inputs.front());

@@ -176,6 +176,8 @@ llvm::Error extractExpressions(mlir::Region &region, QueueBlockPlan &plan) {
       yielded.push_back(yield.getKey());
     else if (auto yield = mlir::dyn_cast<ac::DependencyYieldOp>(operation))
       yielded.push_back(yield.getValue());
+    else if (auto yield = mlir::dyn_cast<ac::MemoryYieldOp>(operation))
+      yielded.push_back(yield.getValue());
     else if (auto yield = mlir::dyn_cast<ac::FeedbackYieldOp>(operation)) {
       yielded.push_back(yield.getValue());
       yielded.push_back(yield.getContinueValue());
@@ -477,6 +479,39 @@ private:
         plan.blocks.push_back(std::move(blockPlan));
         continue;
       }
+      if (auto memory = mlir::dyn_cast<ac::MemoryOp>(operation)) {
+        auto input = queueName(memory.getInput(), names);
+        if (!input)
+          return input.takeError();
+        std::vector<std::string> outputs;
+        if (auto error = addOutputs(
+                memory, memory->getResults(), {int64_t(memory.getDepth())},
+                {int64_t(memory.getLatency())}, scope, outputs))
+          return error;
+        QueueBlockPlan blockPlan{"memory",
+                                 outputs.front(),
+                                 scopePath(scope),
+                                 {*input},
+                                 outputs,
+                                 {uint64_t(memory.getDepth())},
+                                 {uint64_t(memory.getLatency())}};
+        blockPlan.entries = memory.getEntries();
+        blockPlan.init = memory.getInit();
+        blockPlan.resultField = memory.getResultField().str();
+        blockPlan.region = printRegion(memory.getAddress());
+        std::vector<std::string> policyYields;
+        for (mlir::Region *policy :
+             {&memory.getAddress(), &memory.getWrite(), &memory.getData()}) {
+          if (auto error = extractExpressions(*policy, blockPlan))
+            return error;
+          if (blockPlan.yields.size() != 1)
+            return planError("memory policy must yield one value");
+          policyYields.push_back(blockPlan.yields.front());
+        }
+        blockPlan.yields = std::move(policyYields);
+        plan.blocks.push_back(std::move(blockPlan));
+        continue;
+      }
       if (auto feedback = mlir::dyn_cast<ac::FeedbackOp>(operation)) {
         auto input = queueName(feedback.getInput(), names);
         if (!input)
@@ -634,6 +669,7 @@ llvm::Expected<std::string> QueueGraphPlan::canonicalJson() const {
     blockValues.push_back(
         llvm::json::Object{{"capacity", block.capacity},
                            {"depths", std::move(depths)},
+                           {"entries", block.entries},
                            {"expressions", std::move(expressions)},
                            {"inputs", std::move(inputs)},
                            {"kind", block.kind},
@@ -644,9 +680,11 @@ llvm::Expected<std::string> QueueGraphPlan::canonicalJson() const {
                            {"outputs", std::move(outputs)},
                            {"policy", block.policy},
                            {"region", block.region},
+                           {"result_field", block.resultField},
                            {"resources", block.resources},
                            {"scope", block.scope},
                            {"start", block.start},
+                           {"init", block.init},
                            {"yields", std::move(yields)}});
   }
   llvm::json::Object root{{"blocks", std::move(blockValues)},

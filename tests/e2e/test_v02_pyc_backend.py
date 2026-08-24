@@ -19,6 +19,7 @@ ROUTE_EXAMPLE = ROOT / "examples" / "v02" / "pyc_route_merge_pipeline.py"
 ATOMIC_EXAMPLE = ROOT / "examples" / "v02" / "pyc_atomic_pipeline.py"
 REORDER_EXAMPLE = ROOT / "examples" / "v02" / "pyc_reorder_pipeline.py"
 DEPENDENCY_EXAMPLE = ROOT / "examples" / "v02" / "pyc_dependency_pipeline.py"
+MEMORY_EXAMPLE = ROOT / "examples" / "v02" / "pyc_memory_pipeline.py"
 FORK_EXAMPLE = ROOT / "examples" / "v02" / "pyc_fork_pipeline.py"
 CONDITIONAL_EXAMPLE = ROOT / "examples" / "v02" / "pyc_conditional_pipeline.py"
 FEEDBACK_EXAMPLE = ROOT / "examples" / "v02" / "pyc_feedback_pipeline.py"
@@ -43,8 +44,15 @@ class V02PycBackendTest(unittest.TestCase):
         metadata = toolchain / "share" / "pycircuit" / "toolchain-metadata.json"
         cxx = shutil.which("c++")
         verilator = shutil.which("verilator")
-        if not pycc.is_file() or not metadata.is_file() or cxx is None or verilator is None:
-            self.skipTest("pinned pyCircuit toolchain, C++, or Verilator is unavailable")
+        if (
+            not pycc.is_file()
+            or not metadata.is_file()
+            or cxx is None
+            or verilator is None
+        ):
+            self.skipTest(
+                "pinned pyCircuit toolchain, C++, or Verilator is unavailable"
+            )
         source = FEEDBACK_EXAMPLE.read_text(encoding="utf-8")
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -102,7 +110,7 @@ class V02PycBackendTest(unittest.TestCase):
             cpp_harness = root / "cpp_harness.cpp"
             cpp_executable = root / "cpp_model"
             cpp_harness.write_text(
-                '''#include "pyc_feedback_pipeline.hpp"
+                """#include "pyc_feedback_pipeline.hpp"
 #include <cstdint>
 #include <iostream>
 
@@ -123,7 +131,7 @@ int main() {
     dut.step();
   }
 }
-''',
+""",
                 encoding="utf-8",
             )
             cpp_build = subprocess.run(
@@ -155,7 +163,7 @@ int main() {
 
             verilator_harness = root / "verilator_harness.cpp"
             verilator_harness.write_text(
-                '''#include "Vpyc_feedback_pipeline.h"
+                """#include "Vpyc_feedback_pipeline.h"
 #include <cstdint>
 #include <iostream>
 
@@ -176,7 +184,7 @@ int main() {
     dut.eval();
   }
 }
-''',
+""",
                 encoding="utf-8",
             )
             object_dir = root / "verilator_obj"
@@ -274,7 +282,9 @@ int main() {{
                 check=False,
             )
             self.assertEqual(0, gfsim_run.returncode, gfsim_run.stderr)
-            self.assertEqual(transactions, [int(value) for value in gfsim_run.stdout.split()])
+            self.assertEqual(
+                transactions, [int(value) for value in gfsim_run.stdout.split()]
+            )
 
     def test_serial_runtime_if_builds_pyc_cpp_and_verilog(self) -> None:
         toolchain = Path(os.environ.get("PYC_V02_TOOLCHAIN_ROOT", DEFAULT_TOOLCHAIN))
@@ -282,8 +292,15 @@ int main() {{
         metadata = toolchain / "share" / "pycircuit" / "toolchain-metadata.json"
         cxx = shutil.which("c++")
         verilator = shutil.which("verilator")
-        if not pycc.is_file() or not metadata.is_file() or cxx is None or verilator is None:
-            self.skipTest("pinned pyCircuit toolchain, C++, or Verilator is unavailable")
+        if (
+            not pycc.is_file()
+            or not metadata.is_file()
+            or cxx is None
+            or verilator is None
+        ):
+            self.skipTest(
+                "pinned pyCircuit toolchain, C++, or Verilator is unavailable"
+            )
         source = CONDITIONAL_EXAMPLE.read_text(encoding="utf-8")
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -350,8 +367,15 @@ int main() {{
         metadata = toolchain / "share" / "pycircuit" / "toolchain-metadata.json"
         cxx = shutil.which("c++")
         verilator = shutil.which("verilator")
-        if not pycc.is_file() or not metadata.is_file() or cxx is None or verilator is None:
-            self.skipTest("pinned pyCircuit toolchain, C++, or Verilator is unavailable")
+        if (
+            not pycc.is_file()
+            or not metadata.is_file()
+            or cxx is None
+            or verilator is None
+        ):
+            self.skipTest(
+                "pinned pyCircuit toolchain, C++, or Verilator is unavailable"
+            )
         source = FORK_EXAMPLE.read_text(encoding="utf-8")
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -414,8 +438,15 @@ int main() {{
         metadata = toolchain / "share" / "pycircuit" / "toolchain-metadata.json"
         cxx = shutil.which("c++")
         verilator = shutil.which("verilator")
-        if not pycc.is_file() or not metadata.is_file() or cxx is None or verilator is None:
-            self.skipTest("pinned pyCircuit toolchain, C++, or Verilator is unavailable")
+        if (
+            not pycc.is_file()
+            or not metadata.is_file()
+            or cxx is None
+            or verilator is None
+        ):
+            self.skipTest(
+                "pinned pyCircuit toolchain, C++, or Verilator is unavailable"
+            )
         source = ATOMIC_EXAMPLE.read_text(encoding="utf-8")
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -475,7 +506,7 @@ int main() {{
             self.assertIn("%in1_valid", pyc)
             self.assertIn("%out0_ready", pyc)
             self.assertIn("%out1_ready", pyc)
-            self.assertIn("result_names = [\"out0_valid\"", pyc)
+            self.assertIn('result_names = ["out0_valid"', pyc)
 
     def test_dependency_is_cycle_equivalent_in_pyc_cpp_and_verilog(self) -> None:
         toolchain = Path(os.environ.get("PYC_V02_TOOLCHAIN_ROOT", DEFAULT_TOOLCHAIN))
@@ -483,8 +514,15 @@ int main() {{
         metadata = toolchain / "share" / "pycircuit" / "toolchain-metadata.json"
         cxx = shutil.which("c++")
         verilator = shutil.which("verilator")
-        if not pycc.is_file() or not metadata.is_file() or cxx is None or verilator is None:
-            self.skipTest("pinned pyCircuit toolchain, C++, or Verilator is unavailable")
+        if (
+            not pycc.is_file()
+            or not metadata.is_file()
+            or cxx is None
+            or verilator is None
+        ):
+            self.skipTest(
+                "pinned pyCircuit toolchain, C++, or Verilator is unavailable"
+            )
         source = DEPENDENCY_EXAMPLE.read_text(encoding="utf-8")
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -546,7 +584,7 @@ int main() {{
             cpp_harness = root / "cpp_harness.cpp"
             cpp_executable = root / "cpp_model"
             cpp_harness.write_text(
-                '''#include "pyc_dependency_pipeline.hpp"
+                """#include "pyc_dependency_pipeline.hpp"
 #include <array>
 #include <cstdint>
 #include <iostream>
@@ -576,7 +614,7 @@ int main() {
     dut.step();
   }
 }
-''',
+""",
                 encoding="utf-8",
             )
             cpp_build = subprocess.run(
@@ -608,7 +646,7 @@ int main() {
 
             verilator_harness = root / "verilator_harness.cpp"
             verilator_harness.write_text(
-                '''#include "Vpyc_dependency_pipeline.h"
+                """#include "Vpyc_dependency_pipeline.h"
 #include <array>
 #include <cstdint>
 #include <iostream>
@@ -638,7 +676,7 @@ int main() {
     dut.eval();
   }
 }
-''',
+""",
                 encoding="utf-8",
             )
             object_dir = root / "verilator_obj"
@@ -684,14 +722,241 @@ int main() {
                 transactions,
             )
 
+    def test_memory_is_old_data_and_cycle_equivalent_in_pyc_cpp_and_verilog(
+        self,
+    ) -> None:
+        toolchain = Path(os.environ.get("PYC_V02_TOOLCHAIN_ROOT", DEFAULT_TOOLCHAIN))
+        pycc = toolchain / "bin" / "pycc"
+        metadata = toolchain / "share" / "pycircuit" / "toolchain-metadata.json"
+        cxx = shutil.which("c++")
+        verilator = shutil.which("verilator")
+        if (
+            not pycc.is_file()
+            or not metadata.is_file()
+            or cxx is None
+            or verilator is None
+        ):
+            self.skipTest(
+                "pinned pyCircuit toolchain, C++, or Verilator is unavailable"
+            )
+        source = MEMORY_EXAMPLE.read_text(encoding="utf-8")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            raw = root / "memory.raw.ac.mlir"
+            frozen = root / "memory.frozen.ac.mlir"
+            output = root / "output"
+            raw.write_text(
+                lower_queue_source(source, "pyc_memory_pipeline"),
+                encoding="utf-8",
+            )
+            optimized = subprocess.run(
+                (str(ROOT / "build/dev-llvm22/bin/acir-opt"), str(raw)),
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(0, optimized.returncode, optimized.stderr)
+            frozen.write_text(optimized.stdout, encoding="utf-8")
+            completed = subprocess.run(
+                (
+                    str(ROOT / "tools/ac-queue-pyc-build.py"),
+                    str(frozen),
+                    "--pycgen-tool",
+                    str(ROOT / "build/dev-llvm22/bin/acir-queue-pycgen"),
+                    "--pycc",
+                    str(pycc),
+                    "--toolchain-lock",
+                    str(ROOT / "toolchains/pyc-v0.2.lock.json"),
+                    "--toolchain-metadata",
+                    str(metadata),
+                    "--cxx",
+                    cxx,
+                    "--verilator",
+                    verilator,
+                    "--pyc-output",
+                    str(output / "model.pyc"),
+                    "--cpp-output-dir",
+                    str(output / "cpp"),
+                    "--verilog-output-dir",
+                    str(output / "verilog"),
+                    "--manifest",
+                    str(output / "manifest.json"),
+                ),
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(0, completed.returncode, completed.stderr)
+            pyc = (output / "model.pyc").read_text(encoding="utf-8")
+            self.assertEqual(2, pyc.count("pyc.reg"))
+            self.assertEqual(1, pyc.count("pyc.sync_mem"))
+            self.assertIn('{depth = 16, name = "responses"}', pyc)
+            manifest = json.loads((output / "manifest.json").read_text())
+            self.assertEqual(
+                ["ac.memory", "ac.sink", "ac.source"],
+                manifest["opcode_lowering_inventory"],
+            )
+
+            cpp_harness = root / "cpp_harness.cpp"
+            cpp_executable = root / "cpp_model"
+            cpp_harness.write_text(
+                """#include "pyc_memory_pipeline.hpp"
+#include <array>
+#include <cstdint>
+#include <iostream>
+
+int main() {
+  pyc::gen::pyc_memory_pipeline dut;
+  const std::array<std::uint64_t, 4> input{
+      (3ULL << 25) | (1ULL << 24) | (42ULL << 8) | 1,
+      (3ULL << 25) | (0ULL << 24) | (0ULL << 8) | 2,
+      (3ULL << 25) | (1ULL << 24) | (99ULL << 8) | 3,
+      (3ULL << 25) | (0ULL << 24) | (0ULL << 8) | 4};
+  std::size_t cursor = 0;
+  for (std::uint64_t cycle = 0; cycle < 24; ++cycle) {
+    const bool offering = cycle != 0 && cursor < input.size();
+    dut.rst = pyc::cpp::Wire<1>(cycle == 0 ? 1 : 0);
+    dut.in_valid = pyc::cpp::Wire<1>(offering ? 1 : 0);
+    dut.in_data = pyc::cpp::Wire<29>(offering ? input[cursor] : 0);
+    dut.out_ready = pyc::cpp::Wire<1>(1);
+    dut.clk = pyc::cpp::Wire<1>(0);
+    dut.step();
+    dut.clk = pyc::cpp::Wire<1>(1);
+    dut.step();
+    std::cout << cycle << " " << dut.out_valid.value() << " "
+              << dut.out_data.value() << " " << dut.in_ready.value() << "\\n";
+    if (offering && dut.in_ready.value() != 0)
+      ++cursor;
+    dut.clk = pyc::cpp::Wire<1>(0);
+    dut.step();
+  }
+}
+""",
+                encoding="utf-8",
+            )
+            cpp_build = subprocess.run(
+                (
+                    cxx,
+                    "-std=c++17",
+                    "-I",
+                    str(output / "cpp"),
+                    "-I",
+                    str(toolchain / "include"),
+                    str(output / "cpp/pyc_memory_pipeline.cpp"),
+                    str(cpp_harness),
+                    str(toolchain / "lib/libpyc4_runtime.a"),
+                    "-o",
+                    str(cpp_executable),
+                ),
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(0, cpp_build.returncode, cpp_build.stderr)
+            cpp_run = subprocess.run(
+                (str(cpp_executable),),
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(0, cpp_run.returncode, cpp_run.stderr)
+
+            verilator_harness = root / "verilator_harness.cpp"
+            verilator_harness.write_text(
+                """#include "Vpyc_memory_pipeline.h"
+#include <array>
+#include <cstdint>
+#include <iostream>
+
+int main() {
+  Vpyc_memory_pipeline dut;
+  const std::array<std::uint64_t, 4> input{
+      (3ULL << 25) | (1ULL << 24) | (42ULL << 8) | 1,
+      (3ULL << 25) | (0ULL << 24) | (0ULL << 8) | 2,
+      (3ULL << 25) | (1ULL << 24) | (99ULL << 8) | 3,
+      (3ULL << 25) | (0ULL << 24) | (0ULL << 8) | 4};
+  std::size_t cursor = 0;
+  for (std::uint64_t cycle = 0; cycle < 24; ++cycle) {
+    const bool offering = cycle != 0 && cursor < input.size();
+    dut.rst = cycle == 0 ? 1 : 0;
+    dut.in_valid = offering ? 1 : 0;
+    dut.in_data = offering ? input[cursor] : 0;
+    dut.out_ready = 1;
+    dut.clk = 0;
+    dut.eval();
+    dut.clk = 1;
+    dut.eval();
+    std::cout << cycle << " " << unsigned(dut.out_valid) << " "
+              << dut.out_data << " " << unsigned(dut.in_ready) << "\\n";
+    if (offering && dut.in_ready != 0)
+      ++cursor;
+    dut.clk = 0;
+    dut.eval();
+  }
+}
+""",
+                encoding="utf-8",
+            )
+            object_dir = root / "verilator_obj"
+            verilator_build = subprocess.run(
+                (
+                    verilator,
+                    "--cc",
+                    "--exe",
+                    "--build",
+                    "-Wno-fatal",
+                    "--top-module",
+                    "pyc_memory_pipeline",
+                    "--Mdir",
+                    str(object_dir),
+                    str(output / "verilog/pyc_primitives.v"),
+                    str(output / "verilog/pyc_memory_pipeline.v"),
+                    str(verilator_harness),
+                ),
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(0, verilator_build.returncode, verilator_build.stderr)
+            verilator_run = subprocess.run(
+                (str(object_dir / "Vpyc_memory_pipeline"),),
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(0, verilator_run.returncode, verilator_run.stderr)
+            self.assertEqual(cpp_run.stdout, verilator_run.stdout)
+            transactions = [
+                int(fields[2])
+                for line in cpp_run.stdout.splitlines()
+                if len(fields := line.split()) == 4 and fields[1] == "1"
+            ]
+            self.assertEqual(
+                [
+                    (3 << 25) | (1 << 24) | (0 << 8) | 1,
+                    (3 << 25) | (0 << 24) | (42 << 8) | 2,
+                    (3 << 25) | (1 << 24) | (42 << 8) | 3,
+                    (3 << 25) | (0 << 24) | (99 << 8) | 4,
+                ],
+                transactions,
+            )
+
     def test_reorder_is_cycle_equivalent_in_pyc_cpp_and_verilog(self) -> None:
         toolchain = Path(os.environ.get("PYC_V02_TOOLCHAIN_ROOT", DEFAULT_TOOLCHAIN))
         pycc = toolchain / "bin" / "pycc"
         metadata = toolchain / "share" / "pycircuit" / "toolchain-metadata.json"
         cxx = shutil.which("c++")
         verilator = shutil.which("verilator")
-        if not pycc.is_file() or not metadata.is_file() or cxx is None or verilator is None:
-            self.skipTest("pinned pyCircuit toolchain, C++, or Verilator is unavailable")
+        if (
+            not pycc.is_file()
+            or not metadata.is_file()
+            or cxx is None
+            or verilator is None
+        ):
+            self.skipTest(
+                "pinned pyCircuit toolchain, C++, or Verilator is unavailable"
+            )
         source = REORDER_EXAMPLE.read_text(encoding="utf-8").replace(
             "capacity=16", "capacity=4"
         )
@@ -757,7 +1022,7 @@ int main() {
             cpp_harness = root / "cpp_harness.cpp"
             cpp_executable = root / "cpp_model"
             cpp_harness.write_text(
-                '''#include "pyc_reorder_pipeline.hpp"
+                """#include "pyc_reorder_pipeline.hpp"
 #include <array>
 #include <cstdint>
 #include <iostream>
@@ -785,7 +1050,7 @@ int main() {
     dut.step();
   }
 }
-''',
+""",
                 encoding="utf-8",
             )
             cpp_build = subprocess.run(
@@ -817,7 +1082,7 @@ int main() {
 
             verilator_harness = root / "verilator_harness.cpp"
             verilator_harness.write_text(
-                '''#include "Vpyc_reorder_pipeline.h"
+                """#include "Vpyc_reorder_pipeline.h"
 #include <array>
 #include <cstdint>
 #include <iostream>
@@ -845,7 +1110,7 @@ int main() {
     dut.eval();
   }
 }
-''',
+""",
                 encoding="utf-8",
             )
             object_dir = root / "verilator_obj"
@@ -882,9 +1147,7 @@ int main() {
                 for line in cpp_run.stdout.splitlines()
                 if len(fields := line.split()) == 4 and fields[1] == "1"
             ]
-            self.assertEqual(
-                [0, (1 << 32) | 10, (2 << 32) | 20], transactions
-            )
+            self.assertEqual([0, (1 << 32) | 10, (2 << 32) | 20], transactions)
 
     def test_davincioo_like_graph_builds_full_pyc_and_verilog(self) -> None:
         toolchain = Path(os.environ.get("PYC_V02_TOOLCHAIN_ROOT", DEFAULT_TOOLCHAIN))
@@ -892,8 +1155,15 @@ int main() {
         metadata = toolchain / "share" / "pycircuit" / "toolchain-metadata.json"
         cxx = shutil.which("c++")
         verilator = shutil.which("verilator")
-        if not pycc.is_file() or not metadata.is_file() or cxx is None or verilator is None:
-            self.skipTest("pinned pyCircuit toolchain, C++, or Verilator is unavailable")
+        if (
+            not pycc.is_file()
+            or not metadata.is_file()
+            or cxx is None
+            or verilator is None
+        ):
+            self.skipTest(
+                "pinned pyCircuit toolchain, C++, or Verilator is unavailable"
+            )
         source = DAVINCIOO_EXAMPLE.read_text(encoding="utf-8")
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -949,9 +1219,7 @@ int main() {
             self.assertIn(": i2", pyc)
             self.assertGreaterEqual(pyc.count("pyc.fifo"), 14)
             self.assertGreaterEqual(pyc.count("pyc.reg"), 50)
-            self.assertTrue(
-                (output / "verilog/davincioo_queue_model.v").is_file()
-            )
+            self.assertTrue((output / "verilog/davincioo_queue_model.v").is_file())
             manifest = json.loads((output / "manifest.json").read_text())
             self.assertEqual(
                 [
@@ -1001,7 +1269,7 @@ int main() {
             cpp_harness = root / "davinci_cpp_harness.cpp"
             cpp_executable = root / "davinci_cpp_model"
             cpp_harness.write_text(
-                f'''#include "davincioo_queue_model.hpp"
+                f"""#include "davincioo_queue_model.hpp"
 #include <array>
 #include <cstdint>
 #include <iostream>
@@ -1035,7 +1303,7 @@ int main() {{
     dut.step();
   }}
 }}
-''',
+""",
                 encoding="utf-8",
             )
             cpp_build = subprocess.run(
@@ -1067,7 +1335,7 @@ int main() {{
 
             verilator_harness = root / "davinci_verilator_harness.cpp"
             verilator_harness.write_text(
-                f'''#include "Vdavincioo_queue_model.h"
+                f"""#include "Vdavincioo_queue_model.h"
 #include <array>
 #include <cstdint>
 #include <iostream>
@@ -1108,7 +1376,7 @@ int main() {{
     dut.eval();
   }}
 }}
-''',
+""",
                 encoding="utf-8",
             )
             object_dir = root / "davinci_verilator_obj"
@@ -1153,8 +1421,15 @@ int main() {{
         metadata = toolchain / "share" / "pycircuit" / "toolchain-metadata.json"
         cxx = shutil.which("c++")
         verilator = shutil.which("verilator")
-        if not pycc.is_file() or not metadata.is_file() or cxx is None or verilator is None:
-            self.skipTest("pinned pyCircuit toolchain, C++, or Verilator is unavailable")
+        if (
+            not pycc.is_file()
+            or not metadata.is_file()
+            or cxx is None
+            or verilator is None
+        ):
+            self.skipTest(
+                "pinned pyCircuit toolchain, C++, or Verilator is unavailable"
+            )
         source = ROUTE_EXAMPLE.read_text(encoding="utf-8")
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -1210,9 +1485,7 @@ int main() {{
             self.assertIn("pyc.not", pyc)
             self.assertIn("pyc.or", pyc)
             self.assertIn("pyc.and", pyc)
-            self.assertTrue(
-                (output / "verilog/pyc_route_merge_pipeline.v").is_file()
-            )
+            self.assertTrue((output / "verilog/pyc_route_merge_pipeline.v").is_file())
 
     def test_struct_payload_has_stable_packed_pyc_and_verilog_layout(self) -> None:
         toolchain = Path(os.environ.get("PYC_V02_TOOLCHAIN_ROOT", DEFAULT_TOOLCHAIN))
@@ -1220,8 +1493,15 @@ int main() {{
         metadata = toolchain / "share" / "pycircuit" / "toolchain-metadata.json"
         cxx = shutil.which("c++")
         verilator = shutil.which("verilator")
-        if not pycc.is_file() or not metadata.is_file() or cxx is None or verilator is None:
-            self.skipTest("pinned pyCircuit toolchain, C++, or Verilator is unavailable")
+        if (
+            not pycc.is_file()
+            or not metadata.is_file()
+            or cxx is None
+            or verilator is None
+        ):
+            self.skipTest(
+                "pinned pyCircuit toolchain, C++, or Verilator is unavailable"
+            )
         source = STRUCT_EXAMPLE.read_text(encoding="utf-8")
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -1286,15 +1566,24 @@ int main() {{
         metadata = toolchain / "share" / "pycircuit" / "toolchain-metadata.json"
         cxx = shutil.which("c++")
         verilator = shutil.which("verilator")
-        if not pycc.is_file() or not metadata.is_file() or cxx is None or verilator is None:
-            self.skipTest("pinned pyCircuit toolchain, C++, or Verilator is unavailable")
+        if (
+            not pycc.is_file()
+            or not metadata.is_file()
+            or cxx is None
+            or verilator is None
+        ):
+            self.skipTest(
+                "pinned pyCircuit toolchain, C++, or Verilator is unavailable"
+            )
 
         source = EXAMPLE.read_text(encoding="utf-8")
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             raw = root / "model.raw.ac.mlir"
             frozen = root / "model.frozen.ac.mlir"
-            raw.write_text(lower_queue_source(source, "pyc_queue_pipeline"), encoding="utf-8")
+            raw.write_text(
+                lower_queue_source(source, "pyc_queue_pipeline"), encoding="utf-8"
+            )
             optimized = subprocess.run(
                 (str(ROOT / "build/dev-llvm22/bin/acir-opt"), str(raw)),
                 text=True,
@@ -1359,7 +1648,7 @@ int main() {{
             cpp_harness = first / "cpp_harness.cpp"
             cpp_executable = first / "cpp_model"
             cpp_harness.write_text(
-                '''#include "pyc_queue_pipeline.hpp"
+                """#include "pyc_queue_pipeline.hpp"
 #include <cstdint>
 #include <iostream>
 
@@ -1380,7 +1669,7 @@ int main() {
     dut.step();
   }
 }
-''',
+""",
                 encoding="utf-8",
             )
             cpp_build = subprocess.run(
@@ -1412,7 +1701,7 @@ int main() {
 
             verilator_harness = first / "verilator_harness.cpp"
             verilator_harness.write_text(
-                '''#include "Vpyc_queue_pipeline.h"
+                """#include "Vpyc_queue_pipeline.h"
 #include <cstdint>
 #include <iostream>
 
@@ -1433,7 +1722,7 @@ int main() {
     dut.eval();
   }
 }
-''',
+""",
                 encoding="utf-8",
             )
             object_dir = first / "verilator_obj"
