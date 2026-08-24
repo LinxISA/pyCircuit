@@ -24,6 +24,7 @@ def ACIR_TypeScopeOp : ACIR_Op<"type_scope", [
                         $_builder.getStringAttr(name));
     $_state.addRegion();
   }]>];
+  let assemblyFormat = "$sym_name $body attr-dict";
 }
 
 def ACIR_TypeAliasOp : ACIR_Op<"type_alias", [Symbol]> {
@@ -35,6 +36,7 @@ class ACIR_RecordDeclarationOp<string mnemonic>
     : ACIR_Op<mnemonic, [Symbol, ACIR_RecordLike]> {
   let arguments = (ins SymbolNameAttr:$sym_name, ArrayAttr:$fields);
   let hasVerifier = 1;
+  let assemblyFormat = "$sym_name `fields` $fields attr-dict";
 }
 
 def ACIR_StructOp : ACIR_RecordDeclarationOp<"struct">;

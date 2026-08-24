@@ -17,10 +17,10 @@ builtin.module attributes {ac.contract_epoch = "0.1"} {
   >} : () -> ()
 }
 
-// CHECK: "ac.type_scope"
+// CHECK: ac.type_scope @types
 // CHECK: "ac.type_alias"
-// CHECK: "ac.struct"
+// CHECK: ac.struct @Header
 // CHECK: "ac.enum"
 // CHECK: "ac.union"
 // CHECK: "ac.packet"
-// CHECK: "ac.transaction"
+// CHECK: ac.transaction @Dma
