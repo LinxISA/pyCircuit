@@ -70,6 +70,7 @@ class RouteBinding:
     latency: int
     scope: tuple[str, ...]
     order: int
+    boolean_selector: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -519,15 +520,177 @@ def parse_queue_program(text: str, system: str) -> QueueProgram:
             current_order = order
             order += 1
             if isinstance(statement, ast.If):
-                if not (
+                if (
                     isinstance(statement.test, ast.Constant)
                     and type(statement.test.value) is bool
                 ):
-                    raise QueueFrontendError(
-                        "ACPY-QUEUE-011: runtime Queue condition must use route"
+                    selected = (
+                        statement.body if statement.test.value else statement.orelse
                     )
-                selected = statement.body if statement.test.value else statement.orelse
-                visit(selected, scope_path, aliases, atomic_group)
+                    visit(selected, scope_path, aliases, atomic_group)
+                    continue
+                if atomic_group is not None:
+                    raise QueueFrontendError(
+                        "ACPY-QUEUE-011: runtime if cannot be nested in atomic"
+                    )
+
+                def parse_arm(
+                    body: list[ast.stmt],
+                ) -> tuple[str, str, ast.Call, str, ast.expr]:
+                    if (
+                        len(body) != 1
+                        or not isinstance(body[0], ast.Assign)
+                        or len(body[0].targets) != 1
+                        or not isinstance(body[0].targets[0], ast.Name)
+                        or not isinstance(body[0].value, ast.Call)
+                    ):
+                        raise QueueFrontendError(
+                            "ACPY-QUEUE-011: runtime if requires one apply "
+                            "assignment in each branch"
+                        )
+                    target = body[0].targets[0].id
+                    call = body[0].value
+                    if (
+                        not isinstance(call.func, ast.Attribute)
+                        or call.func.attr != "apply"
+                        or len(call.args) != 1
+                    ):
+                        raise QueueFrontendError(
+                            "ACPY-QUEUE-011: runtime if requires one apply "
+                            "assignment in each branch"
+                        )
+                    input_name = queue_reference(call.func.value, aliases)
+                    argument, expression = _lambda(call.args[0])
+                    return target, input_name, call, argument, expression
+
+                false_arm = parse_arm(statement.orelse)
+                true_arm = parse_arm(statement.body)
+                if false_arm[0] != true_arm[0]:
+                    raise QueueFrontendError(
+                        "ACPY-QUEUE-011: runtime if branches require one result name"
+                    )
+                if false_arm[1] != true_arm[1]:
+                    raise QueueFrontendError(
+                        "ACPY-QUEUE-011: runtime if branches must consume one Queue"
+                    )
+                name = true_arm[0]
+                input_name = true_arm[1]
+                if name in by_name or name in collections:
+                    raise QueueFrontendError(
+                        "ACPY-QUEUE-011: runtime if result requires one fresh name"
+                    )
+                incoming = by_name[input_name]
+
+                condition_names: dict[str, str] = {}
+                for node in ast.walk(statement.test):
+                    if not isinstance(node, ast.Name):
+                        continue
+                    try:
+                        referenced = queue_reference(node, aliases)
+                    except QueueFrontendError:
+                        continue
+                    condition_names[node.id] = referenced
+                if set(condition_names.values()) != {input_name}:
+                    raise QueueFrontendError(
+                        "ACPY-QUEUE-011: runtime if condition must read its branch Queue"
+                    )
+
+                argument = "item"
+
+                class QueueCondition(ast.NodeTransformer):
+                    def visit_Name(self, node: ast.Name) -> ast.expr:
+                        if condition_names.get(node.id) == input_name:
+                            return ast.copy_location(ast.Name(id=argument), node)
+                        return node
+
+                condition = QueueCondition().visit(copy.deepcopy(statement.test))
+                assert isinstance(condition, ast.expr)
+                _, condition_type = _ExpressionEmitter(
+                    payload_map, argument, incoming.payload
+                ).emit(condition)
+                if condition_type != "i1":
+                    raise QueueFrontendError(
+                        "ACPY-QUEUE-011: runtime if condition must lower to bool"
+                    )
+                conditional = len(
+                    [route for route in routes if route.boolean_selector]
+                )
+                false_input = f"{name}__if_false{conditional}_in"
+                true_input = f"{name}__if_true{conditional}_in"
+                false_output = f"{name}__if_false{conditional}"
+                true_output = f"{name}__if_true{conditional}"
+                for route_name in (false_input, true_input):
+                    binding = QueueBinding(
+                        route_name,
+                        incoming.payload,
+                        1,
+                        1,
+                        None,
+                        scope=scope_path,
+                        order=current_order,
+                        route_output=True,
+                    )
+                    queues.append(binding)
+                    by_name[route_name] = binding
+                routes.append(
+                    RouteBinding(
+                        input_name,
+                        (false_input, true_input),
+                        argument,
+                        condition,
+                        1,
+                        1,
+                        scope_path,
+                        current_order,
+                        True,
+                    )
+                )
+
+                for arm, arm_input, arm_output in (
+                    (false_arm, false_input, false_output),
+                    (true_arm, true_input, true_output),
+                ):
+                    branch_order = order
+                    order += 1
+                    binding = QueueBinding(
+                        arm_output,
+                        incoming.payload,
+                        _positive_int(arm[2], "depth", 1),
+                        _positive_int(arm[2], "latency", 1),
+                        arm_input,
+                        arm[3],
+                        arm[4],
+                        scope_path,
+                        branch_order,
+                    )
+                    queues.append(binding)
+                    by_name[arm_output] = binding
+
+                merge_order = order
+                order += 1
+                output = QueueBinding(
+                    name,
+                    incoming.payload,
+                    1,
+                    1,
+                    None,
+                    scope=scope_path,
+                    order=merge_order,
+                    merge_output=True,
+                )
+                queues.append(output)
+                by_name[name] = output
+                merges.append(
+                    MergeBinding(
+                        (false_output, true_output),
+                        name,
+                        "priority",
+                        1,
+                        1,
+                        scope_path,
+                        merge_order,
+                    )
+                )
                 continue
             if isinstance(statement, ast.With) and len(statement.items) == 1:
                 item = statement.items[0]
@@ -1303,6 +1466,10 @@ def lower_queue_program(program: QueueProgram) -> str:
                 incoming = by_name[route.input_name]
                 emitter = _ExpressionEmitter(payloads, route.argument, incoming.payload)
                 selector, selector_type = emitter.emit(route.selector)
+                if route.boolean_selector and selector_type != "i1":
+                    raise QueueFrontendError(
+                        "ACPY-QUEUE-011: runtime if condition must lower to bool"
+                    )
                 output_names = [
                     name if not path else f"{name}__local" for name in route.outputs
                 ]

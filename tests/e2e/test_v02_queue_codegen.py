@@ -11,9 +11,107 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
 SOURCE = ROOT / "examples" / "v02" / "davincioo_queue_model.py"
+CONDITIONAL_SOURCE = ROOT / "examples" / "v02" / "pyc_conditional_pipeline.py"
 
 
 class V02QueueCodegenTest(unittest.TestCase):
+    def test_serial_runtime_if_generates_and_runs_common_blocks(self) -> None:
+        compiler = shutil.which("c++")
+        if compiler is None:
+            self.skipTest("C++ compiler is unavailable")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            model = root / "conditional.cpp"
+            acir = root / "conditional.ac.mlir"
+            plan = root / "conditional.queue-plan.json"
+            generated = subprocess.run(
+                (
+                    str(ROOT / "tools/ac-queue-cxxgen.py"),
+                    str(CONDITIONAL_SOURCE),
+                    "--system",
+                    "pyc_conditional_pipeline",
+                    "--acir-output",
+                    str(acir),
+                    "--plan-output",
+                    str(plan),
+                    "--acir-opt",
+                    str(ROOT / "build/dev-llvm22/bin/acir-opt"),
+                    "--queue-plan-tool",
+                    str(ROOT / "build/dev-llvm22/bin/acir-queue-plan"),
+                    "--queue-cxxgen-tool",
+                    str(ROOT / "build/dev-llvm22/bin/acir-queue-cxxgen"),
+                    "--output",
+                    str(model),
+                ),
+                cwd=ROOT,
+                env={**os.environ, "PYTHONPATH": str(ROOT / "src")},
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(0, generated.returncode, generated.stderr)
+            content = model.read_text(encoding="utf-8")
+            self.assertIn("gfsim::QueueRoute<Item, 2", content)
+            self.assertIn("gfsim::QueueTransform<Item, Item", content)
+            self.assertIn("gfsim::QueueMerge<Item, 2>", content)
+            plan_document = json.loads(plan.read_text(encoding="utf-8"))
+            self.assertEqual("0.2", plan_document["contract_epoch"])
+
+            harness = root / "harness.cpp"
+            executable = root / "conditional"
+            harness.write_text(
+                f'''#include "{model.name}"
+#include <array>
+#include <cstddef>
+
+int main() {{
+  ac_generated::PycConditionalPipeline model;
+  if (!model.input_queue().proposePush(ac_generated::Item{{1, 0}}) ||
+      !model.input_queue().proposePush(ac_generated::Item{{1, 1}}))
+    return 1;
+  auto rows = model.dispatch_rows();
+  for (std::size_t tick = 0; tick < 16; ++tick) {{
+    const gfsim::Epoch epoch{{tick, 0}};
+    for (auto &row : rows)
+      row.work(row.object, epoch);
+    for (auto &row : rows)
+      row.xfer(row.object, epoch, gfsim::XferPhase::Arbitrate);
+    for (auto &row : rows)
+      row.xfer(row.object, epoch, gfsim::XferPhase::Commit);
+  }}
+  const auto values = model.sink_0_values();
+  if (values.size() != 2)
+    return 2;
+  return values[0].value == 11 && values[1].value == 21 ? 0 : 3;
+}}
+''',
+                encoding="utf-8",
+            )
+            linked = subprocess.run(
+                (
+                    compiler,
+                    "-std=c++20",
+                    "-I",
+                    str(ROOT / "include"),
+                    str(harness),
+                    "-o",
+                    str(executable),
+                ),
+                cwd=root,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(0, linked.returncode, linked.stderr)
+            executed = subprocess.run(
+                (str(executable),),
+                cwd=root,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(0, executed.returncode, executed.stderr)
+
     def test_native_frozen_acir_codegen_covers_broadcast_and_feedback(self) -> None:
         from tests.python_frontend.test_queue_codegen_v02 import (
             BROADCAST_SOURCE,

@@ -59,3 +59,5 @@ exact pyCircuit commit with LLVM 19 before running the PYC gate.
 logic, including forward valid and backward ready paths.
 `pyc_atomic_pipeline.py` verifies multi-source/multi-sink atomic firing.
 `pyc_fork_pipeline.py` verifies decoupled fanout with per-output delivered state.
+`pyc_conditional_pipeline.py` verifies that a serial runtime `if` becomes an
+official route, two branch transforms, and a mutually exclusive priority merge.

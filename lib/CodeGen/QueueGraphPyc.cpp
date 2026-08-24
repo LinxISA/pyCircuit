@@ -164,6 +164,52 @@ emitTransform(const QueueGraphPlan &plan, const QueueBlockPlan &block,
           return type.takeError();
         body << "    " << result << " = pyc." << expression.kind << ' '
              << *first << ", " << *second << " : " << *type << "\n";
+      } else if (expression.kind == "cmp") {
+        if (expression.operands.size() != 2)
+          return pycError("comparison expression arity mismatch");
+        auto second = value(expression.operands[1]);
+        auto firstType = valueType(expression.operands[0]);
+        auto secondType = valueType(expression.operands[1]);
+        if (!second)
+          return second.takeError();
+        if (!firstType)
+          return firstType.takeError();
+        if (!secondType)
+          return secondType.takeError();
+        if (*firstType != *secondType)
+          return pycError("comparison operand types must match");
+        auto type = pycType(plan, *firstType);
+        if (!type)
+          return type.takeError();
+
+        llvm::StringRef opcode;
+        std::string lhs = *first;
+        std::string rhs = *second;
+        bool negate = false;
+        if (expression.predicate == "eq" || expression.predicate == "ne") {
+          opcode = "eq";
+          negate = expression.predicate == "ne";
+        } else if (expression.predicate == "slt" ||
+                   expression.predicate == "sge") {
+          opcode = "slt";
+          negate = expression.predicate == "sge";
+        } else if (expression.predicate == "sgt" ||
+                   expression.predicate == "sle") {
+          opcode = "slt";
+          std::swap(lhs, rhs);
+          negate = expression.predicate == "sle";
+        } else {
+          return pycError("unsupported comparison predicate");
+        }
+        std::string compared = newValue();
+        body << "    " << compared << " = pyc." << opcode.str() << ' ' << lhs
+             << ", " << rhs << " : " << *type << "\n";
+        if (negate) {
+          result = newValue();
+          body << "    " << result << " = pyc.not " << compared << " : i1\n";
+        } else {
+          result = std::move(compared);
+        }
       } else if (expression.kind == "get") {
         auto recordType = valueType(expression.operands[0]);
         if (!recordType)

@@ -429,8 +429,25 @@ for index in range(2):
     ac.sink(lanes[index])
 ```
 
-A runtime Queue condition in a Python `if` is rejected. Use `route` to express
-runtime Queue control. Runtime topology allocation is forbidden.
+A runtime Queue condition may use the symmetric form below. The condition MUST
+lower to `ac.var<i1>`, both branches MUST consume the same Queue through one
+`apply`, and both branches MUST assign the same fresh result name.
+
+```python
+if incoming.route == 0:
+    selected = incoming.apply(
+        lambda item: item.with_fields(value=item.value + 10)
+    )
+else:
+    selected = incoming.apply(
+        lambda item: item.with_fields(value=item.value + 20)
+    )
+```
+
+The frontend lowers this statement to an official two-way `ac.route`, two
+branch transforms, and a mutually exclusive priority `ac.merge`. More complex
+runtime Queue control remains explicit through `route`/`merge`. Runtime topology
+allocation is forbidden.
 
 ## ACIR type contract
 
@@ -882,7 +899,7 @@ include:
 | `ACPY-QUEUE-008` | invalid merge |
 | `ACPY-QUEUE-009` | invalid atomic group |
 | `ACPY-QUEUE-010` | forbidden user opcode or backend provider |
-| `ACPY-QUEUE-011` | runtime Queue condition must use route |
+| `ACPY-QUEUE-011` | runtime `if` is not a symmetric Boolean Queue branch |
 | `ACPY-QUEUE-012` | invalid fork |
 
 Native QueueGraph/backend diagnostics use the `ACLOWER-QUEUE-*` family and
@@ -914,7 +931,8 @@ The following v0.2 slices are implemented and tested:
 - scopes with inferred Queue boundaries;
 - transform, strict broadcast, decoupled fork, route, merge, observe, sink,
   explicit atomic transform, and bounded feedback;
-- static arrays, maps, sets, static `if`, and static loops;
+- static arrays, maps, sets, static `if`, static loops, and symmetric runtime
+  Queue `if` lowering through route/transform/merge;
 - canonical QueueGraph extraction;
 - typed gfsim C++ generation;
 - PYC/Verilog lowering for transform, broadcast, fork, route, merge, hierarchy,

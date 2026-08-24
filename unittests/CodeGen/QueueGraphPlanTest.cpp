@@ -17,7 +17,9 @@ module attributes {ac.contract_epoch = "0.2", ac.system = "pipeline"} {
   %input = ac.source depth 4 latency 1 {ac.name = "input"} : !ac.queue<i64>
   %left, %right = ac.route %input depths [2, 2] latencies [1, 1] {
   ^selector(%item: !ac.var<i64>):
-    ac.route.yield %item : !ac.var<i64>
+    %zero = ac.var.constant 0 : i64 as !ac.var<i64>
+    %selected = ac.var.cmp "eq" %item, %zero : !ac.var<i64> -> !ac.var<i1>
+    ac.route.yield %selected : !ac.var<i1>
   } {ac.output_names = ["left", "right"]} : !ac.queue<i64> -> (!ac.queue<i64>, !ac.queue<i64>)
   %merged = ac.merge %left, %right policy "round_robin" depth 3 latency 1 {ac.name = "merged"} : (!ac.queue<i64>, !ac.queue<i64>) -> !ac.queue<i64>
   ac.sink %merged {ac.name = "sink_0"} : !ac.queue<i64>
@@ -173,6 +175,43 @@ TEST(QueueGraphPlanTest, EmitsCanonicalScalarQueuePyc) {
   EXPECT_NE(pyc->find("pyc.add"), std::string::npos);
   EXPECT_NE(pyc->find("pyc.frontend.contract = \"pycircuit\""),
             std::string::npos);
+}
+
+TEST(QueueGraphPlanTest, EmitsQueuePredicateAsPycComparison) {
+  struct Case {
+    llvm::StringLiteral predicate;
+    llvm::StringLiteral opcode;
+    bool negated;
+  };
+  constexpr Case cases[] = {
+      {"eq", "pyc.eq", false},   {"ne", "pyc.eq", true},
+      {"slt", "pyc.slt", false}, {"sle", "pyc.slt", true},
+      {"sgt", "pyc.slt", false}, {"sge", "pyc.slt", true},
+  };
+  for (const Case &testCase : cases) {
+    SCOPED_TRACE(testCase.predicate.str());
+    mlir::MLIRContext context;
+    context.loadDialect<ac::ACIRDialect, mlir::DLTIDialect>();
+    std::string source = kQueueGraph.str();
+    const std::string original = "ac.var.cmp \"eq\"";
+    size_t predicate = source.find(original);
+    ASSERT_NE(predicate, std::string::npos);
+    source.replace(predicate, original.size(),
+                   "ac.var.cmp \"" + testCase.predicate.str() + "\"");
+    auto module = mlir::parseSourceString<mlir::ModuleOp>(source, &context);
+    ASSERT_TRUE(module);
+    auto plan = buildQueueGraphPlan(*module);
+    ASSERT_TRUE(bool(plan)) << llvm::toString(plan.takeError());
+    auto pyc = generateQueueGraphPyc(*plan);
+    ASSERT_TRUE(bool(pyc)) << llvm::toString(pyc.takeError());
+    EXPECT_NE(pyc->find(testCase.opcode.str()), std::string::npos);
+    size_t notCount = 0;
+    for (size_t offset = 0;
+         (offset = pyc->find("pyc.not", offset)) != std::string::npos;
+         offset += 7)
+      ++notCount;
+    EXPECT_EQ(notCount, testCase.negated ? 3u : 2u);
+  }
 }
 
 TEST(QueueGraphPlanTest, EmitsOneReadyValidStagePerQueueLatency) {

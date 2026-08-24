@@ -230,6 +230,28 @@ def pipeline() -> None:
     ac.sink(right)
 """
 
+RUNTIME_IF_SOURCE = """
+import agentic_circuit as ac
+
+@ac.struct
+class Item:
+    value: int
+    route: int
+
+@ac.system
+def pipeline() -> None:
+    input_queue = ac.source(Item)
+    if input_queue.route == 0:
+        output_queue = input_queue.apply(
+            lambda item: item.with_fields(value=item.value + 10)
+        )
+    else:
+        output_queue = input_queue.apply(
+            lambda item: item.with_fields(value=item.value + 20)
+        )
+    ac.sink(output_queue)
+"""
+
 
 class QueueFrontendV02Test(unittest.TestCase):
     def test_simple_serial_python_lowers_to_typed_queue_graph(self) -> None:
@@ -419,7 +441,7 @@ class QueueFrontendV02Test(unittest.TestCase):
         self.assertNotIn("unreachable", lowered)
         self.assertIn("ac.sink %lanes__0", lowered)
         self.assertIn("ac.sink %lanes__1", lowered)
-        with self.assertRaisesRegex(QueueFrontendError, "must use route"):
+        with self.assertRaisesRegex(QueueFrontendError, "one result name"):
             lower_queue_source(
                 STATIC_CONTROL_SOURCE.replace("if True:", "if input_queue:"),
                 "pipeline",
@@ -471,6 +493,59 @@ def pipeline() -> None:
             "latencies [1, 1]",
             lowered,
         )
+
+    def test_runtime_if_infers_route_branch_transforms_and_merge(self) -> None:
+        from agentic_circuit._queue_frontend import lower_queue_source
+
+        lowered = lower_queue_source(RUNTIME_IF_SOURCE, "pipeline")
+        self.assertEqual(
+            lowered, lower_queue_source(RUNTIME_IF_SOURCE, "pipeline")
+        )
+        self.assertIn(
+            "%output_queue__if_false0_in, %output_queue__if_true0_in = "
+            "ac.route %input_queue",
+            lowered,
+        )
+        self.assertIn('ac.var.cmp "eq"', lowered)
+        self.assertIn("ac.route.yield", lowered)
+        self.assertIn("ac.transform %output_queue__if_false0_in", lowered)
+        self.assertIn("ac.transform %output_queue__if_true0_in", lowered)
+        self.assertIn(
+            "%output_queue = ac.merge %output_queue__if_false0, "
+            "%output_queue__if_true0 policy \"priority\"",
+            lowered,
+        )
+
+    def test_runtime_if_requires_symmetric_queue_assignment(self) -> None:
+        from agentic_circuit._queue_frontend import (
+            QueueFrontendError,
+            lower_queue_source,
+        )
+
+        with self.assertRaisesRegex(
+            QueueFrontendError, "requires one apply assignment in each branch"
+        ):
+            lower_queue_source(
+                RUNTIME_IF_SOURCE.replace("    else:\n", "    else:\n        pass\n"),
+                "pipeline",
+            )
+        with self.assertRaisesRegex(QueueFrontendError, "one result name"):
+            lower_queue_source(
+                RUNTIME_IF_SOURCE.replace(
+                    "        output_queue = input_queue.apply(\n"
+                    "            lambda item: item.with_fields(value=item.value + 20)",
+                    "        other_queue = input_queue.apply(\n"
+                    "            lambda item: item.with_fields(value=item.value + 20)",
+                ),
+                "pipeline",
+            )
+        with self.assertRaisesRegex(QueueFrontendError, "must lower to bool"):
+            lower_queue_source(
+                RUNTIME_IF_SOURCE.replace(
+                    "if input_queue.route == 0:", "if input_queue.route:"
+                ),
+                "pipeline",
+            )
 
     def test_latency_zero_and_unsupported_lambda_are_rejected(self) -> None:
         from agentic_circuit._queue_frontend import (
