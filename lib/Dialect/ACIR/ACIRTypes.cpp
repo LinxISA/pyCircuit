@@ -97,6 +97,19 @@ LogicalResult verifyNamedLayoutEntries(DataLayoutEntryListRef entries,
   return success();
 }
 
+bool isStaticCollectionElementType(Type type) {
+  return isa<QueueType, VarType, ArrayType, MapType, SetType>(type);
+}
+
+LogicalResult
+verifyStaticCollectionElement(function_ref<InFlightDiagnostic()> emitError,
+                              Type elementType, StringRef collection) {
+  if (isStaticCollectionElementType(elementType))
+    return success();
+  return emitError() << collection
+                     << " element must be a queue, var, or static collection";
+}
+
 } // namespace
 
 bool containsChannelType(Type type) {
@@ -187,6 +200,37 @@ LogicalResult QueueType::verify(function_ref<InFlightDiagnostic()> emitError,
   if (isImmutablePayloadType(elementType))
     return success();
   return emitError() << "queue payload must be an immutable ACIR value type";
+}
+
+LogicalResult ArrayType::verify(function_ref<InFlightDiagnostic()> emitError,
+                                int64_t length, Type elementType) {
+  if (length <= 0)
+    return emitError() << "array length must be positive";
+  return verifyStaticCollectionElement(emitError, elementType, "array");
+}
+
+LogicalResult MapType::verify(function_ref<InFlightDiagnostic()> emitError,
+                              ArrayAttr keys, Type elementType) {
+  if (keys.empty())
+    return emitError()
+           << "map keys must be non-empty and strictly lexicographic";
+  StringRef previous;
+  for (Attribute rawKey : keys) {
+    auto key = dyn_cast<StringAttr>(rawKey);
+    if (!key || key.getValue().empty() ||
+        (!previous.empty() && previous >= key.getValue()))
+      return emitError()
+             << "map keys must be non-empty and strictly lexicographic";
+    previous = key.getValue();
+  }
+  return verifyStaticCollectionElement(emitError, elementType, "map");
+}
+
+LogicalResult SetType::verify(function_ref<InFlightDiagnostic()> emitError,
+                              int64_t length, Type elementType) {
+  if (length <= 0)
+    return emitError() << "set length must be positive";
+  return verifyStaticCollectionElement(emitError, elementType, "set");
 }
 
 LogicalResult FlowType::verify(function_ref<InFlightDiagnostic()> emitError,

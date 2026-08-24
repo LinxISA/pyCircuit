@@ -67,7 +67,7 @@ acsim_contract_epoch: 0.1
 | ac.stat.add | ACIR_StatAddOp | test/ACIR/contracts-valid.mlir<br>test/ACIR/trace-valid.mlir<br>test/Transforms/freeze-topology.mlir | test/ACIR/runtime-references-invalid.mlir |
 | ac.instrumentation | ACIR_InstrumentationOp | test/ACIR/contracts-valid.mlir<br>test/ACIR/hierarchy-valid.mlir<br>test/Transforms/freeze-topology.mlir | test/ACIR/contracts-invalid.mlir<br>test/ACIR/hierarchy-invalid.mlir |
 
-## acir types (19)
+## acir types (22)
 
 | type | source symbol | positive coverage | negative coverage |
 | --- | --- | --- | --- |
@@ -77,10 +77,13 @@ acsim_contract_epoch: 0.1
 | !ac.enum | ACIR_EnumType | test/ACIR/declarations-valid.mlir<br>test/ACIR/review-r1-valid.mlir<br>test/ACIR/types-valid.mlir | test/ACIR/declarations-invalid.mlir |
 | !ac.union | ACIR_UnionType | test/ACIR/declarations-valid.mlir<br>test/ACIR/review-r1-valid.mlir<br>test/ACIR/types-valid.mlir | test/ACIR/types-invalid.mlir |
 | !ac.optional | ACIR_OptionalType | test/ACIR/types-valid.mlir | test/ACIR/review-r2-invalid.mlir<br>test/ACIR/topology-review-r1-invalid.mlir<br>test/ACIR/types-invalid.mlir |
-| !ac.list | ACIR_ListType | test/ACIR/review-r1-valid.mlir<br>test/ACIR/types-valid.mlir<br>test/Transforms/verify-model.mlir | test/ACIR/review-r1-invalid.mlir<br>test/ACIR/review-r2-invalid.mlir<br>test/ACIR/topology-review-r1-invalid.mlir |
+| !ac.list | ACIR_ListType | test/ACIR/review-r1-valid.mlir<br>test/ACIR/types-valid.mlir<br>test/Transforms/verify-model.mlir | test/ACIR/queue-var-types-invalid-v0.2.mlir<br>test/ACIR/review-r1-invalid.mlir<br>test/ACIR/review-r2-invalid.mlir<br>test/ACIR/topology-review-r1-invalid.mlir |
 | !ac.vector | ACIR_VectorType | test/ACIR/records-valid.mlir<br>test/ACIR/review-r1-valid.mlir<br>test/ACIR/types-valid.mlir | test/ACIR/records-invalid.mlir<br>test/ACIR/review-r1-invalid.mlir<br>test/ACIR/review-r2-invalid.mlir<br>test/ACIR/topology-review-r1-invalid.mlir<br>test/ACIR/types-invalid.mlir |
 | !ac.var | ACIR_VarType | test/ACIR/queue-var-types-v0.2.mlir | test/ACIR/queue-var-types-invalid-v0.2.mlir |
 | !ac.queue | ACIR_QueueType | test/ACIR/queue-var-types-v0.2.mlir | test/ACIR/queue-var-types-invalid-v0.2.mlir |
+| !ac.array | ACIR_ArrayType | test/ACIR/queue-var-types-v0.2.mlir | test/ACIR/queue-var-types-invalid-v0.2.mlir |
+| !ac.map | ACIR_MapType | test/ACIR/queue-var-types-v0.2.mlir | test/ACIR/queue-var-types-invalid-v0.2.mlir |
+| !ac.set | ACIR_SetType | test/ACIR/queue-var-types-v0.2.mlir | test/ACIR/queue-var-types-invalid-v0.2.mlir |
 | !ac.flow | ACIR_FlowType | test/ACIR/protocols-valid.mlir<br>test/ACIR/types-valid.mlir<br>test/Transforms/verify-model.mlir | test/ACIR/interfaces-invalid.mlir<br>test/ACIR/interfaces-review-r1-invalid.mlir<br>test/ACIR/topology-review-r1-invalid.mlir<br>test/ACIR/types-invalid.mlir |
 | !ac.endpoint | ACIR_EndpointType | test/ACIR/interfaces-valid.mlir<br>test/ACIR/types-valid.mlir<br>test/Conversion/typed-graph.mlir<br>test/Conversion/whole-model.mlir | test/ACIR/interfaces-invalid.mlir<br>test/ACIR/protocols-invalid.mlir<br>test/ACIR/resources-invalid.mlir<br>test/ACIR/topology-review-r1-invalid.mlir |
 | !ac.resource_ref | ACIR_ResourceRefType | test/ACIR/types-valid.mlir | test/ACIR/topology-review-r1-invalid.mlir |

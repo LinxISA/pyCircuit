@@ -75,6 +75,9 @@ types:
   - vector
   - var
   - queue
+  - array
+  - map
+  - set
   - flow
   - endpoint
   - resource_ref

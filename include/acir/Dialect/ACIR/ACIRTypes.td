@@ -66,6 +66,25 @@ def ACIR_QueueType : ACIR_Type<"Queue", "queue"> {
   let genVerifyDecl = 1;
 }
 
+def ACIR_ArrayType : ACIR_Type<"Array", "array"> {
+  let parameters = (ins "int64_t":$length, "mlir::Type":$elementType);
+  let assemblyFormat = "`<` $length `x` $elementType `>`";
+  let genVerifyDecl = 1;
+}
+
+def ACIR_MapType : ACIR_Type<"Map", "map"> {
+  let parameters = (ins "mlir::ArrayAttr":$keys,
+                        "mlir::Type":$elementType);
+  let assemblyFormat = "`<` $keys `,` $elementType `>`";
+  let genVerifyDecl = 1;
+}
+
+def ACIR_SetType : ACIR_Type<"Set", "set"> {
+  let parameters = (ins "int64_t":$length, "mlir::Type":$elementType);
+  let assemblyFormat = "`<` $length `x` $elementType `>`";
+  let genVerifyDecl = 1;
+}
+
 def ACIR_FlowType : ACIR_Type<"Flow", "flow"> {
   let parameters = (ins "mlir::Type":$elementType,
                         "mlir::FlatSymbolRefAttr":$protocol);
