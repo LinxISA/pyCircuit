@@ -452,6 +452,10 @@ int main() {{
             architectural_values_text = ", ".join(
                 map(str, projection["architectural_values"])
             )
+            occupancy = projection["occupancy_projection"]
+            resource_peaks_text = ", ".join(
+                map(str, occupancy["resource_executing_peaks"])
+            )
 
             oracle_summary = root / "oracle-summary.json"
             oracle = subprocess.run(
@@ -493,6 +497,9 @@ int main() {{
       return 1;
   auto rows = model.dispatch_rows();
   std::size_t simulatedCycles = 0;
+  std::size_t dependencyPeak = 0;
+  std::size_t reorderPeak = 0;
+  std::array<std::size_t, 4> resourcePeaks{{}};
   for (std::size_t tick = 0; tick < 600; ++tick) {{
     const gfsim::Epoch epoch{{tick, 0}};
     for (auto &row : rows)
@@ -501,6 +508,12 @@ int main() {{
       row.xfer(row.object, epoch, gfsim::XferPhase::Arbitrate);
     for (auto &row : rows)
       row.xfer(row.object, epoch, gfsim::XferPhase::Commit);
+    dependencyPeak = std::max(dependencyPeak, model.dependency_0_active());
+    reorderPeak = std::max(reorderPeak, model.reorder_0_active());
+    for (std::size_t resource = 0; resource < resourcePeaks.size(); ++resource)
+      resourcePeaks[resource] = std::max(
+          resourcePeaks[resource],
+          model.dependency_0_resource_active(resource));
     if (model.sink_0_values().size() == input.size()) {{
       simulatedCycles = tick + 1;
       break;
@@ -537,6 +550,13 @@ int main() {{
   for (std::size_t index = 0; index < completed.size(); ++index)
     if (completed[index].sequence_id != completionOrder[index])
       return 8;
+  if (dependencyPeak != {occupancy["dependency_window_peak"]} ||
+      reorderPeak != {occupancy["reorder_window_peak"]})
+    return 9;
+  const std::array<std::size_t, 4> expectedResourcePeaks{{
+      {resource_peaks_text}}};
+  if (resourcePeaks != expectedResourcePeaks)
+    return 10;
   return 0;
 }}
 ''',

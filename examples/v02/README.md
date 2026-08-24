@@ -60,9 +60,10 @@ of these gates:
 Dependency wait is no longer folded into token latency. `ac.dependency` tracks
 predecessor completion explicitly and counts the reference execution cost. The
 projection applies only a documented 5-cycle ingress and 4-cycle drain
-compensation for the different Queue boundaries. It does not yet claim that the
-generated topology exposes the reference model's internal rename tables,
-per-unit issue queues, or ROB occupancy counters.
+compensation for the different Queue boundaries. It checks dependency-window
+peak occupancy, per-resource executing peaks, and reorder-window peak occupancy
+through stable generated-model accessors; raw reference rename-table structure
+remains outside the declared observation projection.
 
 ## PYC and Verilog slice
 

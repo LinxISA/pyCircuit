@@ -1374,8 +1374,9 @@ resource reservation, and execution countdown are now explicit `ac.dependency`
 state, while bounded parallel in-flight work is explicit `ac.credit` state. The
 projection
 retains only a fixed 5-cycle ingress and 4-cycle drain compensation for the
-different model boundaries; internal resource reservation and issue/ROB
-occupancy reporting remain future refinement layers.
+different model boundaries. The checked occupancy projection records dependency
+window peak 8, per-resource executing peaks `[1, 1, 0, 1]`, and reorder window
+peak 8 through stable generated-model accessors.
 
 ## Contributor checklist
 

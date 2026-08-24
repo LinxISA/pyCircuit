@@ -67,6 +67,11 @@
   "reorder_capacity": 64,
   "dependency_capacity": 8,
   "dependency_resources": 4,
+  "occupancy_projection": {
+    "dependency_window_peak": 8,
+    "resource_executing_peaks": [1, 1, 0, 1],
+    "reorder_window_peak": 8
+  },
   "architectural_values": [102, 115, 122, 132, 143, 152, 163, 172, 183, 192, 202, 213, 222, 233, 245],
   "simulated_cycles": 453
 }

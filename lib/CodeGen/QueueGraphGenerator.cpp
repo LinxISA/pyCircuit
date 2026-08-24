@@ -803,6 +803,22 @@ llvm::Expected<std::string> generateQueueGraphCpp(const QueueGraphPlan &plan) {
              << "_.observed(); }\n";
       ++observationIndex;
     }
+  size_t dependencyIndex = 0;
+  size_t reorderIndex = 0;
+  for (auto [index, block] : llvm::enumerate(runtimeBlocks)) {
+    if (block->kind == "dependency") {
+      output << "  size_t dependency_" << dependencyIndex
+             << "_active() const { return block_" << index << "_.active(); }\n"
+             << "  size_t dependency_" << dependencyIndex
+             << "_resource_active(size_t resource) const { return block_"
+             << index << "_.resourceActive(resource); }\n";
+      ++dependencyIndex;
+    } else if (block->kind == "reorder") {
+      output << "  size_t reorder_" << reorderIndex
+             << "_active() const { return block_" << index << "_.active(); }\n";
+      ++reorderIndex;
+    }
+  }
   output << "\n  std::array<gfsim::DispatchRow, " << nextId
          << "> dispatch_rows() {\n    return {\n";
   for (const QueuePlan &queue : plan.queues)

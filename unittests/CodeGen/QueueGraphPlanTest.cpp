@@ -285,6 +285,7 @@ TEST(QueueGraphPlanTest, EmitsTypedReorderForBothBackends) {
   EXPECT_NE(cpp->find("gfsim::QueueReorder<std::int64_t, block_0_policy>"),
             std::string::npos);
   EXPECT_NE(cpp->find(", input_, output_, 4, 0)"), std::string::npos);
+  EXPECT_NE(cpp->find("size_t reorder_0_active() const"), std::string::npos);
 
   auto pyc = generateQueueGraphPyc(plan);
   ASSERT_TRUE(bool(pyc)) << llvm::toString(pyc.takeError());
@@ -317,6 +318,8 @@ TEST(QueueGraphPlanTest, EmitsTypedDependencyForBothBackends) {
   EXPECT_NE(cpp->find("gfsim::QueueDependency<std::uint8_t"),
             std::string::npos);
   EXPECT_NE(cpp->find(", input_, output_, 4, 2, 255)"), std::string::npos);
+  EXPECT_NE(cpp->find("size_t dependency_0_active() const"), std::string::npos);
+  EXPECT_NE(cpp->find("dependency_0_resource_active"), std::string::npos);
 
   auto pyc = generateQueueGraphPyc(plan);
   ASSERT_TRUE(bool(pyc)) << llvm::toString(pyc.takeError());

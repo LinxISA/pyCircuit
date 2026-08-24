@@ -275,6 +275,7 @@ public:
   bool hasPendingCommit() const override {
     return pendingInput_.has_value() || pendingOutputKey_.has_value();
   }
+  size_t active() const { return entries_.size(); }
   bool isRunnable(Epoch) const override {
     const bool canRetire = !pendingOutputKey_ && entries_.contains(nextKey_) &&
                            output_.canProposePush();
@@ -416,6 +417,13 @@ public:
     return false;
   }
   size_t active() const { return entries_.size(); }
+  size_t resourceActive(size_t resource) const {
+    return static_cast<size_t>(
+        std::count_if(entries_.begin(), entries_.end(), [&](const auto &entry) {
+          return entry.second.resource == resource &&
+                 entry.second.state == State::Executing;
+        }));
+  }
   void reset() override {
     entries_.clear();
     pendingInput_.reset();
