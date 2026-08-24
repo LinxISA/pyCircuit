@@ -1,5 +1,6 @@
 #include "acir/CodeGen/QueueGraphPlan.h"
 #include "acir/CodeGen/QueueGraphGenerator.h"
+#include "acir/CodeGen/QueueGraphPyc.h"
 
 #include "acir/Dialect/ACIR/ACIRDialect.h"
 #include "mlir/Dialect/DLTI/DLTI.h"
@@ -117,6 +118,27 @@ TEST(QueueGraphPlanTest, NativeGeneratorConsumesOnlyExtractedPlan) {
   EXPECT_NE(source->find("gfsim::QueueMerge<std::int64_t, 2>"),
             std::string::npos);
   EXPECT_NE(source->find("gfsim::QueueSink<std::int64_t>"), std::string::npos);
+}
+
+TEST(QueueGraphPlanTest, EmitsCanonicalScalarQueuePyc) {
+  QueueGraphPlan plan;
+  plan.system = "scalar_pipeline";
+  plan.queues = {{"input", "i64", "/", 2, 1}, {"output", "i64", "/", 2, 1}};
+  plan.blocks.push_back({"source", "input", "/", {}, {"input"}, {2}, {1}});
+  QueueBlockPlan transform{"transform", "output", "/", {"input"},
+                           {"output"},  {2},      {1}};
+  transform.expressions = {{"v0", "constant", "i64", {}, "", "", "1 : i64"},
+                           {"v1", "add", "i64", {"item", "v0"}, "", "", ""}};
+  transform.yields = {"v1"};
+  plan.blocks.push_back(std::move(transform));
+  plan.blocks.push_back({"sink", "sink_0", "/", {"output"}, {}});
+  auto pyc = generateQueueGraphPyc(plan);
+  ASSERT_TRUE(bool(pyc)) << llvm::toString(pyc.takeError());
+  EXPECT_EQ(std::count(pyc->begin(), pyc->end(), '\n') > 5, true);
+  EXPECT_NE(pyc->find("pyc.fifo"), std::string::npos);
+  EXPECT_NE(pyc->find("pyc.add"), std::string::npos);
+  EXPECT_NE(pyc->find("pyc.frontend.contract = \"pycircuit\""),
+            std::string::npos);
 }
 
 } // namespace

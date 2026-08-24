@@ -9,6 +9,7 @@ add_acir_library(ACIRCodeGen SOURCES
   ProcessGenerator.cpp
   QueueGraphPlan.cpp
   QueueGraphGenerator.cpp
+  QueueGraphPyc.cpp
   Staging.cpp
 )
 list(GET LLVM_INCLUDE_DIRS 0 ACIR_CODEGEN_LLVM_INCLUDE_DIR)

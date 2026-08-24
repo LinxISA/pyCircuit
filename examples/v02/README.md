@@ -38,3 +38,14 @@ backpressure, Work/arbitrate/Xfer barriers, and deterministic generated C++.
 It does not yet claim the imported DavinciOO 15-record/453-cycle performance
 contract. That gate requires the remaining official scheduler, dependency,
 ROB, memory, and observation blocks.
+
+## PYC and Verilog slice
+
+`pyc_queue_pipeline.py` exercises the initial scalar hardware lowering. Generate
+frozen ACIR first, then run `acir-queue-pycgen` or the bundled
+`tools/ac-queue-pyc-build.py` command. The bundle command validates the pinned
+toolchain lock, invokes external `pycc` for C++ and Verilog, compiles the C++
+source, runs Verilator lint, and writes a canonical hash manifest.
+
+The pinned toolchain is recorded in `toolchains/pyc-v0.2.lock.json`. Build that
+exact pyCircuit commit with LLVM 19 before running the PYC gate.
