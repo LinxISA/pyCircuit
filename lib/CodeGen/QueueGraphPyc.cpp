@@ -417,14 +417,39 @@ llvm::Expected<std::string> generateQueueGraphPyc(const QueueGraphPlan &plan) {
     std::string pendingData;
     std::string dataType;
   };
+  struct CreditSlotState {
+    std::string next;
+    std::string enable;
+    std::string state;
+    std::string valid;
+    std::string remaining;
+    std::string data;
+    std::string free;
+    std::string done;
+  };
+  struct CreditState {
+    std::vector<CreditSlotState> slots;
+    std::string inputCost;
+    std::string anyFree;
+    std::string freeIndex;
+    std::string freeIndexType;
+    std::string outputDone;
+    std::string doneIndex;
+    std::string safeAdmission;
+    std::string costType;
+    std::string dataType;
+    std::string slotType;
+  };
   std::vector<const QueueBlockPlan *> sources;
   std::vector<const QueueBlockPlan *> sinks;
   std::vector<const QueueBlockPlan *> observations;
   llvm::StringMap<TransformProducer> transformByOutput;
+  llvm::StringMap<TransformProducer> barrierByOutput;
   llvm::StringMap<const QueueBlockPlan *> broadcastByOutput;
   llvm::StringMap<const QueueBlockPlan *> forkByOutput;
   llvm::StringMap<RouteProducer> routeByOutput;
   llvm::StringMap<const QueueBlockPlan *> mergeByOutput;
+  llvm::StringMap<const QueueBlockPlan *> creditByOutput;
   llvm::StringMap<const QueueBlockPlan *> memoryByOutput;
   llvm::StringMap<const QueueBlockPlan *> dependencyByOutput;
   llvm::StringMap<const QueueBlockPlan *> reorderByOutput;
@@ -467,6 +492,17 @@ llvm::Expected<std::string> generateQueueGraphPyc(const QueueGraphPlan &plan) {
       if (block.policy != "priority" && block.policy != "round_robin")
         return pycError("PYC merge policy must be priority or round_robin");
       mergeByOutput[block.outputs.front()] = &block;
+    } else if (block.kind == "barrier") {
+      if (block.inputs.size() < 2 ||
+          block.outputs.size() != block.inputs.size())
+        return pycError("barrier contract is unsupported");
+      for (auto [index, output] : llvm::enumerate(block.outputs))
+        barrierByOutput[output] = TransformProducer{&block, index};
+    } else if (block.kind == "credit") {
+      if (block.inputs.size() != 1 || block.outputs.size() != 1 ||
+          block.yields.size() != 1 || block.credits == 0)
+        return pycError("credit contract is unsupported");
+      creditByOutput[block.outputs.front()] = &block;
     } else if (block.kind == "memory") {
       if (block.inputs.size() != 1 || block.outputs.size() != 1 ||
           block.yields.size() != 3 || block.entries == 0 || block.init != 0 ||
@@ -492,9 +528,11 @@ llvm::Expected<std::string> generateQueueGraphPyc(const QueueGraphPlan &plan) {
     } else {
       return pycError(
           "PYC QueueGraph supports source/transform/broadcast/fork/route/merge/"
-          "memory/dependency/reorder/feedback/observe/sink");
+          "barrier/credit/memory/dependency/reorder/feedback/observe/sink");
     }
   }
+  if (auto error = verifyQueueGraphPlan(plan))
+    return std::move(error);
   if (sources.empty() || sinks.empty())
     return pycError("PYC lowering requires at least one source and one sink");
   for (const QueuePlan &queue : plan.queues) {
@@ -547,6 +585,7 @@ llvm::Expected<std::string> generateQueueGraphPyc(const QueueGraphPlan &plan) {
   llvm::StringMap<MergeState> mergeStates;
   llvm::StringMap<ForkState> forkStates;
   llvm::StringMap<FeedbackState> feedbackStates;
+  llvm::StringMap<CreditState> creditStates;
   llvm::StringMap<MemoryState> memoryStates;
   llvm::StringMap<DependencyState> dependencyStates;
   llvm::StringMap<ReorderState> reorderStates;
@@ -685,10 +724,12 @@ llvm::Expected<std::string> generateQueueGraphPyc(const QueueGraphPlan &plan) {
       producerData = inputName(source->getValue(), "data");
     } else {
       auto transformProducer = transformByOutput.find(queue.name);
+      auto barrierProducer = barrierByOutput.find(queue.name);
       auto broadcastProducer = broadcastByOutput.find(queue.name);
       auto forkProducer = forkByOutput.find(queue.name);
       auto routeProducer = routeByOutput.find(queue.name);
       auto mergeProducer = mergeByOutput.find(queue.name);
+      auto creditProducer = creditByOutput.find(queue.name);
       auto memoryProducer = memoryByOutput.find(queue.name);
       auto dependencyProducer = dependencyByOutput.find(queue.name);
       auto reorderProducer = reorderByOutput.find(queue.name);
@@ -725,6 +766,22 @@ llvm::Expected<std::string> generateQueueGraphPyc(const QueueGraphPlan &plan) {
         if (!transformed)
           return transformed.takeError();
         producerData = std::move(*transformed);
+      } else if (barrierProducer != barrierByOutput.end()) {
+        const TransformProducer &producer = barrierProducer->getValue();
+        const QueueBlockPlan &barrier = *producer.block;
+        for (const std::string &inputName : barrier.inputs) {
+          auto valid = outputValid.find(inputName);
+          if (valid == outputValid.end())
+            return pycError(
+                "barrier input is not available in topological order");
+        }
+        auto data = outputData.find(barrier.inputs[producer.index]);
+        if (data == outputData.end())
+          return pycError("barrier input data is missing");
+        producerValid = newValue();
+        body << "    " << producerValid << " = pyc.wire : i1\n";
+        atomicTransformValid[queue.name] = producerValid;
+        producerData = data->getValue();
       } else if (broadcastProducer != broadcastByOutput.end()) {
         const QueueBlockPlan &broadcast = *broadcastProducer->getValue();
         auto valid = outputValid.find(broadcast.inputs.front());
@@ -878,6 +935,101 @@ llvm::Expected<std::string> generateQueueGraphPyc(const QueueGraphPlan &plan) {
         mergeGrants[merge.name] = grants;
         producerValid = any;
         producerData = selectedData;
+      } else if (creditProducer != creditByOutput.end()) {
+        const QueueBlockPlan &credit = *creditProducer->getValue();
+        auto inputValidValue = outputValid.find(credit.inputs.front());
+        auto inputDataValue = outputData.find(credit.inputs.front());
+        const QueuePlan *inputQueue = findQueue(plan, credit.inputs.front());
+        if (inputValidValue == outputValid.end() ||
+            inputDataValue == outputData.end() || !inputQueue)
+          return pycError("credit input is not available in topological order");
+        auto dataType = pycType(plan, inputQueue->payloadType);
+        auto dataWidth = typeWidth(plan, inputQueue->payloadType);
+        if (!dataType)
+          return dataType.takeError();
+        if (!dataWidth)
+          return dataWidth.takeError();
+        auto costValue =
+            emitTransform(plan, credit, {inputDataValue->getValue()},
+                          {inputQueue->payloadType}, 0, nextValue, body);
+        if (!costValue)
+          return costValue.takeError();
+        auto costType =
+            yieldedType(credit, credit.yields.front(), inputQueue->payloadType);
+        if (!costType)
+          return costType.takeError();
+        auto costPycType = pycType(plan, *costType);
+        auto costWidth = typeWidth(plan, *costType);
+        if (!costPycType)
+          return costPycType.takeError();
+        if (!costWidth)
+          return costWidth.takeError();
+        if (*costWidth == 0 || *costWidth > 64)
+          return pycError("credit cost width is unsupported");
+
+        CreditState state;
+        state.inputCost = std::move(*costValue);
+        state.costType = std::move(*costPycType);
+        state.dataType = *dataType;
+        state.slotType = "i" + std::to_string(1 + *costWidth + *dataWidth);
+        std::string zeroSlot = emitConstant(0, state.slotType);
+        std::string zeroCost = emitConstant(0, state.costType);
+        std::vector<std::string> freeValues;
+        std::vector<std::string> doneValues;
+        std::vector<std::string> dataValues;
+        for (uint64_t index = 0; index < credit.credits; ++index) {
+          CreditSlotState slot;
+          slot.next = newValue();
+          slot.enable = newValue();
+          slot.state = newValue();
+          body << "    " << slot.next << " = pyc.wire : " << state.slotType
+               << "\n";
+          body << "    " << slot.enable << " = pyc.wire : i1\n";
+          body << "    " << slot.state << " = pyc.reg %clk, %rst, "
+               << slot.enable << ", " << slot.next << ", " << zeroSlot << " : "
+               << state.slotType << "\n";
+          slot.valid = emitExtract(slot.state, *costWidth + *dataWidth,
+                                   state.slotType, "i1");
+          slot.remaining = emitExtract(slot.state, *dataWidth, state.slotType,
+                                       state.costType);
+          slot.data =
+              emitExtract(slot.state, 0, state.slotType, state.dataType);
+          slot.free = emitNot(slot.valid);
+          std::string atZero =
+              emitBinary("eq", slot.remaining, zeroCost, state.costType);
+          slot.done = emitBinary("and", slot.valid, atZero, "i1");
+          freeValues.push_back(slot.free);
+          doneValues.push_back(slot.done);
+          dataValues.push_back(slot.data);
+          state.slots.push_back(std::move(slot));
+        }
+        unsigned indexWidth = 1;
+        while ((uint64_t{1} << indexWidth) < credit.credits)
+          ++indexWidth;
+        state.freeIndexType = "i" + std::to_string(indexWidth);
+        std::vector<std::string> indices;
+        indices.reserve(credit.credits);
+        for (uint64_t index = 0; index < credit.credits; ++index)
+          indices.push_back(emitConstant(index, state.freeIndexType));
+        auto selectedFree =
+            selectBalanced(freeValues, indices, state.freeIndexType);
+        state.anyFree = std::move(selectedFree.first);
+        state.freeIndex = std::move(selectedFree.second);
+        auto selectedDoneIndex =
+            selectBalanced(doneValues, indices, state.freeIndexType);
+        state.doneIndex = std::move(selectedDoneIndex.second);
+        auto selectedDoneData =
+            selectBalanced(doneValues, dataValues, state.dataType);
+        state.outputDone = std::move(selectedDoneData.first);
+        std::string selectedData = std::move(selectedDoneData.second);
+        std::string invalidCost =
+            emitBinary("eq", state.inputCost, zeroCost, state.costType);
+        std::string invalidAdmission =
+            emitBinary("and", inputValidValue->getValue(), invalidCost, "i1");
+        state.safeAdmission = emitNot(invalidAdmission);
+        producerValid = state.outputDone;
+        producerData = std::move(selectedData);
+        creditStates[credit.name] = std::move(state);
       } else if (memoryProducer != memoryByOutput.end()) {
         const QueueBlockPlan &memory = *memoryProducer->getValue();
         auto inputValidValue = outputValid.find(memory.inputs.front());
@@ -1404,6 +1556,40 @@ llvm::Expected<std::string> generateQueueGraphPyc(const QueueGraphPlan &plan) {
                << outputCanFire << " : i1\n";
         }
       }
+    } else if (block.kind == "barrier") {
+      std::string allReady = inputReady[block.outputs.front()];
+      for (size_t index = 1; index < block.outputs.size(); ++index)
+        allReady =
+            emitBinary("and", allReady, inputReady[block.outputs[index]], "i1");
+      std::string allValid = outputValid[block.inputs.front()];
+      for (size_t index = 1; index < block.inputs.size(); ++index)
+        allValid =
+            emitBinary("and", allValid, outputValid[block.inputs[index]], "i1");
+      for (auto [index, input] : llvm::enumerate(block.inputs)) {
+        std::string inputCanFire = allReady;
+        for (auto [otherIndex, other] : llvm::enumerate(block.inputs)) {
+          if (otherIndex == index)
+            continue;
+          inputCanFire =
+              emitBinary("and", inputCanFire, outputValid[other], "i1");
+        }
+        body << "    pyc.assign " << readyWires[input] << ", " << inputCanFire
+             << " : i1\n";
+      }
+      for (auto [index, output] : llvm::enumerate(block.outputs)) {
+        auto validWire = atomicTransformValid.find(output);
+        if (validWire == atomicTransformValid.end())
+          return pycError("barrier valid wire is missing");
+        std::string outputCanFire = allValid;
+        for (auto [otherIndex, other] : llvm::enumerate(block.outputs)) {
+          if (otherIndex == index)
+            continue;
+          outputCanFire =
+              emitBinary("and", outputCanFire, inputReady[other], "i1");
+        }
+        body << "    pyc.assign " << validWire->getValue() << ", "
+             << outputCanFire << " : i1\n";
+      }
     } else if (block.kind == "broadcast") {
       std::string allReady = inputReady[block.outputs.front()];
       for (size_t index = 1; index < block.outputs.size(); ++index)
@@ -1478,6 +1664,70 @@ llvm::Expected<std::string> generateQueueGraphPyc(const QueueGraphPlan &plan) {
         }
         body << "    pyc.assign " << state->getValue().nextWire << ", " << next
              << " : " << state->getValue().type << "\n";
+      }
+    } else if (block.kind == "credit") {
+      auto state = creditStates.find(block.name);
+      auto inputValidValue = outputValid.find(block.inputs.front());
+      auto inputDataValue = outputData.find(block.inputs.front());
+      if (state == creditStates.end() || inputValidValue == outputValid.end() ||
+          inputDataValue == outputData.end())
+        return pycError("credit state or input is missing");
+      const std::string &outputReady = inputReady[block.outputs.front()];
+      std::string retire =
+          emitBinary("and", state->getValue().outputDone, outputReady, "i1");
+      std::string inputReadyValue =
+          emitBinary("and", state->getValue().anyFree,
+                     state->getValue().safeAdmission, "i1");
+      body << "    pyc.assign " << readyWires[block.inputs.front()] << ", "
+           << inputReadyValue << " : i1\n";
+      body << "    pyc.assert " << state->getValue().safeAdmission
+           << " {msg = \"credit_nonpositive_cost\"}\n";
+      std::string admit =
+          emitBinary("and", inputValidValue->getValue(), inputReadyValue, "i1");
+      std::string zeroValid = emitConstant(0, "i1");
+      std::string oneValid = emitConstant(1, "i1");
+      std::string oneCost = emitConstant(1, state->getValue().costType);
+      std::vector<std::string> freeGrants;
+      std::vector<std::string> doneGrants;
+      for (size_t index = 0; index < state->getValue().slots.size(); ++index) {
+        std::string indexValue =
+            emitConstant(index, state->getValue().freeIndexType);
+        freeGrants.push_back(emitBinary("eq", state->getValue().freeIndex,
+                                        indexValue,
+                                        state->getValue().freeIndexType));
+        doneGrants.push_back(emitBinary("eq", state->getValue().doneIndex,
+                                        indexValue,
+                                        state->getValue().freeIndexType));
+      }
+      for (auto [index, slot] : llvm::enumerate(state->getValue().slots)) {
+        std::string admitSlot =
+            emitBinary("and", admit, freeGrants[index], "i1");
+        std::string retireSlot =
+            emitBinary("and", retire, doneGrants[index], "i1");
+        std::string active =
+            emitBinary("and", slot.valid, emitNot(slot.done), "i1");
+        std::string decremented = emitBinary("sub", slot.remaining, oneCost,
+                                             state->getValue().costType);
+        std::string nextRemaining = emitMux(active, decremented, slot.remaining,
+                                            state->getValue().costType);
+        nextRemaining = emitMux(admitSlot, state->getValue().inputCost,
+                                nextRemaining, state->getValue().costType);
+        std::string nextValid =
+            emitMux(retireSlot, zeroValid, slot.valid, "i1");
+        nextValid = emitMux(admitSlot, oneValid, nextValid, "i1");
+        std::string nextData = emitMux(admitSlot, inputDataValue->getValue(),
+                                       slot.data, state->getValue().dataType);
+        std::string nextState = newValue();
+        body << "    " << nextState << " = pyc.concat(" << nextValid << ", "
+             << nextRemaining << ", " << nextData << ") : (i1, "
+             << state->getValue().costType << ", " << state->getValue().dataType
+             << ") -> " << state->getValue().slotType << "\n";
+        std::string changed =
+            reduceBalanced("or", {admitSlot, retireSlot, active}, "i1");
+        body << "    pyc.assign " << slot.next << ", " << nextState << " : "
+             << state->getValue().slotType << "\n";
+        body << "    pyc.assign " << slot.enable << ", " << changed
+             << " : i1\n";
       }
     } else if (block.kind == "memory") {
       auto state = memoryStates.find(block.name);

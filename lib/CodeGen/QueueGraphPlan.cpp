@@ -176,6 +176,8 @@ llvm::Error extractExpressions(mlir::Region &region, QueueBlockPlan &plan) {
       yielded.push_back(yield.getKey());
     else if (auto yield = mlir::dyn_cast<ac::DependencyYieldOp>(operation))
       yielded.push_back(yield.getValue());
+    else if (auto yield = mlir::dyn_cast<ac::CreditYieldOp>(operation))
+      yielded.push_back(yield.getCost());
     else if (auto yield = mlir::dyn_cast<ac::MemoryYieldOp>(operation))
       yielded.push_back(yield.getValue());
     else if (auto yield = mlir::dyn_cast<ac::FeedbackYieldOp>(operation)) {
@@ -214,27 +216,7 @@ public:
   }
 
 private:
-  llvm::Error validateGraph() {
-    llvm::StringMap<unsigned> producers;
-    llvm::StringMap<unsigned> consumers;
-    for (const QueueBlockPlan &block : plan.blocks) {
-      for (const std::string &output : block.outputs)
-        ++producers[output];
-      if (block.kind != "observe")
-        for (const std::string &input : block.inputs)
-          ++consumers[input];
-    }
-    for (const QueuePlan &queue : plan.queues) {
-      if (producers[queue.name] != 1)
-        return planError("Queue '" + queue.name +
-                         "' must have exactly one producer");
-      if (consumers[queue.name] > 1)
-        return planError(
-            "Queue '" + queue.name +
-            "' has multiple consuming blocks; insert ac.broadcast");
-    }
-    return llvm::Error::success();
-  }
+  llvm::Error validateGraph() { return verifyQueueGraphPlan(plan); }
 
   llvm::Error addQueue(mlir::Value value, llvm::StringRef name, uint64_t depth,
                        uint64_t latency, llvm::ArrayRef<std::string> scope) {
@@ -420,6 +402,25 @@ private:
                                merge.getPolicy().str()});
         continue;
       }
+      if (auto barrier = mlir::dyn_cast<ac::BarrierOp>(operation)) {
+        auto inputs = queueNames(barrier.getInputs(), names);
+        if (!inputs)
+          return inputs.takeError();
+        std::vector<std::string> outputs;
+        if (auto error = addOutputs(
+                barrier, barrier.getOutputs(),
+                barrier.getOutputDepthsAttr().asArrayRef(),
+                barrier.getOutputLatenciesAttr().asArrayRef(), scope, outputs))
+          return error;
+        QueueBlockPlan blockPlan{"barrier", outputs.front(), scopePath(scope),
+                                 std::move(*inputs), outputs};
+        for (int64_t value : barrier.getOutputDepths())
+          blockPlan.depths.push_back(value);
+        for (int64_t value : barrier.getOutputLatencies())
+          blockPlan.latencies.push_back(value);
+        plan.blocks.push_back(std::move(blockPlan));
+        continue;
+      }
       if (auto reorder = mlir::dyn_cast<ac::ReorderOp>(operation)) {
         auto input = queueName(reorder.getInput(), names);
         if (!input)
@@ -476,6 +477,31 @@ private:
           policyYields.push_back(blockPlan.yields.front());
         }
         blockPlan.yields = std::move(policyYields);
+        plan.blocks.push_back(std::move(blockPlan));
+        continue;
+      }
+      if (auto credit = mlir::dyn_cast<ac::CreditOp>(operation)) {
+        auto input = queueName(credit.getInput(), names);
+        if (!input)
+          return input.takeError();
+        std::vector<std::string> outputs;
+        if (auto error = addOutputs(
+                credit, credit->getResults(), {int64_t(credit.getDepth())},
+                {int64_t(credit.getLatency())}, scope, outputs))
+          return error;
+        QueueBlockPlan blockPlan{"credit",
+                                 outputs.front(),
+                                 scopePath(scope),
+                                 {*input},
+                                 outputs,
+                                 {uint64_t(credit.getDepth())},
+                                 {uint64_t(credit.getLatency())}};
+        blockPlan.credits = credit.getCredits();
+        blockPlan.region = printRegion(credit.getCost());
+        if (auto error = extractExpressions(credit.getCost(), blockPlan))
+          return error;
+        if (blockPlan.yields.size() != 1)
+          return planError("credit cost must yield one value");
         plan.blocks.push_back(std::move(blockPlan));
         continue;
       }
@@ -614,6 +640,76 @@ llvm::Expected<QueueGraphPlan> buildQueueGraphPlan(mlir::ModuleOp module) {
   return Extractor(module).run();
 }
 
+llvm::Error verifyQueueGraphPlan(const QueueGraphPlan &plan) {
+  if (plan.system.empty() || plan.queues.empty() || plan.blocks.empty())
+    return planError("QueueGraph plan is incomplete");
+
+  llvm::StringSet<> queueNames;
+  llvm::StringMap<unsigned> producers;
+  llvm::StringMap<unsigned> consumers;
+  llvm::StringMap<unsigned> indegree;
+  llvm::StringMap<std::vector<std::string>> successors;
+  for (const QueuePlan &queue : plan.queues) {
+    if (queue.name.empty() || !queueNames.insert(queue.name).second)
+      return planError("Queue logical identities must be non-empty and unique");
+    if (queue.payloadType.empty() || queue.depth == 0 || queue.latency == 0)
+      return planError("Queue plan requires typed positive depth and latency");
+    indegree[queue.name] = 0;
+  }
+
+  for (const QueueBlockPlan &block : plan.blocks) {
+    for (const std::string &input : block.inputs)
+      if (!queueNames.contains(input))
+        return planError("block input references unknown Queue '" + input +
+                         "'");
+    for (const std::string &output : block.outputs) {
+      if (!queueNames.contains(output))
+        return planError("block output references unknown Queue '" + output +
+                         "'");
+      ++producers[output];
+    }
+    if (block.kind != "observe")
+      for (const std::string &input : block.inputs)
+        ++consumers[input];
+    for (const std::string &input : block.inputs)
+      for (const std::string &output : block.outputs) {
+        successors[input].push_back(output);
+        ++indegree[output];
+      }
+  }
+
+  for (const QueuePlan &queue : plan.queues) {
+    if (producers[queue.name] != 1)
+      return planError("Queue '" + queue.name +
+                       "' must have exactly one producer");
+    if (consumers[queue.name] == 0)
+      return planError("Queue '" + queue.name +
+                       "' has no consuming block; connect ac.sink");
+    if (consumers[queue.name] > 1)
+      return planError("Queue '" + queue.name +
+                       "' has multiple consuming blocks; insert ac.broadcast");
+  }
+
+  std::vector<std::string> ready;
+  for (const QueuePlan &queue : plan.queues)
+    if (indegree[queue.name] == 0)
+      ready.push_back(queue.name);
+  size_t visited = 0;
+  for (size_t cursor = 0; cursor < ready.size(); ++cursor) {
+    ++visited;
+    auto found = successors.find(ready[cursor]);
+    if (found == successors.end())
+      continue;
+    for (const std::string &successor : found->getValue())
+      if (--indegree[successor] == 0)
+        ready.push_back(successor);
+  }
+  if (visited != plan.queues.size())
+    return planError("QueueGraph contains a cycle; represent stateful loops "
+                     "with ac.feedback");
+  return llvm::Error::success();
+}
+
 llvm::Expected<std::string> QueueGraphPlan::canonicalJson() const {
   llvm::json::Array payloadValues;
   for (const QueuePayloadPlan &payload : payloads) {
@@ -668,6 +764,7 @@ llvm::Expected<std::string> QueueGraphPlan::canonicalJson() const {
       yields.push_back(yield);
     blockValues.push_back(
         llvm::json::Object{{"capacity", block.capacity},
+                           {"credits", block.credits},
                            {"depths", std::move(depths)},
                            {"entries", block.entries},
                            {"expressions", std::move(expressions)},

@@ -225,7 +225,11 @@ int main() {{
             BROADCAST_SOURCE,
             FEEDBACK_SOURCE,
         )
-        from tests.python_frontend.test_queue_frontend_v02 import MEMORY_SOURCE
+        from tests.python_frontend.test_queue_frontend_v02 import (
+            BARRIER_SOURCE,
+            CREDIT_SOURCE,
+            MEMORY_SOURCE,
+        )
 
         compiler = shutil.which("c++")
         if compiler is None:
@@ -233,7 +237,9 @@ int main() {{
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             for name, source, expected in (
+                ("barrier", BARRIER_SOURCE, "gfsim::QueueBarrier"),
                 ("broadcast", BROADCAST_SOURCE, "gfsim::QueueBroadcast"),
+                ("credit", CREDIT_SOURCE, "gfsim::QueueCredit"),
                 ("feedback", FEEDBACK_SOURCE, "gfsim::QueueFeedback"),
                 ("memory", MEMORY_SOURCE, "gfsim::QueueMemory"),
             ):

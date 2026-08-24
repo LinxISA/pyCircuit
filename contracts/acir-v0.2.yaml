@@ -62,6 +62,9 @@ operations:
   - ac.route
   - ac.route.yield
   - ac.merge
+  - ac.barrier
+  - ac.credit
+  - ac.credit.yield
   - ac.dependency
   - ac.dependency.yield
   - ac.memory

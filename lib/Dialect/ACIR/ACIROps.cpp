@@ -179,6 +179,30 @@ LogicalResult MergeOp::verify() {
   return success();
 }
 
+LogicalResult BarrierOp::verify() {
+  if (getInputs().size() < 2)
+    return emitOpError("requires at least two input queues");
+  if (getOutputs().size() != getInputs().size())
+    return emitOpError("output count must match input count");
+  llvm::DenseSet<Value> uniqueInputs;
+  for (auto [index, input] : llvm::enumerate(getInputs())) {
+    if (!uniqueInputs.insert(input).second)
+      return emitOpError("input queue operands must be unique");
+    if (getOutputs()[index].getType() != input.getType())
+      return emitOpError() << "output queue " << index
+                           << " must match its input queue type";
+  }
+  ArrayRef<int64_t> depths = getOutputDepthsAttr().asArrayRef();
+  ArrayRef<int64_t> latencies = getOutputLatenciesAttr().asArrayRef();
+  if (depths.size() != getOutputs().size() ||
+      llvm::any_of(depths, [](int64_t value) { return value <= 0; }))
+    return emitOpError("output depths must match results and be positive");
+  if (latencies.size() != getOutputs().size() ||
+      llvm::any_of(latencies, [](int64_t value) { return value <= 0; }))
+    return emitOpError("output latencies must match results and be positive");
+  return success();
+}
+
 LogicalResult ReorderOp::verify() {
   if (getInput().getType() != getOutput().getType())
     return emitOpError("output queue must match input queue type");
@@ -266,6 +290,32 @@ LogicalResult DependencyOp::verify() {
   if (resource->getWidth() < 64 && static_cast<uint64_t>(getResources()) >
                                        (uint64_t{1} << resource->getWidth()))
     return emitOpError("resources must fit resource width");
+  return success();
+}
+
+LogicalResult CreditOp::verify() {
+  if (getInput().getType() != getOutput().getType())
+    return emitOpError("output queue must match input queue type");
+  if (getCredits() <= 0 || getDepth() <= 0 || getLatency() <= 0)
+    return emitOpError("credits, depth, and latency must be positive");
+
+  Block &block = getCost().front();
+  Type payload = cast<QueueType>(getInput().getType()).getElementType();
+  Type expected = VarType::get(getContext(), payload);
+  if (block.getNumArguments() != 1 ||
+      block.getArgument(0).getType() != expected)
+    return emitOpError("cost argument must match queue payload Var");
+  for (Operation &operation : block.without_terminator())
+    if (!isMemoryEffectFree(&operation))
+      return emitOpError() << "cost operation '" << operation.getName()
+                           << "' must be pure";
+  auto yield = dyn_cast<CreditYieldOp>(block.getTerminator());
+  if (!yield)
+    return emitOpError("cost must terminate with ac.credit.yield");
+  Type cost = cast<VarType>(yield.getCost().getType()).getElementType();
+  auto integer = dyn_cast<IntegerType>(cost);
+  if (!integer || integer.getWidth() > 64)
+    return emitOpError("cost must yield an integer Var with width at most 64");
   return success();
 }
 

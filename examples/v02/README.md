@@ -88,6 +88,12 @@ feedback data, valid, and iteration state shared by PYC C++ and Verilog.
 register-bank and handshake semantics in typed gfsim, PYC C++, and Verilog.
 `pyc_dependency_pipeline.py` verifies predecessor wakeup, execution countdown,
 out-of-order completion, and PYC C++/Verilator cycle equivalence.
+`pyc_barrier_pipeline.py` verifies heterogeneous positional payloads and an
+all-input/all-output atomic synchronization firing shared by typed gfsim, PYC
+C++, and Verilog.
+`pyc_credit_pipeline.py` verifies bounded parallel in-flight slots, independent
+cost countdown, deterministic completion selection, automatic credit return,
+and PYC C++/Verilator cycle equivalence.
 `pyc_memory_pipeline.py` verifies a typed single-read/single-write memory,
 old-data read-during-write behavior, aligned request/response state, and the
 same `pyc.sync_mem` realization in PYC C++ and Verilog.

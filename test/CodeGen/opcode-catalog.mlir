@@ -4,7 +4,9 @@
 // RUN: %not grep -E '"operation":"ac\.(decode|dispatch|rename|retire)"' %t
 
 // CHECK: "contract_epoch":"0.2"
+// CHECK-SAME: "operation":"ac{{\.}}barrier"
 // CHECK-SAME: "operation":"ac{{\.}}broadcast"
+// CHECK-SAME: "operation":"ac{{\.}}credit"
 // CHECK-SAME: "operation":"ac{{\.}}dependency"
 // CHECK-SAME: "operation":"ac{{\.}}feedback"
 // CHECK-SAME: "operation":"ac{{\.}}fork"

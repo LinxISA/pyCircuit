@@ -37,7 +37,9 @@ class QueueBinding:
     merge_output: bool = False
     reorder_output: bool = False
     dependency_output: bool = False
+    credit_output: bool = False
     memory_output: bool = False
+    barrier_output: bool = False
     atomic_group: int | None = None
 
 
@@ -144,6 +146,29 @@ class DependencyBinding:
 
 
 @dataclass(frozen=True, slots=True)
+class CreditBinding:
+    input_name: str
+    output_name: str
+    argument: str
+    cost: ast.expr
+    credits: int
+    depth: int
+    latency: int
+    scope: tuple[str, ...]
+    order: int
+
+
+@dataclass(frozen=True, slots=True)
+class BarrierBinding:
+    inputs: tuple[str, ...]
+    outputs: tuple[str, ...]
+    depth: int
+    latency: int
+    scope: tuple[str, ...]
+    order: int
+
+
+@dataclass(frozen=True, slots=True)
 class MemoryBinding:
     input_name: str
     output_name: str
@@ -194,6 +219,8 @@ class QueueProgram:
     merges: tuple[MergeBinding, ...]
     reorders: tuple[ReorderBinding, ...]
     dependencies: tuple[DependencyBinding, ...]
+    credits: tuple[CreditBinding, ...]
+    barriers: tuple[BarrierBinding, ...]
     memories: tuple[MemoryBinding, ...]
     atomics: tuple[AtomicBinding, ...]
     collections: tuple[CollectionBinding, ...]
@@ -387,6 +414,8 @@ def parse_queue_program(text: str, system: str) -> QueueProgram:
     merges: list[MergeBinding] = []
     reorders: list[ReorderBinding] = []
     dependencies: list[DependencyBinding] = []
+    credits: list[CreditBinding] = []
+    barriers: list[BarrierBinding] = []
     memories: list[MemoryBinding] = []
     atomics: list[AtomicBinding] = []
     sinks: list[SinkBinding] = []
@@ -816,6 +845,8 @@ def parse_queue_program(text: str, system: str) -> QueueProgram:
                     merge_start = len(merges)
                     reorder_start = len(reorders)
                     dependency_start = len(dependencies)
+                    credit_start = len(credits)
+                    barrier_start = len(barriers)
                     memory_start = len(memories)
                     feedback_start = len(feedbacks)
                     sink_start = len(sinks)
@@ -831,6 +862,8 @@ def parse_queue_program(text: str, system: str) -> QueueProgram:
                         or len(merges) != merge_start
                         or len(reorders) != reorder_start
                         or len(dependencies) != dependency_start
+                        or len(credits) != credit_start
+                        or len(barriers) != barrier_start
                         or len(memories) != memory_start
                         or len(feedbacks) != feedback_start
                         or len(sinks) != sink_start
@@ -1238,6 +1271,70 @@ def parse_queue_program(text: str, system: str) -> QueueProgram:
                 and isinstance(statement.targets[0], ast.Name)
                 and isinstance(statement.value, ast.Call)
                 and isinstance(statement.value.func, ast.Attribute)
+                and statement.value.func.attr == "credit"
+                and isinstance(statement.value.func.value, ast.Name)
+                and not statement.value.args
+            ):
+                name = statement.targets[0].id
+                if name in by_name or name in collections:
+                    raise QueueFrontendError(
+                        "ACPY-QUEUE-016: credit output requires one fresh name"
+                    )
+                call = statement.value
+                incoming = by_name.get(call.func.value.id)
+                if incoming is None:
+                    raise QueueFrontendError("ACPY-QUEUE-016: credit input is unbound")
+                allowed_keywords = {"cost", "credits", "depth", "latency"}
+                if any(
+                    keyword.arg is None or keyword.arg not in allowed_keywords
+                    for keyword in call.keywords
+                ):
+                    raise QueueFrontendError(
+                        "ACPY-QUEUE-016: credit has an unsupported keyword"
+                    )
+                costs = [
+                    keyword.value for keyword in call.keywords if keyword.arg == "cost"
+                ]
+                if len(costs) != 1:
+                    raise QueueFrontendError(
+                        "ACPY-QUEUE-016: credit requires one cost lambda"
+                    )
+                argument, cost = _lambda(costs[0])
+                credit_count = _positive_int(call, "credits", 16)
+                depth = _positive_int(call, "depth", 1)
+                latency = _positive_int(call, "latency", 1)
+                output = QueueBinding(
+                    name,
+                    incoming.payload,
+                    depth,
+                    latency,
+                    None,
+                    scope=scope_path,
+                    order=current_order,
+                    credit_output=True,
+                )
+                queues.append(output)
+                by_name[name] = output
+                credits.append(
+                    CreditBinding(
+                        incoming.name,
+                        name,
+                        argument,
+                        cost,
+                        credit_count,
+                        depth,
+                        latency,
+                        scope_path,
+                        current_order,
+                    )
+                )
+                continue
+            if (
+                isinstance(statement, ast.Assign)
+                and len(statement.targets) == 1
+                and isinstance(statement.targets[0], ast.Name)
+                and isinstance(statement.value, ast.Call)
+                and isinstance(statement.value.func, ast.Attribute)
                 and statement.value.func.attr == "memory"
                 and isinstance(statement.value.func.value, ast.Name)
                 and not statement.value.args
@@ -1404,6 +1501,72 @@ def parse_queue_program(text: str, system: str) -> QueueProgram:
                 )
                 and isinstance(statement.value, ast.Call)
                 and isinstance(statement.value.func, ast.Attribute)
+                and statement.value.func.attr == "barrier"
+                and isinstance(statement.value.func.value, ast.Name)
+            ):
+                call = statement.value
+                if any(
+                    keyword.arg is None
+                    or keyword.arg not in {"depth", "latency"}
+                    for keyword in call.keywords
+                ):
+                    raise QueueFrontendError(
+                        "ACPY-QUEUE-017: barrier has an unsupported keyword"
+                    )
+                inputs = tuple(
+                    queue_reference(operand, aliases)
+                    for operand in [call.func.value, *call.args]
+                )
+                outputs = tuple(item.id for item in statement.targets[0].elts)
+                if len(inputs) < 2 or len(outputs) != len(inputs):
+                    raise QueueFrontendError(
+                        "ACPY-QUEUE-017: barrier requires matching input/output arity"
+                    )
+                if len(set(inputs)) != len(inputs):
+                    raise QueueFrontendError(
+                        "ACPY-QUEUE-017: barrier inputs must be unique Queues"
+                    )
+                if len(set(outputs)) != len(outputs) or any(
+                    output in by_name or output in collections for output in outputs
+                ):
+                    raise QueueFrontendError(
+                        "ACPY-QUEUE-017: barrier outputs require fresh tuple names"
+                    )
+                depth = _positive_int(call, "depth", 1)
+                latency = _positive_int(call, "latency", 1)
+                for input_name, output_name in zip(inputs, outputs, strict=True):
+                    output = QueueBinding(
+                        output_name,
+                        by_name[input_name].payload,
+                        depth,
+                        latency,
+                        None,
+                        scope=scope_path,
+                        order=current_order,
+                        barrier_output=True,
+                    )
+                    queues.append(output)
+                    by_name[output_name] = output
+                barriers.append(
+                    BarrierBinding(
+                        inputs,
+                        outputs,
+                        depth,
+                        latency,
+                        scope_path,
+                        current_order,
+                    )
+                )
+                continue
+            if (
+                isinstance(statement, ast.Assign)
+                and len(statement.targets) == 1
+                and isinstance(statement.targets[0], (ast.Tuple, ast.List))
+                and all(
+                    isinstance(item, ast.Name) for item in statement.targets[0].elts
+                )
+                and isinstance(statement.value, ast.Call)
+                and isinstance(statement.value.func, ast.Attribute)
                 and statement.value.func.attr == "route"
                 and isinstance(statement.value.func.value, ast.Name)
             ):
@@ -1557,6 +1720,8 @@ def parse_queue_program(text: str, system: str) -> QueueProgram:
         tuple(merges),
         tuple(reorders),
         tuple(dependencies),
+        tuple(credits),
+        tuple(barriers),
         tuple(memories),
         tuple(atomics),
         tuple(collection_bindings),
@@ -1791,6 +1956,11 @@ def lower_queue_program(program: QueueProgram) -> str:
         uses[reorder.input_name].append(reorder.scope)
     for dependency in program.dependencies:
         uses[dependency.input_name].append(dependency.scope)
+    for credit in program.credits:
+        uses[credit.input_name].append(credit.scope)
+    for barrier in program.barriers:
+        for input_name in barrier.inputs:
+            uses[input_name].append(barrier.scope)
     for memory in program.memories:
         uses[memory.input_name].append(memory.scope)
 
@@ -1872,7 +2042,9 @@ def lower_queue_program(program: QueueProgram) -> str:
             and not queue.merge_output
             and not queue.reorder_output
             and not queue.dependency_output
+            and not queue.credit_output
             and not queue.memory_output
+            and not queue.barrier_output
             and queue.atomic_group is None
         )
         events.extend(
@@ -1907,6 +2079,16 @@ def lower_queue_program(program: QueueProgram) -> str:
             (dependency.order, "dependency", dependency)
             for dependency in program.dependencies
             if dependency.scope == path
+        )
+        events.extend(
+            (credit.order, "credit", credit)
+            for credit in program.credits
+            if credit.scope == path
+        )
+        events.extend(
+            (barrier.order, "barrier", barrier)
+            for barrier in program.barriers
+            if barrier.scope == path
         )
         events.extend(
             (memory.order, "memory", memory)
@@ -1965,6 +2147,39 @@ def lower_queue_program(program: QueueProgram) -> str:
                 )
                 for consumer, output in zip(group, outputs, strict=True):
                     mapping[effective_input[consumer.name]] = output
+            elif kind == "barrier":
+                barrier = item
+                assert isinstance(barrier, BarrierBinding)
+                output_names = [
+                    name if not path else f"{name}__local"
+                    for name in barrier.outputs
+                ]
+                lhs = ", ".join(f"%{name}" for name in output_names)
+                operands = ", ".join(
+                    f"%{mapping[input_name]}" for input_name in barrier.inputs
+                )
+                depths = ", ".join(str(barrier.depth) for _ in output_names)
+                latencies = ", ".join(
+                    str(barrier.latency) for _ in output_names
+                )
+                input_types = ", ".join(
+                    f"!ac.queue<{by_name[input_name].payload}>"
+                    for input_name in barrier.inputs
+                )
+                output_types = ", ".join(
+                    f"!ac.queue<{by_name[input_name].payload}>"
+                    for input_name in barrier.inputs
+                )
+                lines.append(
+                    f"{indent}{lhs} = ac.barrier {operands} depths [{depths}] "
+                    f"latencies [{latencies}] "
+                    f"{{ac.output_names = {name_array(barrier.outputs)}}} : "
+                    f"({input_types}) -> ({output_types})"
+                )
+                for name, output in zip(
+                    barrier.outputs, output_names, strict=True
+                ):
+                    mapping[name] = output
             elif kind == "route":
                 route = item
                 assert isinstance(route, RouteBinding)
@@ -2145,6 +2360,41 @@ def lower_queue_program(program: QueueProgram) -> str:
                     f"!ac.queue<{incoming.payload}>"
                 )
                 mapping[dependency.output_name] = output
+            elif kind == "credit":
+                credit = item
+                assert isinstance(credit, CreditBinding)
+                incoming = by_name[credit.input_name]
+                emitter = _ExpressionEmitter(
+                    payloads, credit.argument, incoming.payload
+                )
+                cost, cost_type = emitter.emit(credit.cost)
+                if not cost_type.startswith("i"):
+                    raise QueueFrontendError(
+                        "ACPY-QUEUE-016: credit cost must lower to an integer"
+                    )
+                output = (
+                    credit.output_name
+                    if not path
+                    else f"{credit.output_name}__local"
+                )
+                lines.append(
+                    f"{indent}%{output} = ac.credit "
+                    f"%{mapping[credit.input_name]} credits {credit.credits} "
+                    f"depth {credit.depth} latency {credit.latency} cost {{"
+                )
+                lines.append(
+                    f"{indent}^cost(%item: !ac.var<{incoming.payload}>):"
+                )
+                lines.extend(indent + line[2:] for line in emitter.lines)
+                lines.append(
+                    f"{indent}  ac.credit.yield %{cost} : !ac.var<{cost_type}>"
+                )
+                lines.append(
+                    f'{indent}}} {{ac.name = "{credit.output_name}"}} : '
+                    f"!ac.queue<{incoming.payload}> -> "
+                    f"!ac.queue<{incoming.payload}>"
+                )
+                mapping[credit.output_name] = output
             elif kind == "memory":
                 memory = item
                 assert isinstance(memory, MemoryBinding)

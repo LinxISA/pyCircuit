@@ -198,12 +198,24 @@ llvm::Expected<std::string> generateQueueGraphCpp(const QueueGraphPlan &plan) {
          block.yields.size() != 4 || block.capacity == 0 ||
          block.resources == 0))
       return generatorError("dependency contract is unsupported");
+    if (block.kind == "credit" &&
+        (block.inputs.size() != 1 || block.outputs.size() != 1 ||
+         block.yields.size() != 1 || block.credits == 0))
+      return generatorError("credit contract is unsupported");
+    if (block.kind == "barrier" &&
+        (block.inputs.size() < 2 ||
+         block.outputs.size() != block.inputs.size() ||
+         block.depths.size() != block.outputs.size() ||
+         block.latencies.size() != block.outputs.size()))
+      return generatorError("barrier contract is unsupported");
     if (block.kind == "memory" &&
         (block.inputs.size() != 1 || block.outputs.size() != 1 ||
          block.yields.size() != 3 || block.entries == 0 || block.init != 0 ||
          block.resultField.empty()))
       return generatorError("memory contract is unsupported");
   }
+  if (auto error = verifyQueueGraphPlan(plan))
+    return std::move(error);
 
   llvm::StringMap<std::string> queueMembers;
   llvm::StringMap<std::string> queueOwners;
@@ -284,8 +296,9 @@ llvm::Expected<std::string> generateQueueGraphCpp(const QueueGraphPlan &plan) {
 
   for (auto [index, block] : llvm::enumerate(runtimeBlocks)) {
     if (block->kind != "transform" && block->kind != "route" &&
-        block->kind != "dependency" && block->kind != "memory" &&
-        block->kind != "reorder" && block->kind != "feedback")
+        block->kind != "dependency" && block->kind != "credit" &&
+        block->kind != "memory" && block->kind != "reorder" &&
+        block->kind != "feedback")
       continue;
     if (block->kind == "dependency") {
       const QueuePlan *input = findQueue(plan, block->inputs.front());
@@ -425,7 +438,7 @@ llvm::Expected<std::string> generateQueueGraphCpp(const QueueGraphPlan &plan) {
     output << "struct " << policy << " {\n  ";
     if (block->kind == "route")
       output << "size_t";
-    else if (block->kind == "reorder") {
+    else if (block->kind == "reorder" || block->kind == "credit") {
       llvm::StringRef keyType = input->payloadType;
       if (block->yields.front() != "item") {
         auto expression =
@@ -434,7 +447,7 @@ llvm::Expected<std::string> generateQueueGraphCpp(const QueueGraphPlan &plan) {
                            return candidate.result == block->yields.front();
                          });
         if (expression == block->expressions.end())
-          return generatorError("reorder yield type is missing");
+          return generatorError(block->kind + " yield type is missing");
         keyType = expression->type;
       }
       auto keyCppType = cppType(keyType);
@@ -515,8 +528,8 @@ llvm::Expected<std::string> generateQueueGraphCpp(const QueueGraphPlan &plan) {
     if (!parent)
       return parent.takeError();
     initializers.push_back(
-        "block_" + std::to_string(index) + "_state_(\"" + block->name +
-        "_state\", " + std::to_string(state->second) + ", " + *parent +
+        "block_" + std::to_string(index) + "_state_(\"feedback_state_" +
+        block->name + "\", " + std::to_string(state->second) + ", " + *parent +
         ", 1, std::numeric_limits<size_t>::max(), nullptr, 1)");
   }
   size_t sinkIndex = 0;
@@ -526,9 +539,10 @@ llvm::Expected<std::string> generateQueueGraphCpp(const QueueGraphPlan &plan) {
       return parent.takeError();
     std::string member = "block_" + std::to_string(index) + "_";
     std::string key = block->name + "#" + std::to_string(index);
+    std::string instanceName = block->kind + "_" + block->name;
     if (block->kind == "transform") {
       if (block->inputs.size() == 1 && block->outputs.size() == 1) {
-        initializers.push_back(member + "(\"" + block->name + "\", " +
+        initializers.push_back(member + "(\"" + instanceName + "\", " +
                                std::to_string(blockIds[key]) + ", " + *parent +
                                ", " + queueMembers[block->inputs[0]] + ", " +
                                queueMembers[block->outputs[0]] + ")");
@@ -545,7 +559,7 @@ llvm::Expected<std::string> generateQueueGraphCpp(const QueueGraphPlan &plan) {
             outputs.append(", ");
           outputs.append("&").append(queueMembers[block->outputs[result]]);
         }
-        initializers.push_back(member + "(\"" + block->name + "\", " +
+        initializers.push_back(member + "(\"" + instanceName + "\", " +
                                std::to_string(blockIds[key]) + ", " + *parent +
                                ", std::tuple{" + inputs + "}, std::tuple{" +
                                outputs + "})");
@@ -564,7 +578,7 @@ llvm::Expected<std::string> generateQueueGraphCpp(const QueueGraphPlan &plan) {
           outputs.append(", ");
         outputs.append("&").append(queueMembers[name]);
       }
-      initializers.push_back(member + "(\"" + block->name + "\", " +
+      initializers.push_back(member + "(\"" + instanceName + "\", " +
                              std::to_string(blockIds[key]) + ", " + *parent +
                              ", " + queueMembers[block->inputs[0]] +
                              ", std::array<gfsim::SimQueue<" + *type + "> *, " +
@@ -586,43 +600,64 @@ llvm::Expected<std::string> generateQueueGraphCpp(const QueueGraphPlan &plan) {
       std::string policy = block->policy == "priority"
                                ? "gfsim::QueueMergePolicy::Priority"
                                : "gfsim::QueueMergePolicy::RoundRobin";
-      initializers.push_back(member + "(\"" + block->name + "\", " +
+      initializers.push_back(member + "(\"" + instanceName + "\", " +
                              std::to_string(blockIds[key]) + ", " + *parent +
                              ", std::array<gfsim::SimQueue<" + *type + "> *, " +
                              std::to_string(block->inputs.size()) + ">{" +
                              inputs + "}, " + queueMembers[block->outputs[0]] +
                              ", " + policy + ")");
+    } else if (block->kind == "barrier") {
+      std::string inputs;
+      std::string outputs;
+      for (size_t operand = 0; operand < block->inputs.size(); ++operand) {
+        if (operand)
+          inputs.append(", ");
+        inputs.append("&").append(queueMembers[block->inputs[operand]]);
+        if (operand)
+          outputs.append(", ");
+        outputs.append("&").append(queueMembers[block->outputs[operand]]);
+      }
+      initializers.push_back(member + "(\"" + instanceName + "\", " +
+                             std::to_string(blockIds[key]) + ", " + *parent +
+                             ", std::tuple{" + inputs + "}, std::tuple{" +
+                             outputs + "})");
     } else if (block->kind == "reorder") {
-      initializers.push_back(member + "(\"" + block->name + "\", " +
+      initializers.push_back(member + "(\"" + instanceName + "\", " +
                              std::to_string(blockIds[key]) + ", " + *parent +
                              ", " + queueMembers[block->inputs[0]] + ", " +
                              queueMembers[block->outputs[0]] + ", " +
                              std::to_string(block->capacity) + ", " +
                              std::to_string(block->start) + ")");
     } else if (block->kind == "dependency") {
-      initializers.push_back(member + "(\"" + block->name + "\", " +
+      initializers.push_back(member + "(\"" + instanceName + "\", " +
                              std::to_string(blockIds[key]) + ", " + *parent +
                              ", " + queueMembers[block->inputs[0]] + ", " +
                              queueMembers[block->outputs[0]] + ", " +
                              std::to_string(block->capacity) + ", " +
                              std::to_string(block->resources) + ", " +
                              std::to_string(block->noDependency) + ")");
+    } else if (block->kind == "credit") {
+      initializers.push_back(member + "(\"" + instanceName + "\", " +
+                             std::to_string(blockIds[key]) + ", " + *parent +
+                             ", " + queueMembers[block->inputs[0]] + ", " +
+                             queueMembers[block->outputs[0]] + ", " +
+                             std::to_string(block->credits) + ")");
     } else if (block->kind == "memory") {
-      initializers.push_back(member + "(\"" + block->name + "\", " +
+      initializers.push_back(member + "(\"" + instanceName + "\", " +
                              std::to_string(blockIds[key]) + ", " + *parent +
                              ", " + queueMembers[block->inputs[0]] + ", " +
                              queueMembers[block->outputs[0]] + ", " +
                              std::to_string(block->entries) + ", " +
                              std::to_string(block->init) + ")");
     } else if (block->kind == "feedback") {
-      initializers.push_back(member + "(\"" + block->name + "\", " +
+      initializers.push_back(member + "(\"" + instanceName + "\", " +
                              std::to_string(blockIds[key]) + ", " + *parent +
                              ", " + queueMembers[block->inputs[0]] +
                              ", block_" + std::to_string(index) + "_state_, " +
                              queueMembers[block->outputs[0]] + ", " +
                              std::to_string(block->maxIterations) + ")");
     } else if (block->kind == "sink" || block->kind == "observe") {
-      initializers.push_back(member + "(\"" + block->name + "\", " +
+      initializers.push_back(member + "(\"" + instanceName + "\", " +
                              std::to_string(blockIds[key]) + ", " + *parent +
                              ", " + queueMembers[block->inputs[0]] + ")");
       ++sinkIndex;
@@ -813,6 +848,20 @@ llvm::Expected<std::string> generateQueueGraphCpp(const QueueGraphPlan &plan) {
         return type.takeError();
       output << "  gfsim::QueueMerge<" << *type << ", " << block->inputs.size()
              << "> block_" << index << "_;\n";
+    } else if (block->kind == "barrier") {
+      output << "  gfsim::QueueBarrier<std::tuple<";
+      for (auto [inputIndex, inputName] : llvm::enumerate(block->inputs)) {
+        const QueuePlan *input = findQueue(plan, inputName);
+        auto type = input ? cppType(input->payloadType)
+                          : llvm::Expected<std::string>(
+                                generatorError("barrier input missing"));
+        if (!type)
+          return type.takeError();
+        if (inputIndex)
+          output << ", ";
+        output << *type;
+      }
+      output << ">> block_" << index << "_;\n";
     } else if (block->kind == "reorder") {
       const QueuePlan *input = findQueue(plan, block->inputs[0]);
       auto type = input ? cppType(input->payloadType)
@@ -833,6 +882,15 @@ llvm::Expected<std::string> generateQueueGraphCpp(const QueueGraphPlan &plan) {
              << "_key_policy, block_" << index << "_dependency_policy, block_"
              << index << "_resource_policy, block_" << index
              << "_cost_policy> block_" << index << "_;\n";
+    } else if (block->kind == "credit") {
+      const QueuePlan *input = findQueue(plan, block->inputs[0]);
+      auto type = input ? cppType(input->payloadType)
+                        : llvm::Expected<std::string>(
+                              generatorError("credit input missing"));
+      if (!type)
+        return type.takeError();
+      output << "  gfsim::QueueCredit<" << *type << ", block_" << index
+             << "_policy> block_" << index << "_;\n";
     } else if (block->kind == "memory") {
       const QueuePlan *input = findQueue(plan, block->inputs[0]);
       auto type = input ? cppType(input->payloadType)

@@ -208,6 +208,37 @@ TEST(QueueGraphPlanTest, EmitsAtomicTransformWithIndependentArity) {
   EXPECT_NE(pyc->find("= pyc.wire : i1"), std::string::npos);
 }
 
+TEST(QueueGraphPlanTest, EmitsHeterogeneousBarrierForBothBackends) {
+  QueueGraphPlan plan;
+  plan.system = "barrier";
+  plan.queues = {{"left", "i8", "/", 2, 1},
+                 {"right", "i16", "/", 2, 1},
+                 {"left_ready", "i8", "/", 2, 1},
+                 {"right_ready", "i16", "/", 2, 1}};
+  plan.blocks.push_back({"source", "left", "/", {}, {"left"}, {2}, {1}});
+  plan.blocks.push_back({"source", "right", "/", {}, {"right"}, {2}, {1}});
+  plan.blocks.push_back({"barrier",
+                         "left_ready",
+                         "/",
+                         {"left", "right"},
+                         {"left_ready", "right_ready"},
+                         {2, 2},
+                         {1, 1}});
+  plan.blocks.push_back({"sink", "sink_0", "/", {"left_ready"}, {}});
+  plan.blocks.push_back({"sink", "sink_1", "/", {"right_ready"}, {}});
+
+  auto cpp = generateQueueGraphCpp(plan);
+  ASSERT_TRUE(bool(cpp)) << llvm::toString(cpp.takeError());
+  EXPECT_NE(cpp->find("gfsim::QueueBarrier<std::tuple<std::uint8_t, "
+                      "std::uint16_t>>"),
+            std::string::npos);
+
+  auto pyc = generateQueueGraphPyc(plan);
+  ASSERT_TRUE(bool(pyc)) << llvm::toString(pyc.takeError());
+  EXPECT_NE(pyc->find("%in0_valid"), std::string::npos);
+  EXPECT_NE(pyc->find("%out1_ready"), std::string::npos);
+}
+
 TEST(QueueGraphPlanTest, EmitsTypedReorderForBothBackends) {
   QueueGraphPlan plan;
   plan.system = "ordered";
@@ -258,6 +289,30 @@ TEST(QueueGraphPlanTest, EmitsTypedDependencyForBothBackends) {
   EXPECT_NE(cpp->find("gfsim::QueueDependency<std::uint8_t"),
             std::string::npos);
   EXPECT_NE(cpp->find(", input_, output_, 4, 2, 255)"), std::string::npos);
+
+  auto pyc = generateQueueGraphPyc(plan);
+  ASSERT_TRUE(bool(pyc)) << llvm::toString(pyc.takeError());
+  EXPECT_NE(pyc->find("pyc.reg"), std::string::npos);
+  EXPECT_NE(pyc->find("pyc.sub"), std::string::npos);
+}
+
+TEST(QueueGraphPlanTest, EmitsTypedCreditWindowForBothBackends) {
+  QueueGraphPlan plan;
+  plan.system = "credited";
+  plan.queues = {{"input", "i8", "/", 4, 1}, {"output", "i8", "/", 4, 1}};
+  plan.blocks.push_back({"source", "input", "/", {}, {"input"}, {4}, {1}});
+  QueueBlockPlan credit{"credit",   "output", "/", {"input"},
+                        {"output"}, {4},      {1}};
+  credit.yields = {"item"};
+  credit.credits = 2;
+  plan.blocks.push_back(std::move(credit));
+  plan.blocks.push_back({"sink", "sink_0", "/", {"output"}, {}});
+
+  auto cpp = generateQueueGraphCpp(plan);
+  ASSERT_TRUE(bool(cpp)) << llvm::toString(cpp.takeError());
+  EXPECT_NE(cpp->find("gfsim::QueueCredit<std::uint8_t, block_0_policy>"),
+            std::string::npos);
+  EXPECT_NE(cpp->find(", input_, output_, 2)"), std::string::npos);
 
   auto pyc = generateQueueGraphPyc(plan);
   ASSERT_TRUE(bool(pyc)) << llvm::toString(pyc.takeError());
@@ -371,6 +426,30 @@ TEST(QueueGraphPlanTest, RejectsImplicitMultipleConsumers) {
   auto plan = buildQueueGraphPlan(*module);
   ASSERT_FALSE(bool(plan));
   EXPECT_NE(llvm::toString(plan.takeError()).find("insert ac.broadcast"),
+            std::string::npos);
+}
+
+TEST(QueueGraphPlanTest, RejectsUnconsumedQueueAsStaticDeadlockRisk) {
+  QueueGraphPlan plan;
+  plan.system = "unconsumed";
+  plan.queues = {{"input", "i8", "/", 1, 1}};
+  plan.blocks.push_back({"source", "input", "/", {}, {"input"}, {1}, {1}});
+  auto error = verifyQueueGraphPlan(plan);
+  ASSERT_TRUE(bool(error));
+  EXPECT_NE(llvm::toString(std::move(error)).find("has no consuming block"),
+            std::string::npos);
+}
+
+TEST(QueueGraphPlanTest, RejectsRawQueueCycleOutsideFeedbackBlock) {
+  QueueGraphPlan plan;
+  plan.system = "cycle";
+  plan.queues = {{"a", "i8", "/", 1, 1}, {"b", "i8", "/", 1, 1}};
+  plan.blocks.push_back({"transform", "a", "/", {"b"}, {"a"}, {1}, {1}});
+  plan.blocks.push_back({"transform", "b", "/", {"a"}, {"b"}, {1}, {1}});
+  auto error = verifyQueueGraphPlan(plan);
+  ASSERT_TRUE(bool(error));
+  EXPECT_NE(llvm::toString(std::move(error))
+                .find("represent stateful loops with ac.feedback"),
             std::string::npos);
 }
 

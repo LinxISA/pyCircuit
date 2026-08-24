@@ -371,6 +371,55 @@ integer at runtime. Dependencies refer to tokens retained in the bounded
 window; a missing predecessor blocks the token and can participate in deadlock
 diagnostics.
 
+### Credit scheduling
+
+`credit` is a bounded parallel completion window. It admits at most `credits`
+tokens, evaluates a pure per-token cost, advances every occupied slot once per
+epoch, and returns the slot when the completed token transfers to the output
+Queue.
+
+```python
+completed = issued.credit(
+    cost=lambda item: item.cycles,
+    credits=2,
+    depth=4,
+    latency=1,
+)
+```
+
+`credits`, output `depth`, and output `latency` are positive compile-time
+constants. The cost lambda MUST return an integer Var no wider than 64 bits.
+Every accepted runtime cost MUST be positive; zero or negative cost produces
+the deterministic `credit_nonpositive_cost` failure/assertion.
+
+Each slot counts down independently, so completion order may differ from input
+order. When multiple slots are complete, the block chooses the lowest canonical
+slot index and emits at most one token per epoch. Admission and retirement may
+occur in the same epoch when they use different committed slots. A slot retired
+in the current Xfer is not reused until a later epoch.
+
+### Barrier synchronization
+
+`barrier` synchronizes two or more Queue heads and publishes a positionally
+matching output tuple as one atomic firing. Input payload types may differ.
+
+```python
+left_ready, right_ready = left.barrier(
+    right,
+    depth=2,
+    latency=1,
+)
+```
+
+All input Queues MUST be distinct. The output count MUST equal the input count,
+and each output payload type MUST match its corresponding input. The barrier
+waits until every input can pop and every output can accept; then all pops and
+pushes commit together. Before that Xfer, it publishes no partial result.
+
+The output Queues are ordinary independent Queues after the atomic transfer.
+Downstream consumers may therefore drain them on different later epochs without
+changing the barrier firing contract.
+
 ### Typed memory
 
 `memory` is the common single-read/single-write state block. The request and
@@ -613,6 +662,8 @@ has both a typed gfsim realization and a PYC realization.
 | `ac.fork` | design | one to two or more | output depths and latencies | decoupled exactly-once fanout |
 | `ac.route` | design | one to two or more | output depths and latencies | selector-controlled demultiplexing |
 | `ac.merge` | design | two or more to one | `policy`, `depth`, `latency` | priority or round-robin arbitration |
+| `ac.barrier` | design | two or more to the same count | output depths and latencies | positionally typed atomic synchronization |
+| `ac.credit` | design | one to one | `credits`, `depth`, `latency` | bounded parallel cost countdown and completion |
 | `ac.memory` | design | one to one | `entries`, `init`, `result_field`, `depth`, `latency` | synchronous old-data read and commit-time write |
 | `ac.dependency` | design | one to one | `capacity`, `resources`, `no_dependency`, `depth`, `latency` | bounded predecessor tracking, resource reservation, and execution countdown |
 | `ac.reorder` | design | one to one | `capacity`, `start`, `depth`, `latency` | bounded key-ordered retirement |
@@ -667,6 +718,39 @@ consumes both heads and publishes the sum as one atomic transaction:
 Neither backend may consume only one input or publish a partial output set.
 The transform fires only when every input is valid and every output can accept
 its corresponding result.
+
+### Credit example
+
+The Python credit call lowers to one stateful `ac.credit` and one pure cost
+region.
+
+```mlir
+%completed = ac.credit %issued credits 2 depth 4 latency 1 cost {
+^cost(%item: !ac.var<!ac.struct<@types::@CreditToken>>):
+  %cycles = ac.var.get %item field "cycles"
+    : !ac.var<!ac.struct<@types::@CreditToken>> -> !ac.var<i4>
+  ac.credit.yield %cycles : !ac.var<i4>
+} : !ac.queue<!ac.struct<@types::@CreditToken>>
+    -> !ac.queue<!ac.struct<@types::@CreditToken>>
+```
+
+The cost region MUST contain one argument matching the Queue payload, contain
+only pure Var operations, and terminate with exactly one `ac.credit.yield`.
+
+### Barrier example
+
+The barrier has no Var policy region. Its positional Queue types and static
+output parameters completely define the operation.
+
+```mlir
+%left_ready, %right_ready = ac.barrier %left, %right
+    depths [2, 2] latencies [1, 1]
+    : (!ac.queue<i16>, !ac.queue<i32>)
+      -> (!ac.queue<i16>, !ac.queue<i32>)
+```
+
+The input operands MUST be unique. Output depth and latency arrays MUST match
+the output count and contain only positive values.
 
 ### Memory example
 
@@ -740,18 +824,22 @@ path.
 A backend-ready Queue graph MUST satisfy:
 
 - every Queue has exactly one producer;
-- a Queue has no more than one consuming block;
+- every Queue has exactly one consuming block;
 - `ac.observe` does not count as a consuming block;
 - fanout is represented by `ac.broadcast` or `ac.fork`;
 - merge is represented by `ac.merge`, not multiple producers on one Queue;
 - key-ordered retirement is represented by bounded `ac.reorder` state;
 - every Queue depth and latency is positive;
 - Queue logical identities are non-empty and unique;
+- every block input and output references a known Queue identity;
+- raw QueueGraph cycles are rejected; a stateful loop MUST use `ac.feedback`;
 - every Var region uses only supported pure operations and structured yields;
 - topology and collection shape are compile-time fixed.
 
-The current planner permits an otherwise unused Queue, although authoring code
-SHOULD connect every functional path to a sink or another consuming block.
+An otherwise unused Queue is a static no-progress risk and is rejected with an
+actionable `connect ac.sink` diagnostic. The same verifier runs after ACIR
+extraction and again at both backend entry points, so hand-constructed plans
+cannot bypass the producer, consumer, reference, or cycle checks.
 
 ## Runtime execution contract
 
@@ -791,6 +879,28 @@ Xfer.
 No legal lowering may commit an input pop while a required output push is
 rejected.
 
+### Credit transfer
+
+Credit admission pops one input token into a free committed slot. Active slots
+decrement at Xfer, and a zero-remaining slot may propose one output token. The
+slot becomes free only when that output push commits. Output backpressure keeps
+the completed token and its credit occupied.
+
+The gfsim and PYC implementations use the same lowest-slot tie break, the same
+one-admission/one-completion bandwidth, and the same no-same-Xfer slot reuse
+rule. Refinement compares accepted and completed transactions and derives the
+active credit count from their committed difference.
+
+### Barrier transfer
+
+A barrier reads every committed input head, checks every output proposal slot,
+and proposes the complete positional transfer. If any precondition fails, it
+proposes no pop or push. Xfer commits all accepted Queue effects together.
+
+gfsim implements this as `QueueBarrier<std::tuple<Ts...>>`. PYC implements the
+same contract with an all-input-valid conjunction, per-input ready gating, and
+per-output valid gating; no backend retains a dynamic Queue pointer.
+
 ### Memory transfer
 
 Memory reads observe committed state before the current Xfer. The memory block
@@ -824,8 +934,8 @@ blocks borrow typed Queue references. Sibling blocks MUST NOT own duplicate
 instances of the same interconnect.
 
 The implementation currently provides reusable templates for transform,
-atomic transform, sink, observe, broadcast, fork, route, merge, memory,
-dependency, reorder, and feedback.
+atomic transform, sink, observe, broadcast, fork, route, merge, barrier, credit,
+memory, dependency, reorder, and feedback.
 Generated dispatch is static; generated runtime code MUST NOT discover opcodes
 by strings, walk schemas, construct topology dynamically, or depend on Python
 or MLIR libraries.
@@ -849,6 +959,8 @@ The current hardware lowering maps:
 | route | selector decoder, valid demultiplexing, ready multiplexing |
 | priority merge | fixed-priority selection |
 | round-robin merge | selection plus committed cursor register |
+| barrier | all-input-valid/all-output-ready atomic handshake |
+| credit | fixed slot register bank, parallel countdown, and deterministic completion selection |
 | memory | `pyc.sync_mem` plus an aligned pending request/valid register |
 | dependency | fixed register window, predecessor wakeup, countdown, and resource grants |
 | reorder | fixed register window and committed next-key register |
@@ -1115,17 +1227,17 @@ The following v0.2 slices are implemented and tested:
 - immutable scalar and structure payloads;
 - Queue/Var types and pure Var expressions;
 - scopes with inferred Queue boundaries;
-- transform, strict broadcast, decoupled fork, route, merge, typed memory,
-  dependency, reorder, observe, sink, explicit atomic transform, and bounded
-  feedback;
+- transform, strict broadcast, decoupled fork, route, merge, atomic barrier,
+  bounded credit, typed memory, dependency, reorder, observe, sink, explicit
+  atomic transform, and bounded feedback;
 - static arrays, maps, sets, static `if`, static loops, and symmetric runtime
   Queue `if` lowering through route/transform/merge;
 - canonical QueueGraph extraction;
 - typed gfsim C++ generation;
-- PYC/Verilog lowering for transform, broadcast, fork, route, merge, typed
-  synchronous memory, dependency, reorder, bounded feedback, elaboration-time
-  scope flattening, packed structures, atomic handshakes, and exact Queue
-  latency;
+- PYC/Verilog lowering for transform, broadcast, fork, route, merge, atomic
+  barrier, bounded credit, typed synchronous memory, dependency, reorder,
+  bounded feedback, elaboration-time scope flattening, packed structures,
+  atomic handshakes, and exact Queue latency;
 - PYC C++ versus Verilog cycle equivalence and gfsim/PYC projected transaction
   comparison.
 
@@ -1133,8 +1245,7 @@ The following work remains before v0.2 is complete:
 
 - finish lowercase component naming and removal of the remaining provider
   surfaces after the epoch and `ac.std.*` hard break;
-- freeze the remaining common building-block inventory for general state,
-  credits, and barriers;
+- freeze the remaining common building-block inventory for general state;
 - preserve explicit signedness semantics beyond integer width;
 - lower the remaining general state and resource blocks through PYC;
 - complete the DavinciOO functional and performance refinement contract;
@@ -1148,7 +1259,8 @@ opcode/completion/retirement projection, and the 453-cycle bounded oracle. The
 same frozen ACIR produces PYC C++ and Verilog with cycle-identical hardware
 observations and the same projected output transactions. Dependency readiness
 resource reservation, and execution countdown are now explicit `ac.dependency`
-state. The projection
+state, while bounded parallel in-flight work is explicit `ac.credit` state. The
+projection
 retains only a fixed 5-cycle ingress and 4-cycle drain compensation for the
 different model boundaries; internal resource reservation and issue/ROB
 occupancy reporting remain future refinement layers.

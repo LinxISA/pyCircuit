@@ -246,6 +246,18 @@ def ACIR_MergeOp : ACIR_Op<"merge"> {
   }];
 }
 
+def ACIR_BarrierOp : ACIR_Op<"barrier"> {
+  let arguments = (ins Variadic<ACIR_QueueType>:$inputs,
+                       DenseI64ArrayAttr:$output_depths,
+                       DenseI64ArrayAttr:$output_latencies);
+  let results = (outs Variadic<ACIR_QueueType>:$outputs);
+  let hasVerifier = 1;
+  let assemblyFormat = [{
+    $inputs `depths` $output_depths `latencies` $output_latencies attr-dict
+    `:` functional-type($inputs, $outputs)
+  }];
+}
+
 def ACIR_ReorderOp : ACIR_Op<"reorder", [SingleBlock]> {
   let arguments = (ins ACIR_QueueType:$input, I64Attr:$capacity,
                        I64Attr:$start, I64Attr:$depth, I64Attr:$latency);
@@ -290,6 +302,25 @@ def ACIR_DependencyYieldOp : ACIR_Op<"dependency.yield", [
   ]> {
   let arguments = (ins ACIR_VarType:$value);
   let assemblyFormat = "$value attr-dict `:` qualified(type($value))";
+}
+
+def ACIR_CreditOp : ACIR_Op<"credit", [SingleBlock]> {
+  let arguments = (ins ACIR_QueueType:$input, I64Attr:$credits,
+                       I64Attr:$depth, I64Attr:$latency);
+  let results = (outs ACIR_QueueType:$output);
+  let regions = (region SizedRegion<1>:$cost);
+  let hasVerifier = 1;
+  let assemblyFormat = [{
+    $input `credits` $credits `depth` $depth `latency` $latency `cost` $cost
+    attr-dict `:` qualified(type($input)) `->` qualified(type($output))
+  }];
+}
+
+def ACIR_CreditYieldOp : ACIR_Op<"credit.yield", [
+    Pure, Terminator, HasParent<"CreditOp">
+  ]> {
+  let arguments = (ins ACIR_VarType:$cost);
+  let assemblyFormat = "$cost attr-dict `:` qualified(type($cost))";
 }
 
 def ACIR_MemoryOp : ACIR_Op<"memory", [SingleBlock]> {

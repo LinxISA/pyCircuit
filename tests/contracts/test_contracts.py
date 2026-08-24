@@ -103,7 +103,9 @@ class RepositoryContractsTest(unittest.TestCase):
         catalog = json.loads((ROOT / "schemas/opcodes-v0.2.json").read_text())
         Draft202012Validator(schema).validate(catalog)
         expected = {
+            "ac.barrier",
             "ac.broadcast",
+            "ac.credit",
             "ac.dependency",
             "ac.feedback",
             "ac.fork",

@@ -225,6 +225,43 @@ TEST(QueueBlocksTest, AtomicTransformSupportsIndependentInputOutputArity) {
   EXPECT_EQ(*output.peek(), 12);
 }
 
+TEST(QueueBlocksTest, BarrierTransfersHeterogeneousQueuesAtomically) {
+  SimQueue<int> left("left", 1, nullptr, 1);
+  SimQueue<int64_t> right("right", 2, nullptr, 1);
+  SimQueue<int> leftOutput("left_output", 3, nullptr, 1);
+  SimQueue<int64_t> rightOutput("right_output", 4, nullptr, 1);
+  QueueBarrier<std::tuple<int, int64_t>> barrier(
+      "barrier", 5, nullptr, {&left, &right}, {&leftOutput, &rightOutput});
+  ASSERT_TRUE(left.proposePush(4));
+  ASSERT_TRUE(right.proposePush(8));
+  ASSERT_TRUE(rightOutput.proposePush(99));
+  left.doXfer({0, 0});
+  right.doXfer({0, 0});
+  rightOutput.doXfer({0, 0});
+
+  barrier.doWork({1, 0});
+  EXPECT_FALSE(barrier.hasPendingCommit());
+  EXPECT_EQ(left.committedSize(), 1u);
+  EXPECT_EQ(right.committedSize(), 1u);
+  EXPECT_TRUE(leftOutput.isEmpty());
+
+  rightOutput.proposePop();
+  rightOutput.doXfer({1, 0});
+  barrier.doWork({2, 0});
+  ASSERT_TRUE(barrier.hasPendingCommit());
+  left.doXfer({2, 0});
+  right.doXfer({2, 0});
+  leftOutput.doXfer({2, 0});
+  rightOutput.doXfer({2, 0});
+  barrier.doXfer({2, 0});
+  EXPECT_TRUE(left.isEmpty());
+  EXPECT_TRUE(right.isEmpty());
+  ASSERT_NE(leftOutput.peek(), nullptr);
+  ASSERT_NE(rightOutput.peek(), nullptr);
+  EXPECT_EQ(*leftOutput.peek(), 4);
+  EXPECT_EQ(*rightOutput.peek(), 8);
+}
+
 TEST(QueueBlocksTest, ReorderRetiresOutOfOrderArrivalsBySequenceKey) {
   SimQueue<SequencedValue> input("input", 1, nullptr, 4);
   SimQueue<SequencedValue> output("output", 2, nullptr, 4);
@@ -339,6 +376,48 @@ TEST(QueueBlocksTest, DependencyRejectsOutOfRangeResource) {
   EXPECT_EQ(dependency.runtimeFailureCode(),
             "dependency_resource_out_of_range");
   EXPECT_FALSE(dependency.hasPendingCommit());
+  EXPECT_TRUE(output.isEmpty());
+}
+
+TEST(QueueBlocksTest, CreditWindowCompletesParallelTokensAndReturnsSlots) {
+  SimQueue<DependencyValue> input("input", 1, nullptr, 4);
+  SimQueue<DependencyValue> output("output", 2, nullptr, 4);
+  QueueCredit<DependencyValue, DependencyCost> credit("credit", 3, nullptr,
+                                                      input, output, 2);
+  QueueSink<DependencyValue> sink("sink", 4, nullptr, output);
+  ASSERT_TRUE(input.proposePush({0, 255, 0, 4}));
+  ASSERT_TRUE(input.proposePush({1, 255, 0, 1}));
+  ASSERT_TRUE(input.proposePush({2, 255, 0, 1}));
+  input.doXfer({0, 0});
+
+  for (uint64_t tick = 1; tick < 12; ++tick) {
+    const Epoch epoch{tick, 0};
+    credit.doWork(epoch);
+    sink.doWork(epoch);
+    input.doXfer(epoch);
+    output.doXfer(epoch);
+    credit.doXfer(epoch);
+    sink.doXfer(epoch);
+  }
+
+  ASSERT_EQ(sink.received().size(), 3u);
+  EXPECT_EQ(sink.received()[0].sequence, 1u);
+  EXPECT_EQ(sink.received()[1].sequence, 0u);
+  EXPECT_EQ(sink.received()[2].sequence, 2u);
+  EXPECT_EQ(credit.active(), 0u);
+}
+
+TEST(QueueBlocksTest, CreditRejectsZeroCostWithoutConsumingInput) {
+  SimQueue<DependencyValue> input("input", 1, nullptr, 1);
+  SimQueue<DependencyValue> output("output", 2, nullptr, 1);
+  QueueCredit<DependencyValue, DependencyCost> credit("credit", 3, nullptr,
+                                                      input, output, 1);
+  ASSERT_TRUE(input.proposePush({0, 255, 0, 0}));
+  input.doXfer({0, 0});
+  credit.doWork({1, 0});
+  EXPECT_EQ(credit.runtimeFailureCode(), "credit_nonpositive_cost");
+  EXPECT_FALSE(credit.hasPendingCommit());
+  EXPECT_EQ(input.committedSize(), 1u);
   EXPECT_TRUE(output.isEmpty());
 }
 

@@ -143,6 +143,75 @@ private:
   bool fired_ = false;
 };
 
+template <typename Types> class QueueBarrier;
+
+template <typename... Values>
+class QueueBarrier<std::tuple<Values...>> final : public SimObject {
+public:
+  static constexpr std::string_view contractName = "ac.barrier";
+  static constexpr ObjectKind componentKind = ObjectKind::Scheduler;
+
+  QueueBarrier(std::string name, ObjectId id, SimObject *parent,
+               std::tuple<SimQueue<Values> *...> inputs,
+               std::tuple<SimQueue<Values> *...> outputs,
+               ObservationSink *observations = nullptr)
+      : SimObject(componentKind, std::move(name), id, parent, observations),
+        inputs_(inputs), outputs_(outputs) {}
+
+  void doWork(Epoch) override {
+    if (fired_ || !allInputsReady() || !allOutputsReady())
+      return;
+    auto values = inputValues(std::index_sequence_for<Values...>{});
+    if (!pushAll(values, std::index_sequence_for<Values...>{}) ||
+        !popAll(std::index_sequence_for<Values...>{}))
+      return;
+    fired_ = true;
+  }
+  void doXfer(Epoch) override { fired_ = false; }
+  bool hasPendingCommit() const override { return fired_; }
+  bool isRunnable(Epoch) const override {
+    return !fired_ && allInputsReady() && allOutputsReady();
+  }
+  void reset() override {
+    fired_ = false;
+    clearRuntimeFailureCode();
+  }
+
+private:
+  bool allInputsReady() const {
+    return std::apply(
+        [](const auto *...queues) {
+          return ((queues != nullptr && queues->canProposePop()) && ...);
+        },
+        inputs_);
+  }
+  bool allOutputsReady() const {
+    return std::apply(
+        [](const auto *...queues) {
+          return ((queues != nullptr && queues->canProposePush()) && ...);
+        },
+        outputs_);
+  }
+  template <size_t... Indices>
+  std::tuple<Values...> inputValues(std::index_sequence<Indices...>) const {
+    return std::tuple<Values...>{*std::get<Indices>(inputs_)->peek()...};
+  }
+  template <size_t... Indices>
+  bool pushAll(const std::tuple<Values...> &values,
+               std::index_sequence<Indices...>) {
+    return (
+        std::get<Indices>(outputs_)->proposePush(std::get<Indices>(values)) &&
+        ...);
+  }
+  template <size_t... Indices> bool popAll(std::index_sequence<Indices...>) {
+    return (std::get<Indices>(inputs_)->proposePop().has_value() && ...);
+  }
+
+  std::tuple<SimQueue<Values> *...> inputs_;
+  std::tuple<SimQueue<Values> *...> outputs_;
+  bool fired_ = false;
+};
+
 template <typename T, typename Key>
   requires std::invocable<const Key &, const T &> &&
            std::integral<std::invoke_result_t<const Key &, const T &>>
@@ -462,6 +531,135 @@ private:
   std::optional<uint64_t> pendingOutputKey_;
   std::vector<uint64_t> pendingIssues_;
   std::vector<uint64_t> pendingCompletions_;
+  bool proposed_ = false;
+};
+
+template <typename T, typename Cost>
+  requires std::invocable<const Cost &, const T &> &&
+           std::integral<std::invoke_result_t<const Cost &, const T &>>
+class QueueCredit final : public SimObject {
+public:
+  static constexpr std::string_view contractName = "ac.credit";
+  static constexpr ObjectKind componentKind = ObjectKind::Scheduler;
+
+  QueueCredit(std::string name, ObjectId id, SimObject *parent,
+              SimQueue<T> &input, SimQueue<T> &output, size_t credits,
+              Cost cost = {}, ObservationSink *observations = nullptr)
+      : SimObject(componentKind, std::move(name), id, parent, observations),
+        input_(input), output_(output), slots_(credits),
+        cost_(std::move(cost)) {}
+
+  void doWork(Epoch) override {
+    if (proposed_)
+      return;
+
+    for (size_t index = 0; index < slots_.size(); ++index)
+      if (slots_[index] && slots_[index]->remaining == 0 &&
+          output_.canProposePush() &&
+          output_.proposePush(slots_[index]->value)) {
+        pendingOutput_ = index;
+        break;
+      }
+
+    for (size_t index = 0; index < slots_.size(); ++index)
+      if (slots_[index] && slots_[index]->remaining > 0)
+        pendingCountdowns_.push_back(index);
+
+    if (input_.canProposePop()) {
+      auto free = std::find_if(slots_.begin(), slots_.end(),
+                               [](const auto &slot) { return !slot; });
+      const T *head = input_.peek();
+      if (free != slots_.end() && head != nullptr)
+        proposeInput(static_cast<size_t>(free - slots_.begin()), *head);
+    }
+
+    proposed_ = pendingInput_.has_value() || pendingOutput_.has_value() ||
+                !pendingCountdowns_.empty();
+  }
+
+  void doXfer(Epoch) override {
+    if (!proposed_)
+      return;
+    if (pendingOutput_)
+      slots_[*pendingOutput_].reset();
+    for (size_t index : pendingCountdowns_)
+      if (slots_[index] && slots_[index]->remaining > 0)
+        --slots_[index]->remaining;
+    if (pendingInput_)
+      slots_[pendingInput_->slot] =
+          Entry{std::move(pendingInput_->value), pendingInput_->cost};
+    pendingInput_.reset();
+    pendingOutput_.reset();
+    pendingCountdowns_.clear();
+    proposed_ = false;
+  }
+
+  bool hasPendingCommit() const override { return proposed_; }
+  bool isRunnable(Epoch) const override {
+    if (proposed_)
+      return false;
+    if (input_.canProposePop() &&
+        std::any_of(slots_.begin(), slots_.end(),
+                    [](const auto &slot) { return !slot; }))
+      return true;
+    for (const auto &slot : slots_)
+      if (slot && (slot->remaining > 0 || output_.canProposePush()))
+        return true;
+    return false;
+  }
+
+  size_t active() const {
+    return static_cast<size_t>(
+        std::count_if(slots_.begin(), slots_.end(),
+                      [](const auto &slot) { return slot.has_value(); }));
+  }
+
+  void reset() override {
+    for (auto &slot : slots_)
+      slot.reset();
+    pendingInput_.reset();
+    pendingOutput_.reset();
+    pendingCountdowns_.clear();
+    proposed_ = false;
+    clearRuntimeFailureCode();
+  }
+
+private:
+  struct Entry {
+    T value;
+    uint64_t remaining = 0;
+  };
+  struct PendingInput {
+    size_t slot = 0;
+    T value;
+    uint64_t cost = 0;
+  };
+
+  void proposeInput(size_t slot, const T &value) {
+    using CostResult = std::invoke_result_t<const Cost &, const T &>;
+    const CostResult rawCost = std::invoke(std::as_const(cost_), value);
+    if constexpr (std::signed_integral<CostResult>)
+      if (rawCost <= 0) {
+        setRuntimeFailureCode("credit_nonpositive_cost");
+        return;
+      }
+    if constexpr (std::unsigned_integral<CostResult>)
+      if (rawCost == 0) {
+        setRuntimeFailureCode("credit_nonpositive_cost");
+        return;
+      }
+    if (!input_.proposePop())
+      return;
+    pendingInput_ = PendingInput{slot, value, static_cast<uint64_t>(rawCost)};
+  }
+
+  SimQueue<T> &input_;
+  SimQueue<T> &output_;
+  std::vector<std::optional<Entry>> slots_;
+  [[no_unique_address]] Cost cost_;
+  std::optional<PendingInput> pendingInput_;
+  std::optional<size_t> pendingOutput_;
+  std::vector<size_t> pendingCountdowns_;
   bool proposed_ = false;
 };
 

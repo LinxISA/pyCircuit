@@ -325,8 +325,77 @@ def pipeline() -> None:
     ac.sink(responses)
 """
 
+CREDIT_SOURCE = """
+import agentic_circuit as ac
+
+@ac.system
+def pipeline() -> None:
+    issued = ac.source(int)
+    completed = issued.credit(
+        cost=lambda item: item,
+        credits=4,
+        depth=4,
+        latency=1,
+    )
+    ac.sink(completed)
+"""
+
+BARRIER_SOURCE = """
+import agentic_circuit as ac
+
+@ac.system
+def pipeline() -> None:
+    left = ac.source(int)
+    right = ac.source(int)
+    left_ready, right_ready = left.barrier(right, depth=2, latency=1)
+    ac.sink(left_ready)
+    ac.sink(right_ready)
+"""
+
 
 class QueueFrontendV02Test(unittest.TestCase):
+    def test_barrier_lowers_multi_queue_atomic_synchronization(self) -> None:
+        from agentic_circuit._queue_frontend import (
+            QueueFrontendError,
+            lower_queue_source,
+        )
+
+        lowered = lower_queue_source(BARRIER_SOURCE, "pipeline")
+        self.assertIn(
+            "%left_ready, %right_ready = ac.barrier %left, %right "
+            "depths [2, 2] latencies [1, 1]",
+            lowered,
+        )
+        with self.assertRaisesRegex(QueueFrontendError, "inputs must be unique"):
+            lower_queue_source(
+                BARRIER_SOURCE.replace("left.barrier(right", "left.barrier(left"),
+                "pipeline",
+            )
+        with self.assertRaisesRegex(QueueFrontendError, "matching input/output arity"):
+            lower_queue_source(
+                BARRIER_SOURCE.replace(
+                    "left_ready, right_ready =", "left_ready, right_ready, extra ="
+                ),
+                "pipeline",
+            )
+
+    def test_credit_lowers_bounded_parallel_completion_window(self) -> None:
+        from agentic_circuit._queue_frontend import (
+            QueueFrontendError,
+            lower_queue_source,
+        )
+
+        lowered = lower_queue_source(CREDIT_SOURCE, "pipeline")
+        self.assertIn(
+            "%completed = ac.credit %issued credits 4 depth 4 latency 1 cost",
+            lowered,
+        )
+        self.assertIn("ac.credit.yield %item : !ac.var<i64>", lowered)
+        with self.assertRaisesRegex(QueueFrontendError, "credits must be positive"):
+            lower_queue_source(
+                CREDIT_SOURCE.replace("credits=4", "credits=0"), "pipeline"
+            )
+
     def test_memory_lowers_old_data_request_response_contract(self) -> None:
         from agentic_circuit._queue_frontend import (
             QueueFrontendError,
