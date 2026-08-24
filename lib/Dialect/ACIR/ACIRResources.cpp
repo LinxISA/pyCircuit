@@ -53,21 +53,6 @@ Operation *lookupOuter(Operation *from, SymbolRefAttr reference) {
   return file ? SymbolTable::lookupSymbolIn(file, reference) : nullptr;
 }
 
-bool isNormativePayload(Type type) {
-  if (isa<IntegerType, FloatType, IndexType, StructType, PacketType,
-          TransactionType, EnumType, UnionType>(type))
-    return true;
-  if (auto optional = dyn_cast<OptionalType>(type))
-    return isNormativePayload(optional.getElementType());
-  if (auto list = dyn_cast<ListType>(type))
-    return isNormativePayload(list.getElementType());
-  if (auto vector = dyn_cast<VectorType>(type))
-    return isNormativePayload(vector.getElementType());
-  if (auto vector = dyn_cast<mlir::VectorType>(type))
-    return isNormativePayload(vector.getElementType());
-  return false;
-}
-
 LogicalResult verifyOwner(Operation *op, StringRef name, StringRef stableId,
                           StringRef path, int64_t delay) {
   if (failed(verifyPlacement(op)))
@@ -325,7 +310,7 @@ LogicalResult QueueOp::verify() {
     return emitOpError("ordering must be 'fifo' or 'per_key'");
   if (getOwnership() != "exclusive")
     return emitOpError("queue ownership must be exactly 'exclusive'");
-  if (!isNormativePayload(getPayload()))
+  if (!isNormativePayloadType(getPayload()))
     return emitOpError("queue payload must be a normative ACIR value type");
   if (DictionaryAttr marks = getWatermarksAttr()) {
     auto low = marks.getAs<IntegerAttr>("low");

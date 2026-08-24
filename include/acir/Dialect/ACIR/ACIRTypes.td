@@ -54,6 +54,18 @@ def ACIR_VectorType : ACIR_Type<"Vector", "vector"> {
   let genVerifyDecl = 1;
 }
 
+def ACIR_VarType : ACIR_Type<"Var", "var"> {
+  let parameters = (ins "mlir::Type":$elementType);
+  let assemblyFormat = "`<` $elementType `>`";
+  let genVerifyDecl = 1;
+}
+
+def ACIR_QueueType : ACIR_Type<"Queue", "queue"> {
+  let parameters = (ins "mlir::Type":$elementType);
+  let assemblyFormat = "`<` $elementType `>`";
+  let genVerifyDecl = 1;
+}
+
 def ACIR_FlowType : ACIR_Type<"Flow", "flow"> {
   let parameters = (ins "mlir::Type":$elementType,
                         "mlir::FlatSymbolRefAttr":$protocol);

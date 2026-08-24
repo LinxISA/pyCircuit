@@ -18,7 +18,7 @@ def load_coverage_checker():
 
 
 ACIR_MANIFEST = """schema: acir-ir-inventory
-contract_epoch: "0.1"
+contract_epoch: "0.2"
 dialect: acir
 operations:
   - ac.system
@@ -36,7 +36,7 @@ types:
 """
 
 FIXTURE_FILES = {
-    "contracts/acir-v0.1.yaml": ACIR_MANIFEST,
+    "contracts/acir-v0.2.yaml": ACIR_MANIFEST,
     "contracts/acsim-v0.1.yaml": ACSIM_MANIFEST,
     "include/acir/Dialect/ACIR/ACIROps.td": (
         'def ACIR_SystemOp : ACIR_Op<"system", [Symbol]> {\n}\n'
@@ -136,7 +136,7 @@ class IRCoverageTest(unittest.TestCase):
     def test_manifest_missing_operation_is_reported(self):
         temporary_directory, root = initialize_coverage_fixture(
             overrides={
-                "contracts/acir-v0.1.yaml": ACIR_MANIFEST.replace(
+                "contracts/acir-v0.2.yaml": ACIR_MANIFEST.replace(
                     "operations:\n  - ac.system\n", "operations: []\n"
                 )
             }
@@ -151,7 +151,7 @@ class IRCoverageTest(unittest.TestCase):
     def test_manifest_extra_operation_needs_source_symbol(self):
         temporary_directory, root = initialize_coverage_fixture(
             overrides={
-                "contracts/acir-v0.1.yaml": ACIR_MANIFEST.replace(
+                "contracts/acir-v0.2.yaml": ACIR_MANIFEST.replace(
                     "  - ac.system\n", "  - ac.system\n  - ac.ghost\n"
                 )
             }

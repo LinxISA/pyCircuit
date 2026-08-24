@@ -1,4 +1,4 @@
-# Normative ACIR v0.1 public inventory.
+# Proposed ACIR v0.2 public inventory under active implementation.
 #
 # This manifest is the contract-side source of truth for the public ACIR
 # surface. scripts/check-ir-coverage.py requires the ODS definitions to
@@ -6,7 +6,7 @@
 # or type must be reflected here in the same commit, and every entry must
 # have observable lit coverage.
 schema: acir-ir-inventory
-contract_epoch: "0.1"
+contract_epoch: "0.2"
 dialect: acir
 operations:
   - ac.system
@@ -73,6 +73,8 @@ types:
   - optional
   - list
   - vector
+  - var
+  - queue
   - flow
   - endpoint
   - resource_ref
