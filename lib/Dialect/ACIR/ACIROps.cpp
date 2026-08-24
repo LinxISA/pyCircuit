@@ -111,6 +111,36 @@ LogicalResult BroadcastOp::verify() {
   return success();
 }
 
+LogicalResult RouteOp::verify() {
+  if (getOutputs().size() < 2)
+    return emitOpError("requires at least two output queues");
+  for (auto [index, output] : llvm::enumerate(getOutputs()))
+    if (output.getType() != getInput().getType())
+      return emitOpError() << "output queue " << index
+                           << " must match input queue type";
+  ArrayRef<int64_t> depths = getOutputDepthsAttr().asArrayRef();
+  ArrayRef<int64_t> latencies = getOutputLatenciesAttr().asArrayRef();
+  if (depths.size() != getOutputs().size() ||
+      llvm::any_of(depths, [](int64_t value) { return value <= 0; }))
+    return emitOpError("output depths must match results and be positive");
+  if (latencies.size() != getOutputs().size() ||
+      llvm::any_of(latencies, [](int64_t value) { return value <= 0; }))
+    return emitOpError("output latencies must match results and be positive");
+  Block &block = getSelector().front();
+  if (block.getNumArguments() != 1 ||
+      block.getArgument(0).getType() !=
+          VarType::get(getContext(),
+                       cast<QueueType>(getInput().getType()).getElementType()))
+    return emitOpError("selector argument must match input payload Var");
+  auto yield = dyn_cast<RouteYieldOp>(block.getTerminator());
+  if (!yield)
+    return emitOpError("selector must terminate with ac.route.yield");
+  Type selector = cast<VarType>(yield.getSelector().getType()).getElementType();
+  if (!isa<IntegerType, EnumType>(selector))
+    return emitOpError("selector must be an integer or enum Var");
+  return success();
+}
+
 LogicalResult ScopeOp::verify() {
   Block &block = getBody().front();
   if (block.getNumArguments() != getInputs().size())

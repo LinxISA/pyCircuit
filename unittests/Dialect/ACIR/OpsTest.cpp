@@ -353,6 +353,8 @@ TEST(ACIROpsTest, RegistryContainsExactV02QueueVarOperations) {
       "ac.require",
       "ac.return",
       "ac.resource",
+      "ac.route",
+      "ac.route.yield",
       "ac.role",
       "ac.scope",
       "ac.scope.yield",
@@ -744,18 +746,19 @@ TEST(ACIROpsTest, RuntimeAndV02QueueVarRegistryIsExact) {
         << name.str();
   EXPECT_FALSE(mlir::OperationName("ac.try_issue", &context).isRegistered());
   EXPECT_FALSE(mlir::OperationName("ac.connect", &context).isRegistered());
-  const std::array<llvm::StringLiteral, 18> v02Names = {
+  const std::array<llvm::StringLiteral, 20> v02Names = {
       "ac.transform",    "ac.transform.yield", "ac.firing",
       "ac.firing.yield", "ac.queue.peek",      "ac.queue.pop",
       "ac.queue.push",   "ac.source",          "ac.sink",
       "ac.var.constant", "ac.var.add",         "ac.var.sub",
       "ac.var.mul",      "ac.var.get",         "ac.var.with",
       "ac.scope",        "ac.scope.yield",     "ac.broadcast",
+      "ac.route",        "ac.route.yield",
   };
   for (llvm::StringLiteral name : v02Names)
     EXPECT_TRUE(mlir::OperationName(name, &context).isRegistered())
         << name.str();
-  EXPECT_EQ(context.getRegisteredOperationsByDialect("ac").size(), 73u);
+  EXPECT_EQ(context.getRegisteredOperationsByDialect("ac").size(), 75u);
 }
 
 TEST(ACIROpsTest, ProcessLinearLivenessDoesNotRescanBlockPerValue) {

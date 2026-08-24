@@ -184,6 +184,26 @@ def ACIR_BroadcastOp : ACIR_Op<"broadcast"> {
   }];
 }
 
+def ACIR_RouteOp : ACIR_Op<"route", [SingleBlock]> {
+  let arguments = (ins ACIR_QueueType:$input,
+                       DenseI64ArrayAttr:$output_depths,
+                       DenseI64ArrayAttr:$output_latencies);
+  let results = (outs Variadic<ACIR_QueueType>:$outputs);
+  let regions = (region SizedRegion<1>:$selector);
+  let hasVerifier = 1;
+  let assemblyFormat = [{
+    $input `depths` $output_depths `latencies` $output_latencies $selector
+    attr-dict `:` qualified(type($input)) `->` `(` type($outputs) `)`
+  }];
+}
+
+def ACIR_RouteYieldOp : ACIR_Op<"route.yield", [
+    Pure, Terminator, HasParent<"RouteOp">
+  ]> {
+  let arguments = (ins ACIR_VarType:$selector);
+  let assemblyFormat = "$selector attr-dict `:` qualified(type($selector))";
+}
+
 def ACIR_ScopeOp : ACIR_Op<"scope", [SingleBlock, RecursiveMemoryEffects]> {
   let arguments = (ins SymbolNameAttr:$sym_name,
                        Variadic<ACIR_QueueType>:$inputs);
