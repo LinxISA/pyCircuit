@@ -38,6 +38,11 @@ include_directories(
 add_definitions(${LLVM_DEFINITIONS})
 
 option(ACIR_ENABLE_ASSERTIONS "Keep C/C++ assertions enabled" OFF)
+option(
+  ACIR_BUILD_REFERENCE_MODELS
+  "Build non-installed reference models used as code-generation baselines"
+  ${BUILD_TESTING}
+)
 
 add_library(acir_project_options INTERFACE)
 add_library(AgenticCircuit::ProjectOptions ALIAS acir_project_options)
@@ -101,6 +106,9 @@ add_subdirectory(include)
 add_subdirectory(lib)
 add_subdirectory(python)
 add_subdirectory(tools)
+if(ACIR_BUILD_REFERENCE_MODELS)
+  add_subdirectory(examples/reference/davincioo-gfsim)
+endif()
 if(BUILD_TESTING)
   add_subdirectory(test)
   add_subdirectory(unittests)
