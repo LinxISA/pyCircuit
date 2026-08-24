@@ -35,6 +35,10 @@ Normative specifications:
 - [PTO Trace Schema v0.1](docs/specs/pto-trace-schema-v0.1.md)
 - [ACIR Process-State Plan v0.1](docs/specs/acir-process-state-plan-v0.1.md)
 
+Proposed future contract:
+
+- [Agentic Circuit Queue/Var Architecture v0.2 Proposal Manual](docs/specs/agentic-circuit-queue-var-v0.2-proposal.md)
+
 Canonical machine-readable schemas:
 
 - [ACPy](schemas/acpy.schema.json)
