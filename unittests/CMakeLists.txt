@@ -1,15 +1,12 @@
 # LLVM's own build defaults to no RTTI. When linking such an LLVM build (CI
-# builds LLVM from source with default flags), our MLIR-facing targets must
-# compile with -fno-rtti too: derived-class vtables otherwise reference
-# typeinfo symbols (mlir::Dialect, mlir::Pass, llvm::cl::Option, ...) that
-# no-RTTI LLVM libraries never export. gfsim keeps RTTI for its dynamic_cast
-# tree walks, so it is added before the flag is scoped in.
-add_subdirectory(gfsim)
-
+# builds LLVM from source with default flags), every unit-test target must use
+# the same mode: sanitizer instrumentation otherwise emits typeinfo references
+# that the no-RTTI runtime libraries cannot provide.
 if(NOT LLVM_ENABLE_RTTI)
   add_compile_options($<$<COMPILE_LANGUAGE:CXX>:-fno-rtti>)
 endif()
 
+add_subdirectory(gfsim)
 add_subdirectory(Dialect)
 add_subdirectory(Analysis)
 add_subdirectory(Bindings)
