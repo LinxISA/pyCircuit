@@ -68,7 +68,12 @@ def main() -> int:
             raw = Path(directory) / "model.ac.mlir"
             raw.write_text(lower_queue_program(program), encoding="utf-8")
             optimized = subprocess.run(
-                (str(arguments.acir_opt), str(raw)),
+                (
+                    str(arguments.acir_opt),
+                    "--canonicalize",
+                    "--cse",
+                    str(raw),
+                ),
                 text=True,
                 capture_output=True,
                 check=False,

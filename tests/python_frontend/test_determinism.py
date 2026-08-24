@@ -40,6 +40,7 @@ EXACT_PUBLIC_API = {
     "source",
     "sink",
     "observe",
+    "atomic",
 }
 
 
@@ -208,6 +209,7 @@ def frontend_test_ledger() -> dict[str, CoverageRow]:
         "source": CoverageRow((public_import,), (marker_negative,)),
         "sink": CoverageRow((public_import,), (marker_negative,)),
         "observe": CoverageRow((public_import,), (marker_negative,)),
+        "atomic": CoverageRow((public_import,), (marker_negative,)),
     }
 
 

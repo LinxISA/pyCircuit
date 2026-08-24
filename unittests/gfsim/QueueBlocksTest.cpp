@@ -26,6 +26,12 @@ struct Decrement {
   int operator()(const int &value) const { return value - 1; }
 };
 
+struct IncrementAndDouble {
+  std::tuple<int, int> operator()(const int &left, const int &right) const {
+    return {left + 1, right * 2};
+  }
+};
+
 TEST(QueueBlocksTest, TransformCommitsOnlyAcrossTheQueueBarrier) {
   SimQueue<int> input("input", 1, nullptr, 2);
   SimQueue<int> output("output", 2, nullptr, 2);
@@ -65,6 +71,35 @@ TEST(QueueBlocksTest, TransformDoesNotConsumeWhenOutputIsBackpressured) {
   EXPECT_EQ(*input.peek(), 7);
   ASSERT_NE(output.peek(), nullptr);
   EXPECT_EQ(*output.peek(), 99);
+}
+
+TEST(QueueBlocksTest, AtomicTransformCommitsAllQueuesTogether) {
+  SimQueue<int> left("left", 1, nullptr, 1);
+  SimQueue<int> right("right", 2, nullptr, 1);
+  SimQueue<int> leftOutput("left_output", 3, nullptr, 1);
+  SimQueue<int> rightOutput("right_output", 4, nullptr, 1);
+  QueueAtomicTransform<IncrementAndDouble, int, int> atomic(
+      "atomic", 5, nullptr, {&left, &right}, {&leftOutput, &rightOutput});
+  ASSERT_TRUE(left.proposePush(4));
+  ASSERT_TRUE(right.proposePush(7));
+  left.doXfer({0, 0});
+  right.doXfer({0, 0});
+  atomic.doWork({1, 0});
+  EXPECT_EQ(left.committedSize(), 1u);
+  EXPECT_EQ(right.committedSize(), 1u);
+  EXPECT_TRUE(leftOutput.isEmpty());
+  EXPECT_TRUE(rightOutput.isEmpty());
+  left.doXfer({1, 0});
+  right.doXfer({1, 0});
+  leftOutput.doXfer({1, 0});
+  rightOutput.doXfer({1, 0});
+  atomic.doXfer({1, 0});
+  EXPECT_TRUE(left.isEmpty());
+  EXPECT_TRUE(right.isEmpty());
+  ASSERT_NE(leftOutput.peek(), nullptr);
+  ASSERT_NE(rightOutput.peek(), nullptr);
+  EXPECT_EQ(*leftOutput.peek(), 5);
+  EXPECT_EQ(*rightOutput.peek(), 14);
 }
 
 TEST(QueueBlocksTest, QueueLatencyDelaysVisibilityButReservesCapacity) {

@@ -53,3 +53,4 @@ exact pyCircuit commit with LLVM 19 before running the PYC gate.
 `pyc_struct_pipeline.py` verifies deterministic packed struct layout.
 `pyc_route_merge_pipeline.py` verifies static selector demux and priority merge
 logic, including forward valid and backward ready paths.
+`pyc_atomic_pipeline.py` verifies multi-source/multi-sink atomic firing.

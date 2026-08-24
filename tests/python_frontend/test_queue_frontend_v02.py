@@ -155,6 +155,20 @@ def pipeline() -> None:
     ac.sink(input_queue)
 """
 
+ATOMIC_SOURCE = """
+import agentic_circuit as ac
+
+@ac.system
+def pipeline() -> None:
+    left = ac.source(int)
+    right = ac.source(int)
+    with ac.atomic():
+        left_next = left.apply(lambda item: item + 1)
+        right_next = right.apply(lambda item: item * 2)
+    ac.sink(left_next)
+    ac.sink(right_next)
+"""
+
 
 class QueueFrontendV02Test(unittest.TestCase):
     def test_simple_serial_python_lowers_to_typed_queue_graph(self) -> None:
@@ -311,6 +325,27 @@ class QueueFrontendV02Test(unittest.TestCase):
         self.assertIn('ac.observe %input_queue name "observe_1"', lowered)
         self.assertIn("ac.sink %input_queue", lowered)
         self.assertNotIn("ac.broadcast", lowered)
+
+    def test_explicit_atomic_groups_multiple_queue_updates(self) -> None:
+        from agentic_circuit._queue_frontend import (
+            QueueFrontendError,
+            lower_queue_source,
+        )
+
+        lowered = lower_queue_source(ATOMIC_SOURCE, "pipeline")
+        self.assertIn(
+            "%left_next, %right_next = ac.transform %left, %right", lowered
+        )
+        self.assertIn("^transform(%item0: !ac.var<i64>, %item1: !ac.var<i64>):", lowered)
+        self.assertIn("ac.transform.yield", lowered)
+        self.assertIn('ac.output_names = ["left_next", "right_next"]', lowered)
+        with self.assertRaisesRegex(QueueFrontendError, "inputs must be unique"):
+            lower_queue_source(
+                ATOMIC_SOURCE.replace(
+                    "right_next = right.apply", "right_next = left.apply"
+                ),
+                "pipeline",
+            )
 
     def test_latency_zero_and_unsupported_lambda_are_rejected(self) -> None:
         from agentic_circuit._queue_frontend import (

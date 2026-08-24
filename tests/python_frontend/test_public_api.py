@@ -30,6 +30,7 @@ PUBLIC = {
     "source",
     "sink",
     "observe",
+    "atomic",
 }
 
 
@@ -105,6 +106,7 @@ class PublicApiTest(unittest.TestCase):
             lambda: api.source(int),
             lambda: api.sink(object()),
             lambda: api.observe(object()),
+            lambda: api.atomic(),
         )
         for operation in operations:
             with self.subTest(operation=operation):

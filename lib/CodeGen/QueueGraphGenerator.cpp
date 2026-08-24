@@ -228,7 +228,8 @@ llvm::Expected<std::string> generateQueueGraphCpp(const QueueGraphPlan &plan) {
             "#include \"gfsim/object.h\"\n"
             "#include \"gfsim/queue.h\"\n"
             "#include \"gfsim/queue_blocks.h\"\n\n"
-            "#include <array>\n#include <cstdint>\n#include <limits>\n\n"
+            "#include <array>\n#include <cstdint>\n#include <limits>\n"
+            "#include <tuple>\n\n"
             "namespace ac_generated {\n\n";
   for (const QueuePayloadPlan &payload : plan.payloads) {
     output << "struct " << payload.name << " {\n";
@@ -247,6 +248,49 @@ llvm::Expected<std::string> generateQueueGraphCpp(const QueueGraphPlan &plan) {
     if (block->kind != "transform" && block->kind != "route" &&
         block->kind != "feedback")
       continue;
+    if (block->kind == "transform" && block->inputs.size() > 1) {
+      if (block->inputs.size() != block->outputs.size() ||
+          block->outputs.size() != block->yields.size())
+        return generatorError("atomic transform arity is inconsistent");
+      std::vector<std::string> types;
+      for (size_t valueIndex = 0; valueIndex < block->inputs.size();
+           ++valueIndex) {
+        const QueuePlan *input = findQueue(plan, block->inputs[valueIndex]);
+        const QueuePlan *result = findQueue(plan, block->outputs[valueIndex]);
+        if (!input || !result || input->payloadType != result->payloadType)
+          return generatorError(
+              "atomic transform must preserve each Queue payload type");
+        auto type = cppType(input->payloadType);
+        if (!type)
+          return type.takeError();
+        types.push_back(std::move(*type));
+      }
+      output << "struct block_" << index << "_policy {\n  std::tuple<";
+      for (auto [typeIndex, type] : llvm::enumerate(types)) {
+        if (typeIndex)
+          output << ", ";
+        output << type;
+      }
+      output << "> operator()(";
+      for (auto [typeIndex, type] : llvm::enumerate(types)) {
+        if (typeIndex)
+          output << ", ";
+        output << "const " << type << " &item";
+        if (typeIndex)
+          output << typeIndex;
+      }
+      output << ") const {\n    return {\n";
+      for (auto [yieldIndex, yield] : llvm::enumerate(block->yields)) {
+        output << "      [&]() -> " << types[yieldIndex] << " {\n";
+        auto body = emitExpressionBody(*block, yield, 8);
+        if (!body)
+          return body.takeError();
+        output << *body << "      }()"
+               << (yieldIndex + 1 == block->yields.size() ? "\n" : ",\n");
+      }
+      output << "    };\n  }\n};\n\n";
+      continue;
+    }
     const size_t expectedYields = block->kind == "feedback" ? 2 : 1;
     if (block->yields.size() != expectedYields || block->inputs.size() != 1)
       return generatorError("Queue policy arity is unsupported");
@@ -348,10 +392,27 @@ llvm::Expected<std::string> generateQueueGraphCpp(const QueueGraphPlan &plan) {
     std::string member = "block_" + std::to_string(index) + "_";
     std::string key = block->name + "#" + std::to_string(index);
     if (block->kind == "transform") {
-      initializers.push_back(member + "(\"" + block->name + "\", " +
-                             std::to_string(blockIds[key]) + ", " + *parent +
-                             ", " + queueMembers[block->inputs[0]] + ", " +
-                             queueMembers[block->outputs[0]] + ")");
+      if (block->inputs.size() == 1) {
+        initializers.push_back(member + "(\"" + block->name + "\", " +
+                               std::to_string(blockIds[key]) + ", " + *parent +
+                               ", " + queueMembers[block->inputs[0]] + ", " +
+                               queueMembers[block->outputs[0]] + ")");
+      } else {
+        std::string inputs;
+        std::string outputs;
+        for (size_t operand = 0; operand < block->inputs.size(); ++operand) {
+          if (operand) {
+            inputs.append(", ");
+            outputs.append(", ");
+          }
+          inputs.append("&").append(queueMembers[block->inputs[operand]]);
+          outputs.append("&").append(queueMembers[block->outputs[operand]]);
+        }
+        initializers.push_back(member + "(\"" + block->name + "\", " +
+                               std::to_string(blockIds[key]) + ", " + *parent +
+                               ", std::tuple{" + inputs + "}, std::tuple{" +
+                               outputs + "})");
+      }
     } else if (block->kind == "broadcast" || block->kind == "route") {
       const QueuePlan *input = findQueue(plan, block->inputs[0]);
       auto type = input ? cppType(input->payloadType)
@@ -521,20 +582,35 @@ llvm::Expected<std::string> generateQueueGraphCpp(const QueueGraphPlan &plan) {
   sinkIndex = 0;
   for (auto [index, block] : llvm::enumerate(runtimeBlocks)) {
     if (block->kind == "transform") {
-      const QueuePlan *input = findQueue(plan, block->inputs[0]);
-      const QueuePlan *result = findQueue(plan, block->outputs[0]);
-      auto inputType = input ? cppType(input->payloadType)
-                             : llvm::Expected<std::string>(
-                                   generatorError("transform input missing"));
-      auto resultType = result ? cppType(result->payloadType)
-                               : llvm::Expected<std::string>(generatorError(
-                                     "transform output missing"));
-      if (!inputType)
-        return inputType.takeError();
-      if (!resultType)
-        return resultType.takeError();
-      output << "  gfsim::QueueTransform<" << *inputType << ", " << *resultType
-             << ", block_" << index << "_policy> block_" << index << "_;\n";
+      if (block->inputs.size() == 1) {
+        const QueuePlan *input = findQueue(plan, block->inputs[0]);
+        const QueuePlan *result = findQueue(plan, block->outputs[0]);
+        auto inputType = input ? cppType(input->payloadType)
+                               : llvm::Expected<std::string>(
+                                     generatorError("transform input missing"));
+        auto resultType = result ? cppType(result->payloadType)
+                                 : llvm::Expected<std::string>(generatorError(
+                                       "transform output missing"));
+        if (!inputType)
+          return inputType.takeError();
+        if (!resultType)
+          return resultType.takeError();
+        output << "  gfsim::QueueTransform<" << *inputType << ", "
+               << *resultType << ", block_" << index << "_policy> block_"
+               << index << "_;\n";
+      } else {
+        output << "  gfsim::QueueAtomicTransform<block_" << index << "_policy";
+        for (const std::string &inputName : block->inputs) {
+          const QueuePlan *input = findQueue(plan, inputName);
+          auto type = input ? cppType(input->payloadType)
+                            : llvm::Expected<std::string>(
+                                  generatorError("atomic input missing"));
+          if (!type)
+            return type.takeError();
+          output << ", " << *type;
+        }
+        output << "> block_" << index << "_;\n";
+      }
     } else if (block->kind == "broadcast" || block->kind == "route") {
       const QueuePlan *input = findQueue(plan, block->inputs[0]);
       auto type = input ? cppType(input->payloadType)

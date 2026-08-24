@@ -15,6 +15,7 @@ EXAMPLE = ROOT / "examples" / "v02" / "pyc_queue_pipeline.py"
 DAVINCIOO_EXAMPLE = ROOT / "examples" / "v02" / "davincioo_queue_model.py"
 STRUCT_EXAMPLE = ROOT / "examples" / "v02" / "pyc_struct_pipeline.py"
 ROUTE_EXAMPLE = ROOT / "examples" / "v02" / "pyc_route_merge_pipeline.py"
+ATOMIC_EXAMPLE = ROOT / "examples" / "v02" / "pyc_atomic_pipeline.py"
 DEFAULT_TOOLCHAIN = Path(
     "/Users/zhoubot/Documents/SummerSchool/vendor/pyCircuit/"
     ".pycircuit_out/toolchain/install"
@@ -22,6 +23,75 @@ DEFAULT_TOOLCHAIN = Path(
 
 
 class V02PycBackendTest(unittest.TestCase):
+    def test_atomic_multi_queue_firing_builds_pyc_and_verilog(self) -> None:
+        toolchain = Path(os.environ.get("PYC_V02_TOOLCHAIN_ROOT", DEFAULT_TOOLCHAIN))
+        pycc = toolchain / "bin" / "pycc"
+        metadata = toolchain / "share" / "pycircuit" / "toolchain-metadata.json"
+        cxx = shutil.which("c++")
+        verilator = shutil.which("verilator")
+        if not pycc.is_file() or not metadata.is_file() or cxx is None or verilator is None:
+            self.skipTest("pinned pyCircuit toolchain, C++, or Verilator is unavailable")
+        source = ATOMIC_EXAMPLE.read_text(encoding="utf-8")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            raw = root / "atomic.raw.ac.mlir"
+            frozen = root / "atomic.frozen.ac.mlir"
+            output = root / "output"
+            raw.write_text(
+                lower_queue_source(source, "pyc_atomic_pipeline"),
+                encoding="utf-8",
+            )
+            optimized = subprocess.run(
+                (
+                    str(ROOT / "build/dev-llvm22/bin/acir-opt"),
+                    "--canonicalize",
+                    "--cse",
+                    str(raw),
+                ),
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(0, optimized.returncode, optimized.stderr)
+            frozen.write_text(optimized.stdout, encoding="utf-8")
+            completed = subprocess.run(
+                (
+                    str(ROOT / "tools/ac-queue-pyc-build.py"),
+                    str(frozen),
+                    "--pycgen-tool",
+                    str(ROOT / "build/dev-llvm22/bin/acir-queue-pycgen"),
+                    "--pycc",
+                    str(pycc),
+                    "--toolchain-lock",
+                    str(ROOT / "toolchains/pyc-v0.2.lock.json"),
+                    "--toolchain-metadata",
+                    str(metadata),
+                    "--cxx",
+                    cxx,
+                    "--verilator",
+                    verilator,
+                    "--pyc-output",
+                    str(output / "model.pyc"),
+                    "--cpp-output-dir",
+                    str(output / "cpp"),
+                    "--verilog-output-dir",
+                    str(output / "verilog"),
+                    "--manifest",
+                    str(output / "manifest.json"),
+                ),
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(0, completed.returncode, completed.stderr)
+            pyc = (output / "model.pyc").read_text(encoding="utf-8")
+            self.assertIn("%in0_valid", pyc)
+            self.assertIn("%in1_valid", pyc)
+            self.assertIn("%out0_ready", pyc)
+            self.assertIn("%out1_ready", pyc)
+            self.assertIn("result_names = [\"out0_valid\"", pyc)
+
     def test_davincioo_like_graph_builds_full_pyc_and_verilog(self) -> None:
         toolchain = Path(os.environ.get("PYC_V02_TOOLCHAIN_ROOT", DEFAULT_TOOLCHAIN))
         pycc = toolchain / "bin" / "pycc"

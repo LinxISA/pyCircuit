@@ -49,6 +49,7 @@ __all__ = (
     "source",
     "sink",
     "observe",
+    "atomic",
 )
 
 
@@ -84,3 +85,7 @@ def sink(value: object) -> Never:
 
 def observe(value: object) -> Never:
     return _not_implemented("observe")
+
+
+def atomic() -> Never:
+    return _not_implemented("atomic")

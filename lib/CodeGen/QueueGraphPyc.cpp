@@ -1,5 +1,6 @@
 #include "acir/CodeGen/QueueGraphPyc.h"
 
+#include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/StringRef.h"
 
@@ -108,12 +109,18 @@ llvm::Expected<std::string> yieldedType(const QueueBlockPlan &block,
 
 llvm::Expected<std::string>
 emitTransform(const QueueGraphPlan &plan, const QueueBlockPlan &block,
-              llvm::StringRef inputData, llvm::StringRef inputType,
+              llvm::ArrayRef<std::string> inputData,
+              llvm::ArrayRef<std::string> inputTypes, size_t yieldIndex,
               unsigned &nextValue, std::ostringstream &body) {
+  if (inputData.size() != inputTypes.size() || inputData.empty())
+    return pycError("transform input data/type arity mismatch");
   llvm::StringMap<std::string> values;
   llvm::StringMap<std::string> types;
-  values["item"] = inputData.str();
-  types["item"] = inputType.str();
+  for (size_t index = 0; index < inputData.size(); ++index) {
+    std::string name = index == 0 ? "item" : "item" + std::to_string(index);
+    values[name] = inputData[index];
+    types[name] = inputTypes[index];
+  }
   auto newValue = [&]() { return "%v" + std::to_string(nextValue++); };
   auto value = [&](llvm::StringRef name) -> llvm::Expected<std::string> {
     auto found = values.find(name);
@@ -231,9 +238,9 @@ emitTransform(const QueueGraphPlan &plan, const QueueBlockPlan &block,
     values[expression.result] = result;
     types[expression.result] = expression.type;
   }
-  if (block.yields.size() != 1)
-    return pycError("transform requires exactly one yielded value");
-  return value(block.yields.front());
+  if (yieldIndex >= block.yields.size())
+    return pycError("transform yield index is outside result arity");
+  return value(block.yields[yieldIndex]);
 }
 
 constexpr llvm::StringLiteral kStructMetrics =
@@ -250,6 +257,10 @@ constexpr llvm::StringLiteral kStructMetrics =
 } // namespace
 
 llvm::Expected<std::string> generateQueueGraphPyc(const QueueGraphPlan &plan) {
+  struct TransformProducer {
+    const QueueBlockPlan *block = nullptr;
+    size_t index = 0;
+  };
   struct RouteProducer {
     const QueueBlockPlan *block = nullptr;
     size_t index = 0;
@@ -264,7 +275,7 @@ llvm::Expected<std::string> generateQueueGraphPyc(const QueueGraphPlan &plan) {
   std::vector<const QueueBlockPlan *> sources;
   std::vector<const QueueBlockPlan *> sinks;
   std::vector<const QueueBlockPlan *> observations;
-  llvm::StringMap<const QueueBlockPlan *> transformByOutput;
+  llvm::StringMap<TransformProducer> transformByOutput;
   llvm::StringMap<const QueueBlockPlan *> broadcastByOutput;
   llvm::StringMap<RouteProducer> routeByOutput;
   llvm::StringMap<const QueueBlockPlan *> mergeByOutput;
@@ -276,9 +287,12 @@ llvm::Expected<std::string> generateQueueGraphPyc(const QueueGraphPlan &plan) {
     else if (block.kind == "observe")
       observations.push_back(&block);
     else if (block.kind == "transform") {
-      if (block.outputs.size() != 1)
+      if (block.outputs.empty() ||
+          block.inputs.size() != block.outputs.size() ||
+          block.yields.size() != block.outputs.size())
         return pycError("transform output arity is unsupported");
-      transformByOutput[block.outputs.front()] = &block;
+      for (auto [index, output] : llvm::enumerate(block.outputs))
+        transformByOutput[output] = TransformProducer{&block, index};
     } else if (block.kind == "route") {
       if (block.inputs.size() != 1 || block.outputs.size() < 2)
         return pycError("route arity is unsupported");
@@ -300,27 +314,46 @@ llvm::Expected<std::string> generateQueueGraphPyc(const QueueGraphPlan &plan) {
                       "source/transform/broadcast/route/priority-merge/sink");
     }
   }
-  if (sources.size() != 1 || sinks.size() != 1)
-    return pycError("initial PYC slice requires one source and one sink");
+  if (sources.empty() || sinks.empty())
+    return pycError("PYC lowering requires at least one source and one sink");
   for (const QueuePlan &queue : plan.queues) {
     if (auto width = typeWidth(plan, queue.payloadType); !width)
       return width.takeError();
-    if (queue.latency != 1)
-      return pycError("initial PYC slice requires Queue latency=1");
+    if (queue.latency == 0)
+      return pycError("PYC Queue latency must be positive");
   }
-  const QueuePlan *sourceQueue =
-      findQueue(plan, sources.front()->outputs.front());
-  const QueuePlan *sinkQueuePlan =
-      findQueue(plan, sinks.front()->inputs.front());
-  const bool missingBoundary = !sourceQueue || !sinkQueuePlan;
-  if (missingBoundary)
-    return pycError("source or sink Queue is missing");
-  auto inputPortType = pycType(plan, sourceQueue->payloadType);
-  auto outputPortType = pycType(plan, sinkQueuePlan->payloadType);
-  if (!inputPortType)
-    return inputPortType.takeError();
-  if (!outputPortType)
-    return outputPortType.takeError();
+  llvm::StringMap<size_t> sourceBoundary;
+  std::vector<std::string> inputPortTypes;
+  for (auto [index, source] : llvm::enumerate(sources)) {
+    const QueuePlan *queue = findQueue(plan, source->outputs.front());
+    if (!queue)
+      return pycError("source Queue is missing");
+    auto type = pycType(plan, queue->payloadType);
+    if (!type)
+      return type.takeError();
+    sourceBoundary[source->outputs.front()] = index;
+    inputPortTypes.push_back(std::move(*type));
+  }
+  std::vector<std::string> outputPortTypes;
+  for (const QueueBlockPlan *sink : sinks) {
+    const QueuePlan *queue = findQueue(plan, sink->inputs.front());
+    if (!queue)
+      return pycError("sink Queue is missing");
+    auto type = pycType(plan, queue->payloadType);
+    if (!type)
+      return type.takeError();
+    outputPortTypes.push_back(std::move(*type));
+  }
+  auto inputName = [&](size_t index, llvm::StringRef suffix) {
+    return sources.size() == 1
+               ? ("%in_" + suffix).str()
+               : ("%in" + std::to_string(index) + "_" + suffix.str());
+  };
+  auto outputName = [&](size_t index, llvm::StringRef suffix) {
+    return sinks.size() == 1
+               ? ("%out_" + suffix).str()
+               : ("%out" + std::to_string(index) + "_" + suffix.str());
+  };
 
   llvm::StringMap<std::string> readyWires;
   llvm::StringMap<std::string> inputReady;
@@ -367,31 +400,38 @@ llvm::Expected<std::string> generateQueueGraphPyc(const QueueGraphPlan &plan) {
   for (const QueuePlan &queue : plan.queues) {
     std::string producerValid;
     std::string producerData;
-    const QueueBlockPlan *source =
-        sources.front()->outputs.front() == queue.name ? sources.front()
-                                                       : nullptr;
-    if (source) {
-      producerValid = "%in_valid";
-      producerData = "%in_data";
+    auto source = sourceBoundary.find(queue.name);
+    if (source != sourceBoundary.end()) {
+      producerValid = inputName(source->getValue(), "valid");
+      producerData = inputName(source->getValue(), "data");
     } else {
       auto transformProducer = transformByOutput.find(queue.name);
       auto broadcastProducer = broadcastByOutput.find(queue.name);
       auto routeProducer = routeByOutput.find(queue.name);
       auto mergeProducer = mergeByOutput.find(queue.name);
       if (transformProducer != transformByOutput.end()) {
-        const QueueBlockPlan &transform = *transformProducer->getValue();
-        auto valid = outputValid.find(transform.inputs.front());
-        auto data = outputData.find(transform.inputs.front());
-        if (valid == outputValid.end() || data == outputData.end())
-          return pycError("Queue transforms are not in topological order");
-        producerValid = valid->getValue();
-        const QueuePlan *inputQueue = findQueue(plan, transform.inputs.front());
-        const bool missingInput = !inputQueue;
-        if (missingInput)
-          return pycError("transform input Queue is missing");
+        const TransformProducer &producer = transformProducer->getValue();
+        const QueueBlockPlan &transform = *producer.block;
+        std::vector<std::string> inputDataValues;
+        std::vector<std::string> inputTypes;
+        std::string allValid;
+        for (const std::string &inputName : transform.inputs) {
+          auto valid = outputValid.find(inputName);
+          auto data = outputData.find(inputName);
+          const QueuePlan *inputQueue = findQueue(plan, inputName);
+          if (valid == outputValid.end() || data == outputData.end() ||
+              !inputQueue)
+            return pycError("Queue transforms are not in topological order");
+          allValid = allValid.empty()
+                         ? valid->getValue()
+                         : emitBinary("and", allValid, valid->getValue(), "i1");
+          inputDataValues.push_back(data->getValue());
+          inputTypes.push_back(inputQueue->payloadType);
+        }
+        producerValid = allValid;
         auto transformed =
-            emitTransform(plan, transform, data->getValue(),
-                          inputQueue->payloadType, nextValue, body);
+            emitTransform(plan, transform, inputDataValues, inputTypes,
+                          producer.index, nextValue, body);
         if (!transformed)
           return transformed.takeError();
         producerData = std::move(*transformed);
@@ -416,8 +456,8 @@ llvm::Expected<std::string> generateQueueGraphPyc(const QueueGraphPlan &plan) {
         auto selector = routeSelector.find(route.name);
         if (selector == routeSelector.end()) {
           auto selected =
-              emitTransform(plan, route, data->getValue(),
-                            inputQueue->payloadType, nextValue, body);
+              emitTransform(plan, route, {data->getValue()},
+                            {inputQueue->payloadType}, 0, nextValue, body);
           if (!selected)
             return selected.takeError();
           routeSelector[route.name] = *selected;
@@ -518,24 +558,59 @@ llvm::Expected<std::string> generateQueueGraphPyc(const QueueGraphPlan &plan) {
                         "'");
       }
     }
-    std::string inReady = newValue();
-    std::string outValid = newValue();
-    std::string outData = newValue();
     auto dataType = pycType(plan, queue.payloadType);
     if (!dataType)
       return dataType.takeError();
-    body << "    " << inReady << ", " << outValid << ", " << outData
-         << " = pyc.fifo %clk, %rst, " << producerValid << ", " << producerData
-         << ", " << readyWires[queue.name] << " {depth = " << queue.depth
-         << "} : " << *dataType << "\n";
-    inputReady[queue.name] = inReady;
-    outputValid[queue.name] = outValid;
-    outputData[queue.name] = outData;
+    std::vector<std::string> stageReady;
+    for (uint64_t stage = 0; stage + 1 < queue.latency; ++stage) {
+      std::string ready = newValue();
+      body << "    " << ready << " = pyc.wire : i1\n";
+      stageReady.push_back(std::move(ready));
+    }
+    stageReady.push_back(readyWires[queue.name]);
+    std::string currentValid = producerValid;
+    std::string currentData = producerData;
+    std::string firstReady;
+    for (uint64_t stage = 0; stage < queue.latency; ++stage) {
+      std::string inReady = newValue();
+      std::string outValid = newValue();
+      std::string outData = newValue();
+      const uint64_t depth = stage == 0 ? queue.depth : 1;
+      body << "    " << inReady << ", " << outValid << ", " << outData
+           << " = pyc.fifo %clk, %rst, " << currentValid << ", " << currentData
+           << ", " << stageReady[stage] << " {depth = " << depth
+           << "} : " << *dataType << "\n";
+      if (stage == 0)
+        firstReady = inReady;
+      else
+        body << "    pyc.assign " << stageReady[stage - 1] << ", " << inReady
+             << " : i1\n";
+      currentValid = std::move(outValid);
+      currentData = std::move(outData);
+    }
+    inputReady[queue.name] = std::move(firstReady);
+    outputValid[queue.name] = std::move(currentValid);
+    outputData[queue.name] = std::move(currentData);
   }
   for (const QueueBlockPlan &block : plan.blocks) {
     if (block.kind == "transform") {
-      body << "    pyc.assign " << readyWires[block.inputs.front()] << ", "
-           << inputReady[block.outputs.front()] << " : i1\n";
+      if (block.inputs.size() == 1) {
+        body << "    pyc.assign " << readyWires[block.inputs.front()] << ", "
+             << inputReady[block.outputs.front()] << " : i1\n";
+      } else {
+        std::string allReady = inputReady[block.outputs.front()];
+        for (size_t index = 1; index < block.outputs.size(); ++index)
+          allReady = emitBinary("and", allReady,
+                                inputReady[block.outputs[index]], "i1");
+        std::string allValid = outputValid[block.inputs.front()];
+        for (size_t index = 1; index < block.inputs.size(); ++index)
+          allValid = emitBinary("and", allValid,
+                                outputValid[block.inputs[index]], "i1");
+        std::string firing = emitBinary("and", allReady, allValid, "i1");
+        for (const std::string &input : block.inputs)
+          body << "    pyc.assign " << readyWires[input] << ", " << firing
+               << " : i1\n";
+      }
     } else if (block.kind == "broadcast") {
       std::string allReady = inputReady[block.outputs.front()];
       for (size_t index = 1; index < block.outputs.size(); ++index)
@@ -585,8 +660,9 @@ llvm::Expected<std::string> generateQueueGraphPyc(const QueueGraphPlan &plan) {
       }
     }
   }
-  const std::string &sinkQueue = sinks.front()->inputs.front();
-  body << "    pyc.assign " << readyWires[sinkQueue] << ", %out_ready : i1\n";
+  for (auto [index, sink] : llvm::enumerate(sinks))
+    body << "    pyc.assign " << readyWires[sink->inputs.front()] << ", "
+         << outputName(index, "ready") << " : i1\n";
   for (const QueueBlockPlan *observation : observations) {
     const QueuePlan *queue = findQueue(plan, observation->inputs.front());
     auto type = queue ? pycType(plan, queue->payloadType)
@@ -601,25 +677,65 @@ llvm::Expected<std::string> generateQueueGraphPyc(const QueueGraphPlan &plan) {
   }
 
   llvm::StringRef top = plan.system;
+  std::vector<std::string> arguments = {"%clk: !pyc.clock", "%rst: !pyc.reset"};
+  std::vector<std::string> argumentNames = {"clk", "rst"};
+  for (size_t index = 0; index < sources.size(); ++index) {
+    arguments.push_back(inputName(index, "valid") + ": i1");
+    arguments.push_back(inputName(index, "data") + ": " +
+                        inputPortTypes[index]);
+    argumentNames.push_back(inputName(index, "valid").substr(1));
+    argumentNames.push_back(inputName(index, "data").substr(1));
+  }
+  for (size_t index = 0; index < sinks.size(); ++index) {
+    arguments.push_back(outputName(index, "ready") + ": i1");
+    argumentNames.push_back(outputName(index, "ready").substr(1));
+  }
+  std::vector<std::string> resultTypes;
+  std::vector<std::string> resultNames;
+  std::vector<std::string> returnValues;
+  for (auto [index, sink] : llvm::enumerate(sinks)) {
+    resultTypes.push_back("i1");
+    resultTypes.push_back(outputPortTypes[index]);
+    resultNames.push_back(outputName(index, "valid").substr(1));
+    resultNames.push_back(outputName(index, "data").substr(1));
+    returnValues.push_back(outputValid[sink->inputs.front()]);
+    returnValues.push_back(outputData[sink->inputs.front()]);
+  }
+  for (auto [index, source] : llvm::enumerate(sources)) {
+    resultTypes.push_back("i1");
+    resultNames.push_back(inputName(index, "ready").substr(1));
+    returnValues.push_back(inputReady[source->outputs.front()]);
+  }
+  auto writeList =
+      [](std::ostringstream &stream, const std::vector<std::string> &values,
+         llvm::StringRef prefix = {}, llvm::StringRef suffix = {}) {
+        for (auto [index, value] : llvm::enumerate(values)) {
+          if (index)
+            stream << ", ";
+          stream << prefix.str() << value << suffix.str();
+        }
+      };
   std::ostringstream output;
   output << "module attributes {pyc.top = @" << top.str()
-         << ", pyc.frontend.contract = \"pycircuit\"} {\n"
-         << "  func.func @" << top.str()
-         << "(%clk: !pyc.clock, %rst: !pyc.reset, %in_valid: i1, "
-            "%in_data: "
-         << *inputPortType << ", %out_ready: i1) -> (i1, " << *outputPortType
-         << ", i1) "
-            "attributes {arg_names = [\"clk\", \"rst\", \"in_valid\", "
-            "\"in_data\", \"out_ready\"], result_names = [\"out_valid\", "
-            "\"out_data\", \"in_ready\"], pyc.value_params = [], "
-            "pyc.value_param_types = [], pyc.kind = \"module\", "
-            "pyc.inline = \"false\", pyc.params = \"{}\", pyc.base = \""
+         << ", pyc.frontend.contract = \"pycircuit\"} {\n  func.func @"
+         << top.str() << '(';
+  writeList(output, arguments);
+  output << ") -> (";
+  writeList(output, resultTypes);
+  output << ") attributes {arg_names = [";
+  writeList(output, argumentNames, "\"", "\"");
+  output << "], result_names = [";
+  writeList(output, resultNames, "\"", "\"");
+  output << "], pyc.value_params = [], pyc.value_param_types = [], "
+            "pyc.kind = \"module\", pyc.inline = \"false\", "
+            "pyc.params = \"{}\", pyc.base = \""
          << top.str() << "\", pyc.struct.metrics = \"" << kStructMetrics.str()
          << "\", pyc.struct.collections = \"[]\"} {\n"
-         << body.str() << "    func.return " << outputValid[sinkQueue] << ", "
-         << outputData[sinkQueue] << ", "
-         << inputReady[sources.front()->outputs.front()] << " : i1, "
-         << *outputPortType << ", i1\n  }\n}\n";
+         << body.str() << "    func.return ";
+  writeList(output, returnValues);
+  output << " : ";
+  writeList(output, resultTypes);
+  output << "\n  }\n}\n";
   return output.str();
 }
 

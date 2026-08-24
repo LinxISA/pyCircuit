@@ -10,6 +10,7 @@
 #include <cstddef>
 #include <functional>
 #include <optional>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -57,6 +58,79 @@ public:
 private:
   SimQueue<Input> &input_;
   SimQueue<Output> &output_;
+  [[no_unique_address]] Policy policy_;
+  bool fired_ = false;
+};
+
+template <typename Policy, typename... Ts>
+  requires std::invocable<const Policy &, const Ts &...> &&
+           std::same_as<std::invoke_result_t<const Policy &, const Ts &...>,
+                        std::tuple<Ts...>>
+class QueueAtomicTransform final : public SimObject {
+public:
+  static constexpr std::string_view contractName = "ac.transform.atomic";
+  static constexpr ObjectKind componentKind = ObjectKind::Compute;
+
+  QueueAtomicTransform(std::string name, ObjectId id, SimObject *parent,
+                       std::tuple<SimQueue<Ts> *...> inputs,
+                       std::tuple<SimQueue<Ts> *...> outputs,
+                       Policy policy = {},
+                       ObservationSink *observations = nullptr)
+      : SimObject(componentKind, std::move(name), id, parent, observations),
+        inputs_(inputs), outputs_(outputs), policy_(std::move(policy)) {}
+
+  void doWork(Epoch) override {
+    if (fired_ || !allInputsReady() || !allOutputsReady())
+      return;
+    auto values = inputValues(std::index_sequence_for<Ts...>{});
+    auto results = std::apply(std::as_const(policy_), values);
+    if (!pushAll(results, std::index_sequence_for<Ts...>{}) ||
+        !popAll(std::index_sequence_for<Ts...>{}))
+      return;
+    fired_ = true;
+  }
+  void doXfer(Epoch) override { fired_ = false; }
+  bool hasPendingCommit() const override { return fired_; }
+  bool isRunnable(Epoch) const override {
+    return !fired_ && allInputsReady() && allOutputsReady();
+  }
+  void reset() override {
+    fired_ = false;
+    clearRuntimeFailureCode();
+  }
+
+private:
+  bool allInputsReady() const {
+    return std::apply(
+        [](const auto *...queues) {
+          return ((queues != nullptr && queues->canProposePop()) && ...);
+        },
+        inputs_);
+  }
+  bool allOutputsReady() const {
+    return std::apply(
+        [](const auto *...queues) {
+          return ((queues != nullptr && queues->canProposePush()) && ...);
+        },
+        outputs_);
+  }
+  template <size_t... Indices>
+  std::tuple<Ts...> inputValues(std::index_sequence<Indices...>) const {
+    return std::tuple<Ts...>{*std::get<Indices>(inputs_)->peek()...};
+  }
+  template <size_t... Indices>
+  bool pushAll(const std::tuple<Ts...> &values,
+               std::index_sequence<Indices...>) {
+    return (
+        std::get<Indices>(outputs_)->proposePush(std::get<Indices>(values)) &&
+        ...);
+  }
+  template <size_t... Indices> bool popAll(std::index_sequence<Indices...>) {
+    return (std::get<Indices>(inputs_)->proposePop().has_value() && ...);
+  }
+
+  std::tuple<SimQueue<Ts> *...> inputs_;
+  std::tuple<SimQueue<Ts> *...> outputs_;
   [[no_unique_address]] Policy policy_;
   bool fired_ = false;
 };

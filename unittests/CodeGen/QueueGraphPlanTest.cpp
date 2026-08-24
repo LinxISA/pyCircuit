@@ -157,6 +157,27 @@ TEST(QueueGraphPlanTest, EmitsCanonicalScalarQueuePyc) {
             std::string::npos);
 }
 
+TEST(QueueGraphPlanTest, EmitsOneReadyValidStagePerQueueLatency) {
+  QueueGraphPlan plan;
+  plan.system = "latency_pipeline";
+  plan.queues = {{"input", "i64", "/", 2, 1}, {"output", "i64", "/", 4, 3}};
+  plan.blocks.push_back({"source", "input", "/", {}, {"input"}, {2}, {1}});
+  QueueBlockPlan transform{"transform", "output", "/", {"input"},
+                           {"output"},  {4},      {3}};
+  transform.yields = {"item"};
+  plan.blocks.push_back(std::move(transform));
+  plan.blocks.push_back({"sink", "sink_0", "/", {"output"}, {}});
+  auto pyc = generateQueueGraphPyc(plan);
+  ASSERT_TRUE(bool(pyc)) << llvm::toString(pyc.takeError());
+  size_t count = 0;
+  for (size_t offset = 0;
+       (offset = pyc->find("pyc.fifo", offset)) != std::string::npos;
+       offset += 8)
+    ++count;
+  EXPECT_EQ(count, 4u);
+  EXPECT_NE(pyc->find("{depth = 4}"), std::string::npos);
+}
+
 TEST(QueueGraphPlanTest, RejectsImplicitMultipleConsumers) {
   mlir::MLIRContext context;
   context.loadDialect<ac::ACIRDialect, mlir::DLTIDialect>();

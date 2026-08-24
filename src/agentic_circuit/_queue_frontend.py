@@ -35,6 +35,7 @@ class QueueBinding:
     route_output: bool = False
     feedback_output: bool = False
     merge_output: bool = False
+    atomic_group: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -97,6 +98,13 @@ class MergeBinding:
 
 
 @dataclass(frozen=True, slots=True)
+class AtomicBinding:
+    queues: tuple[str, ...]
+    scope: tuple[str, ...]
+    order: int
+
+
+@dataclass(frozen=True, slots=True)
 class StaticQueueCollection:
     kind: str
     members: tuple[
@@ -121,6 +129,7 @@ class QueueProgram:
     routes: tuple[RouteBinding, ...]
     feedbacks: tuple[FeedbackBinding, ...]
     merges: tuple[MergeBinding, ...]
+    atomics: tuple[AtomicBinding, ...]
     collections: tuple[CollectionBinding, ...]
     observations: tuple[ObservationBinding, ...]
     sinks: tuple[SinkBinding, ...]
@@ -251,6 +260,7 @@ def parse_queue_program(text: str, system: str) -> QueueProgram:
     routes: list[RouteBinding] = []
     feedbacks: list[FeedbackBinding] = []
     merges: list[MergeBinding] = []
+    atomics: list[AtomicBinding] = []
     sinks: list[SinkBinding] = []
     observations: list[ObservationBinding] = []
     by_name: dict[str, QueueBinding] = {}
@@ -460,6 +470,7 @@ def parse_queue_program(text: str, system: str) -> QueueProgram:
         statements: list[ast.stmt],
         scope_path: tuple[str, ...],
         aliases: dict[str, str | StaticQueueCollection] | None = None,
+        atomic_group: int | None = None,
     ) -> None:
         nonlocal order
         aliases = {} if aliases is None else aliases
@@ -482,7 +493,58 @@ def parse_queue_program(text: str, system: str) -> QueueProgram:
                     if any(existing.path == path for existing in scopes):
                         raise QueueFrontendError("ACPY-QUEUE-004: duplicate scope path")
                     scopes.append(ScopeBinding(call.args[0].value, path, current_order))
-                    visit(statement.body, path, aliases)
+                    visit(statement.body, path, aliases, atomic_group)
+                    continue
+            if (
+                isinstance(statement, ast.With)
+                and len(statement.items) == 1
+                and atomic_group is None
+            ):
+                item = statement.items[0]
+                call = item.context_expr
+                if (
+                    item.optional_vars is None
+                    and isinstance(call, ast.Call)
+                    and call_name(call) == "atomic"
+                    and not call.args
+                    and not call.keywords
+                ):
+                    group = len(atomics)
+                    queue_start = len(queues)
+                    scope_start = len(scopes)
+                    route_start = len(routes)
+                    merge_start = len(merges)
+                    feedback_start = len(feedbacks)
+                    sink_start = len(sinks)
+                    observation_start = len(observations)
+                    visit(statement.body, scope_path, aliases, group)
+                    created = queues[queue_start:]
+                    if (
+                        len(created) < 2
+                        or any(queue.atomic_group != group for queue in created)
+                        or len(scopes) != scope_start
+                        or len(routes) != route_start
+                        or len(merges) != merge_start
+                        or len(feedbacks) != feedback_start
+                        or len(sinks) != sink_start
+                        or len(observations) != observation_start
+                    ):
+                        raise QueueFrontendError(
+                            "ACPY-QUEUE-009: atomic requires at least two direct "
+                            "Queue apply statements"
+                        )
+                    inputs = [queue.input_name for queue in created]
+                    if None in inputs or len(set(inputs)) != len(inputs):
+                        raise QueueFrontendError(
+                            "ACPY-QUEUE-009: atomic inputs must be unique Queues"
+                        )
+                    atomics.append(
+                        AtomicBinding(
+                            tuple(queue.name for queue in created),
+                            scope_path,
+                            current_order,
+                        )
+                    )
                     continue
             if (
                 isinstance(statement, ast.Assign)
@@ -524,6 +586,7 @@ def parse_queue_program(text: str, system: str) -> QueueProgram:
                         statement.body,
                         scope_path,
                         {**aliases, statement.target.id: member},
+                        atomic_group,
                     )
                 continue
             if isinstance(statement, ast.While) and not statement.orelse:
@@ -672,7 +735,18 @@ def parse_queue_program(text: str, system: str) -> QueueProgram:
                     if incoming is None:
                         raise QueueFrontendError(f"ACPY-QUEUE-001: input queue {input_name!r} is unbound")
                     argument, expression = _lambda(call.args[0])
-                    binding = QueueBinding(name, incoming.payload, _positive_int(call, "depth", 1), _positive_int(call, "latency", 1), incoming.name, argument, expression, scope_path, current_order)
+                    binding = QueueBinding(
+                        name,
+                        incoming.payload,
+                        _positive_int(call, "depth", 1),
+                        _positive_int(call, "latency", 1),
+                        incoming.name,
+                        argument,
+                        expression,
+                        scope_path,
+                        current_order,
+                        atomic_group=atomic_group,
+                    )
                 else:
                     raise QueueFrontendError("ACPY-QUEUE-001: unsupported queue-producing call")
                 queues.append(binding)
@@ -748,6 +822,7 @@ def parse_queue_program(text: str, system: str) -> QueueProgram:
         tuple(routes),
         tuple(feedbacks),
         tuple(merges),
+        tuple(atomics),
         tuple(collection_bindings),
         tuple(observations),
         tuple(sinks),
@@ -755,21 +830,31 @@ def parse_queue_program(text: str, system: str) -> QueueProgram:
 
 
 class _ExpressionEmitter:
-    def __init__(self, payloads: dict[str, Payload], argument: str, payload: str) -> None:
+    def __init__(
+        self,
+        payloads: dict[str, Payload],
+        argument: str,
+        payload: str,
+        *,
+        root_name: str = "item",
+        prefix: str = "",
+    ) -> None:
         self.payloads = payloads
         self.argument = argument
         self.payload = payload
+        self.root_name = root_name
+        self.prefix = prefix
         self.lines: list[str] = []
         self.index = 0
 
     def _new(self) -> str:
-        name = f"v{self.index}"
+        name = f"{self.prefix}v{self.index}"
         self.index += 1
         return name
 
     def emit(self, node: ast.expr, expected: str | None = None) -> tuple[str, str]:
         if isinstance(node, ast.Name) and node.id == self.argument:
-            return "item", self.payload
+            return self.root_name, self.payload
         if isinstance(node, ast.Constant) and type(node.value) in {int, bool}:
             typ = expected or ("i1" if type(node.value) is bool else "i64")
             name = self._new()
@@ -997,6 +1082,12 @@ def lower_queue_program(program: QueueProgram) -> str:
             and not queue.route_output
             and not queue.feedback_output
             and not queue.merge_output
+            and queue.atomic_group is None
+        )
+        events.extend(
+            (atomic.order, "atomic", atomic)
+            for atomic in program.atomics
+            if atomic.scope == path
         )
         events.extend(
             (route.order, "route", route)
@@ -1132,6 +1223,73 @@ def lower_queue_program(program: QueueProgram) -> str:
                     f"!ac.queue<{incoming.payload}>"
                 )
                 mapping[feedback.output_name] = output
+            elif kind == "atomic":
+                atomic = item
+                assert isinstance(atomic, AtomicBinding)
+                members = [by_name[name] for name in atomic.queues]
+                inputs = [
+                    effective_input.get(queue.name, queue.input_name)
+                    for queue in members
+                ]
+                if any(input_name is None for input_name in inputs):
+                    raise QueueFrontendError(
+                        "ACPY-QUEUE-009: atomic input resolution failed"
+                    )
+                input_names = [str(input_name) for input_name in inputs]
+                outputs = [
+                    queue.name if not path else f"{queue.name}__local"
+                    for queue in members
+                ]
+                lhs = ", ".join(f"%{name}" for name in outputs)
+                operands = ", ".join(
+                    f"%{mapping[input_name]}" for input_name in input_names
+                )
+                depths = ", ".join(str(queue.depth) for queue in members)
+                latencies = ", ".join(str(queue.latency) for queue in members)
+                input_types = ", ".join(
+                    f"!ac.queue<{payload_by_queue[input_name]}>"
+                    for input_name in input_names
+                )
+                output_types = ", ".join(
+                    f"!ac.queue<{queue.payload}>" for queue in members
+                )
+                lines.append(
+                    f"{indent}{lhs} = ac.transform {operands} depths [{depths}] "
+                    f"latencies [{latencies}] {{"
+                )
+                arguments = ", ".join(
+                    f"%item{index}: !ac.var<{payload_by_queue[input_name]}>"
+                    for index, input_name in enumerate(input_names)
+                )
+                lines.append(f"{indent}^transform({arguments}):")
+                yielded: list[str] = []
+                for index, queue in enumerate(members):
+                    assert queue.argument is not None and queue.expression is not None
+                    emitter = _ExpressionEmitter(
+                        payloads,
+                        queue.argument,
+                        payload_by_queue[input_names[index]],
+                        root_name=f"item{index}",
+                        prefix=f"a{index}_",
+                    )
+                    result, result_type = emitter.emit(queue.expression)
+                    if result_type != queue.payload:
+                        raise QueueFrontendError(
+                            "ACPY-QUEUE-009: atomic lambda result type mismatch"
+                        )
+                    lines.extend(indent + line[2:] for line in emitter.lines)
+                    yielded.append(f"%{result}")
+                lines.append(
+                    f"{indent}  ac.transform.yield {', '.join(yielded)} : "
+                    + ", ".join(f"!ac.var<{queue.payload}>" for queue in members)
+                )
+                names_attr = name_array(tuple(queue.name for queue in members))
+                lines.append(
+                    f"{indent}}} {{ac.output_names = {names_attr}}} : "
+                    f"({input_types}) -> ({output_types})"
+                )
+                for queue, output in zip(members, outputs, strict=True):
+                    mapping[queue.name] = output
             elif kind == "merge":
                 merge = item
                 assert isinstance(merge, MergeBinding)
