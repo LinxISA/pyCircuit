@@ -1,5 +1,6 @@
 #include "acir/CodeGen/Build.h"
 #include "BuildInternal.h"
+#include "TestToolchain.h"
 
 #include "acir/Dialect/ACSim/ACSimDialect.h"
 
@@ -11,6 +12,7 @@
 #include "llvm/Support/raw_ostream.h"
 #include "gtest/gtest.h"
 
+#include <algorithm>
 #include <array>
 #include <string>
 
@@ -125,7 +127,7 @@ public:
     request_.linkInputs = {ACIR_TEST_BINARY_DIR "/lib/gfsim/libgfsim.a",
                            ACIR_TEST_BINARY_DIR
                            "/lib/Bindings/libACIRBindings.a"};
-    request_.linkerFlags = {"-L" ACIR_TEST_LLVM_LIB_DIR, "-lLLVM"};
+    request_.linkerFlags = test::llvmLinkerFlags();
     if (llvm::StringRef(ACIR_TEST_SANITIZER_FLAG).size())
       request_.linkerFlags.push_back(ACIR_TEST_SANITIZER_FLAG);
     request_.outputRoot = outputRoot.str();
@@ -183,9 +185,15 @@ TEST(BuildTest, CompilePlanIsClosedCanonicalAndArgumentVectorBased) {
   EXPECT_EQ(first->schema, "acsim-compile-plan-0.1");
   EXPECT_TRUE(isValidFingerprint(first->fingerprint));
   EXPECT_EQ(first->fingerprint, second->fingerprint);
-  EXPECT_EQ(first->includeRoots,
-            (std::vector<std::string>{ACIR_TEST_LLVM_INCLUDE_DIR, "include",
-                                      "vendor/include"}));
+  std::vector<std::string> expectedIncludeRoots =
+      test::llvmIncludeDirectories();
+  expectedIncludeRoots.insert(expectedIncludeRoots.end(),
+                              {"include", "vendor/include"});
+  std::sort(expectedIncludeRoots.begin(), expectedIncludeRoots.end());
+  expectedIncludeRoots.erase(
+      std::unique(expectedIncludeRoots.begin(), expectedIncludeRoots.end()),
+      expectedIncludeRoots.end());
+  EXPECT_EQ(first->includeRoots, expectedIncludeRoots);
   EXPECT_EQ(first->definitions,
             (std::vector<std::string>{"ALPHA=1", "ZETA=1"}));
   ASSERT_EQ(first->compileCommands.size(), 1u);
