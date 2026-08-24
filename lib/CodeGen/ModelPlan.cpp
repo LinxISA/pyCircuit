@@ -99,7 +99,7 @@ bool isTraceSourceBinding(const ModelPlan &plan, const BindingPlan &binding) {
                              [&](const TypePlan &type) {
                                return type.symbol == binding.componentSchema;
                              });
-  return schema != plan.types.end() && schema->cppType == "ac.std.TraceSource";
+  return schema != plan.types.end() && schema->cppType == "ac.TraceSource";
 }
 
 bool isTraceOwner(const ModelPlan &plan,

@@ -33,58 +33,58 @@ EXPECTED_LLVM = {
 }
 
 AVAILABLE_STDLIB_COMPONENTS = {
-    "ac.std.TraceSource",
-    "ac.std.Queue",
-    "ac.std.Scheduler",
-    "ac.std.Compute",
-    "ac.std.Link",
-    "ac.std.Memory",
-    "ac.std.Sink",
-    "ac.std.ready_valid",
-    "ac.std.request_response",
+    "ac.TraceSource",
+    "ac.Queue",
+    "ac.Scheduler",
+    "ac.Compute",
+    "ac.Link",
+    "ac.Memory",
+    "ac.Sink",
+    "ac.ready_valid",
+    "ac.request_response",
 }
 AVAILABLE_STDLIB_BINDINGS = {
-    "ac.std.TraceSource": ("gfsim/trace.h", "gfsim::TraceSource"),
-    "ac.std.Queue": ("gfsim/queue.h", "gfsim::Queue"),
-    "ac.std.Scheduler": ("gfsim/components.h", "gfsim::Scheduler"),
-    "ac.std.Compute": ("gfsim/components.h", "gfsim::Compute"),
-    "ac.std.Link": ("gfsim/components.h", "gfsim::Link"),
-    "ac.std.Memory": ("gfsim/components.h", "gfsim::Memory"),
-    "ac.std.Sink": ("gfsim/components.h", "gfsim::Sink"),
-    "ac.std.ready_valid": ("gfsim/components.h", "gfsim::ReadyValid"),
-    "ac.std.request_response": (
+    "ac.TraceSource": ("gfsim/trace.h", "gfsim::TraceSource"),
+    "ac.Queue": ("gfsim/queue.h", "gfsim::Queue"),
+    "ac.Scheduler": ("gfsim/components.h", "gfsim::Scheduler"),
+    "ac.Compute": ("gfsim/components.h", "gfsim::Compute"),
+    "ac.Link": ("gfsim/components.h", "gfsim::Link"),
+    "ac.Memory": ("gfsim/components.h", "gfsim::Memory"),
+    "ac.Sink": ("gfsim/components.h", "gfsim::Sink"),
+    "ac.ready_valid": ("gfsim/components.h", "gfsim::ReadyValid"),
+    "ac.request_response": (
         "gfsim/components.h",
         "gfsim::RequestResponse",
     ),
 }
 UNAVAILABLE_STDLIB_COMPONENTS = {
-    "ac.std.Arbiter",
-    "ac.std.Dispatcher",
-    "ac.std.Scoreboard",
-    "ac.std.DependencyTracker",
-    "ac.std.Bus",
-    "ac.std.Crossbar",
-    "ac.std.Router",
-    "ac.std.Switch",
-    "ac.std.Dma",
-    "ac.std.Packetizer",
-    "ac.std.Reassembler",
-    "ac.std.LoadStore",
-    "ac.std.RegisterFile",
-    "ac.std.Scratchpad",
-    "ac.std.Cache",
-    "ac.std.Tlb",
-    "ac.std.MemoryController",
-    "ac.std.Fork",
-    "ac.std.Join",
-    "ac.std.Broadcast",
-    "ac.std.Barrier",
-    "ac.std.ProtocolAdapter",
-    "ac.std.WidthAdapter",
-    "ac.std.TimeDomainBridge",
-    "ac.std.AddressTranslator",
-    "ac.std.MemoryManagement",
-    "ac.std.TrafficSource",
+    "ac.Arbiter",
+    "ac.Dispatcher",
+    "ac.Scoreboard",
+    "ac.DependencyTracker",
+    "ac.Bus",
+    "ac.Crossbar",
+    "ac.Router",
+    "ac.Switch",
+    "ac.Dma",
+    "ac.Packetizer",
+    "ac.Reassembler",
+    "ac.LoadStore",
+    "ac.RegisterFile",
+    "ac.Scratchpad",
+    "ac.Cache",
+    "ac.Tlb",
+    "ac.MemoryController",
+    "ac.Fork",
+    "ac.Join",
+    "ac.Broadcast",
+    "ac.Barrier",
+    "ac.ProtocolAdapter",
+    "ac.WidthAdapter",
+    "ac.TimeDomainBridge",
+    "ac.AddressTranslator",
+    "ac.MemoryManagement",
+    "ac.TrafficSource",
 }
 
 
@@ -149,7 +149,7 @@ def check_stdlib_catalog(errors):
         errors.append("standard-library catalog has unknown or missing fields")
         return
     if (
-        catalog["catalog"] != "ac.std"
+        catalog["catalog"] != "ac"
         or catalog["version"] != "0.1"
         or catalog["contract_epoch"] != EPOCH
         or not isinstance(catalog["entries"], list)

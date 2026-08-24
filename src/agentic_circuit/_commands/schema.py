@@ -56,7 +56,7 @@ def _select(
     candidates = [
         record
         for identity, record in records
-        if name == identity or name == identity.removeprefix("ac.std.")
+        if name == identity
     ]
     if len(candidates) != 1:
         _fail(f"schema identity is unknown: {name}")
@@ -104,15 +104,15 @@ def run(arguments: object, sink: OutputSink) -> int:
     elif kind == "diagnostic":
         document = _diagnostics(name)
     elif kind == "interface":
-        names = ["ac.std.Stream"]
+        names = ["ac.Stream"]
         if name is None:
             document = _listing(kind, names)
-        elif name in ("Stream", "ac.std.Stream"):
+        elif name == "ac.Stream":
             document = {
                 "schema": "agentic-circuit-interface-definition",
                 "version": "0.1",
                 "contract_epoch": "0.1",
-                "canonical_name": "ac.std.Stream",
+                "canonical_name": "ac.Stream",
                 "availability": "available",
             }
         else:

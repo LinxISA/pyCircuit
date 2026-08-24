@@ -91,9 +91,9 @@ def run(arguments: object, sink: OutputSink) -> int:
     checks.append(
         _check(
             "standard_library",
-            catalog_identity == "ac.std@0.1",
+            catalog_identity == "ac@0.1",
             catalog_identity,
-            "ac.std@0.1",
+            "ac@0.1",
         )
     )
     canonical = canonical_json_bytes({"epoch": "0.1"})

@@ -627,8 +627,8 @@ class RepositoryContractsTest(unittest.TestCase):
             "placement": "member_or_array",
         }
         stateful_duplicate_name["activation_sources"] = [
-            {"kind": "ac.std.Clock", "name": "wake"},
-            {"kind": "ac.std.Reset", "name": "wake"},
+            {"kind": "ac.Clock", "name": "wake"},
+            {"kind": "ac.Reset", "name": "wake"},
         ]
         # Draft 2020-12 cannot state unique-by-name. The schema accepts this
         # structurally; BindingRecord semantic validation rejects it.

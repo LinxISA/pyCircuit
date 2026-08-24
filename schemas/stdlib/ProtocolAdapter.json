@@ -2,9 +2,9 @@
   "schema_kind": "agentic-circuit-component",
   "schema_version": "0.1",
   "contract_epoch": "0.1",
-  "canonical_name": "ac.std.ProtocolAdapter",
+  "canonical_name": "ac.ProtocolAdapter",
   "family": "adaptation",
-  "provider_namespace": "ac.std",
+  "provider_namespace": "ac",
   "stability": "provisional",
   "cpp_binding": {
     "header": "gfsim/components.h",
@@ -17,10 +17,10 @@
   "static_parameters": [
     {
       "name": "Transaction",
-      "acir_type": "!ac.static_type<ac.std.Transaction>",
+      "acir_type": "!ac.static_type<ac.Transaction>",
       "required": true,
       "default": null,
-      "constraint": "ac.std.Packet",
+      "constraint": "ac.Packet",
       "cpp_mapping": "template_argument"
     }
   ],
@@ -28,7 +28,7 @@
     {
       "name": "input",
       "binding_kind": "endpoint",
-      "acir_type": "!ac.endpoint<!ac.interface<ac.std.Stream<!ac.packet<ac.std.Transaction>,ac.std.ready_valid>>,consumer>",
+      "acir_type": "!ac.endpoint<!ac.interface<ac.Stream<!ac.packet<ac.Transaction>,ac.ready_valid>>,consumer>",
       "direction": "in",
       "role": "consumer",
       "cardinality": 1,
@@ -40,7 +40,7 @@
     {
       "name": "output",
       "binding_kind": "endpoint",
-      "acir_type": "!ac.endpoint<!ac.interface<ac.std.Stream<!ac.packet<ac.std.Transaction>,ac.std.ready_valid>>,producer>",
+      "acir_type": "!ac.endpoint<!ac.interface<ac.Stream<!ac.packet<ac.Transaction>,ac.ready_valid>>,producer>",
       "direction": "out",
       "role": "producer",
       "cardinality": 1,
@@ -54,10 +54,10 @@
   "resources": [],
   "address_behavior": {
     "consumes": [
-      "ac.std.system"
+      "ac.system"
     ],
     "produces": [
-      "ac.std.system"
+      "ac.system"
     ],
     "ranges": [],
     "translation": "static",
@@ -66,7 +66,7 @@
   },
   "protocol_contracts": [
     {
-      "protocol": "ac.std.ready_valid",
+      "protocol": "ac.ready_valid",
       "role": "consumer",
       "ordering": "fifo",
       "delivery": "exactly_once_on_transfer",
@@ -75,7 +75,7 @@
       "failure": "protocol_violation"
     },
     {
-      "protocol": "ac.std.ready_valid",
+      "protocol": "ac.ready_valid",
       "role": "producer",
       "ordering": "fifo",
       "delivery": "exactly_once_on_transfer",
@@ -119,5 +119,5 @@
     "gauges": [],
     "histograms": []
   },
-  "schema_fingerprint": "sha256:f3c5d3e7549283dfc03ca406b0581a5879abb10ae56fad5d22e42d33e6e409da"
+  "schema_fingerprint": "sha256:5dc54c45559387e4703a8af58df2be27e869973f296cf8cfec8bb70ca20cf5b9"
 }

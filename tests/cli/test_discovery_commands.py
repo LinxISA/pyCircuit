@@ -76,15 +76,17 @@ class DiscoveryCommandTest(unittest.TestCase):
     def test_component_protocol_and_list_queries_are_exact(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            component = run_cli("schema", "component", "Queue", "--json", cwd=root)
+            component = run_cli(
+                "schema", "component", "ac.Queue", "--json", cwd=root
+            )
             protocol = run_cli(
-                "schema", "protocol", "ready_valid", "--json", cwd=root
+                "schema", "protocol", "ac.ready_valid", "--json", cwd=root
             )
             listing = run_cli("schema", "component", "--json", cwd=root)
 
-        self.assertEqual("ac.std.Queue", json.loads(component.stdout)["canonical_name"])
+        self.assertEqual("ac.Queue", json.loads(component.stdout)["canonical_name"])
         self.assertEqual(
-            "ac.std.ready_valid", json.loads(protocol.stdout)["canonical_name"]
+            "ac.ready_valid", json.loads(protocol.stdout)["canonical_name"]
         )
         names = json.loads(listing.stdout)["items"]
         self.assertEqual(sorted(names), names)

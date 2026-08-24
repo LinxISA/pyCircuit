@@ -39,9 +39,9 @@ static BuildManifest makeCompleteManifestFixture() {
   manifest.compiler = {"clang++", "clang-22.1.8", "arm64-apple-darwin"};
   manifest.passPipeline = {"acsim-verify", "acsim-emit-cxx"};
   manifest.providers = {
-      {"ac.std", repeatedFingerprint('3'), repeatedFingerprint('4')}};
+      {"ac", repeatedFingerprint('3'), repeatedFingerprint('4')}};
   manifest.componentSpecializations = {
-      {"ac.std.Queue", repeatedFingerprint('5'), repeatedFingerprint('6')}};
+      {"ac.Queue", repeatedFingerprint('5'), repeatedFingerprint('6')}};
   manifest.protocolIdentities = {{"ready_valid", repeatedFingerprint('7')}};
   manifest.artifacts = {
       {"bin/model", ArtifactKind::Executable, repeatedFingerprint('8')}};
@@ -76,7 +76,7 @@ TEST(CodeGenManifestTest, CanonicalManifestMatchesClosedSchemaShape) {
   }
 
   constexpr std::string_view expected =
-      R"json({"artifacts":[{"kind":"executable","path":"bin/model","sha256":"sha256:8888888888888888888888888888888888888888888888888888888888888888"}],"build_fingerprint":"sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff","build_profile":"validated","compiler":{"build_id":"clang-22.1.8","name":"clang++","toolchain_target":"arm64-apple-darwin"},"component_specializations":[{"canonical_name":"ac.std.Queue","schema_fingerprint":"sha256:5555555555555555555555555555555555555555555555555555555555555555","specialization_fingerprint":"sha256:6666666666666666666666666666666666666666666666666666666666666666"}],"contract_epoch":"0.1","instrumentation_layers":["trace"],"normalized_acir_sha256":"sha256:2222222222222222222222222222222222222222222222222222222222222222","pass_pipeline":["acsim-verify","acsim-emit-cxx"],"project":{"identity":"project:demo","name":"demo"},"protocol_identities":[{"fingerprint":"sha256:7777777777777777777777777777777777777777777777777777777777777777","name":"ready_valid"}],"providers":[{"implementation_fingerprint":"sha256:4444444444444444444444444444444444444444444444444444444444444444","namespace":"ac.std","schema_fingerprint":"sha256:3333333333333333333333333333333333333333333333333333333333333333"}],"schema":"agentic-circuit-build-manifest","source_files":[{"path":"src/generated/model.cpp","sha256":"sha256:1111111111111111111111111111111111111111111111111111111111111111"}],"specialization_inputs":[{"acir_type":"ui32","canonical_value":4,"name":"depth"}],"system":{"identity":"system:top","name":"top"},"validation_gates":[{"name":"compile","report_sha256":null,"status":"passed"}],"version":"0.1"})json";
+      R"json({"artifacts":[{"kind":"executable","path":"bin/model","sha256":"sha256:8888888888888888888888888888888888888888888888888888888888888888"}],"build_fingerprint":"sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff","build_profile":"validated","compiler":{"build_id":"clang-22.1.8","name":"clang++","toolchain_target":"arm64-apple-darwin"},"component_specializations":[{"canonical_name":"ac.Queue","schema_fingerprint":"sha256:5555555555555555555555555555555555555555555555555555555555555555","specialization_fingerprint":"sha256:6666666666666666666666666666666666666666666666666666666666666666"}],"contract_epoch":"0.1","instrumentation_layers":["trace"],"normalized_acir_sha256":"sha256:2222222222222222222222222222222222222222222222222222222222222222","pass_pipeline":["acsim-verify","acsim-emit-cxx"],"project":{"identity":"project:demo","name":"demo"},"protocol_identities":[{"fingerprint":"sha256:7777777777777777777777777777777777777777777777777777777777777777","name":"ready_valid"}],"providers":[{"implementation_fingerprint":"sha256:4444444444444444444444444444444444444444444444444444444444444444","namespace":"ac","schema_fingerprint":"sha256:3333333333333333333333333333333333333333333333333333333333333333"}],"schema":"agentic-circuit-build-manifest","source_files":[{"path":"src/generated/model.cpp","sha256":"sha256:1111111111111111111111111111111111111111111111111111111111111111"}],"specialization_inputs":[{"acir_type":"ui32","canonical_value":4,"name":"depth"}],"system":{"identity":"system:top","name":"top"},"validation_gates":[{"name":"compile","report_sha256":null,"status":"passed"}],"version":"0.1"})json";
   EXPECT_EQ(*canonical, expected);
 }
 
@@ -100,7 +100,7 @@ TEST(CodeGenManifestTest, ManifestCanonicalizesSetLikeCollections) {
   second.instrumentationLayers = {"statistics", "trace"};
   second.providers = {
       {"ac.extra", repeatedFingerprint('9'), repeatedFingerprint('a')},
-      {"ac.std", repeatedFingerprint('3'), repeatedFingerprint('4')}};
+      {"ac", repeatedFingerprint('3'), repeatedFingerprint('4')}};
 
   auto firstJson = first.canonicalJson();
   auto secondJson = second.canonicalJson();

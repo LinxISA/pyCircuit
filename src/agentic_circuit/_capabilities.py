@@ -102,7 +102,7 @@ def _base_items(catalog: dict[str, JsonValue]) -> list[dict[str, JsonValue]]:
     items.append(
         {
             "kind": "provider",
-            "name": "ac.std",
+            "name": "ac",
             "availability": "available",
             "schema_fingerprint": catalog_fingerprint,
             "implementation_fingerprint": None,
@@ -121,10 +121,10 @@ def _base_items(catalog: dict[str, JsonValue]) -> list[dict[str, JsonValue]]:
     items.append(
         {
             "kind": "interface",
-            "name": "ac.std.Stream",
+            "name": "ac.Stream",
             "availability": "available",
             "schema_fingerprint": _synthetic_fingerprint(
-                "interface", "ac.std.Stream"
+                "interface", "ac.Stream"
             ),
             "implementation_fingerprint": None,
         }

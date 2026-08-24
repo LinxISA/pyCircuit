@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate the frozen ac.std v0.1 component catalog deterministically."""
+"""Generate the frozen ac v0.1 component catalog deterministically."""
 
 import argparse
 import hashlib
@@ -63,8 +63,8 @@ def endpoint(name, direction, role, cardinality=1):
         "name": name,
         "binding_kind": "endpoint",
         "acir_type": (
-            "!ac.endpoint<!ac.interface<ac.std.Stream<"
-            "!ac.packet<ac.std.Transaction>,ac.std.ready_valid>>," + role + ">"
+            "!ac.endpoint<!ac.interface<ac.Stream<"
+            "!ac.packet<ac.Transaction>,ac.ready_valid>>," + role + ">"
         ),
         "direction": direction,
         "role": role,
@@ -117,16 +117,16 @@ def static_parameters_for(name, shape):
     parameters = [
         {
             "name": type_name,
-            "acir_type": f"!ac.static_type<ac.std.{type_name}>",
+            "acir_type": f"!ac.static_type<ac.{type_name}>",
             "required": True,
             "default": None,
             "constraint": (
-                "ac.std.FunctionalPolicy"
+                "ac.FunctionalPolicy"
                 if type_name == "FunctionalPolicy"
                 else (
                     "gfsim::TraceDecoder<Decoder,Transaction>"
                     if name == "TraceSource" and type_name == "Decoder"
-                    else "ac.std.Packet"
+                    else "ac.Packet"
                 )
             ),
             "cpp_mapping": "template_argument",
@@ -208,9 +208,9 @@ def resources_for(name, family):
             "lanes": 1,
             "issue_width": 1,
             "initiation_interval": 1,
-            "latency_policy": "ac.std.FixedLatency<0>",
+            "latency_policy": "ac.FixedLatency<0>",
             "reservation_owner": "self",
-            "transaction_classes": ["ac.std.Transaction"],
+            "transaction_classes": ["ac.Transaction"],
             "statistics": ["accepted_transactions", "queue_occupancy"],
         }
     ]
@@ -221,7 +221,7 @@ def protocol_contracts_for(bindings):
     for binding in bindings:
         contracts.append(
             {
-                "protocol": "ac.std.ready_valid",
+                "protocol": "ac.ready_valid",
                 "role": binding["role"],
                 "ordering": "fifo",
                 "delivery": "exactly_once_on_transfer",
@@ -238,8 +238,8 @@ def protocol_contracts_for(bindings):
 def address_behavior(family):
     address_aware = family in {"storage", "adaptation", "transport"}
     return {
-        "consumes": ["ac.std.system"] if address_aware else [],
-        "produces": ["ac.std.system"] if address_aware else [],
+        "consumes": ["ac.system"] if address_aware else [],
+        "produces": ["ac.system"] if address_aware else [],
         "ranges": [],
         "translation": "static" if address_aware else "none",
         "routing": "address_range" if address_aware else "none",
@@ -297,9 +297,9 @@ def component_record(name, family, shape, header):
         "schema_kind": "agentic-circuit-component",
         "schema_version": "0.1",
         "contract_epoch": "0.1",
-        "canonical_name": f"ac.std.{name}",
+        "canonical_name": f"ac.{name}",
         "family": family,
-        "provider_namespace": "ac.std",
+        "provider_namespace": "ac",
         "stability": "provisional",
         "cpp_binding": {
             "header": header,
@@ -370,7 +370,7 @@ def rendered_files():
         )
     catalog_entries.sort(key=lambda entry: entry["canonical_name"])
     catalog = {
-        "catalog": "ac.std",
+        "catalog": "ac",
         "version": "0.1",
         "contract_epoch": "0.1",
         "entries": catalog_entries,

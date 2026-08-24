@@ -2,9 +2,9 @@
   "schema_kind": "agentic-circuit-component",
   "schema_version": "0.1",
   "contract_epoch": "0.1",
-  "canonical_name": "ac.std.Scheduler",
+  "canonical_name": "ac.Scheduler",
   "family": "control",
-  "provider_namespace": "ac.std",
+  "provider_namespace": "ac",
   "stability": "provisional",
   "cpp_binding": {
     "header": "gfsim/components.h",
@@ -17,10 +17,10 @@
   "static_parameters": [
     {
       "name": "T",
-      "acir_type": "!ac.static_type<ac.std.T>",
+      "acir_type": "!ac.static_type<ac.T>",
       "required": true,
       "default": null,
-      "constraint": "ac.std.Packet",
+      "constraint": "ac.Packet",
       "cpp_mapping": "template_argument"
     },
     {
@@ -36,7 +36,7 @@
     {
       "name": "input",
       "binding_kind": "endpoint",
-      "acir_type": "!ac.endpoint<!ac.interface<ac.std.Stream<!ac.packet<ac.std.Transaction>,ac.std.ready_valid>>,consumer>",
+      "acir_type": "!ac.endpoint<!ac.interface<ac.Stream<!ac.packet<ac.Transaction>,ac.ready_valid>>,consumer>",
       "direction": "in",
       "role": "consumer",
       "cardinality": 1,
@@ -48,7 +48,7 @@
     {
       "name": "output",
       "binding_kind": "endpoint",
-      "acir_type": "!ac.endpoint<!ac.interface<ac.std.Stream<!ac.packet<ac.std.Transaction>,ac.std.ready_valid>>,producer>",
+      "acir_type": "!ac.endpoint<!ac.interface<ac.Stream<!ac.packet<ac.Transaction>,ac.ready_valid>>,producer>",
       "direction": "out",
       "role": "producer",
       "cardinality": 1,
@@ -67,10 +67,10 @@
       "lanes": 1,
       "issue_width": 1,
       "initiation_interval": 1,
-      "latency_policy": "ac.std.FixedLatency<0>",
+      "latency_policy": "ac.FixedLatency<0>",
       "reservation_owner": "self",
       "transaction_classes": [
-        "ac.std.Transaction"
+        "ac.Transaction"
       ],
       "statistics": [
         "accepted_transactions",
@@ -90,7 +90,7 @@
   },
   "protocol_contracts": [
     {
-      "protocol": "ac.std.ready_valid",
+      "protocol": "ac.ready_valid",
       "role": "consumer",
       "ordering": "fifo",
       "delivery": "exactly_once_on_transfer",
@@ -99,7 +99,7 @@
       "failure": "protocol_violation"
     },
     {
-      "protocol": "ac.std.ready_valid",
+      "protocol": "ac.ready_valid",
       "role": "producer",
       "ordering": "fifo",
       "delivery": "exactly_once_on_transfer",
@@ -148,5 +148,5 @@
     ],
     "histograms": []
   },
-  "schema_fingerprint": "sha256:ee7ae59ef0c5305594e06cd2fa173e46c747853d5ccab4c48ac7f65ab7ab8a17"
+  "schema_fingerprint": "sha256:5d7c333eb0efddce79c2dc643d7eadb4445c001bd3c552caa4402dde6e500466"
 }

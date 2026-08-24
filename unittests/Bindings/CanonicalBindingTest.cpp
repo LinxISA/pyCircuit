@@ -27,7 +27,7 @@ namespace acir::bindings {
 namespace {
 
 constexpr llvm::StringLiteral kRecordFingerprint =
-    "sha256:075f9a6bf582cdf6f16b599d654c3126085ea15aa38a1937f6af63e57bbc2392";
+    "sha256:d202c3b13b10c1a6384b538a56cdce623db7f7996d1c36c050db3de0d4d92ac1";
 
 std::string takeError(llvm::Error error) {
   return llvm::toString(std::move(error));
@@ -56,7 +56,7 @@ std::string recordJson(llvm::StringRef fingerprint = kRecordFingerprint,
     "availability": "available",
     "binding": "Leaf",
     "binding_schema": "acsim-binding-0.1",
-    "component_schema": "ac.std.Leaf",
+    "component_schema": "ac.Leaf",
     "component_schema_fingerprint": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
     "construction": {"arguments": [8], "kind": "constructor"},
     "contract_epoch": "0.1",
@@ -87,12 +87,12 @@ std::string recordJson(llvm::StringRef fingerprint = kRecordFingerprint,
       "cardinality": "exclusive",
       "delegation": "forbidden",
       "direction": "input",
-      "interface": "ac.std.Stream",
+      "interface": "ac.Stream",
       "ownership": "borrowed",
-      "payload": "ac.std.Packet",
-      "protocol": "ac.std.ReadyValid",
+      "payload": "ac.Packet",
+      "protocol": "ac.ReadyValid",
       "role": "consumer",
-      "time_domain": "ac.std.cycle"
+      "time_domain": "ac.cycle"
     }],
     "provider": "gfsim",
     "provider_implementation_fingerprint": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
@@ -114,7 +114,7 @@ std::string candidateJson(llvm::StringRef profile = "fast",
 }
 
 std::string requestJson(
-    llvm::StringRef componentSchema = "ac.std.Leaf",
+    llvm::StringRef componentSchema = "ac.Leaf",
     llvm::StringRef providerFingerprint =
         "sha256:"
         "2222222222222222222222222222222222222222222222222222222222222222",
@@ -137,12 +137,12 @@ std::string requestJson(
       "cardinality": "exclusive",
       "delegation": "forbidden",
       "direction": "input",
-      "interface": "ac.std.Stream",
+      "interface": "ac.Stream",
       "ownership": "borrowed",
-      "payload": "ac.std.Packet",
-      "protocol": "ac.std.ReadyValid",
+      "payload": "ac.Packet",
+      "protocol": "ac.ReadyValid",
       "role": "consumer",
-      "time_domain": "ac.std.cycle"
+      "time_domain": "ac.cycle"
     }],
     "provider": "gfsim",
     "provider_implementation_fingerprint": ")json" +
@@ -662,9 +662,9 @@ TEST(BindingRecordTest, RejectsDuplicateStatefulActivationSourceNames) {
   (*ownership)["placement"] = "member_or_array";
   llvm::json::Array activations;
   activations.push_back(
-      llvm::json::Object({{"kind", "ac.std.Clock"}, {"name", "wake"}}));
+      llvm::json::Object({{"kind", "ac.Clock"}, {"name", "wake"}}));
   activations.push_back(
-      llvm::json::Object({{"kind", "ac.std.Reset"}, {"name", "wake"}}));
+      llvm::json::Object({{"kind", "ac.Reset"}, {"name", "wake"}}));
   (*object)["activation_sources"] = std::move(activations);
 
   auto duplicate = BindingRecord::parse(*object);
@@ -878,9 +878,7 @@ TEST(BindingRegistryTest, ZeroExactMatchesAreMissingWithSubordinateReason) {
   };
   const Mismatch mismatches[] = {
       {"ACLOWER-SCHEMA-MISMATCH",
-       [](BindingRequest &request) {
-         request.componentSchema = "ac.std.Other";
-       }},
+       [](BindingRequest &request) { request.componentSchema = "ac.Other"; }},
       {"ACLOWER-INLINE-EFFECT",
        [](BindingRequest &request) { request.effect = "stateful"; }},
       {"ACLOWER-PARAM-PHASE",
@@ -923,8 +921,7 @@ TEST(BindingRegistryTest, ZeroExactMatchesAreMissingWithSubordinateReason) {
 
 TEST(BindingRegistryTest, NarrowsOneCandidateSetAcrossEveryExactField) {
   BindingRequest request = exactRequest();
-  std::string otherSchema =
-      withComponentSchema(recordJson(), "ac.std.OtherLeaf");
+  std::string otherSchema = withComponentSchema(recordJson(), "ac.OtherLeaf");
   auto candidates = parseCandidates(registryJson(
       {candidateJson("validated"),
        candidateJson("fast", "arm64-apple-darwin", true, otherSchema)}));
@@ -955,7 +952,7 @@ TEST(BindingLockTest, EmitsStableCanonicalBytesAndProjectHashVector) {
                                 "arm64-apple-darwin");
   ASSERT_TRUE(static_cast<bool>(result)) << takeError(result.takeError());
   EXPECT_EQ(
-      "sha256:2fb6dab878129c1900393b41bcd1881b60807024502f2f63b68d6da1f63a9dc3",
+      "sha256:6e29500fb6db7cabc9f8b0a115b7bd2b5249fd4bb3f25949f5e14960ee8884be",
       result->lockFingerprint());
   EXPECT_EQ('[', result->canonicalLock().front());
   EXPECT_EQ(']', result->canonicalLock().back());
@@ -1097,7 +1094,7 @@ TEST(ResolveBindingsApiTest, ReturnsTypedResultWithoutMutatingFrozenTopology) {
   ResolveBindingsPassOptions schemaMismatch = options;
   schemaMismatch.candidates = parseCandidates(registryJson(
       {candidateJson("fast", "arm64-apple-darwin", true,
-                     withComponentSchema(recordJson(), "ac.std.OtherLeaf"))}));
+                     withComponentSchema(recordJson(), "ac.OtherLeaf"))}));
   auto wrongSchema = resolveModuleBindings(*module, schemaMismatch);
   ASSERT_FALSE(static_cast<bool>(wrongSchema));
   EXPECT_TRUE(containsText(takeError(wrongSchema.takeError()),
@@ -1137,7 +1134,7 @@ TEST(ResolveBindingsApiTest, ReturnsTypedResultWithoutMutatingFrozenTopology) {
       {candidateJson("fast", "arm64-apple-darwin", true,
                      withUnitParameter(recordJson()))},
       {requestJson(
-          "ac.std.Leaf",
+          "ac.Leaf",
           "sha256:"
           "2222222222222222222222222222222222222222222222222222222222222222",
           "() -> i32", R"({"unit":"cycles","value":4})")});

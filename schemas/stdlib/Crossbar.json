@@ -2,9 +2,9 @@
   "schema_kind": "agentic-circuit-component",
   "schema_version": "0.1",
   "contract_epoch": "0.1",
-  "canonical_name": "ac.std.Crossbar",
+  "canonical_name": "ac.Crossbar",
   "family": "interconnect",
-  "provider_namespace": "ac.std",
+  "provider_namespace": "ac",
   "stability": "provisional",
   "cpp_binding": {
     "header": "gfsim/components.h",
@@ -17,10 +17,10 @@
   "static_parameters": [
     {
       "name": "Transaction",
-      "acir_type": "!ac.static_type<ac.std.Transaction>",
+      "acir_type": "!ac.static_type<ac.Transaction>",
       "required": true,
       "default": null,
-      "constraint": "ac.std.Packet",
+      "constraint": "ac.Packet",
       "cpp_mapping": "template_argument"
     }
   ],
@@ -28,7 +28,7 @@
     {
       "name": "input",
       "binding_kind": "endpoint",
-      "acir_type": "!ac.endpoint<!ac.interface<ac.std.Stream<!ac.packet<ac.std.Transaction>,ac.std.ready_valid>>,consumer>",
+      "acir_type": "!ac.endpoint<!ac.interface<ac.Stream<!ac.packet<ac.Transaction>,ac.ready_valid>>,consumer>",
       "direction": "in",
       "role": "consumer",
       "cardinality": 1,
@@ -40,7 +40,7 @@
     {
       "name": "output",
       "binding_kind": "endpoint",
-      "acir_type": "!ac.endpoint<!ac.interface<ac.std.Stream<!ac.packet<ac.std.Transaction>,ac.std.ready_valid>>,producer>",
+      "acir_type": "!ac.endpoint<!ac.interface<ac.Stream<!ac.packet<ac.Transaction>,ac.ready_valid>>,producer>",
       "direction": "out",
       "role": "producer",
       "cardinality": 1,
@@ -62,7 +62,7 @@
   },
   "protocol_contracts": [
     {
-      "protocol": "ac.std.ready_valid",
+      "protocol": "ac.ready_valid",
       "role": "consumer",
       "ordering": "fifo",
       "delivery": "exactly_once_on_transfer",
@@ -71,7 +71,7 @@
       "failure": "protocol_violation"
     },
     {
-      "protocol": "ac.std.ready_valid",
+      "protocol": "ac.ready_valid",
       "role": "producer",
       "ordering": "fifo",
       "delivery": "exactly_once_on_transfer",
@@ -115,5 +115,5 @@
     "gauges": [],
     "histograms": []
   },
-  "schema_fingerprint": "sha256:8885a0186f8fb4d51483775bc3b5300e09af142e299ca57bdcca56b8345dddfd"
+  "schema_fingerprint": "sha256:57210ca04480b0578c6285c770e10fad7da45193f93f22729206fc03b5e4300c"
 }

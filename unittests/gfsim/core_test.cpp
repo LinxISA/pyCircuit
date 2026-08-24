@@ -1327,16 +1327,16 @@ TEST(GfsimComponentsTest, BaselineTemplatesExposeCanonicalObjectKinds) {
   EXPECT_EQ(link.kind(), ObjectKind::Link);
   EXPECT_EQ(memory.kind(), ObjectKind::Memory);
   EXPECT_EQ(sink.kind(), ObjectKind::Sink);
-  EXPECT_EQ(TraceSource<>::contractName, "ac.std.TraceSource");
-  EXPECT_EQ(Queue<uint64_t>::contractName, "ac.std.Queue");
-  EXPECT_EQ(Scheduler<uint64_t>::contractName, "ac.std.Scheduler");
-  EXPECT_EQ(Compute<>::contractName, "ac.std.Compute");
-  EXPECT_EQ(Link<>::contractName, "ac.std.Link");
-  EXPECT_EQ(Memory<>::contractName, "ac.std.Memory");
-  EXPECT_EQ(Sink<>::contractName, "ac.std.Sink");
-  EXPECT_EQ(ReadyValid<uint64_t>::contractName, "ac.std.ready_valid");
+  EXPECT_EQ(TraceSource<>::contractName, "ac.TraceSource");
+  EXPECT_EQ(Queue<uint64_t>::contractName, "ac.Queue");
+  EXPECT_EQ(Scheduler<uint64_t>::contractName, "ac.Scheduler");
+  EXPECT_EQ(Compute<>::contractName, "ac.Compute");
+  EXPECT_EQ(Link<>::contractName, "ac.Link");
+  EXPECT_EQ(Memory<>::contractName, "ac.Memory");
+  EXPECT_EQ(Sink<>::contractName, "ac.Sink");
+  EXPECT_EQ(ReadyValid<uint64_t>::contractName, "ac.ready_valid");
   EXPECT_EQ((RequestResponse<uint64_t, uint64_t>::contractName),
-            "ac.std.request_response");
+            "ac.request_response");
 }
 
 TEST(GfsimComponentsTest, QueueCommitsThroughBarrierAndTracksStatistics) {

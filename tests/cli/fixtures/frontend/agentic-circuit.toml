@@ -7,7 +7,7 @@ architecture = "architecture.py"
 system = "main"
 
 [providers]
-standard_library = ["ac.std"]
+standard_library = ["ac"]
 
 [build]
 profile = "fast"

@@ -169,7 +169,7 @@ def load_workspace(manifest: Path) -> WorkspaceConfig:
         required=frozenset({"standard_library"}),
     )
     provider_names = _string_list(providers, "standard_library", "providers")
-    if any(name != "ac.std" for name in provider_names):
+    if any(name != "ac" for name in provider_names):
         _fail("ACPY-CONFIG-006", "unknown standard-library provider")
 
     build = _closed_table(

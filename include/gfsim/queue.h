@@ -224,7 +224,7 @@ private:
 /// component contract; SimQueue remains the underlying runtime primitive.
 template <typename T> class Queue final : public SimQueue<T> {
 public:
-  static constexpr std::string_view contractName = "ac.std.Queue";
+  static constexpr std::string_view contractName = "ac.Queue";
   static constexpr ObjectKind componentKind = ObjectKind::Queue;
   using SimQueue<T>::SimQueue;
 };

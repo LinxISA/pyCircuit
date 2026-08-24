@@ -2,9 +2,9 @@
   "schema_kind": "agentic-circuit-component",
   "schema_version": "0.1",
   "contract_epoch": "0.1",
-  "canonical_name": "ac.std.TraceSource",
+  "canonical_name": "ac.TraceSource",
   "family": "workload",
-  "provider_namespace": "ac.std",
+  "provider_namespace": "ac",
   "stability": "provisional",
   "cpp_binding": {
     "header": "gfsim/trace.h",
@@ -17,15 +17,15 @@
   "static_parameters": [
     {
       "name": "Transaction",
-      "acir_type": "!ac.static_type<ac.std.Transaction>",
+      "acir_type": "!ac.static_type<ac.Transaction>",
       "required": true,
       "default": null,
-      "constraint": "ac.std.Packet",
+      "constraint": "ac.Packet",
       "cpp_mapping": "template_argument"
     },
     {
       "name": "Decoder",
-      "acir_type": "!ac.static_type<ac.std.Decoder>",
+      "acir_type": "!ac.static_type<ac.Decoder>",
       "required": true,
       "default": null,
       "constraint": "gfsim::TraceDecoder<Decoder,Transaction>",
@@ -36,7 +36,7 @@
     {
       "name": "output",
       "binding_kind": "endpoint",
-      "acir_type": "!ac.endpoint<!ac.interface<ac.std.Stream<!ac.packet<ac.std.Transaction>,ac.std.ready_valid>>,producer>",
+      "acir_type": "!ac.endpoint<!ac.interface<ac.Stream<!ac.packet<ac.Transaction>,ac.ready_valid>>,producer>",
       "direction": "out",
       "role": "producer",
       "cardinality": 1,
@@ -58,7 +58,7 @@
   },
   "protocol_contracts": [
     {
-      "protocol": "ac.std.ready_valid",
+      "protocol": "ac.ready_valid",
       "role": "producer",
       "ordering": "fifo",
       "delivery": "exactly_once_on_transfer",
@@ -101,5 +101,5 @@
     ],
     "histograms": []
   },
-  "schema_fingerprint": "sha256:4e80c2e6e35a638347397233cea96f25754feb8bf8aedd5c9bf6e5531dddaa2c"
+  "schema_fingerprint": "sha256:2eab50620a848cdc68200f6a0ef515f6c92325d072c4c42ff79f074718dbdabf"
 }

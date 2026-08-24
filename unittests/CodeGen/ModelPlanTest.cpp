@@ -134,7 +134,7 @@ TEST(ModelPlanTest, IdentifiesTraceOwnersFromTypedBindingMetadata) {
       source.replace(position, from.size(), to);
   };
   replaceAll("gfsim::Fifo", "gfsim::TraceSource");
-  replaceAll("fifo.schema", "ac.std.TraceSource");
+  replaceAll("fifo.schema", "ac.TraceSource");
   auto file = mlir::parseSourceString<mlir::ModuleOp>(source, &context);
   ASSERT_TRUE(file);
 

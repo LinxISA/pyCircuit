@@ -8,7 +8,7 @@
         "availability": "available",
         "binding": "Leaf",
         "binding_schema": "acsim-binding-0.1",
-        "component_schema": "ac.std.Leaf",
+        "component_schema": "ac.Leaf",
         "component_schema_fingerprint": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
         "construction": {
           "arguments": [
@@ -32,7 +32,7 @@
         },
         "cpp_type": "cpp_i32",
         "effect": "stateful",
-        "fingerprint": "sha256:c8e227f956974726d917755a0b2a66492779f2587d811cc00f2c7ead654730d3",
+        "fingerprint": "sha256:20d9cd492545cea1240217f7bb44540813927ac7e50c64a4e13f5bf78baf40a6",
         "implementation": "gfsim.Leaf",
         "ownership": {
           "kind": "unique",
@@ -67,7 +67,7 @@
       "activation_sources": [],
       "binding": "Leaf",
       "binding_schema": "acsim-binding-0.1",
-      "component_schema": "ac.std.Leaf",
+      "component_schema": "ac.Leaf",
       "component_schema_fingerprint": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
       "contract_epoch": "0.1",
       "effect": "stateful",
