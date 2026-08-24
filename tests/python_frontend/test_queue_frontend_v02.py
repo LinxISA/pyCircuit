@@ -151,7 +151,7 @@ class QueueFrontendV02Test(unittest.TestCase):
         from agentic_circuit._queue_frontend import lower_queue_source
 
         self.assertEqual(
-            """module attributes {ac.contract_epoch = "0.1"} {
+            """module attributes {ac.contract_epoch = "0.1", ac.system = "pipeline"} {
   %input_queue = ac.source depth 4 latency 1 {ac.name = "input_queue"} : !ac.queue<i64>
   %output_queue = ac.transform %input_queue depths [8] latencies [2] {
   ^transform(%item: !ac.var<i64>):

@@ -7,6 +7,7 @@ add_acir_library(ACIRCodeGen SOURCES
   ModelPlan.cpp
   ModelPlanDetails.cpp
   ProcessGenerator.cpp
+  QueueGraphPlan.cpp
   Staging.cpp
 )
 list(GET LLVM_INCLUDE_DIRS 0 ACIR_CODEGEN_LLVM_INCLUDE_DIR)

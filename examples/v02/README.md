@@ -10,6 +10,10 @@ Generate one canonical typed C++ model:
 PYTHONPATH=src tools/ac-queue-cxxgen.py \
   examples/v02/davincioo_queue_model.py \
   --system davincioo_queue_model \
+  --acir-output build/davincioo_queue_model.ac.mlir \
+  --plan-output build/davincioo_queue_model.queue-plan.json \
+  --acir-opt build/dev-llvm22/bin/acir-opt \
+  --queue-plan-tool build/dev-llvm22/bin/acir-queue-plan \
   -o build/davincioo_queue_model.cpp
 ```
 

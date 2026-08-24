@@ -14,6 +14,7 @@ add_executable(CodeGenTests
   GeneratedModelRuntimeTest.cpp
   GeneratorTest.cpp
   ModelPlanTest.cpp
+  QueueGraphPlanTest.cpp
 )
 target_include_directories(CodeGenTests PRIVATE
   ${PROJECT_SOURCE_DIR}/include

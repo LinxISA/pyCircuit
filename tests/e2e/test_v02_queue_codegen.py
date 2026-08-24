@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import json
 from pathlib import Path
 import shutil
 import subprocess
@@ -20,6 +21,8 @@ class V02QueueCodegenTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             model = root / "model.cpp"
+            acir = root / "model.ac.mlir"
+            plan = root / "model.queue-plan.json"
             harness = root / "harness.cpp"
             executable = root / "model"
             generated = subprocess.run(
@@ -28,6 +31,20 @@ class V02QueueCodegenTest(unittest.TestCase):
                     str(SOURCE),
                     "--system",
                     "davincioo_queue_model",
+                    "--acir-output",
+                    str(acir),
+                    "--plan-output",
+                    str(plan),
+                    "--acir-opt",
+                    str(ROOT / "build" / "dev-llvm22" / "bin" / "acir-opt"),
+                    "--queue-plan-tool",
+                    str(
+                        ROOT
+                        / "build"
+                        / "dev-llvm22"
+                        / "bin"
+                        / "acir-queue-plan"
+                    ),
                     "-o",
                     str(model),
                 ),
@@ -39,6 +56,11 @@ class V02QueueCodegenTest(unittest.TestCase):
             )
             self.assertEqual(0, generated.returncode, generated.stderr)
             content = model.read_text(encoding="utf-8")
+            plan_document = json.loads(plan.read_text(encoding="utf-8"))
+            self.assertEqual("davincioo_queue_model", plan_document["system"])
+            self.assertEqual(7, len(plan_document["scopes"]))
+            self.assertEqual(12, len(plan_document["queues"]))
+            self.assertEqual(10, len(plan_document["blocks"]))
             copied_source = root / "copied_model.py"
             copied_model = root / "copied_model.cpp"
             shutil.copyfile(SOURCE, copied_source)
