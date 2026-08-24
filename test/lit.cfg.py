@@ -1,4 +1,5 @@
 import os
+import sys
 
 import lit.formats
 
@@ -25,6 +26,9 @@ if missing_paths:
 config.test_exec_root = configured_paths["ACIR_TEST_EXEC_ROOT"]
 tools_dir = configured_paths["ACIR_TOOLS_DIR"]
 llvm_tools_dir = configured_paths["LLVM_TOOLS_DIR"]
+
+if sys.platform == "darwin":
+    config.available_features.add("system-darwin")
 
 config.substitutions.append(("%binary_root", config.acir_binary_root))
 config.substitutions.append(("%cxx", config.acir_cxx))

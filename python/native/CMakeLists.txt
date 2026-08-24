@@ -5,6 +5,9 @@ target_compile_definitions(agentic_circuit_native PRIVATE
   ACIR_NATIVE_CXX_COMPILER="${CMAKE_CXX_COMPILER}"
   ACIR_NATIVE_LLVM_LIB_DIR="${ACIR_NATIVE_LLVM_LIB_DIR}"
 )
+if(NOT LLVM_ENABLE_RTTI)
+  target_compile_options(agentic_circuit_native PRIVATE -fno-rtti)
+endif()
 target_link_libraries(agentic_circuit_native PRIVATE
   ACIRCompiler
   Python3::Module
