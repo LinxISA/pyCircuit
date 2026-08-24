@@ -12,6 +12,7 @@
 #include <cctype>
 #include <sstream>
 #include <system_error>
+#include <utility>
 
 namespace acir::codegen {
 namespace {
@@ -20,6 +21,16 @@ llvm::Error generatorError(const llvm::Twine &message) {
   return llvm::createStringError(
       std::make_error_code(std::errc::invalid_argument),
       "ACLOWER-QUEUE-CXX: " + message);
+}
+
+template <typename... Values>
+void appendInitializer(std::vector<std::string> &initializers,
+                       const Values &...values) {
+  std::string initializer;
+  llvm::raw_string_ostream output(initializer);
+  (output << ... << values);
+  output.flush();
+  initializers.push_back(std::move(initializer));
 }
 
 std::string identifier(llvm::StringRef value) {
@@ -537,9 +548,9 @@ llvm::Expected<std::string> generateQueueGraphCpp(const QueueGraphPlan &plan) {
     auto parentPointer = modulePointer(parent);
     if (!parentPointer)
       return parentPointer.takeError();
-    initializers.push_back(
-        scopeMembers[scope] + "(\"" + pathParts(scope).back() +
-        "\", gfsim::kInvalidObjectId, " + *parentPointer + ")");
+    appendInitializer(initializers, scopeMembers[scope], "(\"",
+                      pathParts(scope).back(), "\", gfsim::kInvalidObjectId, ",
+                      *parentPointer, ")");
   }
   for (const QueuePlan &queue : plan.queues) {
     auto type = cppType(queue.payloadType);
@@ -548,11 +559,10 @@ llvm::Expected<std::string> generateQueueGraphCpp(const QueueGraphPlan &plan) {
       return type.takeError();
     if (!parent)
       return parent.takeError();
-    initializers.push_back(queueMembers[queue.name] + "(\"" + queue.name +
-                           "\", " + std::to_string(queueIds[queue.name]) +
-                           ", " + *parent + ", " + std::to_string(queue.depth) +
-                           ", std::numeric_limits<size_t>::max(), nullptr, " +
-                           std::to_string(queue.latency) + ")");
+    appendInitializer(
+        initializers, queueMembers[queue.name], "(\"", queue.name, "\", ",
+        queueIds[queue.name], ", ", *parent, ", ", queue.depth,
+        ", std::numeric_limits<size_t>::max(), nullptr, ", queue.latency, ")");
   }
   for (auto [index, block] : llvm::enumerate(runtimeBlocks)) {
     auto state = feedbackStateIds.find(index);
@@ -567,10 +577,10 @@ llvm::Expected<std::string> generateQueueGraphCpp(const QueueGraphPlan &plan) {
       return type.takeError();
     if (!parent)
       return parent.takeError();
-    initializers.push_back(
-        "block_" + std::to_string(index) + "_state_(\"feedback_state_" +
-        block->name + "\", " + std::to_string(state->second) + ", " + *parent +
-        ", 1, std::numeric_limits<size_t>::max(), nullptr, 1)");
+    appendInitializer(initializers, "block_", index,
+                      "_state_(\"feedback_state_", block->name, "\", ",
+                      state->second, ", ", *parent,
+                      ", 1, std::numeric_limits<size_t>::max(), nullptr, 1)");
   }
   size_t sinkIndex = 0;
   for (auto [index, block] : llvm::enumerate(runtimeBlocks)) {
@@ -582,10 +592,10 @@ llvm::Expected<std::string> generateQueueGraphCpp(const QueueGraphPlan &plan) {
     std::string instanceName = block->kind + "_" + block->name;
     if (block->kind == "transform") {
       if (block->inputs.size() == 1 && block->outputs.size() == 1) {
-        initializers.push_back(member + "(\"" + instanceName + "\", " +
-                               std::to_string(blockIds[key]) + ", " + *parent +
-                               ", " + queueMembers[block->inputs[0]] + ", " +
-                               queueMembers[block->outputs[0]] + ")");
+        appendInitializer(initializers, member, "(\"", instanceName, "\", ",
+                          blockIds[key], ", ", *parent, ", ",
+                          queueMembers[block->inputs[0]], ", ",
+                          queueMembers[block->outputs[0]], ")");
       } else {
         std::string inputs;
         std::string outputs;
@@ -599,10 +609,9 @@ llvm::Expected<std::string> generateQueueGraphCpp(const QueueGraphPlan &plan) {
             outputs.append(", ");
           outputs.append("&").append(queueMembers[block->outputs[result]]);
         }
-        initializers.push_back(member + "(\"" + instanceName + "\", " +
-                               std::to_string(blockIds[key]) + ", " + *parent +
-                               ", std::tuple{" + inputs + "}, std::tuple{" +
-                               outputs + "})");
+        appendInitializer(initializers, member, "(\"", instanceName, "\", ",
+                          blockIds[key], ", ", *parent, ", std::tuple{", inputs,
+                          "}, std::tuple{", outputs, "})");
       }
     } else if (block->kind == "broadcast" || block->kind == "fork" ||
                block->kind == "route") {
@@ -618,12 +627,11 @@ llvm::Expected<std::string> generateQueueGraphCpp(const QueueGraphPlan &plan) {
           outputs.append(", ");
         outputs.append("&").append(queueMembers[name]);
       }
-      initializers.push_back(member + "(\"" + instanceName + "\", " +
-                             std::to_string(blockIds[key]) + ", " + *parent +
-                             ", " + queueMembers[block->inputs[0]] +
-                             ", std::array<gfsim::SimQueue<" + *type + "> *, " +
-                             std::to_string(block->outputs.size()) + ">{" +
-                             outputs + "})");
+      appendInitializer(initializers, member, "(\"", instanceName, "\", ",
+                        blockIds[key], ", ", *parent, ", ",
+                        queueMembers[block->inputs[0]],
+                        ", std::array<gfsim::SimQueue<", *type, "> *, ",
+                        block->outputs.size(), ">{", outputs, "})");
     } else if (block->kind == "select") {
       const QueuePlan *result = findQueue(plan, block->outputs[0]);
       auto type = result ? cppType(result->payloadType)
@@ -637,12 +645,12 @@ llvm::Expected<std::string> generateQueueGraphCpp(const QueueGraphPlan &plan) {
           inputs.append(", ");
         inputs.append("&").append(queueMembers[block->inputs[input]]);
       }
-      initializers.push_back(
-          member + "(\"" + instanceName + "\", " +
-          std::to_string(blockIds[key]) + ", " + *parent + ", " +
-          queueMembers[block->inputs[0]] + ", std::array<gfsim::SimQueue<" +
-          *type + "> *, " + std::to_string(block->inputs.size() - 1) + ">{" +
-          inputs + "}, " + queueMembers[block->outputs[0]] + ")");
+      appendInitializer(initializers, member, "(\"", instanceName, "\", ",
+                        blockIds[key], ", ", *parent, ", ",
+                        queueMembers[block->inputs[0]],
+                        ", std::array<gfsim::SimQueue<", *type, "> *, ",
+                        block->inputs.size() - 1, ">{", inputs, "}, ",
+                        queueMembers[block->outputs[0]], ")");
     } else if (block->kind == "merge") {
       const QueuePlan *result = findQueue(plan, block->outputs[0]);
       auto type = result ? cppType(result->payloadType)
@@ -659,12 +667,11 @@ llvm::Expected<std::string> generateQueueGraphCpp(const QueueGraphPlan &plan) {
       std::string policy = block->policy == "priority"
                                ? "gfsim::QueueMergePolicy::Priority"
                                : "gfsim::QueueMergePolicy::RoundRobin";
-      initializers.push_back(member + "(\"" + instanceName + "\", " +
-                             std::to_string(blockIds[key]) + ", " + *parent +
-                             ", std::array<gfsim::SimQueue<" + *type + "> *, " +
-                             std::to_string(block->inputs.size()) + ">{" +
-                             inputs + "}, " + queueMembers[block->outputs[0]] +
-                             ", " + policy + ")");
+      appendInitializer(initializers, member, "(\"", instanceName, "\", ",
+                        blockIds[key], ", ", *parent,
+                        ", std::array<gfsim::SimQueue<", *type, "> *, ",
+                        block->inputs.size(), ">{", inputs, "}, ",
+                        queueMembers[block->outputs[0]], ", ", policy, ")");
     } else if (block->kind == "barrier") {
       std::string inputs;
       std::string outputs;
@@ -676,54 +683,47 @@ llvm::Expected<std::string> generateQueueGraphCpp(const QueueGraphPlan &plan) {
           outputs.append(", ");
         outputs.append("&").append(queueMembers[block->outputs[operand]]);
       }
-      initializers.push_back(member + "(\"" + instanceName + "\", " +
-                             std::to_string(blockIds[key]) + ", " + *parent +
-                             ", std::tuple{" + inputs + "}, std::tuple{" +
-                             outputs + "})");
+      appendInitializer(initializers, member, "(\"", instanceName, "\", ",
+                        blockIds[key], ", ", *parent, ", std::tuple{", inputs,
+                        "}, std::tuple{", outputs, "})");
     } else if (block->kind == "reorder") {
-      initializers.push_back(member + "(\"" + instanceName + "\", " +
-                             std::to_string(blockIds[key]) + ", " + *parent +
-                             ", " + queueMembers[block->inputs[0]] + ", " +
-                             queueMembers[block->outputs[0]] + ", " +
-                             std::to_string(block->capacity) + ", " +
-                             std::to_string(block->start) + ")");
+      appendInitializer(initializers, member, "(\"", instanceName, "\", ",
+                        blockIds[key], ", ", *parent, ", ",
+                        queueMembers[block->inputs[0]], ", ",
+                        queueMembers[block->outputs[0]], ", ", block->capacity,
+                        ", ", block->start, ")");
     } else if (block->kind == "dependency") {
-      initializers.push_back(member + "(\"" + instanceName + "\", " +
-                             std::to_string(blockIds[key]) + ", " + *parent +
-                             ", " + queueMembers[block->inputs[0]] + ", " +
-                             queueMembers[block->outputs[0]] + ", " +
-                             std::to_string(block->capacity) + ", " +
-                             std::to_string(block->resources) + ", " +
-                             std::to_string(block->noDependency) + ")");
+      appendInitializer(initializers, member, "(\"", instanceName, "\", ",
+                        blockIds[key], ", ", *parent, ", ",
+                        queueMembers[block->inputs[0]], ", ",
+                        queueMembers[block->outputs[0]], ", ", block->capacity,
+                        ", ", block->resources, ", ", block->noDependency, ")");
     } else if (block->kind == "credit") {
-      initializers.push_back(member + "(\"" + instanceName + "\", " +
-                             std::to_string(blockIds[key]) + ", " + *parent +
-                             ", " + queueMembers[block->inputs[0]] + ", " +
-                             queueMembers[block->outputs[0]] + ", " +
-                             std::to_string(block->credits) + ")");
+      appendInitializer(
+          initializers, member, "(\"", instanceName, "\", ", blockIds[key],
+          ", ", *parent, ", ", queueMembers[block->inputs[0]], ", ",
+          queueMembers[block->outputs[0]], ", ", block->credits, ")");
     } else if (block->kind == "memory") {
-      initializers.push_back(member + "(\"" + instanceName + "\", " +
-                             std::to_string(blockIds[key]) + ", " + *parent +
-                             ", " + queueMembers[block->inputs[0]] + ", " +
-                             queueMembers[block->outputs[0]] + ", " +
-                             std::to_string(block->entries) + ", " +
-                             std::to_string(block->init) + ")");
+      appendInitializer(initializers, member, "(\"", instanceName, "\", ",
+                        blockIds[key], ", ", *parent, ", ",
+                        queueMembers[block->inputs[0]], ", ",
+                        queueMembers[block->outputs[0]], ", ", block->entries,
+                        ", ", block->init, ")");
     } else if (block->kind == "feedback") {
-      initializers.push_back(member + "(\"" + instanceName + "\", " +
-                             std::to_string(blockIds[key]) + ", " + *parent +
-                             ", " + queueMembers[block->inputs[0]] +
-                             ", block_" + std::to_string(index) + "_state_, " +
-                             queueMembers[block->outputs[0]] + ", " +
-                             std::to_string(block->maxIterations) + ")");
+      appendInitializer(initializers, member, "(\"", instanceName, "\", ",
+                        blockIds[key], ", ", *parent, ", ",
+                        queueMembers[block->inputs[0]], ", block_", index,
+                        "_state_, ", queueMembers[block->outputs[0]], ", ",
+                        block->maxIterations, ")");
     } else if (block->kind == "expect") {
-      initializers.push_back(member + "(\"" + instanceName + "\", " +
-                             std::to_string(blockIds[key]) + ", " + *parent +
-                             ", " + queueMembers[block->inputs[0]] + ", " +
-                             cppStringLiteral(block->message) + ")");
+      appendInitializer(initializers, member, "(\"", instanceName, "\", ",
+                        blockIds[key], ", ", *parent, ", ",
+                        queueMembers[block->inputs[0]], ", ",
+                        cppStringLiteral(block->message), ")");
     } else if (block->kind == "sink" || block->kind == "observe") {
-      initializers.push_back(member + "(\"" + instanceName + "\", " +
-                             std::to_string(blockIds[key]) + ", " + *parent +
-                             ", " + queueMembers[block->inputs[0]] + ")");
+      appendInitializer(initializers, member, "(\"", instanceName, "\", ",
+                        blockIds[key], ", ", *parent, ", ",
+                        queueMembers[block->inputs[0]], ")");
       ++sinkIndex;
     } else {
       return generatorError("unsupported native Queue block '" + block->kind +

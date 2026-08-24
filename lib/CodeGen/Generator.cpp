@@ -681,7 +681,7 @@ llvm::Expected<GeneratedFile> modelHeader(const ModelPlan &plan,
          "namespace acsim_generated {\n\ninline constexpr std::string_view "
          "kBuildFingerprint = \""
       << fingerprint.str()
-      << "\";\n\ninline constexpr std::array<gfsim::TimeDomainRuntime, "
+      << "\";\n\ninline const std::array<gfsim::TimeDomainRuntime, "
       << plan.timeDomains.size() << "> kTimeDomains = {{";
   for (auto [index, domain] : llvm::enumerate(plan.timeDomains)) {
     if (index != 0)

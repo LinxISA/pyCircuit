@@ -1,3 +1,4 @@
+#include "TestToolchain.h"
 #include "acir/CodeGen/Generator.h"
 
 #include "llvm/ADT/SmallString.h"
@@ -144,7 +145,11 @@ TEST(GeneratedModelCompileTest,
 
   std::vector<std::string> ownedArguments = {
       ACIR_TEST_CXX_COMPILER, "-std=c++20", "-I" + generatedInclude.str().str(),
-      "-I" ACIR_TEST_SOURCE_DIR "/include", "-I" ACIR_TEST_LLVM_INCLUDE_DIR};
+      "-I" ACIR_TEST_SOURCE_DIR "/include"};
+  for (const std::string &include : test::llvmIncludeDirectories())
+    ownedArguments.push_back("-I" + include);
+  if (llvm::StringRef(ACIR_TEST_RTTI_FLAG).size())
+    ownedArguments.push_back(ACIR_TEST_RTTI_FLAG);
   if (llvm::StringRef(ACIR_TEST_SANITIZER_FLAG).size())
     ownedArguments.push_back(ACIR_TEST_SANITIZER_FLAG);
   for (const GeneratedFile &file : bundle->files) {
@@ -157,8 +162,8 @@ TEST(GeneratedModelCompileTest,
   ownedArguments.push_back(ACIR_TEST_BINARY_DIR "/lib/gfsim/libgfsim.a");
   ownedArguments.push_back(ACIR_TEST_BINARY_DIR
                            "/lib/Bindings/libACIRBindings.a");
-  ownedArguments.push_back("-L" ACIR_TEST_LLVM_LIB_DIR);
-  ownedArguments.push_back("-lLLVM");
+  for (const std::string &flag : test::llvmLinkerFlags())
+    ownedArguments.push_back(flag);
   ownedArguments.push_back("-o");
   ownedArguments.push_back(executable.str().str());
   llvm::SmallVector<llvm::StringRef> arguments;

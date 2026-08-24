@@ -14,6 +14,9 @@ refinement observations.
 - [Queue/Var v0.2 Specification Manual](agentic-circuit-v0.2.md) defines the
   implementation-facing serial Python, ACIR, gfsim, PYC, and refinement
   contract.
+- [Queue/Var v0.2 团队 Specification 手册](agentic-circuit-v0.2-team-manual.zh-CN.md)
+  provides a Chinese teammate-facing overview, common patterns, executable
+  examples, backend differences, and troubleshooting guidance.
 - [Queue/Var v0.2 Proposal Manual](agentic-circuit-queue-var-v0.2-proposal.md)
   records design rationale and the planned complete building-block inventory.
 

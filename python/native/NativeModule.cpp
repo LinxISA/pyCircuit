@@ -340,7 +340,13 @@ bool parseBuildOptions(PyObject *value, CompilerRequest &request) {
       "input/model.ac.mlir", ArtifactKind::Acir,
       acir::codegen::computeFingerprint(build.frontend.canonicalAcirBytes)};
   build.toolchain = std::move(*toolchain);
-  build.linkerFlags = {"-L" ACIR_NATIVE_LLVM_LIB_DIR, "-lLLVM"};
+  llvm::StringRef llvmLinkerFlags(ACIR_NATIVE_LLVM_LINK_FLAGS);
+  while (!llvmLinkerFlags.empty()) {
+    auto [flag, remainder] = llvmLinkerFlags.split('|');
+    if (!flag.empty())
+      build.linkerFlags.push_back(flag.str());
+    llvmLinkerFlags = remainder;
+  }
   build.outputRoot = std::move(*outputRoot);
   return true;
 }

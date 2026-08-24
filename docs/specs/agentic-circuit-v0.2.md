@@ -4,7 +4,7 @@
 | --- | --- |
 | Specification | Serial Python, Queue/Var ACIR, typed gfsim, and PYC refinement |
 | Target contract epoch | `0.2` |
-| Status | Candidate implementation specification; epoch `0.2` is active on the upgrade branch |
+| Status | Implemented candidate specification; epoch `0.2` is active on `main` |
 | Public namespace | `ac` |
 | Audience | Frontend, compiler, simulator, and RTL contributors |
 | Design background | [Queue/Var v0.2 proposal](agentic-circuit-queue-var-v0.2-proposal.md) |
@@ -37,8 +37,8 @@ The editable diagram source is
 The words **MUST**, **MUST NOT**, **SHOULD**, **SHOULD NOT**, and **MAY** are
 normative requirements for the v0.2 candidate.
 
-The global hard break from epoch `0.1` to `0.2` is active on the upgrade
-branch. Producers emit exact epoch `0.2`; consumers reject epoch `0.1` before
+The global hard break from epoch `0.1` to `0.2` is active on `main`.
+Producers emit exact epoch `0.2`; consumers reject epoch `0.1` before
 interpreting the artifact. The toolchain provides no compatibility alias or
 best-effort conversion.
 
@@ -1353,17 +1353,13 @@ The following v0.2 slices are implemented and tested:
 - PYC C++ versus Verilog cycle equivalence and gfsim/PYC projected transaction
   comparison.
 
-The following work remains before v0.2 is complete:
-
-- finish lowercase component naming and removal of the remaining provider
-  surfaces after the epoch and `ac.std.*` hard break;
-- freeze the remaining common building-block inventory for general state;
-- preserve explicit signedness semantics beyond integer width;
-- lower the remaining general state and resource blocks through PYC;
-- complete the DavinciOO functional and performance refinement contract;
-- remove all transition-only provider and compatibility surfaces;
-- run the complete release, sanitizer, install, determinism, replay, PYC,
-  Verilog, and refinement audit.
+Issues [#9](https://github.com/PTO-ISA/agentic-circuit/issues/9),
+[#10](https://github.com/PTO-ISA/agentic-circuit/issues/10), and
+[#11](https://github.com/PTO-ISA/agentic-circuit/issues/11) are closed. The
+requirement matrix contains no partial or missing v0.2 rows. Future public
+building blocks, richer signedness semantics, and additional refinement
+projections are new contract work rather than incomplete requirements of these
+issues.
 
 The checked-in DavinciOO-like model now proves topology, typed payloads, finite
 Queues, backpressure, deterministic C++ generation, the 15-record softmax

@@ -426,7 +426,8 @@ llvm::Error runStage(CompilerStage stage, const CompilerRequest &request,
     return llvm::Error::success();
   }
   llvm_unreachable("closed CompilerStage is exhaustive");
-}
+} // NOLINT(clang-analyzer-cplusplus.NewDeleteLeaks): DriverState owns the
+  // parsed MLIR module across stage calls and destroys it after the pipeline.
 
 } // namespace
 
