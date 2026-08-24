@@ -20,38 +20,38 @@
 // CMP-PREDICATE: error: 'ac.var.cmp' op predicate must be eq, ne, slt, sle, sgt, or sge
 
 //--- constant.mlir
-builtin.module attributes {ac.contract_epoch = "0.1"} {
+builtin.module attributes {ac.contract_epoch = "0.2"} {
   %bad = ac.var.constant 1 : i16 as !ac.var<i32>
 }
 
 //--- sub-nonnumeric.mlir
-builtin.module attributes {ac.contract_epoch = "0.1"} {
+builtin.module attributes {ac.contract_epoch = "0.2"} {
   %value = "builtin.unrealized_conversion_cast"() : () -> !ac.var<!ac.optional<i32>>
   %bad = ac.var.sub %value, %value : !ac.var<!ac.optional<i32>>
 }
 
 //--- mul-nonnumeric.mlir
-builtin.module attributes {ac.contract_epoch = "0.1"} {
+builtin.module attributes {ac.contract_epoch = "0.2"} {
   %value = "builtin.unrealized_conversion_cast"() : () -> !ac.var<!ac.optional<i32>>
   %bad = ac.var.mul %value, %value : !ac.var<!ac.optional<i32>>
 }
 
 //--- cmp-predicate.mlir
-builtin.module attributes {ac.contract_epoch = "0.1"} {
+builtin.module attributes {ac.contract_epoch = "0.2"} {
   %left = ac.var.constant 1 : i64 as !ac.var<i64>
   %right = ac.var.constant 2 : i64 as !ac.var<i64>
   %bad = ac.var.cmp "random" %left, %right : !ac.var<i64> -> !ac.var<i1>
 }
 
 //--- binary.mlir
-builtin.module attributes {ac.contract_epoch = "0.1"} {
+builtin.module attributes {ac.contract_epoch = "0.2"} {
   %left = ac.var.constant 1 : i32 as !ac.var<i32>
   %right = ac.var.constant 1 : i16 as !ac.var<i16>
   %bad = ac.var.add %left, %right : !ac.var<i32>
 }
 
 //--- get-field.mlir
-builtin.module attributes {ac.contract_epoch = "0.1"} {
+builtin.module attributes {ac.contract_epoch = "0.2"} {
   "ac.type_scope"() <{sym_name = "types"}> ({
     "ac.transaction"() <{sym_name = "Item", fields = [{name = "value", type = i64}]}> : () -> ()
   }) : () -> ()
@@ -60,7 +60,7 @@ builtin.module attributes {ac.contract_epoch = "0.1"} {
 }
 
 //--- get-result.mlir
-builtin.module attributes {ac.contract_epoch = "0.1"} {
+builtin.module attributes {ac.contract_epoch = "0.2"} {
   "ac.type_scope"() <{sym_name = "types"}> ({
     "ac.transaction"() <{sym_name = "Item", fields = [{name = "value", type = i64}]}> : () -> ()
   }) : () -> ()
@@ -69,7 +69,7 @@ builtin.module attributes {ac.contract_epoch = "0.1"} {
 }
 
 //--- with-result.mlir
-builtin.module attributes {ac.contract_epoch = "0.1"} {
+builtin.module attributes {ac.contract_epoch = "0.2"} {
   "ac.type_scope"() <{sym_name = "types"}> ({
     "ac.transaction"() <{sym_name = "A", fields = [{name = "value", type = i64}]}> : () -> ()
     "ac.transaction"() <{sym_name = "B", fields = [{name = "value", type = i64}]}> : () -> ()
@@ -80,7 +80,7 @@ builtin.module attributes {ac.contract_epoch = "0.1"} {
 }
 
 //--- with-value.mlir
-builtin.module attributes {ac.contract_epoch = "0.1"} {
+builtin.module attributes {ac.contract_epoch = "0.2"} {
   "ac.type_scope"() <{sym_name = "types"}> ({
     "ac.transaction"() <{sym_name = "Item", fields = [{name = "value", type = i64}]}> : () -> ()
   }) : () -> ()

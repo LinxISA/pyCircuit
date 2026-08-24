@@ -93,7 +93,7 @@ PlanSetBuilder::expandProcess(ac::ProcessOp process,
   auto reserveNodes = [&](Operation *origin, uint64_t count) {
     if (count > limits.maxNodes - expansionNodes) {
       origin->emitOpError(
-          "pure process expansion exceeds ACIR v0.1 node/edge limits");
+          "pure process expansion exceeds ACIR v0.2 node/edge limits");
       budgetFailed = true;
       return false;
     }
@@ -103,7 +103,7 @@ PlanSetBuilder::expandProcess(ac::ProcessOp process,
   auto reserveEdges = [&](Operation *origin, uint64_t count) {
     if (count > limits.maxEdges - expansionEdges) {
       origin->emitOpError(
-          "pure process expansion exceeds ACIR v0.1 node/edge limits");
+          "pure process expansion exceeds ACIR v0.2 node/edge limits");
       budgetFailed = true;
       return false;
     }
@@ -340,7 +340,7 @@ PlanSetBuilder::expandProcess(ac::ProcessOp process,
       ExpansionContext calleeContext = task.context;
       calleeContext.callSites.push_back(makeCallSite(operation, task.context));
       if (calleeContext.callSites.size() > kMaxPureCallDepth) {
-        call.emitOpError() << "pure func.call expansion exceeds ACIR v0.1 "
+        call.emitOpError() << "pure func.call expansion exceeds ACIR v0.2 "
                               "depth limit "
                            << kMaxPureCallDepth;
         return failure();

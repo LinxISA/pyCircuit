@@ -25,7 +25,7 @@ ModelPlan makeMinimalRunnablePlan() {
   ModelPlan plan;
   plan.modelSymbol = "minimal";
   plan.rootSymbol = "Top";
-  plan.contractEpoch = "0.1";
+  plan.contractEpoch = "0.2";
   plan.frozenAcirFingerprint = kFingerprint.str();
   plan.bindingLockFingerprint = kFingerprint.str();
   plan.providerFingerprint = kFingerprint.str();

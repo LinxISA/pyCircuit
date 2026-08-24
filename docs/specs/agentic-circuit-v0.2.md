@@ -4,7 +4,7 @@
 | --- | --- |
 | Specification | Serial Python, Queue/Var ACIR, typed gfsim, and PYC refinement |
 | Target contract epoch | `0.2` |
-| Status | Candidate implementation specification; global epoch cutover is in progress |
+| Status | Candidate implementation specification; epoch `0.2` is active on the upgrade branch |
 | Public namespace | `ac` |
 | Audience | Frontend, compiler, simulator, and RTL contributors |
 | Design background | [Queue/Var v0.2 proposal](agentic-circuit-queue-var-v0.2-proposal.md) |
@@ -37,11 +37,10 @@ The editable diagram source is
 The words **MUST**, **MUST NOT**, **SHOULD**, **SHOULD NOT**, and **MAY** are
 normative requirements for the v0.2 candidate.
 
-The global hard break from epoch `0.1` to `0.2` is still being integrated. A
-transition-branch artifact may temporarily retain `ac.contract_epoch = "0.1"`
-while carrying v0.2 Queue/Var operations. That state is not a releasable public
-contract. The completed v0.2 release MUST emit exact epoch `0.2`, MUST reject
-epoch `0.1`, and MUST provide no compatibility alias.
+The global hard break from epoch `0.1` to `0.2` is active on the upgrade
+branch. Producers emit exact epoch `0.2`; consumers reject epoch `0.1` before
+interpreting the artifact. The toolchain provides no compatibility alias or
+best-effort conversion.
 
 When this manual and implementation disagree before the cutover completes, use
 the following authority order:
@@ -925,7 +924,8 @@ The following v0.2 slices are implemented and tested:
 
 The following work remains before v0.2 is complete:
 
-- finish the global `0.1` to `0.2` epoch and namespace hard break;
+- finish lowercase component naming and removal of the remaining provider
+  surfaces after the epoch and `ac.std.*` hard break;
 - freeze the remaining common building-block inventory for state, memory,
   scheduling, reservation, credits, and barriers;
 - preserve explicit signedness semantics beyond integer width;

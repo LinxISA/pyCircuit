@@ -97,7 +97,7 @@ public:
     // Deterministic local arbitration: FIFO order.
     // Push proposals are appended in order.
     // Pop proposals are served from the front.
-    // In v0.1, arbitration is simple FIFO.
+    // In v0.2, arbitration is simple FIFO.
     for (size_t index = 0; index < pushProposals_.size(); ++index)
       emitObservation({.category = "transaction",
                        .name = "accepted",

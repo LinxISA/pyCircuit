@@ -10,7 +10,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[2]
-CONTRACT_EPOCH = "0.1"
+CONTRACT_EPOCH = "0.2"
 LLVM_LOCK = {
     "release": "22.1.8",
     "upstream_commit": "ca7933e47d3a3451d81e72ac174dcb5aa28b59d1",
@@ -95,7 +95,7 @@ def assert_exact_ci_cache_commands(test_case, workflow):
 
 class RepositoryContractsTest(unittest.TestCase):
     def test_diagnostic_explanation_catalog_is_closed_and_versioned(self):
-        path = ROOT / "resources/diagnostics-v0.1.json"
+        path = ROOT / "resources/diagnostics-v0.2.json"
         self.assertTrue(path.is_file())
         document = json.loads(path.read_text())
         self.assertEqual(
@@ -408,9 +408,9 @@ class RepositoryContractsTest(unittest.TestCase):
             "operation_path": "@Top::@workload/r0/b0/o0",
         }
         descriptor = {
-            "cpp": "acir::generated::impl_wake_next_delta_63cacba5c3eb82976464804b4aeaa17d43b445733efaddfad7c7bec1ab650269",
+            "cpp": "acir::generated::impl_wake_next_delta_b3f0bab001a46eed926ddd600009b72841434b84d2c733fd8a612bc30e396a16",
             "effect": "stateful",
-            "fingerprint": "sha256:63cacba5c3eb82976464804b4aeaa17d43b445733efaddfad7c7bec1ab650269",
+            "fingerprint": "sha256:b3f0bab001a46eed926ddd600009b72841434b84d2c733fd8a612bc30e396a16",
             "inputs": [],
             "kind": "implementation",
             "ordinal": 0,
@@ -418,11 +418,11 @@ class RepositoryContractsTest(unittest.TestCase):
             "results": ["@acir_wake_next_delta"],
             "role": "wake_next_delta",
             "source_paths": [],
-            "symbol": "@acir_impl_wake_next_delta_63cacba5c3eb82976464804b4aeaa17d43b445733efaddfad7c7bec1ab650269",
+            "symbol": "@acir_impl_wake_next_delta_b3f0bab001a46eed926ddd600009b72841434b84d2c733fd8a612bc30e396a16",
         }
         fixture = {
             "callees": [descriptor],
-            "contract_epoch": "0.1",
+            "contract_epoch": "0.2",
             "processes": [{
                 "blocks": [{"actions": [], "cost": 2, "edge": {"kind": "suspend", "transition": 0}, "frames": [], "loads": [], "ordinal": 0, "path": "@Top::@workload/plan/pc/entry/b00000000", "pc": 0}],
                 "captures": [], "definition_key": "@Top::@workload", "entry_pc": 0,
@@ -666,7 +666,7 @@ class RepositoryContractsTest(unittest.TestCase):
         unavailable["availability"] = "unavailable"
         mutations.append(unavailable)
         wrong_epoch = dict(record)
-        wrong_epoch["contract_epoch"] = "0.2"
+        wrong_epoch["contract_epoch"] = "0.1"
         mutations.append(wrong_epoch)
         wrong_schema = dict(record)
         wrong_schema["binding_schema"] = "acsim-binding-0.2"

@@ -202,6 +202,7 @@ def main() -> int:
                 *_artifacts(cpp, "cpp"),
                 *_artifacts(verilog, "verilog"),
             ],
+            "contract_epoch": "0.2",
             "frozen_acir_sha256": _sha256(arguments.frozen_acir.read_bytes()),
             "gates": ["pycc-cpp", "pycc-verilog", "cxx-syntax", "verilator-lint"],
             "llvm_version": metadata["llvm_version"],

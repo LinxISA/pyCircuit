@@ -1,7 +1,7 @@
 {
   "schema_kind": "agentic-circuit-component",
   "schema_version": "0.1",
-  "contract_epoch": "0.1",
+  "contract_epoch": "0.2",
   "canonical_name": "ac.Queue",
   "family": "transport",
   "provider_namespace": "ac",
@@ -160,5 +160,5 @@
     ],
     "histograms": []
   },
-  "schema_fingerprint": "sha256:b44b6d7d4fb5a8bc566bac04dc7382f31bdeffd9c4f8d1d76b06448c2c2f35cd"
+  "schema_fingerprint": "sha256:9955fedd08d5c72852fbfd9e514eaa8b34598ba6eb6d4baab797d1819a711caa"
 }

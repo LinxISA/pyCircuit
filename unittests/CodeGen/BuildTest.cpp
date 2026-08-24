@@ -58,7 +58,7 @@ llvm::Expected<Fingerprint> jsonFingerprint(llvm::json::Value value) {
 
 FrontendProvenance makeFrontendProvenance() {
   const std::string acpy = "{\"schema\":\"agentic-circuit-acpy\"}\n";
-  const std::string acir = "module attributes {ac.contract_epoch = \"0.1\"}\n";
+  const std::string acir = "module attributes {ac.contract_epoch = \"0.2\"}\n";
   FrontendProvenance frontend;
   frontend.sourceFiles = {
       {"architecture.py", computeFingerprint("architecture source\n")}};
@@ -97,8 +97,8 @@ public:
 
     const std::string zero = kFingerprint.str();
     std::string source =
-        "builtin.module attributes {ac.contract_epoch = \"0.1\"} {\n"
-        "  acsim.model @minimal epoch \"0.1\" root @Top construction [] "
+        "builtin.module attributes {ac.contract_epoch = \"0.2\"} {\n"
+        "  acsim.model @minimal epoch \"0.2\" root @Top construction [] "
         "destruction [] fingerprints {frozen_acir = \"" +
         computeFingerprint(frozenBytes) + "\", binding_lock = \"" +
         computeFingerprint(lockBytes) + "\", provider = \"" + *emptySet +
@@ -229,7 +229,7 @@ TEST(BuildTest, RejectsToolchainOrPrebuiltProvenanceMismatch) {
                       .standardLibrary = request->toolchain.standardLibrary,
                       .abiMode = request->toolchain.abiMode,
                       .objectFormat = request->toolchain.objectFormat,
-                      .contractEpoch = "0.1",
+                      .contractEpoch = "0.2",
                       .contractFlags = request->toolchain.contractFlags,
                       .toolchainFingerprint = request->toolchain.fingerprint,
                       .sourceFingerprint = kFingerprint.str()}});

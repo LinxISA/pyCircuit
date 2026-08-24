@@ -216,8 +216,9 @@ llvm::Error validateManifest(const BuildManifest &manifest,
   if (manifest.schema != "agentic-circuit-build-manifest")
     return manifestError(
         "manifest schema must be agentic-circuit-build-manifest");
-  if (manifest.version != "0.1" || manifest.contractEpoch != "0.1")
-    return manifestError("manifest version and contract epoch must be 0.1");
+  if (manifest.version != "0.1" || manifest.contractEpoch != "0.2")
+    return manifestError(
+        "manifest version must be 0.1 and contract epoch must be 0.2");
   if (manifest.project.name.empty() || manifest.project.identity.empty() ||
       manifest.system.name.empty() || manifest.system.identity.empty())
     return manifestError("project and system identities must be non-empty");

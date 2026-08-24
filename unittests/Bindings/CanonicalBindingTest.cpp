@@ -27,7 +27,7 @@ namespace acir::bindings {
 namespace {
 
 constexpr llvm::StringLiteral kRecordFingerprint =
-    "sha256:d202c3b13b10c1a6384b538a56cdce623db7f7996d1c36c050db3de0d4d92ac1";
+    "sha256:dd57a400abb673bfe451fa1418f1693f6ebc6690a7131a16afd8d9eb4e4128cd";
 
 std::string takeError(llvm::Error error) {
   return llvm::toString(std::move(error));
@@ -59,7 +59,7 @@ std::string recordJson(llvm::StringRef fingerprint = kRecordFingerprint,
     "component_schema": "ac.Leaf",
     "component_schema_fingerprint": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
     "construction": {"arguments": [8], "kind": "constructor"},
-    "contract_epoch": "0.1",
+    "contract_epoch": "0.2",
     "cpp": {
       "concept": "gfsim::PureModel",
       "entry_points": {"pure": "gfsim::leaf", "reset": "", "validate": "", "work": "", "xfer": ""},
@@ -127,7 +127,7 @@ std::string requestJson(
     "component_schema": ")json") +
           componentSchema + R"json(",
     "component_schema_fingerprint": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
-    "contract_epoch": "0.1",
+    "contract_epoch": "0.2",
     "effect": "pure",
     "function_type": ")json" +
           functionType + R"json(",
@@ -585,7 +585,7 @@ TEST(BindingRecordTest, ParsesTheClosedTypedMetadataRecord) {
   ASSERT_EQ(1U, candidates.size());
   const BindingRecord &record = candidates.front().record();
   EXPECT_EQ("acsim-binding-0.1", record.bindingSchema());
-  EXPECT_EQ("0.1", record.contractEpoch());
+  EXPECT_EQ("0.2", record.contractEpoch());
   EXPECT_EQ("Leaf", record.binding());
   EXPECT_EQ("pure", record.effect());
   EXPECT_EQ("gfsim::Leaf", record.cpp().symbol);
@@ -839,7 +839,7 @@ TEST(BindingRegistryTest,
   };
   const Malformed malformed[] = {
       {"ACLOWER-EPOCH-MISMATCH",
-       [](BindingRequest &request) { request.contractEpoch = "0.2"; }},
+       [](BindingRequest &request) { request.contractEpoch = "0.1"; }},
       {"ACLOWER-SCHEMA-MISMATCH",
        [](BindingRequest &request) {
          request.bindingSchema = "acsim-binding-0.2";
@@ -952,7 +952,7 @@ TEST(BindingLockTest, EmitsStableCanonicalBytesAndProjectHashVector) {
                                 "arm64-apple-darwin");
   ASSERT_TRUE(static_cast<bool>(result)) << takeError(result.takeError());
   EXPECT_EQ(
-      "sha256:6e29500fb6db7cabc9f8b0a115b7bd2b5249fd4bb3f25949f5e14960ee8884be",
+      "sha256:fa531450b1fd669cb0e3f0e082c811002abdb2d37b2d781120a6b8047dd7d56b",
       result->lockFingerprint());
   EXPECT_EQ('[', result->canonicalLock().front());
   EXPECT_EQ(']', result->canonicalLock().back());
@@ -1029,7 +1029,7 @@ TEST(ResolveBindingsApiTest, ReturnsTypedResultWithoutMutatingFrozenTopology) {
   context.loadAllAvailableDialects();
   acir::ac::getStructuralProviderRegistry(&context).registerExternal("Leaf");
   constexpr llvm::StringLiteral source = R"mlir(
-    builtin.module attributes {ac.contract_epoch = "0.1"} {
+    builtin.module attributes {ac.contract_epoch = "0.2"} {
       ac.system @soc root @Top as "root" tick 0 "cycle"
           workload @Top::@workload seed {kind = "fixed", value = 0 : i64}
           instrumentation [] results {id = "default", format = "json"}

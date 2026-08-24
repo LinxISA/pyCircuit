@@ -1,7 +1,7 @@
 {
   "schema_kind": "agentic-circuit-component",
   "schema_version": "0.1",
-  "contract_epoch": "0.1",
+  "contract_epoch": "0.2",
   "canonical_name": "ac.Scheduler",
   "family": "control",
   "provider_namespace": "ac",
@@ -148,5 +148,5 @@
     ],
     "histograms": []
   },
-  "schema_fingerprint": "sha256:5d7c333eb0efddce79c2dc643d7eadb4445c001bd3c552caa4402dde6e500466"
+  "schema_fingerprint": "sha256:800da587c84140429e9ee02b7dc171c1e4d3a47bb03e6e3007d4d9910ae0692d"
 }

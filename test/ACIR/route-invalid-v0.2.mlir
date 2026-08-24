@@ -8,7 +8,7 @@
 // PAYLOAD: error: 'ac.route' op output queue 1 must match input queue type
 
 //--- outputs.mlir
-builtin.module attributes {ac.contract_epoch = "0.1"} {
+builtin.module attributes {ac.contract_epoch = "0.2"} {
   %input = ac.source depth 4 latency 1 : !ac.queue<i64>
   %only = ac.route %input depths [1] latencies [1] {
   ^selector(%item: !ac.var<i64>):
@@ -17,7 +17,7 @@ builtin.module attributes {ac.contract_epoch = "0.1"} {
 }
 
 //--- selector.mlir
-builtin.module attributes {ac.contract_epoch = "0.1"} {
+builtin.module attributes {ac.contract_epoch = "0.2"} {
   %input = ac.source depth 4 latency 1 : !ac.queue<i64>
   %left, %right = ac.route %input depths [1, 1] latencies [1, 1] {
   ^selector(%item: !ac.var<i64>):
@@ -27,7 +27,7 @@ builtin.module attributes {ac.contract_epoch = "0.1"} {
 }
 
 //--- payload.mlir
-builtin.module attributes {ac.contract_epoch = "0.1"} {
+builtin.module attributes {ac.contract_epoch = "0.2"} {
   %input = ac.source depth 4 latency 1 : !ac.queue<i64>
   %left, %right = ac.route %input depths [1, 1] latencies [1, 1] {
   ^selector(%item: !ac.var<i64>):

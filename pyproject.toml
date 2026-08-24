@@ -22,5 +22,5 @@ Repository = "https://github.com/PTO-ISA/agentic-circuit"
 Issues = "https://github.com/PTO-ISA/agentic-circuit/issues"
 
 [tool.agentic-circuit]
-contract-epoch = "0.1"
+contract-epoch = "0.2"
 llvm-release = "22.1.8"

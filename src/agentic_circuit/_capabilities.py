@@ -32,7 +32,7 @@ def schema_root() -> Path:
 
 
 def diagnostics_catalog_path() -> Path:
-    return resource_directory("resources") / "diagnostics-v0.1.json"
+    return resource_directory("resources") / "diagnostics-v0.2.json"
 
 
 def load_json(path: Path) -> dict[str, JsonValue]:
@@ -61,7 +61,7 @@ class CapabilityDocument:
         return {
             "schema": "agentic-circuit-capabilities",
             "version": "0.1",
-            "contract_epoch": "0.1",
+            "contract_epoch": "0.2",
             "contract_identities": dict(self.contract_identities),
             "items": [dict(item) for item in self.items],
             "compiler_build_id": self.compiler_build_id,

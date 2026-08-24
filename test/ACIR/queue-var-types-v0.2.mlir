@@ -6,7 +6,7 @@
 // This v0.2 phase-branch fixture uses the active file epoch while the
 // replacement contract is built in verified slices. The final hard-break
 // checkpoint updates every artifact and fixture to epoch 0.2 together.
-builtin.module attributes {ac.contract_epoch = "0.1"} {
+builtin.module attributes {ac.contract_epoch = "0.2"} {
   "builtin.unrealized_conversion_cast"() : () -> !ac.var<i32>
   "builtin.unrealized_conversion_cast"() : () -> !ac.var<!ac.struct<@types::@Token>>
   "builtin.unrealized_conversion_cast"() : () -> !ac.queue<i32>

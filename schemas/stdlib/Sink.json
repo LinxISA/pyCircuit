@@ -1,7 +1,7 @@
 {
   "schema_kind": "agentic-circuit-component",
   "schema_version": "0.1",
-  "contract_epoch": "0.1",
+  "contract_epoch": "0.2",
   "canonical_name": "ac.Sink",
   "family": "workload",
   "provider_namespace": "ac",
@@ -90,5 +90,5 @@
     "gauges": [],
     "histograms": []
   },
-  "schema_fingerprint": "sha256:1153acab6073e5558ccb7e6f52f717dcddf329f7c0e5dd6dd90bf50ab023279d"
+  "schema_fingerprint": "sha256:c61afbff6e1afc953e467a3d7a59b900fa5fcd87be0b740125244b47c8b0d21e"
 }

@@ -536,7 +536,7 @@ detail::validatePureProcessCallGraph(ModuleOp model,
     }
   }
   if (symbols.size() > callLimits.maxFunctions) {
-    model.emitError() << "pure func.call analysis exceeds ACIR v0.1 function "
+    model.emitError() << "pure func.call analysis exceeds ACIR v0.2 function "
                          "limit "
                       << callLimits.maxFunctions;
     return failure();
@@ -598,7 +598,7 @@ detail::validatePureProcessCallGraph(ModuleOp model,
         }
         if (stack.size() > callLimits.maxDepth) {
           frame.origin->emitOpError()
-              << "pure func.call analysis exceeds ACIR v0.1 depth limit "
+              << "pure func.call analysis exceeds ACIR v0.2 depth limit "
               << callLimits.maxDepth;
           return failure();
         }
@@ -623,7 +623,7 @@ detail::validatePureProcessCallGraph(ModuleOp model,
       func::CallOp call = calls[frame.nextCall++];
       if (edges == callLimits.maxEdges) {
         call.emitOpError()
-            << "pure func.call analysis exceeds ACIR v0.1 edge limit "
+            << "pure func.call analysis exceeds ACIR v0.2 edge limit "
             << callLimits.maxEdges;
         return failure();
       }
@@ -788,7 +788,7 @@ LogicalResult ModelAnalysis::verifyZeroDelayDependencies() {
     }
     if (nodes.size() > kMaxModelAnalysisNodes)
       return module.emitOpError()
-             << "zero-delay analysis exceeds ACIR v0.1 node limit "
+             << "zero-delay analysis exceeds ACIR v0.2 node limit "
              << kMaxModelAnalysisNodes;
     llvm::sort(nodes, [](const Node &left, const Node &right) {
       return left.label < right.label;
@@ -807,7 +807,7 @@ LogicalResult ModelAnalysis::verifyZeroDelayDependencies() {
         edges[found->second].push_back(ordinal);
         if (++edgeCount > kMaxModelAnalysisEdges)
           return module.emitOpError()
-                 << "zero-delay analysis exceeds ACIR v0.1 edge limit "
+                 << "zero-delay analysis exceeds ACIR v0.2 edge limit "
                  << kMaxModelAnalysisEdges;
       }
     }
@@ -1000,10 +1000,10 @@ LogicalResult ModelAnalysis::verifyFrozenIntegrity() {
   auto epoch = model->getAttrOfType<StringAttr>("ac.freeze_epoch");
   auto digest = model->getAttrOfType<StringAttr>("ac.topology_digest");
   auto owners = model->getAttrOfType<ArrayAttr>("ac.frozen_owners");
-  if (!marker || !marker.getValue() || !epoch || epoch.getValue() != "0.1" ||
+  if (!marker || !marker.getValue() || !epoch || epoch.getValue() != "0.2" ||
       !digest || digest.getValue().size() != 64 || !owners)
     return model.emitError(
-        "malformed topology freeze marker; expected epoch 0.1, owner manifest, "
+        "malformed topology freeze marker; expected epoch 0.2, owner manifest, "
         "and SHA-256 digest");
   LogicalResult skeletonResult = success();
   model.walk([&](ac::ProcessOp process) {
@@ -1045,10 +1045,10 @@ LogicalResult ModelAnalysis::verify() {
     return failure();
 
   auto epoch = model->getAttrOfType<StringAttr>("ac.contract_epoch");
-  if (!epoch || epoch.getValue() != "0.1")
+  if (!epoch || epoch.getValue() != "0.2")
     return model.emitError(
         "expected top-level 'ac.contract_epoch' string attribute equal to "
-        "\"0.1\"");
+        "\"0.2\"");
 
   if (failed(verifyPureProcessCalls()))
     return failure();

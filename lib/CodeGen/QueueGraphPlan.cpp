@@ -193,6 +193,9 @@ public:
   explicit Extractor(mlir::ModuleOp module) : module(module) {}
 
   llvm::Expected<QueueGraphPlan> run() {
+    auto epoch = module->getAttrOfType<mlir::StringAttr>("ac.contract_epoch");
+    if (!epoch || epoch.getValue() != "0.2")
+      return planError("module requires ac.contract_epoch exactly '0.2'");
     auto system = module->getAttrOfType<mlir::StringAttr>("ac.system");
     if (!system || system.getValue().empty())
       return planError("module requires non-empty ac.system");
@@ -580,6 +583,7 @@ llvm::Expected<std::string> QueueGraphPlan::canonicalJson() const {
                            {"yields", std::move(yields)}});
   }
   llvm::json::Object root{{"blocks", std::move(blockValues)},
+                          {"contract_epoch", "0.2"},
                           {"payloads", std::move(payloadValues)},
                           {"queues", std::move(queueValues)},
                           {"schema", "agentic-circuit-queue-graph-plan"},

@@ -29,7 +29,7 @@ struct PrebuiltProvenance {
   std::string standardLibrary;
   std::string abiMode;
   std::string objectFormat;
-  std::string contractEpoch = "0.1";
+  std::string contractEpoch = "0.2";
   std::vector<std::string> contractFlags;
   Fingerprint toolchainFingerprint;
   Fingerprint sourceFingerprint;

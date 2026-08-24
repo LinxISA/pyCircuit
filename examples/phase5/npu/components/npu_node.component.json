@@ -1,7 +1,7 @@
 {
   "schema_kind": "agentic-circuit-component",
   "schema_version": "0.1",
-  "contract_epoch": "0.1",
+  "contract_epoch": "0.2",
   "canonical_name": "phase5.NpuNode",
   "family": "compute",
   "provider_namespace": "phase5.npu.provider",
@@ -39,5 +39,5 @@
     "gauges": [],
     "histograms": []
   },
-  "schema_fingerprint": "sha256:f21ac0875386764303060d218875f0b91582848836e70d478591ea146ef1963e"
+  "schema_fingerprint": "sha256:7dd7e416bc98ca4b871dc2d016b6fcce99c57a7c50c16d8c600b95b90b5133bb"
 }

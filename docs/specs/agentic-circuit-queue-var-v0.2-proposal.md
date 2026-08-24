@@ -5,7 +5,7 @@
 | Specification | Queue/Var authoring, ACIR, gfsim, and PYC refinement proposal |
 | Target version | `0.2` |
 | Status | Design proposal; implementation is in progress and specified separately |
-| Current active contract | `0.1` |
+| Current upgrade-branch contract | `0.2` |
 | Primary namespace | `ac` |
 | Python frontend tracking | [Issue #9](https://github.com/PTO-ISA/agentic-circuit/issues/9) |
 | ACIR and gfsim tracking | [Issue #10](https://github.com/PTO-ISA/agentic-circuit/issues/10) |
@@ -18,11 +18,10 @@ The executable candidate contract now lives in the
 remains the design rationale and future inventory. Where the two differ, the
 implementation specification and its machine-readable sources take precedence.
 
-This document records the proposed Agentic Circuit `0.2` programming and
-lowering model for design review and implementation planning. It does not
-change the active `0.1` contract. The current normative specifications,
-schemas, compiler, runtime, manifests, and installed package continue to use
-exact contract epoch `0.1`.
+This document records the Agentic Circuit `0.2` programming and lowering model
+for design review and implementation planning. The upgrade branch now uses
+exact contract epoch `0.2` and rejects epoch `0.1`; the implementation manual
+and machine-readable contracts define the executable candidate surface.
 
 The `0.2` proposal becomes normative only after the project lands matching
 machine-readable schemas, MLIR ODS definitions, verifiers, runtime behavior,

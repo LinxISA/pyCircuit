@@ -27,7 +27,7 @@ types:
 """
 
 ACSIM_MANIFEST = """schema: acir-ir-inventory
-contract_epoch: "0.1"
+contract_epoch: "0.2"
 dialect: acsim
 operations:
   - acsim.model
@@ -167,7 +167,7 @@ class IRCoverageTest(unittest.TestCase):
         temporary_directory, root = initialize_coverage_fixture(
             overrides={
                 "contracts/acsim-v0.1.yaml": ACSIM_MANIFEST.replace(
-                    '"0.1"', '"0.0"'
+                    '"0.2"', '"0.0"'
                 )
             }
         )

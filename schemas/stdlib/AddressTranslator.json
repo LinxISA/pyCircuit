@@ -1,7 +1,7 @@
 {
   "schema_kind": "agentic-circuit-component",
   "schema_version": "0.1",
-  "contract_epoch": "0.1",
+  "contract_epoch": "0.2",
   "canonical_name": "ac.AddressTranslator",
   "family": "adaptation",
   "provider_namespace": "ac",
@@ -119,5 +119,5 @@
     "gauges": [],
     "histograms": []
   },
-  "schema_fingerprint": "sha256:5a33e2f69b5aaf4c8b911430a7289933e7d12b01ffb636a7c0ff28483ff0d543"
+  "schema_fingerprint": "sha256:c0176e22a330c973c42f1b1d6c981477ea3c5fbf4f42100b38a573b08e3f7834"
 }

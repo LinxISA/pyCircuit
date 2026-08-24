@@ -82,7 +82,7 @@ __all__ = (
 
 def _not_implemented(primitive: str) -> Never:
     raise NotImplementedError(
-        f"{primitive} is part of the v0.1 public surface but is not implemented yet"
+        f"{primitive} is part of the v0.2 public surface but is not implemented yet"
     )
 
 

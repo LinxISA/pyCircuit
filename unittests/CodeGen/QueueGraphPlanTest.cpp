@@ -13,7 +13,7 @@ namespace acir::codegen {
 namespace {
 
 constexpr llvm::StringLiteral kQueueGraph = R"mlir(
-module attributes {ac.contract_epoch = "0.1", ac.system = "pipeline"} {
+module attributes {ac.contract_epoch = "0.2", ac.system = "pipeline"} {
   %input = ac.source depth 4 latency 1 {ac.name = "input"} : !ac.queue<i64>
   %left, %right = ac.route %input depths [2, 2] latencies [1, 1] {
   ^selector(%item: !ac.var<i64>):
@@ -25,7 +25,7 @@ module attributes {ac.contract_epoch = "0.1", ac.system = "pipeline"} {
 )mlir";
 
 constexpr llvm::StringLiteral kStructuredTransform = R"mlir(
-module attributes {ac.contract_epoch = "0.1", ac.system = "structured"} {
+module attributes {ac.contract_epoch = "0.2", ac.system = "structured"} {
   ac.type_scope @types {
     ac.struct @Item fields [{name = "value", type = i64}]
   } {dlti.dl_spec = #dlti.dl_spec<!ac.struct<@types::@Item> = {abi_alignment = 8 : i64, endianness = "little", preferred_alignment = 8 : i64, size = 8 : i64}>}
@@ -43,7 +43,7 @@ module attributes {ac.contract_epoch = "0.1", ac.system = "structured"} {
 )mlir";
 
 constexpr llvm::StringLiteral kMultipleConsumers = R"mlir(
-module attributes {ac.contract_epoch = "0.1", ac.system = "bad"} {
+module attributes {ac.contract_epoch = "0.2", ac.system = "bad"} {
   %input = ac.source depth 2 latency 1 {ac.name = "input"} : !ac.queue<i64>
   ac.sink %input {ac.name = "left"} : !ac.queue<i64>
   ac.sink %input {ac.name = "right"} : !ac.queue<i64>
@@ -51,7 +51,7 @@ module attributes {ac.contract_epoch = "0.1", ac.system = "bad"} {
 )mlir";
 
 constexpr llvm::StringLiteral kObservationUse = R"mlir(
-module attributes {ac.contract_epoch = "0.1", ac.system = "observed"} {
+module attributes {ac.contract_epoch = "0.2", ac.system = "observed"} {
   %input = ac.source depth 2 latency 1 {ac.name = "input"} : !ac.queue<i64>
   ac.observe %input name "head" : !ac.queue<i64>
   ac.sink %input {ac.name = "sink_0"} : !ac.queue<i64>
@@ -91,10 +91,28 @@ TEST(QueueGraphPlanTest, CanonicalJsonIsByteIdenticalAndClosed) {
   auto second = plan->canonicalJson();
   ASSERT_TRUE(bool(second)) << llvm::toString(second.takeError());
   EXPECT_EQ(*first, *second);
+  EXPECT_NE(first->find("\"contract_epoch\":\"0.2\""), std::string::npos);
   EXPECT_NE(first->find("\"schema\":\"agentic-circuit-queue-graph-plan\""),
             std::string::npos);
   EXPECT_NE(first->find("\"version\":\"0.2\""), std::string::npos);
   EXPECT_NE(first->find("\"name\":\"merged\""), std::string::npos);
+}
+
+TEST(QueueGraphPlanTest, RejectsLegacyContractEpochBeforePlanning) {
+  mlir::MLIRContext context;
+  context.loadDialect<ac::ACIRDialect, mlir::DLTIDialect>();
+  std::string legacy = kQueueGraph.str();
+  size_t epoch = legacy.find("ac.contract_epoch = \"0.2\"");
+  ASSERT_NE(epoch, std::string::npos);
+  legacy.replace(epoch, std::string("ac.contract_epoch = \"0.2\"").size(),
+                 "ac.contract_epoch = \"0.1\"");
+  auto module = mlir::parseSourceString<mlir::ModuleOp>(legacy, &context);
+  ASSERT_TRUE(module);
+  auto plan = buildQueueGraphPlan(*module);
+  ASSERT_FALSE(bool(plan));
+  EXPECT_NE(llvm::toString(plan.takeError())
+                .find("module requires ac.contract_epoch exactly '0.2'"),
+            std::string::npos);
 }
 
 TEST(QueueGraphPlanTest, ExtractsPayloadAndImmutableVarDag) {

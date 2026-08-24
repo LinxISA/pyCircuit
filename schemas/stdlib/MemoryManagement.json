@@ -1,7 +1,7 @@
 {
   "schema_kind": "agentic-circuit-component",
   "schema_version": "0.1",
-  "contract_epoch": "0.1",
+  "contract_epoch": "0.2",
   "canonical_name": "ac.MemoryManagement",
   "family": "adaptation",
   "provider_namespace": "ac",
@@ -119,5 +119,5 @@
     "gauges": [],
     "histograms": []
   },
-  "schema_fingerprint": "sha256:eb2184e6b6278cd6378505e91e7ae6b74ee16b26678277387b297b0bac539bec"
+  "schema_fingerprint": "sha256:7d347021b6babb2fddf4866c57e17405d7342f121940b12a18ab338f10b70c64"
 }

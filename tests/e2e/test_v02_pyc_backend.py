@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 import shutil
@@ -81,6 +82,8 @@ class V02PycBackendTest(unittest.TestCase):
                 check=False,
             )
             self.assertEqual(0, completed.returncode, completed.stderr)
+            manifest = json.loads((output / "manifest.json").read_text())
+            self.assertEqual("0.2", manifest["contract_epoch"])
             pyc = (output / "model.pyc").read_text(encoding="utf-8")
             self.assertEqual(2, pyc.count("pyc.reg"))
             self.assertIn("%out0_ready", pyc)

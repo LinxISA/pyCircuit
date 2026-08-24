@@ -15,7 +15,7 @@ class Operation;
 namespace acir::ac {
 
 inline constexpr uint64_t kMaxTickScale = uint64_t{1} << 32;
-/// ACIR v0.1 capability bound for exact general mixed-interleave relations.
+/// ACIR v0.2 capability bound for exact general mixed-interleave relations.
 inline constexpr uint64_t kMaxGeneralSelectorIntersectionQueries = 256;
 
 /// Wide half-open address endpoint type. A 64-bit address space needs the
@@ -105,7 +105,7 @@ mlir::LogicalResult verifyModuleResourceReferences(
     mlir::Operation *module,
     const llvm::StringMap<mlir::Operation *> &producerIndex);
 
-/// Rewrites address-map set fields and entries into the unique ACIR v0.1
+/// Rewrites address-map set fields and entries into the unique ACIR v0.2
 /// total order. This is the deterministic normalization phase used by the
 /// mandatory public pipeline; operation verifiers remain mutation-free.
 void normalizeAddressMaps(mlir::Operation *topLevel);

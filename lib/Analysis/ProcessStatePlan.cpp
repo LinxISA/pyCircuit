@@ -23,9 +23,9 @@ namespace {
 thread_local std::string lastDiagnostic;
 
 constexpr llvm::StringLiteral kWakeNextDeltaSpecialization =
-    R"json({"contract_epoch":"0.1","effect":"stateful","inputs":[],"kind":"implementation","payload":{"wake_kind":"next_delta","wake_type":"@acir_wake_next_delta"},"results":["@acir_wake_next_delta"],"role":"wake_next_delta","schema":"acir-generated-implementation-0.1","source_paths":[]})json";
+    R"json({"contract_epoch":"0.2","effect":"stateful","inputs":[],"kind":"implementation","payload":{"wake_kind":"next_delta","wake_type":"@acir_wake_next_delta"},"results":["@acir_wake_next_delta"],"role":"wake_next_delta","schema":"acir-generated-implementation-0.1","source_paths":[]})json";
 constexpr llvm::StringLiteral kWakeNextDeltaDigest =
-    "63cacba5c3eb82976464804b4aeaa17d43b445733efaddfad7c7bec1ab650269";
+    "b3f0bab001a46eed926ddd600009b72841434b84d2c733fd8a612bc30e396a16";
 
 mlir::LogicalResult reject(const ProcessStatePlanSet &plans,
                            llvm::StringRef diagnostic) {
@@ -208,8 +208,8 @@ detail::PlanSetBuilder::buildEmpty(mlir::ModuleOp module) {
     return mlir::failure();
   }
   auto epoch = module->getAttrOfType<mlir::StringAttr>("ac.contract_epoch");
-  if (!epoch || epoch.getValue() != "0.1") {
-    module.emitError("empty process-state fixture requires contract epoch 0.1");
+  if (!epoch || epoch.getValue() != "0.2") {
+    module.emitError("empty process-state fixture requires contract epoch 0.2");
     return mlir::failure();
   }
   return ProcessStatePlanSet(std::make_shared<ProcessStatePlanSet::Impl>());
@@ -219,8 +219,8 @@ mlir::FailureOr<ProcessStatePlanSet>
 detail::PlanSetBuilder::buildProduction(mlir::ModuleOp module,
                                         const ProcessStateLimits &limits) {
   auto frozenEpoch = module->getAttrOfType<mlir::StringAttr>("ac.freeze_epoch");
-  if (!frozenEpoch || frozenEpoch.getValue() != "0.1") {
-    module.emitError("process-state planning requires a frozen v0.1 model");
+  if (!frozenEpoch || frozenEpoch.getValue() != "0.2") {
+    module.emitError("process-state planning requires a frozen v0.2 model");
     return mlir::failure();
   }
 
@@ -569,12 +569,12 @@ mlir::FailureOr<ProcessStatePlanSet>
 detail::PlanSetBuilder::buildFrozenFixture(mlir::ModuleOp module,
                                            bool requireYieldOnly) {
   auto frozenEpoch = module->getAttrOfType<mlir::StringAttr>("ac.freeze_epoch");
-  if (!frozenEpoch || frozenEpoch.getValue() != "0.1") {
+  if (!frozenEpoch || frozenEpoch.getValue() != "0.2") {
     module.emitError(requireYieldOnly
                          ? "yield-only process-state fixture requires a frozen "
-                           "v0.1 model"
+                           "v0.2 model"
                          : "loop-action process-state fixture requires a "
-                           "frozen v0.1 model");
+                           "frozen v0.2 model");
     return mlir::failure();
   }
 
@@ -1043,7 +1043,7 @@ ProcessStatePlanSet detail::PlanSetBuilder::cloneWithUnpairedLiveSlotCallee(
 
   llvm::json::Object specialization;
   specialization["acir_type"] = "i32";
-  specialization["contract_epoch"] = "0.1";
+  specialization["contract_epoch"] = "0.2";
   specialization["kind"] = "value";
   llvm::json::Object payloadObject;
   payloadObject["encoding"] = "i32";

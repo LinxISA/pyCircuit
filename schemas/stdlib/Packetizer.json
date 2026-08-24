@@ -1,7 +1,7 @@
 {
   "schema_kind": "agentic-circuit-component",
   "schema_version": "0.1",
-  "contract_epoch": "0.1",
+  "contract_epoch": "0.2",
   "canonical_name": "ac.Packetizer",
   "family": "transport",
   "provider_namespace": "ac",
@@ -119,5 +119,5 @@
     "gauges": [],
     "histograms": []
   },
-  "schema_fingerprint": "sha256:f92879f5051b8199c87a4be77dbd821cf312f8b12b6f6cff4bfd4b803b7a1085"
+  "schema_fingerprint": "sha256:f6f7219a6d950ae5b3d95aa808c23735a8b9a08198d4972397024710941a4c87"
 }

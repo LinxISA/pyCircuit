@@ -1,7 +1,7 @@
 {
   "schema_kind": "agentic-circuit-component",
   "schema_version": "0.1",
-  "contract_epoch": "0.1",
+  "contract_epoch": "0.2",
   "canonical_name": "ac.TrafficSource",
   "family": "workload",
   "provider_namespace": "ac",
@@ -92,5 +92,5 @@
     "gauges": [],
     "histograms": []
   },
-  "schema_fingerprint": "sha256:2fdf72126e1c414ce24a95475f904978237157fc1fd2716a39cbf6efab006847"
+  "schema_fingerprint": "sha256:9016d03e6fe637c8feaf2ab9f7dd90cbbb6754079065ed57533806dccbf3dc04"
 }

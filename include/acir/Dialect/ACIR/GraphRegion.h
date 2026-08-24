@@ -70,7 +70,7 @@ StructuralProviderRegistry &
 getStructuralProviderRegistry(mlir::MLIRContext *context);
 
 /// Verifies whole-file hierarchy selection, stable ownership identities and
-/// the statically-resolved subset of topology freeze implemented by ACIR v0.1.
+/// the statically-resolved subset of topology freeze implemented by ACIR v0.2.
 mlir::LogicalResult verifyGraphStructure(mlir::Operation *topLevel);
 
 /// Verifies the graph and returns every elaborated queue/event/resource,

@@ -13,7 +13,7 @@ sources of truth.
 - [Queue/Var v0.2 Proposal Manual](agentic-circuit-queue-var-v0.2-proposal.md)
   records design rationale and the planned complete building-block inventory.
 
-## Active v0.1 contracts
+## Historical v0.1 contracts
 
 - [Interface Evolution](interface-evolution-v0.1.md)
 - [ACIR Core](acir-core-v0.1.md)

@@ -1225,7 +1225,7 @@ verifyAddressMap(AddressMapOp map,
         });
     if (!withinLimit)
       return map.emitOpError()
-             << "general mixed interleave analysis exceeds ACIR v0.1 limit "
+             << "general mixed interleave analysis exceeds ACIR v0.2 limit "
              << kMaxGeneralSelectorIntersectionQueries;
     updateGeneral(preflightIndex, entry, true);
     activeGeneral.emplace(entry.interval.end, &entry);

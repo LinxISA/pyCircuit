@@ -61,7 +61,7 @@ class DavinciOOAdapterTest(unittest.TestCase):
         )
         self.assertEqual("pto-trace", document["schema"])
         self.assertEqual("0.1", document["version"])
-        self.assertEqual("0.1", document["contract_epoch"])
+        self.assertEqual("0.2", document["contract_epoch"])
         self.assertEqual(
             {
                 "producer": PRODUCER,

@@ -59,7 +59,7 @@ using namespace mlir;
 namespace acir {
 namespace {
 
-constexpr llvm::StringLiteral kEpoch = "0.1";
+constexpr llvm::StringLiteral kEpoch = "0.2";
 constexpr llvm::StringLiteral kResultRoleIdentity = "acsim.result.role";
 constexpr uint64_t kMaxExpandedRows = 1U << 20;
 
@@ -1056,7 +1056,7 @@ mlir::LogicalResult ACIRToACSimPass::planModule(ac::ModuleOp module,
         else if (arguments != first)
           return lowerError(array, "ACLOWER-ARRAY",
                             "differently specialized array elements are "
-                            "outside the v0.1 lowering stage; lower them as "
+                            "outside the v0.2 lowering stage; lower them as "
                             "ordered named members instead");
       }
       if (failed(planInstanceTarget(array, array.getDefinition(), first,
@@ -1108,7 +1108,7 @@ mlir::LogicalResult ACIRToACSimPass::planModule(ac::ModuleOp module,
     }
     return lowerError(&operation, "ACLOWER-UNSUPPORTED-CONSTRUCT",
                       "operation '" + operation.getName().getStringRef() +
-                          "' has no ACSim realization in the v0.1 lowering "
+                          "' has no ACSim realization in the v0.2 lowering "
                           "stage (queues, resources, address maps, views, "
                           "and instrumentation are rejected, "
                           "never silently dropped)");
@@ -1294,7 +1294,7 @@ mlir::LogicalResult ACIRToACSimPass::plan(mlir::ModuleOp input) {
   if (!frozen || !frozen.getValue() || !freezeEpoch ||
       freezeEpoch.getValue() != kEpoch)
     return lowerError(input, "ACLOWER-EPOCH-MISMATCH",
-                      "ac-lower-to-acsim requires a topology-frozen v0.1 "
+                      "ac-lower-to-acsim requires a topology-frozen v0.2 "
                       "model; run ac-freeze-topology first");
   auto frozenOwners = input->getAttrOfType<ArrayAttr>("ac.frozen_owners");
   if (!frozenOwners)
@@ -1342,7 +1342,7 @@ mlir::LogicalResult ACIRToACSimPass::plan(mlir::ModuleOp input) {
     if (isa<ac::ModuleGeneratedOp>(operation))
       return lowerError(&operation, "ACLOWER-UNSUPPORTED-CONSTRUCT",
                         "generator-based module declarations are outside the "
-                        "v0.1 lowering stage");
+                        "v0.2 lowering stage");
     if (isa<ac::SystemOp, ac::TypeScopeOp, ac::TypeAliasOp, ac::StructOp,
             ac::EnumOp, ac::UnionOp, ac::PacketOp, ac::TransactionOp,
             ac::InterfaceOp, ac::ProtocolOp>(operation))
@@ -1350,7 +1350,7 @@ mlir::LogicalResult ACIRToACSimPass::plan(mlir::ModuleOp input) {
     return lowerError(&operation, "ACLOWER-UNSUPPORTED-CONSTRUCT",
                       "top-level operation '" +
                           operation.getName().getStringRef() +
-                          "' has no ACSim realization in the v0.1 lowering "
+                          "' has no ACSim realization in the v0.2 lowering "
                           "stage");
   }
 
@@ -1567,7 +1567,7 @@ mlir::LogicalResult ACIRToACSimPass::plan(mlir::ModuleOp input) {
   if (constructionOrder.size() > maxExpandedRows ||
       runtimeRows.size() > maxExpandedRows)
     return lowerError(input, "ACLOWER-DISPATCH",
-                      "expanded hierarchy exceeds the v0.1 capability bound");
+                      "expanded hierarchy exceeds the v0.2 capability bound");
   if (llvm::any_of(constructionOrder,
                    [&](const std::string &path) {
                      return !frozenOwnerPaths.contains(path);

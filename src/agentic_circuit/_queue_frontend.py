@@ -1063,7 +1063,7 @@ class _ExpressionEmitter:
 
 def lower_queue_program(program: QueueProgram) -> str:
     lines = [
-        f'module attributes {{ac.contract_epoch = "0.1", '
+        f'module attributes {{ac.contract_epoch = "0.2", '
         f'ac.system = "{program.system}"}} {{'
     ]
     payloads = {item.name: item for item in program.payloads}
