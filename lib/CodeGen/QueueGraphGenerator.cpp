@@ -52,14 +52,26 @@ std::string className(llvm::StringRef value) {
 }
 
 llvm::Expected<std::string> cppType(llvm::StringRef type) {
-  if (type == "i64")
-    return std::string("std::int64_t");
-  if (type == "i1")
-    return std::string("bool");
+  if (type.starts_with('i')) {
+    unsigned width = 0;
+    if (!type.drop_front().getAsInteger(10, width) && width > 0) {
+      if (width == 1)
+        return std::string("bool");
+      if (width <= 8)
+        return std::string("std::uint8_t");
+      if (width <= 16)
+        return std::string("std::uint16_t");
+      if (width <= 32)
+        return std::string("std::uint32_t");
+      if (width <= 64)
+        return std::string("std::int64_t");
+    }
+  }
   constexpr llvm::StringLiteral prefix = "!ac.struct<@types::@";
   if (type.starts_with(prefix) && type.ends_with('>'))
     return type.drop_front(prefix.size()).drop_back().str();
-  return generatorError("no C++ realization for ACIR type '" + type + "'");
+  return generatorError("no C++ storage realization for ACIR type '" + type +
+                        "'");
 }
 
 std::vector<std::string> pathParts(llvm::StringRef path) {

@@ -21,7 +21,23 @@ from ._definitions import (
     transaction,
 )
 from ._resources import address_map, address_space, queue
-from ._types import Endpoint, Flow, ResourceRef, Static
+from ._types import (
+    Endpoint,
+    Flow,
+    ResourceRef,
+    Static,
+    s8,
+    s16,
+    s32,
+    s64,
+    u1,
+    u2,
+    u4,
+    u8,
+    u16,
+    u32,
+    u64,
+)
 
 
 __all__ = (
@@ -50,6 +66,17 @@ __all__ = (
     "sink",
     "observe",
     "atomic",
+    "u1",
+    "u2",
+    "u4",
+    "u8",
+    "u16",
+    "u32",
+    "u64",
+    "s8",
+    "s16",
+    "s32",
+    "s64",
 )
 
 

@@ -41,6 +41,17 @@ EXACT_PUBLIC_API = {
     "sink",
     "observe",
     "atomic",
+    "u1",
+    "u2",
+    "u4",
+    "u8",
+    "u16",
+    "u32",
+    "u64",
+    "s8",
+    "s16",
+    "s32",
+    "s64",
 }
 
 
@@ -210,6 +221,17 @@ def frontend_test_ledger() -> dict[str, CoverageRow]:
         "sink": CoverageRow((public_import,), (marker_negative,)),
         "observe": CoverageRow((public_import,), (marker_negative,)),
         "atomic": CoverageRow((public_import,), (marker_negative,)),
+        "u1": annotation_row,
+        "u2": annotation_row,
+        "u4": annotation_row,
+        "u8": annotation_row,
+        "u16": annotation_row,
+        "u32": annotation_row,
+        "u64": annotation_row,
+        "s8": annotation_row,
+        "s16": annotation_row,
+        "s32": annotation_row,
+        "s64": annotation_row,
     }
 
 

@@ -108,7 +108,7 @@ class AtomicBinding:
 class StaticQueueCollection:
     kind: str
     members: tuple[
-        tuple[str | int, str | StaticQueueCollection], ...
+        tuple[str | int | bool, str | StaticQueueCollection], ...
     ]
 
 
@@ -147,10 +147,26 @@ def _decorator_name(node: ast.expr) -> str:
 
 
 def _scalar_type(node: ast.expr) -> str:
-    if isinstance(node, ast.Name) and node.id == "int":
+    name = _decorator_name(node).rsplit(".", 1)[-1]
+    if name == "int":
         return "i64"
-    if isinstance(node, ast.Name) and node.id == "bool":
+    if name == "bool":
         return "i1"
+    widths = {
+        "u1": 1,
+        "u2": 2,
+        "u4": 4,
+        "u8": 8,
+        "u16": 16,
+        "u32": 32,
+        "u64": 64,
+        "s8": 8,
+        "s16": 16,
+        "s32": 32,
+        "s64": 64,
+    }
+    if name in widths:
+        return f"i{widths[name]}"
     raise QueueFrontendError("ACPY-QUEUE-002: unsupported field type")
 
 
@@ -224,8 +240,10 @@ def _positive_int(
 
 
 def _payload(node: ast.expr, payloads: dict[str, Payload]) -> str:
-    if isinstance(node, ast.Name) and node.id in {"int", "bool"}:
+    try:
         return _scalar_type(node)
+    except QueueFrontendError:
+        pass
     if isinstance(node, ast.Name) and node.id in payloads:
         return payloads[node.id].acir_type
     raise QueueFrontendError(
@@ -241,6 +259,16 @@ def _lambda(node: ast.expr) -> tuple[str, ast.expr]:
 
 def parse_queue_program(text: str, system: str) -> QueueProgram:
     tree = ast.parse(text, filename="<queue-model>", type_comments=True)
+    for node in tree.body:
+        decorators = getattr(node, "decorator_list", ())
+        if any(
+            _decorator_name(decorator).rsplit(".", 1)[-1]
+            in {"opcode", "provider", "backend"}
+            for decorator in decorators
+        ):
+            raise QueueFrontendError(
+                "ACPY-QUEUE-010: user opcode or backend providers are forbidden"
+            )
     payloads = _payloads(tree)
     payload_map = {item.name: item for item in payloads}
     candidates = [
@@ -285,7 +313,7 @@ def parse_queue_program(text: str, system: str) -> QueueProgram:
         if (
             isinstance(node, ast.Subscript)
             and isinstance(node.slice, ast.Constant)
-            and type(node.slice.value) in {str, int}
+            and type(node.slice.value) in {str, int, bool}
         ):
             collection = static_reference(node.value, aliases)
             if not isinstance(collection, StaticQueueCollection):
@@ -421,20 +449,21 @@ def parse_queue_program(text: str, system: str) -> QueueProgram:
                     "ACPY-QUEUE-005: map requires one compile-time dictionary"
                 )
             entries: list[
-                tuple[str, str | StaticQueueCollection]
+                tuple[str | int | bool, str | StaticQueueCollection]
             ] = []
             for key, value in zip(call.args[0].keys, call.args[0].values, strict=True):
                 if (
                     not isinstance(key, ast.Constant)
-                    or type(key.value) is not str
-                    or not key.value
+                    or type(key.value) not in {str, int, bool}
+                    or (type(key.value) is str and not key.value)
                 ):
                     raise QueueFrontendError(
-                        "ACPY-QUEUE-005: map keys must be non-empty compile-time strings"
+                        "ACPY-QUEUE-005: map keys must be compile-time bool/int/str"
                     )
                 entries.append((key.value, static_reference(value, aliases)))
-            entries.sort(key=lambda item: item[0])
-            if not entries or len({key for key, _ in entries}) != len(entries):
+            rank = {bool: 0, int: 1, str: 2}
+            entries.sort(key=lambda item: (rank[type(item[0])], item[0]))
+            if not entries or len({(type(key), key) for key, _ in entries}) != len(entries):
                 raise QueueFrontendError(
                     "ACPY-QUEUE-005: map keys must be unique and non-empty"
                 )
@@ -477,6 +506,17 @@ def parse_queue_program(text: str, system: str) -> QueueProgram:
         for statement in statements:
             current_order = order
             order += 1
+            if isinstance(statement, ast.If):
+                if not (
+                    isinstance(statement.test, ast.Constant)
+                    and type(statement.test.value) is bool
+                ):
+                    raise QueueFrontendError(
+                        "ACPY-QUEUE-011: runtime Queue condition must use route"
+                    )
+                selected = statement.body if statement.test.value else statement.orelse
+                visit(selected, scope_path, aliases, atomic_group)
+                continue
             if isinstance(statement, ast.With) and len(statement.items) == 1:
                 item = statement.items[0]
                 call = item.context_expr
@@ -570,6 +610,35 @@ def parse_queue_program(text: str, system: str) -> QueueProgram:
                 collection_bindings.append(
                     CollectionBinding(name, collection, scope_path, current_order)
                 )
+                continue
+            if (
+                isinstance(statement, ast.For)
+                and isinstance(statement.target, ast.Name)
+                and isinstance(statement.iter, ast.Call)
+                and call_name(statement.iter) == "range"
+                and len(statement.iter.args) == 1
+                and not statement.iter.keywords
+                and not statement.orelse
+            ):
+                extent = _static_int(statement.iter.args[0], {})
+                if extent is None or extent < 0:
+                    raise QueueFrontendError(
+                        "ACPY-QUEUE-005: range extent must be a non-negative "
+                        "compile-time integer"
+                    )
+
+                class StaticIndex(ast.NodeTransformer):
+                    def visit_Name(self, node: ast.Name) -> ast.expr:
+                        if node.id == statement.target.id:
+                            return ast.copy_location(ast.Constant(index), node)
+                        return node
+
+                for index in range(extent):
+                    expanded = [
+                        StaticIndex().visit(copy.deepcopy(body))
+                        for body in statement.body
+                    ]
+                    visit(expanded, scope_path, aliases, atomic_group)
                 continue
             if (
                 isinstance(statement, ast.For)
@@ -939,7 +1008,10 @@ def lower_queue_program(program: QueueProgram) -> str:
             lines.append(f"    ac.struct @{payload.name} fields [{fields}]")
         layouts: list[str] = []
         for payload in program.payloads:
-            sizes = [8 if typ == "i64" else 1 for _, typ in payload.fields]
+            sizes = [
+                max(1, (int(typ.removeprefix("i")) + 7) // 8)
+                for _, typ in payload.fields
+            ]
             alignment = max(sizes)
             offset = 0
             for size in sizes:

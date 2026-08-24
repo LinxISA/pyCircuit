@@ -17,10 +17,18 @@ from ._queue_frontend import (
 
 
 def _cpp_type(acir_type: str) -> str:
-    if acir_type == "i64":
-        return "std::int64_t"
-    if acir_type == "i1":
-        return "bool"
+    if acir_type.startswith("i") and acir_type[1:].isdigit():
+        width = int(acir_type[1:])
+        if width == 1:
+            return "bool"
+        if width <= 8:
+            return "std::uint8_t"
+        if width <= 16:
+            return "std::uint16_t"
+        if width <= 32:
+            return "std::uint32_t"
+        if width <= 64:
+            return "std::int64_t"
     prefix = "!ac.struct<@types::@"
     if acir_type.startswith(prefix) and acir_type.endswith(">"):
         return acir_type[len(prefix) : -1]

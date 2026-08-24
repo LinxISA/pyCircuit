@@ -169,6 +169,56 @@ def pipeline() -> None:
     ac.sink(right_next)
 """
 
+STATIC_CONTROL_SOURCE = """
+import agentic_circuit as ac
+
+@ac.system
+def pipeline() -> None:
+    input_queue = ac.source(int)
+    if True:
+        selected = input_queue.apply(lambda item: item + 1)
+    else:
+        unreachable = input_queue.apply(lambda item: item + 99)
+    lanes = ac.array(2, lambda index: ac.source(int))
+    for index in range(2):
+        ac.sink(lanes[index])
+    ac.sink(selected)
+"""
+
+CONST_KEY_MAP_SOURCE = """
+import agentic_circuit as ac
+
+@ac.system
+def pipeline() -> None:
+    one = ac.source(int)
+    two = ac.source(int)
+    lanes = ac.map({2: two, 1: one})
+    ac.sink(lanes[1])
+    ac.sink(lanes[2])
+"""
+
+WIDTH_SOURCE = """
+import agentic_circuit as ac
+
+@ac.struct
+class Header:
+    value: ac.u32
+    route: ac.u2
+    remaining: ac.u16
+    valid: bool
+
+@ac.system
+def pipeline() -> None:
+    input_queue = ac.source(Header)
+    output_queue = input_queue.apply(
+        lambda item: item.with_fields(
+            value=item.value + 1,
+            remaining=item.remaining - 1,
+        )
+    )
+    ac.sink(output_queue)
+"""
+
 
 class QueueFrontendV02Test(unittest.TestCase):
     def test_simple_serial_python_lowers_to_typed_queue_graph(self) -> None:
@@ -346,6 +396,60 @@ class QueueFrontendV02Test(unittest.TestCase):
                 ),
                 "pipeline",
             )
+
+    def test_static_if_and_range_are_fully_expanded(self) -> None:
+        from agentic_circuit._queue_frontend import (
+            QueueFrontendError,
+            lower_queue_source,
+        )
+
+        lowered = lower_queue_source(STATIC_CONTROL_SOURCE, "pipeline")
+        self.assertIn("ac.name = \"selected\"", lowered)
+        self.assertNotIn("unreachable", lowered)
+        self.assertIn("ac.sink %lanes__0", lowered)
+        self.assertIn("ac.sink %lanes__1", lowered)
+        with self.assertRaisesRegex(QueueFrontendError, "must use route"):
+            lower_queue_source(
+                STATIC_CONTROL_SOURCE.replace("if True:", "if input_queue:"),
+                "pipeline",
+            )
+
+    def test_user_opcode_definition_is_rejected(self) -> None:
+        from agentic_circuit._queue_frontend import (
+            QueueFrontendError,
+            lower_queue_source,
+        )
+
+        illegal = """
+import agentic_circuit as ac
+
+@ac.opcode
+def private_block():
+    pass
+
+@ac.system
+def pipeline() -> None:
+    queue = ac.source(int)
+    ac.sink(queue)
+"""
+        with self.assertRaisesRegex(QueueFrontendError, "providers are forbidden"):
+            lower_queue_source(illegal, "pipeline")
+
+    def test_static_map_accepts_canonical_integer_keys(self) -> None:
+        from agentic_circuit._queue_frontend import lower_queue_source
+
+        lowered = lower_queue_source(CONST_KEY_MAP_SOURCE, "pipeline")
+        self.assertLess(lowered.index("ac.sink %one"), lowered.index("ac.sink %two"))
+
+    def test_explicit_integer_widths_freeze_payload_layout(self) -> None:
+        from agentic_circuit._queue_frontend import lower_queue_source
+
+        lowered = lower_queue_source(WIDTH_SOURCE, "pipeline")
+        self.assertIn('{name = "value", type = i32}', lowered)
+        self.assertIn('{name = "route", type = i2}', lowered)
+        self.assertIn('{name = "remaining", type = i16}', lowered)
+        self.assertIn('{name = "valid", type = i1}', lowered)
+        self.assertIn("size = 12 : i64", lowered)
 
     def test_latency_zero_and_unsupported_lambda_are_rejected(self) -> None:
         from agentic_circuit._queue_frontend import (
