@@ -238,6 +238,7 @@ jobs:
     env:
       LLVM_RELEASE: "22.1.8"
       LLVM_SOURCE_SHA256: "922f1817a0df7b1489272d18134ee0087a8b068828f87ac63b9861b1a9965888"
+      LLVM_SOURCE_URL: "https://github.com/llvm/llvm-project/releases/download/llvmorg-22.1.8/llvm-project-22.1.8.src.tar.xz"
     strategy:
       fail-fast: false
       matrix:
@@ -246,10 +247,37 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
 
+      - name: Set up Python
+        uses: actions/setup-python@42375524e23c412d93fb67b49958b491fce71c38
+        with:
+          python-version: "3.12"
+          cache: "pip"
+          cache-dependency-path: requirements-dev.lock
+
+      - name: Install locked development requirements
+        run: python -m pip install --disable-pip-version-check -r requirements-dev.lock
+
       - name: Install native test dependencies
         run: |
           sudo apt-get update
           sudo apt-get install --yes --no-install-recommends libgtest-dev
+
+      - name: Cache content-addressed LLVM source archive
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684
+        with:
+          path: .cache/llvm-project-22.1.8.src.tar.xz
+          key: llvm-${{ runner.os }}-${{ runner.arch }}-${{ env.LLVM_SOURCE_SHA256 }}-${{ hashFiles('toolchains/llvm.lock.json') }}
+
+      - name: Fetch and verify locked LLVM source
+        run: |
+          mkdir -p .cache
+          if [[ ! -f .cache/llvm-project-${LLVM_RELEASE}.src.tar.xz ]]; then
+            curl --fail --location --proto '=https' --tlsv1.2 \
+              --output .cache/llvm-project-${LLVM_RELEASE}.src.tar.xz \
+              "${LLVM_SOURCE_URL}"
+          fi
+          echo "${LLVM_SOURCE_SHA256}  .cache/llvm-project-${LLVM_RELEASE}.src.tar.xz" | sha256sum --check --strict
+          tar -C .cache -xf .cache/llvm-project-${LLVM_RELEASE}.src.tar.xz
 
       - name: Compute LLVM build fingerprint
         id: llvm-build-fingerprint
