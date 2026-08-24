@@ -740,6 +740,69 @@ LogicalResult RecordWithOp::verify() {
   return success();
 }
 
+LogicalResult VarConstantOp::verify() {
+  auto result = cast<VarType>(getResult().getType());
+  auto value = dyn_cast<TypedAttr>(getValue());
+  if (!value || value.getType() != result.getElementType())
+    return emitOpError("attribute type must match Var element type");
+  return success();
+}
+
+static LogicalResult verifyVarBinary(Operation *operation, Value lhs, Value rhs,
+                                     Value result) {
+  if (lhs.getType() != rhs.getType() || lhs.getType() != result.getType())
+    return operation->emitOpError(
+        "operands and result must have one identical Var type");
+  Type element = cast<VarType>(result.getType()).getElementType();
+  if (!isa<IntegerType, FloatType>(element))
+    return operation->emitOpError(
+        "arithmetic Var element must be an integer or float");
+  return success();
+}
+
+LogicalResult VarAddOp::verify() {
+  return verifyVarBinary(*this, getLhs(), getRhs(), getResult());
+}
+
+LogicalResult VarSubOp::verify() {
+  return verifyVarBinary(*this, getLhs(), getRhs(), getResult());
+}
+
+LogicalResult VarMulOp::verify() {
+  return verifyVarBinary(*this, getLhs(), getRhs(), getResult());
+}
+
+LogicalResult VarGetOp::verify() {
+  auto record = cast<VarType>(getRecord().getType());
+  Operation *decl = recordDecl(*this, record.getElementType());
+  if (!decl)
+    return emitOpError("requires a record-like Var operand");
+  auto index = findField(decl, getField());
+  if (!index)
+    return emitOpError() << "unknown field '" << getField() << "'";
+  Type expected = VarType::get(getContext(), fieldType(decl, *index));
+  if (getResult().getType() != expected)
+    return emitOpError() << "field '" << getField() << "' result must be "
+                         << expected;
+  return success();
+}
+
+LogicalResult VarWithOp::verify() {
+  if (getRecord().getType() != getResult().getType())
+    return emitOpError("must preserve record Var identity");
+  auto record = cast<VarType>(getRecord().getType());
+  Operation *decl = recordDecl(*this, record.getElementType());
+  if (!decl)
+    return emitOpError("requires a record-like Var operand");
+  auto index = findField(decl, getField());
+  if (!index)
+    return emitOpError() << "unknown field '" << getField() << "'";
+  Type expected = VarType::get(getContext(), fieldType(decl, *index));
+  if (getValue().getType() != expected)
+    return emitOpError() << "field '" << getField() << "' expects " << expected;
+  return success();
+}
+
 LogicalResult PacketSerializeOp::verify() {
   auto packetType = dyn_cast<PacketType>(getPacketValue().getType());
   if (!packetType)

@@ -43,6 +43,12 @@ operations:
   - ac.record.create
   - ac.record.get
   - ac.record.with
+  - ac.var.constant
+  - ac.var.add
+  - ac.var.sub
+  - ac.var.mul
+  - ac.var.get
+  - ac.var.with
   - ac.packet.serialize
   - ac.packet.deserialize
   - ac.transform

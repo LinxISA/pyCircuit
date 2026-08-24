@@ -75,6 +75,50 @@ def ACIR_RecordWithOp : ACIR_Op<"record.with", [Pure]> {
   let hasVerifier = 1;
 }
 
+def ACIR_VarConstantOp : ACIR_Op<"var.constant", [Pure]> {
+  let arguments = (ins AnyAttr:$value);
+  let results = (outs ACIR_VarType:$result);
+  let hasVerifier = 1;
+  let assemblyFormat = "$value attr-dict `as` qualified(type($result))";
+}
+
+class ACIR_VarBinaryOp<string mnemonic> : ACIR_Op<mnemonic, [
+    Pure, AllTypesMatch<["lhs", "rhs", "result"]>
+  ]> {
+  let arguments = (ins ACIR_VarType:$lhs, ACIR_VarType:$rhs);
+  let results = (outs ACIR_VarType:$result);
+  let hasVerifier = 1;
+  let assemblyFormat = [{
+    $lhs `,` $rhs attr-dict `:` qualified(type($result))
+  }];
+}
+
+def ACIR_VarAddOp : ACIR_VarBinaryOp<"var.add">;
+def ACIR_VarSubOp : ACIR_VarBinaryOp<"var.sub">;
+def ACIR_VarMulOp : ACIR_VarBinaryOp<"var.mul">;
+
+def ACIR_VarGetOp : ACIR_Op<"var.get", [Pure]> {
+  let arguments = (ins ACIR_VarType:$record, StrAttr:$field);
+  let results = (outs ACIR_VarType:$result);
+  let hasVerifier = 1;
+  let assemblyFormat = [{
+    $record `field` $field attr-dict `:` qualified(type($record)) `->`
+    qualified(type($result))
+  }];
+}
+
+def ACIR_VarWithOp : ACIR_Op<"var.with", [Pure]> {
+  let arguments = (ins ACIR_VarType:$record, ACIR_VarType:$value,
+                       StrAttr:$field);
+  let results = (outs ACIR_VarType:$result);
+  let hasVerifier = 1;
+  let assemblyFormat = [{
+    $record `,` $value `field` $field attr-dict `:`
+    qualified(type($record)) `,` qualified(type($value)) `->`
+    qualified(type($result))
+  }];
+}
+
 def ACIR_PacketSerializeOp : ACIR_Op<"packet.serialize", [Pure]> {
   let arguments = (ins AnyType:$packet_value, SymbolRefAttr:$packet);
   let results = (outs AnyType:$bytes);
