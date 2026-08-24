@@ -883,6 +883,22 @@ LogicalResult VarMulOp::verify() {
   return verifyVarBinary(*this, getLhs(), getRhs(), getResult());
 }
 
+LogicalResult VarCmpOp::verify() {
+  if (getLhs().getType() != getRhs().getType())
+    return emitOpError("operands must have the same Var type");
+  Type payload = cast<VarType>(getLhs().getType()).getElementType();
+  if (!isa<IntegerType, EnumType>(payload))
+    return emitOpError("operands must carry integer or enum payloads");
+  if (getResult().getType() !=
+      VarType::get(getContext(), IntegerType::get(getContext(), 1)))
+    return emitOpError("result must be !ac.var<i1>");
+  if (!llvm::is_contained(
+          ArrayRef<StringRef>{"eq", "ne", "slt", "sle", "sgt", "sge"},
+          getPredicate()))
+    return emitOpError("predicate must be eq, ne, slt, sle, sgt, or sge");
+  return success();
+}
+
 LogicalResult VarGetOp::verify() {
   auto record = cast<VarType>(getRecord().getType());
   Operation *decl = recordDecl(*this, record.getElementType());

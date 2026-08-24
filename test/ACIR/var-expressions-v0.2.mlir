@@ -17,6 +17,7 @@ builtin.module attributes {ac.contract_epoch = "0.1"} {
     %sum = ac.var.add %value, %one64 : !ac.var<i64>
     %difference = ac.var.sub %remaining, %one16 : !ac.var<i16>
     %product = ac.var.mul %sum, %one64 : !ac.var<i64>
+    %positive = ac.var.cmp "sgt" %product, %one64 : !ac.var<i64> -> !ac.var<i1>
     %updated_value = ac.var.with %item, %product field "value" : !ac.var<!ac.struct<@types::@WorkItem>>, !ac.var<i64> -> !ac.var<!ac.struct<@types::@WorkItem>>
     %updated = ac.var.with %updated_value, %difference field "remaining" : !ac.var<!ac.struct<@types::@WorkItem>>, !ac.var<i16> -> !ac.var<!ac.struct<@types::@WorkItem>>
     ac.transform.yield %updated : !ac.var<!ac.struct<@types::@WorkItem>>
@@ -29,4 +30,5 @@ builtin.module attributes {ac.contract_epoch = "0.1"} {
 // CHECK: ac.var.add
 // CHECK: ac.var.sub
 // CHECK: ac.var.mul
+// CHECK: ac.var.cmp "sgt"
 // CHECK: ac.var.with

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import copy
 from dataclasses import dataclass
 
 
@@ -32,6 +33,7 @@ class QueueBinding:
     scope: tuple[str, ...] = ()
     order: int = 0
     route_output: bool = False
+    feedback_output: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -61,6 +63,20 @@ class RouteBinding:
 
 
 @dataclass(frozen=True, slots=True)
+class FeedbackBinding:
+    input_name: str
+    output_name: str
+    argument: str
+    condition: ast.expr
+    update: ast.expr
+    depth: int
+    latency: int
+    max_iterations: int
+    scope: tuple[str, ...]
+    order: int
+
+
+@dataclass(frozen=True, slots=True)
 class StaticQueueCollection:
     kind: str
     members: tuple[
@@ -75,6 +91,7 @@ class QueueProgram:
     queues: tuple[QueueBinding, ...]
     scopes: tuple[ScopeBinding, ...]
     routes: tuple[RouteBinding, ...]
+    feedbacks: tuple[FeedbackBinding, ...]
     sinks: tuple[SinkBinding, ...]
 
 
@@ -201,6 +218,7 @@ def parse_queue_program(text: str, system: str) -> QueueProgram:
     queues: list[QueueBinding] = []
     scopes: list[ScopeBinding] = []
     routes: list[RouteBinding] = []
+    feedbacks: list[FeedbackBinding] = []
     sinks: list[SinkBinding] = []
     by_name: dict[str, QueueBinding] = {}
     collections: dict[str, StaticQueueCollection] = {}
@@ -217,7 +235,7 @@ def parse_queue_program(text: str, system: str) -> QueueProgram:
             if node.id in aliases:
                 return aliases[node.id]
             if node.id in by_name:
-                return node.id
+                return by_name[node.id].name
             if node.id in collections:
                 return collections[node.id]
         if (
@@ -472,6 +490,72 @@ def parse_queue_program(text: str, system: str) -> QueueProgram:
                         {**aliases, statement.target.id: member},
                     )
                 continue
+            if isinstance(statement, ast.While) and not statement.orelse:
+                if (
+                    len(statement.body) != 1
+                    or not isinstance(statement.body[0], ast.Assign)
+                    or len(statement.body[0].targets) != 1
+                    or not isinstance(statement.body[0].targets[0], ast.Name)
+                    or not isinstance(statement.body[0].value, ast.Call)
+                ):
+                    raise QueueFrontendError(
+                        "ACPY-QUEUE-007: runtime while requires one Queue update"
+                    )
+                update_statement = statement.body[0]
+                variable = update_statement.targets[0].id
+                call = update_statement.value
+                incoming = by_name.get(variable)
+                if (
+                    incoming is None
+                    or not isinstance(call.func, ast.Attribute)
+                    or call.func.attr != "apply"
+                    or not isinstance(call.func.value, ast.Name)
+                    or call.func.value.id != variable
+                    or len(call.args) != 1
+                ):
+                    raise QueueFrontendError(
+                        "ACPY-QUEUE-007: runtime while must rebind one Queue through apply"
+                    )
+                argument, update = _lambda(call.args[0])
+
+                class QueueCondition(ast.NodeTransformer):
+                    def visit_Name(self, node: ast.Name) -> ast.expr:
+                        if node.id == variable:
+                            return ast.copy_location(ast.Name(id=argument), node)
+                        return node
+
+                condition = QueueCondition().visit(copy.deepcopy(statement.test))
+                assert isinstance(condition, ast.expr)
+                output_name = f"{variable}__feedback{len(feedbacks)}"
+                depth = _positive_int(call, "depth", 1)
+                latency = _positive_int(call, "latency", 1)
+                output = QueueBinding(
+                    output_name,
+                    incoming.payload,
+                    depth,
+                    latency,
+                    None,
+                    scope=scope_path,
+                    order=current_order,
+                    feedback_output=True,
+                )
+                queues.append(output)
+                by_name[variable] = output
+                feedbacks.append(
+                    FeedbackBinding(
+                        incoming.name,
+                        output_name,
+                        argument,
+                        condition,
+                        update,
+                        depth,
+                        latency,
+                        1024,
+                        scope_path,
+                        current_order,
+                    )
+                )
+                continue
             if isinstance(statement, ast.Assign) and len(statement.targets) == 1 and isinstance(statement.targets[0], ast.Name) and isinstance(statement.value, ast.Call):
                 name, call = statement.targets[0].id, statement.value
                 if name in by_name or name in collections:
@@ -484,7 +568,7 @@ def parse_queue_program(text: str, system: str) -> QueueProgram:
                     if incoming is None:
                         raise QueueFrontendError(f"ACPY-QUEUE-001: input queue {input_name!r} is unbound")
                     argument, expression = _lambda(call.args[0])
-                    binding = QueueBinding(name, incoming.payload, _positive_int(call, "depth", 1), _positive_int(call, "latency", 1), input_name, argument, expression, scope_path, current_order)
+                    binding = QueueBinding(name, incoming.payload, _positive_int(call, "depth", 1), _positive_int(call, "latency", 1), incoming.name, argument, expression, scope_path, current_order)
                 else:
                     raise QueueFrontendError("ACPY-QUEUE-001: unsupported queue-producing call")
                 queues.append(binding)
@@ -521,7 +605,7 @@ def parse_queue_program(text: str, system: str) -> QueueProgram:
                     output = QueueBinding(name, incoming.payload, depth, latency, None, scope=scope_path, order=current_order, route_output=True)
                     queues.append(output)
                     by_name[name] = output
-                routes.append(RouteBinding(input_name, names, argument, selector, depth, latency, scope_path, current_order))
+                routes.append(RouteBinding(incoming.name, names, argument, selector, depth, latency, scope_path, current_order))
                 continue
             if (
                 isinstance(statement, ast.Expr)
@@ -539,7 +623,15 @@ def parse_queue_program(text: str, system: str) -> QueueProgram:
     visit(function.body, ())
     if not queues or not sinks:
         raise QueueFrontendError("ACPY-QUEUE-001: a queue system requires source and sink boundaries")
-    return QueueProgram(system, payloads, tuple(queues), tuple(scopes), tuple(routes), tuple(sinks))
+    return QueueProgram(
+        system,
+        payloads,
+        tuple(queues),
+        tuple(scopes),
+        tuple(routes),
+        tuple(feedbacks),
+        tuple(sinks),
+    )
 
 
 class _ExpressionEmitter:
@@ -562,7 +654,10 @@ class _ExpressionEmitter:
             typ = expected or ("i1" if type(node.value) is bool else "i64")
             name = self._new()
             value = "true" if node.value is True else "false" if node.value is False else str(node.value)
-            self.lines.append(f"    %{name} = ac.var.constant {value} : {typ} as !ac.var<{typ}>")
+            attribute = value if type(node.value) is bool else f"{value} : {typ}"
+            self.lines.append(
+                f"    %{name} = ac.var.constant {attribute} as !ac.var<{typ}>"
+            )
             return name, typ
         if isinstance(node, ast.Attribute):
             record, record_type = self.emit(node.value)
@@ -583,6 +678,28 @@ class _ExpressionEmitter:
             name = self._new()
             self.lines.append(f"    %{name} = ac.var.{opcode} %{left}, %{right} : !ac.var<{left_type}>")
             return name, left_type
+        if isinstance(node, ast.Compare) and len(node.ops) == len(node.comparators) == 1:
+            left, left_type = self.emit(node.left)
+            right, right_type = self.emit(node.comparators[0], left_type)
+            if left_type != right_type:
+                raise QueueFrontendError("ACPY-QUEUE-003: comparison operands must match")
+            predicates = {
+                ast.Eq: "eq",
+                ast.NotEq: "ne",
+                ast.Lt: "slt",
+                ast.LtE: "sle",
+                ast.Gt: "sgt",
+                ast.GtE: "sge",
+            }
+            predicate = predicates.get(type(node.ops[0]))
+            if predicate is None:
+                raise QueueFrontendError("ACPY-QUEUE-003: unsupported comparison")
+            name = self._new()
+            self.lines.append(
+                f'    %{name} = ac.var.cmp "{predicate}" %{left}, %{right} : '
+                f"!ac.var<{left_type}> -> !ac.var<i1>"
+            )
+            return name, "i1"
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "with_fields" and not node.args:
             record, record_type = self.emit(node.func.value)
             current = record
@@ -672,6 +789,8 @@ def lower_queue_program(program: QueueProgram) -> str:
         uses[sink_binding.queue].append(sink_binding.scope)
     for route in program.routes:
         uses[route.input_name].append(route.scope)
+    for feedback in program.feedbacks:
+        uses[feedback.input_name].append(feedback.scope)
 
     def inside(container: tuple[str, ...], candidate: tuple[str, ...]) -> bool:
         return candidate[: len(container)] == container
@@ -741,12 +860,19 @@ def lower_queue_program(program: QueueProgram) -> str:
         events.extend(
             (queue.order, "queue", queue)
             for queue in program.queues
-            if queue.scope == path and not queue.route_output
+            if queue.scope == path
+            and not queue.route_output
+            and not queue.feedback_output
         )
         events.extend(
             (route.order, "route", route)
             for route in program.routes
             if route.scope == path
+        )
+        events.extend(
+            (feedback.order, "feedback", feedback)
+            for feedback in program.feedbacks
+            if feedback.scope == path
         )
         events.extend(
             (min(visible_order(consumer) for consumer in group) - 0.5, "broadcast", source)
@@ -820,6 +946,43 @@ def lower_queue_program(program: QueueProgram) -> str:
                 )
                 for name, output in zip(route.outputs, output_names, strict=True):
                     mapping[name] = output
+            elif kind == "feedback":
+                feedback = item
+                assert isinstance(feedback, FeedbackBinding)
+                incoming = by_name[feedback.input_name]
+                emitter = _ExpressionEmitter(
+                    payloads, feedback.argument, incoming.payload
+                )
+                condition, condition_type = emitter.emit(feedback.condition)
+                update, update_type = emitter.emit(feedback.update)
+                if condition_type != "i1" or update_type != incoming.payload:
+                    raise QueueFrontendError(
+                        "ACPY-QUEUE-007: while condition must be bool and update "
+                        "must preserve Queue payload"
+                    )
+                output = (
+                    feedback.output_name
+                    if not path
+                    else f"{feedback.output_name}__local"
+                )
+                lines.append(
+                    f"{indent}%{output} = ac.feedback %{mapping[feedback.input_name]} "
+                    f"depth {feedback.depth} latency {feedback.latency} "
+                    f"max_iterations {feedback.max_iterations} {{"
+                )
+                lines.append(
+                    f"{indent}^body(%item: !ac.var<{incoming.payload}>):"
+                )
+                lines.extend(indent + line[2:] for line in emitter.lines)
+                lines.append(
+                    f"{indent}  ac.feedback.yield %{update} continue %{condition} : "
+                    f"!ac.var<{incoming.payload}>, !ac.var<i1>"
+                )
+                lines.append(
+                    f"{indent}}} : !ac.queue<{incoming.payload}> -> "
+                    f"!ac.queue<{incoming.payload}>"
+                )
+                mapping[feedback.output_name] = output
             else:
                 sink_binding = item
                 assert isinstance(sink_binding, SinkBinding)

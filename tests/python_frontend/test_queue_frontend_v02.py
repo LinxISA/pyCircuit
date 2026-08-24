@@ -122,6 +122,29 @@ def pipeline() -> None:
     ac.sink(grid[1][0])
 """
 
+FEEDBACK_SOURCE = """
+from agentic_circuit import sink, source, struct, system
+
+@struct
+class Item:
+    value: int
+    remaining: int
+
+@system
+def pipeline() -> None:
+    current = source(Item)
+    while current.remaining > 0:
+        current = current.apply(
+            lambda item: item.with_fields(
+                value=item.value + 1,
+                remaining=item.remaining - 1,
+            ),
+            depth=2,
+            latency=1,
+        )
+    sink(current)
+"""
+
 
 class QueueFrontendV02Test(unittest.TestCase):
     def test_simple_serial_python_lowers_to_typed_queue_graph(self) -> None:
@@ -257,6 +280,16 @@ class QueueFrontendV02Test(unittest.TestCase):
         self.assertIn("%grid__1__0 = ac.source depth 2", lowered)
         self.assertIn("%grid__1__1 = ac.source depth 3", lowered)
         self.assertIn("ac.sink %grid__1__0", lowered)
+
+    def test_serial_while_lowers_to_bounded_feedback(self) -> None:
+        from agentic_circuit._queue_frontend import lower_queue_source
+
+        lowered = lower_queue_source(FEEDBACK_SOURCE, "pipeline")
+        self.assertIn("ac.feedback %current depth 2 latency 1", lowered)
+        self.assertIn("max_iterations 1024", lowered)
+        self.assertIn('ac.var.cmp "sgt"', lowered)
+        self.assertIn("ac.feedback.yield", lowered)
+        self.assertIn("ac.sink %current__feedback0", lowered)
 
     def test_latency_zero_and_unsupported_lambda_are_rejected(self) -> None:
         from agentic_circuit._queue_frontend import (

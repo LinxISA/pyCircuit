@@ -99,6 +99,19 @@ def ACIR_VarAddOp : ACIR_VarBinaryOp<"var.add">;
 def ACIR_VarSubOp : ACIR_VarBinaryOp<"var.sub">;
 def ACIR_VarMulOp : ACIR_VarBinaryOp<"var.mul">;
 
+def ACIR_VarCmpOp : ACIR_Op<"var.cmp", [
+    Pure, AllTypesMatch<["lhs", "rhs"]>
+  ]> {
+  let arguments = (ins StrAttr:$predicate, ACIR_VarType:$lhs,
+                       ACIR_VarType:$rhs);
+  let results = (outs ACIR_VarType:$result);
+  let hasVerifier = 1;
+  let assemblyFormat = [{
+    $predicate $lhs `,` $rhs attr-dict `:` qualified(type($lhs)) `->`
+    qualified(type($result))
+  }];
+}
+
 def ACIR_VarGetOp : ACIR_Op<"var.get", [Pure]> {
   let arguments = (ins ACIR_VarType:$record, StrAttr:$field);
   let results = (outs ACIR_VarType:$result);

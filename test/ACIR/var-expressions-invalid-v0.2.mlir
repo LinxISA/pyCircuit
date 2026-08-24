@@ -7,6 +7,7 @@
 // RUN: %not %acir_opt %t/with-value.mlir 2>&1 | %FileCheck %s --check-prefix=WITH-VALUE
 // RUN: %not %acir_opt %t/sub-nonnumeric.mlir 2>&1 | %FileCheck %s --check-prefix=SUB-NONNUMERIC
 // RUN: %not %acir_opt %t/mul-nonnumeric.mlir 2>&1 | %FileCheck %s --check-prefix=MUL-NONNUMERIC
+// RUN: %not %acir_opt %t/cmp-predicate.mlir 2>&1 | %FileCheck %s --check-prefix=CMP-PREDICATE
 
 // CONSTANT: error: 'ac.var.constant' op attribute type must match Var element type
 // BINARY: error: use of value '%right' expects different type than prior uses
@@ -16,6 +17,7 @@
 // WITH-VALUE: error: 'ac.var.with' op field 'value' expects '!ac.var<i64>'
 // SUB-NONNUMERIC: error: 'ac.var.sub' op arithmetic Var element must be an integer or float
 // MUL-NONNUMERIC: error: 'ac.var.mul' op arithmetic Var element must be an integer or float
+// CMP-PREDICATE: error: 'ac.var.cmp' op predicate must be eq, ne, slt, sle, sgt, or sge
 
 //--- constant.mlir
 builtin.module attributes {ac.contract_epoch = "0.1"} {
@@ -32,6 +34,13 @@ builtin.module attributes {ac.contract_epoch = "0.1"} {
 builtin.module attributes {ac.contract_epoch = "0.1"} {
   %value = "builtin.unrealized_conversion_cast"() : () -> !ac.var<!ac.optional<i32>>
   %bad = ac.var.mul %value, %value : !ac.var<!ac.optional<i32>>
+}
+
+//--- cmp-predicate.mlir
+builtin.module attributes {ac.contract_epoch = "0.1"} {
+  %left = ac.var.constant 1 : i64 as !ac.var<i64>
+  %right = ac.var.constant 2 : i64 as !ac.var<i64>
+  %bad = ac.var.cmp "random" %left, %right : !ac.var<i64> -> !ac.var<i1>
 }
 
 //--- binary.mlir

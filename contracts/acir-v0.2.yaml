@@ -47,6 +47,7 @@ operations:
   - ac.var.add
   - ac.var.sub
   - ac.var.mul
+  - ac.var.cmp
   - ac.var.get
   - ac.var.with
   - ac.packet.serialize

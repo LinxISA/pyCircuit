@@ -7,7 +7,7 @@
 acir_contract_epoch: 0.2
 acsim_contract_epoch: 0.1
 
-## acir operations (78)
+## acir operations (79)
 
 | operation | source symbol | positive coverage | negative coverage |
 | --- | --- | --- | --- |
@@ -49,6 +49,7 @@ acsim_contract_epoch: 0.1
 | ac.var.add | ACIR_VarAddOp | test/ACIR/control-feedback-v0.2.mlir<br>test/ACIR/var-expressions-v0.2.mlir | test/ACIR/var-expressions-invalid-v0.2.mlir |
 | ac.var.sub | ACIR_VarSubOp | test/ACIR/var-expressions-v0.2.mlir | test/ACIR/var-expressions-invalid-v0.2.mlir |
 | ac.var.mul | ACIR_VarMulOp | test/ACIR/var-expressions-v0.2.mlir | test/ACIR/var-expressions-invalid-v0.2.mlir |
+| ac.var.cmp | ACIR_VarCmpOp | test/ACIR/var-expressions-v0.2.mlir | test/ACIR/var-expressions-invalid-v0.2.mlir |
 | ac.var.get | ACIR_VarGetOp | test/ACIR/var-expressions-v0.2.mlir | test/ACIR/var-expressions-invalid-v0.2.mlir |
 | ac.var.with | ACIR_VarWithOp | test/ACIR/var-expressions-v0.2.mlir | test/ACIR/var-expressions-invalid-v0.2.mlir |
 | ac.packet.serialize | ACIR_PacketSerializeOp | test/ACIR/records-valid.mlir<br>test/ACIR/review-r1-valid.mlir | test/ACIR/records-invalid.mlir<br>test/ACIR/review-r1-invalid.mlir<br>test/ACIR/review-r2-invalid.mlir |
