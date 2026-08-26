@@ -228,6 +228,10 @@ TEST(QueueBlocksTest, SimQueueRateBoundsOneEpochProposals) {
       (SimQueue<int>("invalid", 2, nullptr, 1,
                      std::numeric_limits<size_t>::max(), nullptr, 1, 0)),
       std::invalid_argument);
+  EXPECT_THROW(
+      (SimQueue<int>("too_wide", 3, nullptr, 1,
+                     std::numeric_limits<size_t>::max(), nullptr, 1, 2)),
+      std::invalid_argument);
 }
 
 TEST(QueueBlocksTest, ComputeConsumesAndProducesItsStaticRate) {

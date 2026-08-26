@@ -842,15 +842,21 @@ def parse_queue_program(
             raise QueueFrontendError(
                 "ACPY-QUEUE-005: collection elements must be Queue sources"
             )
+        depth = _positive_int(call, "depth", 1, static_values)
+        rate = _positive_int(call, "rate", 1, static_values)
+        if rate > depth:
+            raise QueueFrontendError(
+                "ACPY-QUEUE-025: Queue rate must not exceed depth"
+            )
         return QueueBinding(
             name,
             _payload(call.args[0], payload_map),
-            _positive_int(call, "depth", 1, static_values),
+            depth,
             _positive_int(call, "latency", 1, static_values),
             None,
             scope=scope_path,
             order=current_order,
-            rate=_positive_int(call, "rate", 1, static_values),
+            rate=rate,
         )
 
     def collection_binding(
@@ -1995,10 +2001,16 @@ def parse_queue_program(
                     input_name = queue_reference(call.args[0], aliases)
                     incoming = by_name[input_name]
                     argument, expression = _lambda(call.args[1])
+                    depth = _positive_int(call, "depth", 1)
+                    rate = _positive_int(call, "rate", incoming.rate)
+                    if rate > depth:
+                        raise QueueFrontendError(
+                            "ACPY-QUEUE-025: Queue rate must not exceed depth"
+                        )
                     binding = QueueBinding(
                         name,
                         incoming.payload,
-                        _positive_int(call, "depth", 1),
+                        depth,
                         _positive_int(call, "latency", 1),
                         incoming.name,
                         argument,
@@ -2007,7 +2019,7 @@ def parse_queue_program(
                         current_order,
                         atomic_group=atomic_group,
                         provider="compute",
-                        rate=_positive_int(call, "rate", incoming.rate),
+                        rate=rate,
                     )
                 elif call_name(call) == "pipeline" and len(call.args) == 1:
                     if any(
@@ -2021,10 +2033,16 @@ def parse_queue_program(
                     input_name = queue_reference(call.args[0], aliases)
                     incoming = by_name[input_name]
                     stages = _positive_int(call, "stages", 1)
+                    depth = _positive_int(call, "depth", 1)
+                    rate = _positive_int(call, "rate", incoming.rate)
+                    if rate > depth:
+                        raise QueueFrontendError(
+                            "ACPY-QUEUE-025: Queue rate must not exceed depth"
+                        )
                     binding = QueueBinding(
                         name,
                         incoming.payload,
-                        _positive_int(call, "depth", 1),
+                        depth,
                         stages,
                         incoming.name,
                         "item",
@@ -2033,7 +2051,7 @@ def parse_queue_program(
                         current_order,
                         atomic_group=atomic_group,
                         provider="pipeline",
-                        rate=_positive_int(call, "rate", incoming.rate),
+                        rate=rate,
                     )
                 elif call_name(call) == "merge":
                     if len(call.args) < 2 or any(

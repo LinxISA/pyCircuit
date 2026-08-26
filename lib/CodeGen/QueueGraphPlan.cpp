@@ -235,9 +235,9 @@ private:
     if (name.empty() || !queueIdentities.insert(name).second)
       return planError("Queue logical identities must be non-empty and unique");
     auto queue = mlir::dyn_cast<ac::QueueType>(value.getType());
-    if (!queue || depth == 0 || latency == 0 || rate == 0)
+    if (!queue || depth == 0 || latency == 0 || rate == 0 || rate > depth)
       return planError(
-          "Queue plan requires typed positive depth, latency, and rate");
+          "Queue plan requires typed positive depth/latency and rate <= depth");
     names[value] = name.str();
     plan.queues.push_back({name.str(), printType(queue.getElementType()),
                            scopePath(scope), depth, latency, rate});
@@ -262,8 +262,10 @@ private:
     if (rates.size() != outputs.size())
       return planError("Queue output rate count must match result count");
     for (size_t index = 0; index < outputs.size(); ++index) {
-      if (depths[index] <= 0 || latencies[index] <= 0 || rates[index] <= 0)
-        return planError("Queue depth, latency, and rate must be positive");
+      if (depths[index] <= 0 || latencies[index] <= 0 || rates[index] <= 0 ||
+          rates[index] > depths[index])
+        return planError("Queue depth/latency must be positive and rate must "
+                         "not exceed depth");
       auto error = addQueue(outputs[index], (*frozen)[index], depths[index],
                             latencies[index], rates[index], scope);
       if (error)
@@ -715,9 +717,9 @@ llvm::Error verifyQueueGraphPlan(const QueueGraphPlan &plan) {
     if (queue.name.empty() || !queueNames.insert(queue.name).second)
       return planError("Queue logical identities must be non-empty and unique");
     if (queue.payloadType.empty() || queue.depth == 0 || queue.latency == 0 ||
-        queue.rate == 0)
+        queue.rate == 0 || queue.rate > queue.depth)
       return planError(
-          "Queue plan requires typed positive depth, latency, and rate");
+          "Queue plan requires typed positive depth/latency and rate <= depth");
     indegree[queue.name] = 0;
   }
 

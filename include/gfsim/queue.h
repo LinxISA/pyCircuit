@@ -28,10 +28,11 @@ public:
            size_t rate = SIZE_MAX)
       : SimObject(ObjectKind::Queue, std::move(name), id, parent, observations),
         entryCapacity_(entryCapacity), byteCapacity_(byteCapacity),
-        latency_(latency), rate_(std::min(rate, entryCapacity)) {
-    if (entryCapacity_ == 0 || latency_ == 0 || rate_ == 0)
+        latency_(latency), rate_(rate == SIZE_MAX ? entryCapacity : rate) {
+    if (entryCapacity_ == 0 || latency_ == 0 || rate_ == 0 ||
+        rate_ > entryCapacity_)
       throw std::invalid_argument(
-          "SimQueue capacity, latency, and rate must be positive");
+          "SimQueue capacity, latency, and rate are inconsistent");
   }
 
   // ── Capacity ────────────────────────────────────────────────────────

@@ -142,7 +142,9 @@ class Config:
 @ac.system
 def multirate(cfg: ac.const[Config]) -> None:
     incoming = ac.source(int, depth=8, rate=cfg.rate)
-    computed = ac.compute(incoming, lambda item: item + 1, rate=cfg.rate)
+    computed = ac.compute(
+        incoming, lambda item: item + 1, depth=8, rate=cfg.rate
+    )
     pipelined = ac.pipeline(computed, stages=2, depth=8, rate=cfg.rate)
     ac.sink(pipelined)
 """
@@ -457,6 +459,7 @@ class JitQueueLoweringTest(unittest.TestCase):
     def test_multirate_queue_metadata_and_cpp_templates_are_frozen(self) -> None:
         from agentic_circuit._queue_codegen import lower_queue_program_to_cpp
         from agentic_circuit._queue_frontend import (
+            QueueFrontendError,
             lower_queue_source,
             parse_queue_program,
         )
@@ -480,6 +483,16 @@ class JitQueueLoweringTest(unittest.TestCase):
         self.assertIn("gfsim::Pipeline<std::int64_t, 2, 4>", cpp)
         self.assertGreaterEqual(cpp.count(", nullptr, 1, 4)"), 2)
         self.assertIn(", nullptr, 2, 4)", cpp)
+        with self.assertRaisesRegex(
+            QueueFrontendError, "rate must not exceed depth"
+        ):
+            lower_queue_source(
+                MULTIRATE_SOURCE.replace(
+                    "depth=8, rate=cfg.rate", "depth=2, rate=cfg.rate", 1
+                ),
+                "multirate",
+                static_arguments=arguments,
+            )
 
 
 if __name__ == "__main__":

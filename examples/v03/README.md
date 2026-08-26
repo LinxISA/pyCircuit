@@ -25,3 +25,10 @@ first use and returns the cached object on later calls. The corresponding
 `materialize_pyc(...)` API consumes explicit pinned `acir-queue-pycgen`,
 `pycc`, toolchain metadata, C++ compiler, and Verilator paths and publishes one
 content-addressed PYC/C++/Verilog bundle.
+
+`multirate_compute.py` freezes `rate=4` into each logical SimQueue and into the
+`Compute<..., 4, ...>` / `Pipeline<..., 2, 4>` C++ template identities. The
+QueueGraph and gfsim paths implement the proposal limit now. PYC intentionally
+rejects `rate>1` with `requires explicit lane lowering`; this prevents treating
+one shared FIFO as four unrelated queues while the ordered multi-enqueue FIFO
+lowering is still under implementation.
