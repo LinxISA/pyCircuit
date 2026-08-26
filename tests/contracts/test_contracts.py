@@ -107,7 +107,7 @@ class RepositoryContractsTest(unittest.TestCase):
                 "compute",
                 "engine",
                 "fork",
-                "issue",
+                "schedule",
                 "merge",
                 "reorder",
                 "route",

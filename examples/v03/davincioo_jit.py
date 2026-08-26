@@ -6,7 +6,7 @@ import agentic_circuit as ac
 @ac.config
 class CoreConfig:
     engines: int
-    issue_entries: int
+    schedule_entries: int
     rob_entries: int
 
 
@@ -49,26 +49,17 @@ def davincioo(cfg: ac.const[CoreConfig]) -> None:
             latency=1,
         )
 
-    with ac.scope("issue"):
-        issued = ac.issue(
+    with ac.scope("schedule"):
+        completed = ac.schedule(
             dispatched,
             by=PTOInst.sequence,
             waits_for=PTOInst.waits_for,
             resource=PTOInst.engine,
             cost=PTOInst.cycles,
-            entries=cfg.issue_entries,
+            entries=cfg.schedule_entries,
             resources=cfg.engines,
             no_dependency=255,
             depth=16,
-            latency=1,
-        )
-
-    with ac.scope("execute"):
-        completed = ac.engine(
-            issued,
-            cost=PTOInst.cycles,
-            lanes=cfg.engines,
-            depth=8,
             latency=1,
         )
 
@@ -90,7 +81,7 @@ specialization = ac.jit(
     davincioo,
     cfg=CoreConfig(
         engines=4,
-        issue_entries=16,
+        schedule_entries=16,
         rob_entries=64,
     ),
 )

@@ -568,15 +568,16 @@ template <typename T, size_t Entries, size_t Resources, uint64_t NoDependency,
           std::integral<std::invoke_result_t<const Resource &, const T &>> &&
           std::invocable<const Cost &, const T &> &&
           std::integral<std::invoke_result_t<const Cost &, const T &>>
-class Issue final : public QueueDependency<T, Key, Dependency, Resource, Cost> {
+class Schedule final
+    : public QueueDependency<T, Key, Dependency, Resource, Cost> {
 public:
-  static constexpr std::string_view contractName = "ac.issue";
+  static constexpr std::string_view contractName = "ac.schedule";
   static constexpr ObjectKind componentKind = ObjectKind::Scheduler;
 
-  Issue(std::string name, ObjectId id, SimObject *parent, SimQueue<T> &input,
-        SimQueue<T> &output, Key key = {}, Dependency dependency = {},
-        Resource resource = {}, Cost cost = {},
-        ObservationSink *observations = nullptr)
+  Schedule(std::string name, ObjectId id, SimObject *parent, SimQueue<T> &input,
+           SimQueue<T> &output, Key key = {}, Dependency dependency = {},
+           Resource resource = {}, Cost cost = {},
+           ObservationSink *observations = nullptr)
       : QueueDependency<T, Key, Dependency, Resource, Cost>(
             std::move(name), id, parent, input, output, Entries, Resources,
             NoDependency, std::move(key), std::move(dependency),

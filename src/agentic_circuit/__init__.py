@@ -77,7 +77,7 @@ __all__ = (
     "jit",
     "route",
     "merge",
-    "issue",
+    "schedule",
     "engine",
     "reorder",
     "round_robin",
@@ -183,7 +183,7 @@ def merge(
     return _not_implemented("merge")
 
 
-def issue(
+def schedule(
     value: object,
     *,
     by: object,
@@ -196,7 +196,7 @@ def issue(
     depth: int = 1,
     latency: int = 1,
 ) -> Never:
-    return _not_implemented("issue")
+    return _not_implemented("schedule")
 
 
 def engine(

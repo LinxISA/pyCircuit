@@ -2036,7 +2036,7 @@ def parse_queue_program(
                             current_order,
                         )
                     )
-                elif call_name(call) == "issue":
+                elif call_name(call) == "schedule":
                     if len(call.args) != 1 or any(
                         keyword.arg is None
                         or keyword.arg
@@ -2054,7 +2054,7 @@ def parse_queue_program(
                         for keyword in call.keywords
                     ):
                         raise QueueFrontendError(
-                            "ACPY-QUEUE-024: issue parameters are invalid"
+                            "ACPY-QUEUE-024: schedule parameters are invalid"
                         )
                     input_name = queue_reference(call.args[0], aliases)
                     incoming = by_name[input_name]
@@ -2098,7 +2098,7 @@ def parse_queue_program(
                             latency,
                             scope_path,
                             current_order,
-                            provider="issue",
+                            provider="schedule",
                         )
                     )
                 elif call_name(call) == "engine":

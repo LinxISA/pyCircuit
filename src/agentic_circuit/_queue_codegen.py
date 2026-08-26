@@ -594,7 +594,7 @@ def lower_queue_program_to_cpp(program: QueueProgram) -> str:
     for index, dependency in enumerate(program.dependencies):
         suffix = (
             ")"
-            if dependency.provider == "issue"
+            if dependency.provider == "schedule"
             else f", {dependency.capacity}, {dependency.resources}, "
             f"{dependency.no_dependency})"
         )
@@ -855,9 +855,9 @@ def lower_queue_program_to_cpp(program: QueueProgram) -> str:
         )
     for index, dependency in enumerate(program.dependencies):
         payload = _cpp_type(queues_by_name[dependency.input_name].payload)
-        if dependency.provider == "issue":
+        if dependency.provider == "schedule":
             lines.append(
-                f"  gfsim::Issue<{payload}, {dependency.capacity}, "
+                f"  gfsim::Schedule<{payload}, {dependency.capacity}, "
                 f"{dependency.resources}, {dependency.no_dependency}, "
                 f"dependency_{index}_key_policy, "
                 f"dependency_{index}_dependency_policy, "

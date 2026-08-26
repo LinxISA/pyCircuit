@@ -68,7 +68,7 @@ def core(cfg: ac.const[Config]) -> None:
         policy=ac.round_robin,
         depth=4,
     )
-    issued = ac.issue(
+    completed = ac.schedule(
         dispatched,
         by=Token.sequence,
         waits_for=Token.waits_for,
@@ -79,8 +79,9 @@ def core(cfg: ac.const[Config]) -> None:
         no_dependency=255,
         depth=8,
     )
-    completed = ac.engine(
-        issued,
+    engine_input = ac.source(Token)
+    engine_done = ac.engine(
+        engine_input,
         cost=Token.cycles,
         lanes=cfg.engines,
         depth=4,
@@ -93,6 +94,7 @@ def core(cfg: ac.const[Config]) -> None:
         depth=4,
     )
     ac.sink(retired)
+    ac.sink(engine_done)
 """
 
 
@@ -200,10 +202,8 @@ class ConfigAndJitTest(unittest.TestCase):
         cpp = module.specialization.lower_cpp()
 
         self.assertIn("ac.dependency", acir)
-        self.assertIn("ac.credit", acir)
         self.assertIn("ac.reorder", acir)
-        self.assertIn("gfsim::Issue<PTOInst, 16, 4, 255", cpp)
-        self.assertIn("gfsim::Engine<PTOInst, 4", cpp)
+        self.assertIn("gfsim::Schedule<PTOInst, 16, 4, 255", cpp)
         self.assertIn("gfsim::Reorder<PTOInst, 64, 0", cpp)
         with tempfile.TemporaryDirectory() as directory:
             source = Path(directory) / "model.cpp"
@@ -352,10 +352,10 @@ class JitQueueLoweringTest(unittest.TestCase):
             lowered,
         )
         self.assertIn(
-            "%issued = ac.dependency %dispatched capacity 16 resources 4",
+            "%completed = ac.dependency %dispatched capacity 16 resources 4",
             lowered,
         )
-        self.assertIn("%completed = ac.credit %issued credits 4", lowered)
+        self.assertIn("%engine_done = ac.credit %engine_input credits 4", lowered)
         self.assertIn("%retired = ac.reorder %completed capacity 16", lowered)
         self.assertNotIn("lambda", lowered)
 

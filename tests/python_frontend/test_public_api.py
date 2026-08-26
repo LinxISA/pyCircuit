@@ -40,7 +40,7 @@ PUBLIC = {
     "jit",
     "route",
     "merge",
-    "issue",
+    "schedule",
     "engine",
     "reorder",
     "round_robin",
@@ -141,7 +141,7 @@ class PublicApiTest(unittest.TestCase):
             lambda: api.compute(object(), lambda value: value),
             lambda: api.route(object(), by=object(), outputs=2),
             lambda: api.merge(object(), object()),
-            lambda: api.issue(
+            lambda: api.schedule(
                 object(),
                 by=object(),
                 waits_for=object(),

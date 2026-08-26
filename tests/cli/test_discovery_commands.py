@@ -83,7 +83,7 @@ class DiscoveryCommandTest(unittest.TestCase):
             listing = run_cli("schema", "component", "--json", cwd=root)
             opcode = run_cli("schema", "opcode", "ac.reorder", "--json", cwd=root)
             opcode_listing = run_cli("schema", "opcode", "--json", cwd=root)
-            block = run_cli("schema", "block", "ac.issue", "--json", cwd=root)
+            block = run_cli("schema", "block", "ac.schedule", "--json", cwd=root)
             block_listing = run_cli("schema", "block", "--json", cwd=root)
 
         self.assertEqual("ac.Queue", json.loads(component.stdout)["canonical_name"])
@@ -102,9 +102,9 @@ class DiscoveryCommandTest(unittest.TestCase):
         self.assertIn("ac.dependency", opcode_names)
         self.assertIn("ac.reorder", opcode_names)
         self.assertIn("ac.transform", opcode_names)
-        issue = json.loads(block.stdout)
-        self.assertEqual("ac.issue", issue["operation"])
-        self.assertEqual("ac.dependency", issue["lowers_to"])
+        schedule = json.loads(block.stdout)
+        self.assertEqual("ac.schedule", schedule["operation"])
+        self.assertEqual("ac.dependency", schedule["lowers_to"])
         block_names = json.loads(block_listing.stdout)["items"]
         self.assertEqual(sorted(block_names), block_names)
         self.assertIn("ac.compute", block_names)
