@@ -90,7 +90,8 @@
             "parameter",
             "localparam",
             "generate_policy",
-            "packed_field_slice"
+            "packed_field_slice",
+            "requires_lane_lowering"
           ]
         }
       }

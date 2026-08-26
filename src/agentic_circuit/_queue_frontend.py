@@ -48,6 +48,7 @@ class QueueBinding:
     firing_effect: bool = False
     atomic_group: int | None = None
     provider: str = "transform"
+    rate: int = 1
 
 
 @dataclass(frozen=True, slots=True)
@@ -849,6 +850,7 @@ def parse_queue_program(
             None,
             scope=scope_path,
             order=current_order,
+            rate=_positive_int(call, "rate", 1, static_values),
         )
 
     def collection_binding(
@@ -1983,7 +1985,8 @@ def parse_queue_program(
                     binding = source_binding(name, call, scope_path, current_order)
                 elif call_name(call) == "compute" and len(call.args) == 2:
                     if any(
-                        keyword.arg is None or keyword.arg not in {"depth", "latency"}
+                        keyword.arg is None
+                        or keyword.arg not in {"depth", "latency", "rate"}
                         for keyword in call.keywords
                     ):
                         raise QueueFrontendError(
@@ -2004,10 +2007,12 @@ def parse_queue_program(
                         current_order,
                         atomic_group=atomic_group,
                         provider="compute",
+                        rate=_positive_int(call, "rate", incoming.rate),
                     )
                 elif call_name(call) == "pipeline" and len(call.args) == 1:
                     if any(
-                        keyword.arg is None or keyword.arg not in {"stages", "depth"}
+                        keyword.arg is None
+                        or keyword.arg not in {"stages", "depth", "rate"}
                         for keyword in call.keywords
                     ):
                         raise QueueFrontendError(
@@ -2028,6 +2033,7 @@ def parse_queue_program(
                         current_order,
                         atomic_group=atomic_group,
                         provider="pipeline",
+                        rate=_positive_int(call, "rate", incoming.rate),
                     )
                 elif call_name(call) == "merge":
                     if len(call.args) < 2 or any(
@@ -2987,6 +2993,16 @@ def lower_queue_program(program: QueueProgram) -> str:
         ]
         return inputs, outputs
 
+    def queue_attributes(name: str, rates: tuple[int, ...]) -> str:
+        attributes = [f'ac.name = "{name}"']
+        if any(rate != 1 for rate in rates):
+            attributes.append(
+                "ac.output_rates = array<i64: "
+                + ", ".join(str(rate) for rate in rates)
+                + ">"
+            )
+        return "{" + ", ".join(attributes) + "}"
+
     def emit_queue(
         queue: QueueBinding,
         output_ssa: str,
@@ -2996,7 +3012,8 @@ def lower_queue_program(program: QueueProgram) -> str:
         if queue.input_name is None:
             lines.append(
                 f"{indent}%{output_ssa} = ac.source depth {queue.depth} "
-                f'latency {queue.latency} {{ac.name = "{queue.name}"}} : '
+                f"latency {queue.latency} "
+                f"{queue_attributes(queue.name, (queue.rate,))} : "
                 f"!ac.queue<{queue.payload}>"
             )
             mapping[queue.name] = output_ssa
@@ -3025,7 +3042,7 @@ def lower_queue_program(program: QueueProgram) -> str:
             f"{indent}  ac.transform.yield %{result} : !ac.var<{queue.payload}>"
         )
         lines.append(
-            f'{indent}}} {{ac.name = "{queue.name}"}} : '
+            f"{indent}}} {queue_attributes(queue.name, (queue.rate,))} : "
             f"(!ac.queue<{queue.payload}>) -> "
             f"!ac.queue<{queue.payload}>"
         )

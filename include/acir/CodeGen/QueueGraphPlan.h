@@ -36,6 +36,7 @@ struct QueuePlan {
   std::string scope;
   uint64_t depth = 1;
   uint64_t latency = 1;
+  uint64_t rate = 1;
 };
 
 struct QueueBlockPlan {

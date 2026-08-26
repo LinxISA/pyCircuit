@@ -19,8 +19,8 @@
 
 namespace gfsim {
 
-template <typename Input, typename Output, typename Policy>
-  requires std::invocable<const Policy &, const Input &> &&
+template <typename Input, typename Output, typename Policy, size_t Rate = 1>
+  requires std::invocable<const Policy &, const Input &> && (Rate > 0) &&
            std::convertible_to<
                std::invoke_result_t<const Policy &, const Input &>, Output>
 class QueueTransform : public SimObject {
@@ -35,26 +35,25 @@ public:
         input_(input), output_(output), policy_(std::move(policy)) {}
 
   void doWork(Epoch) override {
-    if (fired_ || !input_.canProposePop() || !output_.canProposePush())
-      return;
-    const Input *head = input_.peek();
-    if (head == nullptr)
-      return;
-    Output result = std::invoke(std::as_const(policy_), *head);
-    if (!output_.proposePush(std::move(result)))
-      return;
-    if (!input_.proposePop())
-      return;
-    fired_ = true;
+    while (fired_ < Rate && input_.canProposePop() &&
+           output_.canProposePush()) {
+      const Input *head = input_.peekProposable();
+      if (head == nullptr)
+        return;
+      Output result = std::invoke(std::as_const(policy_), *head);
+      if (!output_.proposePush(std::move(result)) || !input_.proposePop())
+        return;
+      ++fired_;
+    }
   }
 
-  void doXfer(Epoch) override { fired_ = false; }
-  bool hasPendingCommit() const override { return fired_; }
+  void doXfer(Epoch) override { fired_ = 0; }
+  bool hasPendingCommit() const override { return fired_ != 0; }
   bool isRunnable(Epoch) const override {
-    return !fired_ && input_.canProposePop() && output_.canProposePush();
+    return fired_ < Rate && input_.canProposePop() && output_.canProposePush();
   }
   void reset() override {
-    fired_ = false;
+    fired_ = 0;
     clearRuntimeFailureCode();
   }
 
@@ -62,14 +61,14 @@ private:
   SimQueue<Input> &input_;
   SimQueue<Output> &output_;
   [[no_unique_address]] Policy policy_;
-  bool fired_ = false;
+  size_t fired_ = 0;
 };
 
-template <typename Input, typename Output, typename Policy>
-  requires std::invocable<const Policy &, const Input &> &&
+template <typename Input, typename Output, size_t Rate, typename Policy>
+  requires std::invocable<const Policy &, const Input &> && (Rate > 0) &&
            std::convertible_to<
                std::invoke_result_t<const Policy &, const Input &>, Output>
-class Compute final : public QueueTransform<Input, Output, Policy> {
+class Compute final : public QueueTransform<Input, Output, Policy, Rate> {
 public:
   static constexpr std::string_view contractName = "ac.compute";
   static constexpr ObjectKind componentKind = ObjectKind::Compute;
@@ -77,26 +76,26 @@ public:
   Compute(std::string name, ObjectId id, SimObject *parent,
           SimQueue<Input> &input, SimQueue<Output> &output, Policy policy = {},
           ObservationSink *observations = nullptr)
-      : QueueTransform<Input, Output, Policy>(std::move(name), id, parent,
-                                              input, output, std::move(policy),
-                                              observations) {}
+      : QueueTransform<Input, Output, Policy, Rate>(
+            std::move(name), id, parent, input, output, std::move(policy),
+            observations) {}
 };
 
 template <typename T> struct Identity {
   T operator()(const T &value) const { return value; }
 };
 
-template <typename T, size_t Stages>
-  requires(Stages > 0)
-class Pipeline final : public QueueTransform<T, T, Identity<T>> {
+template <typename T, size_t Stages, size_t Rate>
+  requires(Stages > 0) && (Rate > 0)
+class Pipeline final : public QueueTransform<T, T, Identity<T>, Rate> {
 public:
   static constexpr std::string_view contractName = "ac.pipeline";
   static constexpr ObjectKind componentKind = ObjectKind::Compute;
 
   Pipeline(std::string name, ObjectId id, SimObject *parent, SimQueue<T> &input,
            SimQueue<T> &output, ObservationSink *observations = nullptr)
-      : QueueTransform<T, T, Identity<T>>(std::move(name), id, parent, input,
-                                          output, {}, observations) {
+      : QueueTransform<T, T, Identity<T>, Rate>(
+            std::move(name), id, parent, input, output, {}, observations) {
     if (output.latency() != Stages)
       throw std::invalid_argument(
           "Pipeline stages must match output SimQueue latency");

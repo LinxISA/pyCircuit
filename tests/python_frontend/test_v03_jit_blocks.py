@@ -132,6 +132,22 @@ def blocks(cfg: ac.const[Config]) -> None:
 """
 
 
+MULTIRATE_SOURCE = """
+import agentic_circuit as ac
+
+@ac.config
+class Config:
+    rate: int
+
+@ac.system
+def multirate(cfg: ac.const[Config]) -> None:
+    incoming = ac.source(int, depth=8, rate=cfg.rate)
+    computed = ac.compute(incoming, lambda item: item + 1, rate=cfg.rate)
+    pipelined = ac.pipeline(computed, stages=2, depth=8, rate=cfg.rate)
+    ac.sink(pipelined)
+"""
+
+
 REPOSITORY = Path(__file__).resolve().parents[2]
 
 
@@ -207,7 +223,7 @@ class ConfigAndJitTest(unittest.TestCase):
         self.assertIn("ac.dependency", acir)
         self.assertIn("ac.reorder", acir)
         self.assertIn("gfsim::Schedule<PTOInst, 16, 4, 255", cpp)
-        self.assertIn("gfsim::Pipeline<PTOInst, 2>", cpp)
+        self.assertIn("gfsim::Pipeline<PTOInst, 2, 1>", cpp)
         self.assertIn("gfsim::Reorder<PTOInst, 64, 0", cpp)
         with tempfile.TemporaryDirectory() as directory:
             source = Path(directory) / "model.cpp"
@@ -386,7 +402,7 @@ class JitQueueLoweringTest(unittest.TestCase):
             )
         )
         self.assertIn("gfsim::Compute<Token, Token", cpp)
-        self.assertIn("gfsim::Pipeline<Token, 2>", cpp)
+        self.assertIn("gfsim::Pipeline<Token, 2, 1>", cpp)
 
     def test_high_level_non_compute_lambda_is_rejected(self) -> None:
         from agentic_circuit._queue_frontend import (
@@ -437,6 +453,33 @@ class JitQueueLoweringTest(unittest.TestCase):
         self.assertIn("gfsim::QueueFork", cpp)
         self.assertIn("gfsim::QueueBarrier", cpp)
         self.assertIn("gfsim::Table<Request, std::uint16_t, 32, 0", cpp)
+
+    def test_multirate_queue_metadata_and_cpp_templates_are_frozen(self) -> None:
+        from agentic_circuit._queue_codegen import lower_queue_program_to_cpp
+        from agentic_circuit._queue_frontend import (
+            lower_queue_source,
+            parse_queue_program,
+        )
+        from agentic_circuit._static_eval import FrozenMap
+
+        arguments = {"cfg": FrozenMap((("rate", 4),))}
+        lowered = lower_queue_source(
+            MULTIRATE_SOURCE,
+            "multirate",
+            static_arguments=arguments,
+        )
+        self.assertEqual(3, lowered.count("ac.output_rates = array<i64: 4>"))
+        cpp = lower_queue_program_to_cpp(
+            parse_queue_program(
+                MULTIRATE_SOURCE,
+                "multirate",
+                static_arguments=arguments,
+            )
+        )
+        self.assertIn("gfsim::Compute<std::int64_t, std::int64_t, 4", cpp)
+        self.assertIn("gfsim::Pipeline<std::int64_t, 2, 4>", cpp)
+        self.assertGreaterEqual(cpp.count(", nullptr, 1, 4)"), 2)
+        self.assertIn(", nullptr, 2, 4)", cpp)
 
 
 if __name__ == "__main__":

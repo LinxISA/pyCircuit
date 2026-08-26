@@ -118,6 +118,14 @@
           "default": 1,
           "cpp_mapping": "constructor_constant",
           "verilog_mapping": "parameter"
+        },
+        {
+          "name": "rate",
+          "kind": "structural",
+          "required": false,
+          "default": 1,
+          "cpp_mapping": "template_argument",
+          "verilog_mapping": "requires_lane_lowering"
         }
       ],
       "providers": {
@@ -391,6 +399,14 @@
           "default": 1,
           "cpp_mapping": "constructor_constant",
           "verilog_mapping": "parameter"
+        },
+        {
+          "name": "rate",
+          "kind": "structural",
+          "required": false,
+          "default": 1,
+          "cpp_mapping": "template_argument",
+          "verilog_mapping": "requires_lane_lowering"
         }
       ],
       "providers": {

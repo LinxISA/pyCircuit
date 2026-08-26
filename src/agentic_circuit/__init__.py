@@ -130,7 +130,9 @@ def view(value: object, *selectors: object) -> Never:
     return _not_implemented("view")
 
 
-def source(payload: object, *, depth: int = 1, latency: int = 1) -> Never:
+def source(
+    payload: object, *, depth: int = 1, latency: int = 1, rate: int = 1
+) -> Never:
     return _not_implemented("source")
 
 
@@ -156,6 +158,7 @@ def compute(
     *,
     depth: int = 1,
     latency: int = 1,
+    rate: int = 1,
 ) -> Never:
     return _not_implemented("compute")
 
@@ -165,6 +168,7 @@ def pipeline(
     *,
     stages: int = 1,
     depth: int = 1,
+    rate: int = 1,
 ) -> Never:
     return _not_implemented("pipeline")
 

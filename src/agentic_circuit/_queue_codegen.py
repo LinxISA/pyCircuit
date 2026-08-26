@@ -324,7 +324,7 @@ def lower_queue_program_to_cpp(program: QueueProgram) -> str:
             f"{ids.queues[queue.name]}, {module_ptr(queue_owner[queue.name])}, "
             f"{queue.depth}, "
             "std::numeric_limits<size_t>::max(), nullptr, "
-            f"{queue.latency})"
+            f"{queue.latency}, {queue.rate})"
         )
 
     def array_initializer(value: StaticQueueCollection) -> str:
@@ -563,7 +563,7 @@ def lower_queue_program_to_cpp(program: QueueProgram) -> str:
             f'{queue.name}_("{queue.name}", {ids.queues[queue.name]}, '
             f"{module_ptr(queue_owner[queue.name])}, "
             f"{queue.depth}, std::numeric_limits<size_t>::max(), nullptr, "
-            f"{queue.latency})"
+            f"{queue.latency}, {queue.rate})"
         )
     for collection in arrays:
         initializers.append(f"{collection.name}_" + array_initializer(collection.value))
@@ -906,9 +906,12 @@ def lower_queue_program_to_cpp(program: QueueProgram) -> str:
             continue
         payload = _cpp_type(queue.payload)
         if queue.provider == "compute":
-            provider = f"gfsim::Compute<{payload}, {payload}, {queue.name}_policy>"
+            provider = (
+                f"gfsim::Compute<{payload}, {payload}, {queue.rate}, "
+                f"{queue.name}_policy>"
+            )
         elif queue.provider == "pipeline":
-            provider = f"gfsim::Pipeline<{payload}, {queue.latency}>"
+            provider = f"gfsim::Pipeline<{payload}, {queue.latency}, {queue.rate}>"
         else:
             provider = (
                 f"gfsim::QueueTransform<{payload}, {payload}, {queue.name}_policy>"

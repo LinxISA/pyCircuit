@@ -230,15 +230,17 @@ private:
   llvm::Error validateGraph() { return verifyQueueGraphPlan(plan); }
 
   llvm::Error addQueue(mlir::Value value, llvm::StringRef name, uint64_t depth,
-                       uint64_t latency, llvm::ArrayRef<std::string> scope) {
+                       uint64_t latency, uint64_t rate,
+                       llvm::ArrayRef<std::string> scope) {
     if (name.empty() || !queueIdentities.insert(name).second)
       return planError("Queue logical identities must be non-empty and unique");
     auto queue = mlir::dyn_cast<ac::QueueType>(value.getType());
-    if (!queue || depth == 0 || latency == 0)
-      return planError("Queue plan requires typed positive depth and latency");
+    if (!queue || depth == 0 || latency == 0 || rate == 0)
+      return planError(
+          "Queue plan requires typed positive depth, latency, and rate");
     names[value] = name.str();
     plan.queues.push_back({name.str(), printType(queue.getElementType()),
-                           scopePath(scope), depth, latency});
+                           scopePath(scope), depth, latency, rate});
     return llvm::Error::success();
   }
 
@@ -252,11 +254,18 @@ private:
       return frozen.takeError();
     if (depths.size() != outputs.size() || latencies.size() != outputs.size())
       return planError("Queue output metadata count mismatch");
+    llvm::SmallVector<int64_t> defaultRates(outputs.size(), 1);
+    llvm::ArrayRef<int64_t> rates = defaultRates;
+    if (auto attribute =
+            op->getAttrOfType<mlir::DenseI64ArrayAttr>("ac.output_rates"))
+      rates = attribute.asArrayRef();
+    if (rates.size() != outputs.size())
+      return planError("Queue output rate count must match result count");
     for (size_t index = 0; index < outputs.size(); ++index) {
-      if (depths[index] <= 0 || latencies[index] <= 0)
-        return planError("Queue depth and latency must be positive");
+      if (depths[index] <= 0 || latencies[index] <= 0 || rates[index] <= 0)
+        return planError("Queue depth, latency, and rate must be positive");
       auto error = addQueue(outputs[index], (*frozen)[index], depths[index],
-                            latencies[index], scope);
+                            latencies[index], rates[index], scope);
       if (error)
         return error;
     }
@@ -705,8 +714,10 @@ llvm::Error verifyQueueGraphPlan(const QueueGraphPlan &plan) {
   for (const QueuePlan &queue : plan.queues) {
     if (queue.name.empty() || !queueNames.insert(queue.name).second)
       return planError("Queue logical identities must be non-empty and unique");
-    if (queue.payloadType.empty() || queue.depth == 0 || queue.latency == 0)
-      return planError("Queue plan requires typed positive depth and latency");
+    if (queue.payloadType.empty() || queue.depth == 0 || queue.latency == 0 ||
+        queue.rate == 0)
+      return planError(
+          "Queue plan requires typed positive depth, latency, and rate");
     indegree[queue.name] = 0;
   }
 
@@ -783,6 +794,7 @@ llvm::Expected<std::string> QueueGraphPlan::canonicalJson() const {
                            {"latency", queue.latency},
                            {"name", queue.name},
                            {"payload_type", queue.payloadType},
+                           {"rate", queue.rate},
                            {"scope", queue.scope}});
   llvm::json::Array blockValues;
   for (const QueueBlockPlan &block : blocks) {
