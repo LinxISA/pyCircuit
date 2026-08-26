@@ -12,7 +12,7 @@
     "contract_identities": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["acpy", "acir", "acsim", "cli", "component_schema", "opcode_catalog", "cxx_source_contract", "pto_trace", "diagnostic", "build_manifest", "run_manifest", "run_result"],
+      "required": ["acpy", "acir", "acsim", "cli", "component_schema", "opcode_catalog", "block_spec", "cxx_source_contract", "pto_trace", "diagnostic", "build_manifest", "run_manifest", "run_result"],
       "properties": {
         "acpy": {"const": "acpy@0.1"},
         "acir": {"const": "acir@0.1"},

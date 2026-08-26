@@ -202,9 +202,9 @@ class ConfigAndJitTest(unittest.TestCase):
         self.assertIn("ac.dependency", acir)
         self.assertIn("ac.credit", acir)
         self.assertIn("ac.reorder", acir)
-        self.assertIn("gfsim::QueueDependency", cpp)
-        self.assertIn("gfsim::QueueCredit", cpp)
-        self.assertIn("gfsim::QueueReorder", cpp)
+        self.assertIn("gfsim::Issue<PTOInst, 16, 4, 255", cpp)
+        self.assertIn("gfsim::Engine<PTOInst, 4", cpp)
+        self.assertIn("gfsim::Reorder<PTOInst, 64, 0", cpp)
         with tempfile.TemporaryDirectory() as directory:
             source = Path(directory) / "model.cpp"
             source.write_text(cpp, encoding="utf-8")
@@ -407,7 +407,7 @@ class JitQueueLoweringTest(unittest.TestCase):
         cpp = lower_queue_program_to_cpp(program)
         self.assertIn("gfsim::QueueFork", cpp)
         self.assertIn("gfsim::QueueBarrier", cpp)
-        self.assertIn("gfsim::QueueMemory", cpp)
+        self.assertIn("gfsim::Table<Request, std::uint16_t, 32, 0", cpp)
 
 
 if __name__ == "__main__":

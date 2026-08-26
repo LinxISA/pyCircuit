@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include <limits>
+#include <type_traits>
 
 namespace gfsim {
 namespace {
@@ -132,6 +133,42 @@ struct MemoryResponse {
     return response;
   }
 };
+
+TEST(QueueBlocksTest, HighLevelProvidersFreezeStructuralTemplateParameters) {
+  using Issue4 =
+      Issue<DependencyValue, 16, 4, 255, DependencyKey, DependencyPredecessor,
+            DependencyResource, DependencyCost>;
+  using Issue2 =
+      Issue<DependencyValue, 8, 2, 255, DependencyKey, DependencyPredecessor,
+            DependencyResource, DependencyCost>;
+  using Engine4 = Engine<DependencyValue, 4, DependencyCost>;
+  using Ordered64 = Reorder<SequencedValue, 64, 0, SequenceKey>;
+  using Table32 = Table<MemoryRequest, uint16_t, 32, 0, MemoryAddress,
+                        MemoryWrite, MemoryWriteData, MemoryResponse>;
+
+  static_assert(!std::is_same_v<Issue4, Issue2>);
+  EXPECT_EQ(Issue4::contractName, "ac.issue");
+  EXPECT_EQ(Engine4::contractName, "ac.engine");
+  EXPECT_EQ(Ordered64::contractName, "ac.reorder");
+  EXPECT_EQ(Table32::contractName, "ac.table");
+
+  SimQueue<DependencyValue> dependencyInput("dependency_input", 1, nullptr, 2);
+  SimQueue<DependencyValue> dependencyOutput("dependency_output", 2, nullptr,
+                                             2);
+  Issue4 issue("issue", 3, nullptr, dependencyInput, dependencyOutput);
+  Engine4 engine("engine", 4, nullptr, dependencyInput, dependencyOutput);
+  SimQueue<SequencedValue> orderedInput("ordered_input", 5, nullptr, 2);
+  SimQueue<SequencedValue> orderedOutput("ordered_output", 6, nullptr, 2);
+  Ordered64 reorder("reorder", 7, nullptr, orderedInput, orderedOutput);
+  SimQueue<MemoryRequest> memoryInput("memory_input", 8, nullptr, 2);
+  SimQueue<MemoryRequest> memoryOutput("memory_output", 9, nullptr, 2);
+  Table32 table("table", 10, nullptr, memoryInput, memoryOutput);
+
+  EXPECT_EQ(issue.active(), 0u);
+  EXPECT_EQ(engine.active(), 0u);
+  EXPECT_EQ(reorder.active(), 0u);
+  EXPECT_EQ(table.at(0), 0u);
+}
 
 TEST(QueueBlocksTest, TransformCommitsOnlyAcrossTheQueueBarrier) {
   SimQueue<int> input("input", 1, nullptr, 2);

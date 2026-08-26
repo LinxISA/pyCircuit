@@ -589,30 +589,38 @@ def lower_queue_program_to_cpp(program: QueueProgram) -> str:
         initializers.append(
             f'reorder_{index}_block_("reorder_{index}", '
             f"{ids.reorders[index]}, {module_ptr(reorder.scope)}, "
-            f"{queue_ref(reorder.input_name)}, {queue_ref(reorder.output_name)}, "
-            f"{reorder.capacity}, {reorder.start})"
+            f"{queue_ref(reorder.input_name)}, {queue_ref(reorder.output_name)})"
         )
     for index, dependency in enumerate(program.dependencies):
+        suffix = (
+            ")"
+            if dependency.provider == "issue"
+            else f", {dependency.capacity}, {dependency.resources}, "
+            f"{dependency.no_dependency})"
+        )
         initializers.append(
-            f'dependency_{index}_block_("dependency_{index}", '
+            f'dependency_{index}_block_("{dependency.provider}_{index}", '
             f"{ids.dependencies[index]}, {module_ptr(dependency.scope)}, "
             f"{queue_ref(dependency.input_name)}, "
-            f"{queue_ref(dependency.output_name)}, {dependency.capacity}, "
-            f"{dependency.resources}, {dependency.no_dependency})"
+            f"{queue_ref(dependency.output_name)}{suffix}"
         )
     for index, credit in enumerate(program.credits):
+        suffix = ")" if credit.provider == "engine" else f", {credit.credits})"
         initializers.append(
-            f'credit_{index}_block_("credit_{index}", '
+            f'credit_{index}_block_("{credit.provider}_{index}", '
             f"{ids.credits[index]}, {module_ptr(credit.scope)}, "
-            f"{queue_ref(credit.input_name)}, {queue_ref(credit.output_name)}, "
-            f"{credit.credits})"
+            f"{queue_ref(credit.input_name)}, {queue_ref(credit.output_name)}"
+            f"{suffix}"
         )
     for index, memory in enumerate(program.memories):
+        suffix = (
+            ")" if memory.provider == "table" else f", {memory.entries}, {memory.init})"
+        )
         initializers.append(
-            f'memory_{index}_block_("memory_{index}", '
+            f'memory_{index}_block_("{memory.provider}_{index}", '
             f"{ids.memories[index]}, {module_ptr(memory.scope)}, "
-            f"{queue_ref(memory.input_name)}, {queue_ref(memory.output_name)}, "
-            f"{memory.entries}, {memory.init})"
+            f"{queue_ref(memory.input_name)}, {queue_ref(memory.output_name)}"
+            f"{suffix}"
         )
     for index, fanout in enumerate(fanouts):
         payload = _cpp_type(fanout.payload)
@@ -841,32 +849,49 @@ def lower_queue_program_to_cpp(program: QueueProgram) -> str:
     for index, reorder in enumerate(program.reorders):
         payload = _cpp_type(queues_by_name[reorder.input_name].payload)
         lines.append(
-            f"  gfsim::QueueReorder<{payload}, reorder_{index}_key_policy> "
+            f"  gfsim::Reorder<{payload}, {reorder.capacity}, {reorder.start}, "
+            f"reorder_{index}_key_policy> "
             f"reorder_{index}_block_;"
         )
     for index, dependency in enumerate(program.dependencies):
         payload = _cpp_type(queues_by_name[dependency.input_name].payload)
-        lines.append(
-            f"  gfsim::QueueDependency<{payload}, "
-            f"dependency_{index}_key_policy, "
-            f"dependency_{index}_dependency_policy, "
-            f"dependency_{index}_resource_policy, "
-            f"dependency_{index}_cost_policy> dependency_{index}_block_;"
-        )
+        if dependency.provider == "issue":
+            lines.append(
+                f"  gfsim::Issue<{payload}, {dependency.capacity}, "
+                f"{dependency.resources}, {dependency.no_dependency}, "
+                f"dependency_{index}_key_policy, "
+                f"dependency_{index}_dependency_policy, "
+                f"dependency_{index}_resource_policy, "
+                f"dependency_{index}_cost_policy> dependency_{index}_block_;"
+            )
+        else:
+            lines.append(
+                f"  gfsim::QueueDependency<{payload}, "
+                f"dependency_{index}_key_policy, "
+                f"dependency_{index}_dependency_policy, "
+                f"dependency_{index}_resource_policy, "
+                f"dependency_{index}_cost_policy> dependency_{index}_block_;"
+            )
     for index, credit in enumerate(program.credits):
         payload = _cpp_type(queues_by_name[credit.input_name].payload)
-        lines.append(
-            f"  gfsim::QueueCredit<{payload}, credit_{index}_cost_policy> "
-            f"credit_{index}_block_;"
+        provider = (
+            f"gfsim::Engine<{payload}, {credit.credits}, "
+            if credit.provider == "engine"
+            else f"gfsim::QueueCredit<{payload}, "
         )
+        lines.append(f"  {provider}credit_{index}_cost_policy> credit_{index}_block_;")
     for index, memory in enumerate(program.memories):
         payload = _cpp_type(queues_by_name[memory.input_name].payload)
         data_type = _cpp_type(memory.data_type)
+        provider = (
+            f"gfsim::Table<{payload}, {data_type}, {memory.entries}, {memory.init}, "
+            if memory.provider == "table"
+            else f"gfsim::QueueMemory<{payload}, {data_type}, "
+        )
         lines.append(
-            f"  gfsim::QueueMemory<{payload}, {data_type}, "
-            f"memory_{index}_address_policy, memory_{index}_write_policy, "
-            f"memory_{index}_data_policy, memory_{index}_response_policy> "
-            f"memory_{index}_block_;"
+            f"  {provider}memory_{index}_address_policy, "
+            f"memory_{index}_write_policy, memory_{index}_data_policy, "
+            f"memory_{index}_response_policy> memory_{index}_block_;"
         )
     for index, fanout in enumerate(fanouts):
         payload = _cpp_type(fanout.payload)

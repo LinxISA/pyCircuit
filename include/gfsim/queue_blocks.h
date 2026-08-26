@@ -215,7 +215,7 @@ private:
 template <typename T, typename Key>
   requires std::invocable<const Key &, const T &> &&
            std::integral<std::invoke_result_t<const Key &, const T &>>
-class QueueReorder final : public SimObject {
+class QueueReorder : public SimObject {
 public:
   static constexpr std::string_view contractName = "ac.reorder";
   static constexpr ObjectKind componentKind = ObjectKind::Scheduler;
@@ -305,6 +305,21 @@ private:
   std::optional<uint64_t> pendingOutputKey_;
 };
 
+template <typename T, size_t Entries, uint64_t Start, typename Key>
+  requires(Entries > 0) && std::invocable<const Key &, const T &> &&
+          std::integral<std::invoke_result_t<const Key &, const T &>>
+class Reorder final : public QueueReorder<T, Key> {
+public:
+  static constexpr std::string_view contractName = "ac.reorder";
+  static constexpr ObjectKind componentKind = ObjectKind::Scheduler;
+
+  Reorder(std::string name, ObjectId id, SimObject *parent, SimQueue<T> &input,
+          SimQueue<T> &output, Key key = {},
+          ObservationSink *observations = nullptr)
+      : QueueReorder<T, Key>(std::move(name), id, parent, input, output,
+                             Entries, Start, std::move(key), observations) {}
+};
+
 template <typename T, typename Key, typename Dependency, typename Resource,
           typename Cost>
   requires std::invocable<const Key &, const T &> &&
@@ -315,7 +330,7 @@ template <typename T, typename Key, typename Dependency, typename Resource,
            std::integral<std::invoke_result_t<const Resource &, const T &>> &&
            std::invocable<const Cost &, const T &> &&
            std::integral<std::invoke_result_t<const Cost &, const T &>>
-class QueueDependency final : public SimObject {
+class QueueDependency : public SimObject {
 public:
   static constexpr std::string_view contractName = "ac.dependency";
   static constexpr ObjectKind componentKind = ObjectKind::Scheduler;
@@ -542,10 +557,36 @@ private:
   bool proposed_ = false;
 };
 
+template <typename T, size_t Entries, size_t Resources, uint64_t NoDependency,
+          typename Key, typename Dependency, typename Resource, typename Cost>
+  requires(Entries > 0) && (Resources > 0) &&
+          std::invocable<const Key &, const T &> &&
+          std::integral<std::invoke_result_t<const Key &, const T &>> &&
+          std::invocable<const Dependency &, const T &> &&
+          std::integral<std::invoke_result_t<const Dependency &, const T &>> &&
+          std::invocable<const Resource &, const T &> &&
+          std::integral<std::invoke_result_t<const Resource &, const T &>> &&
+          std::invocable<const Cost &, const T &> &&
+          std::integral<std::invoke_result_t<const Cost &, const T &>>
+class Issue final : public QueueDependency<T, Key, Dependency, Resource, Cost> {
+public:
+  static constexpr std::string_view contractName = "ac.issue";
+  static constexpr ObjectKind componentKind = ObjectKind::Scheduler;
+
+  Issue(std::string name, ObjectId id, SimObject *parent, SimQueue<T> &input,
+        SimQueue<T> &output, Key key = {}, Dependency dependency = {},
+        Resource resource = {}, Cost cost = {},
+        ObservationSink *observations = nullptr)
+      : QueueDependency<T, Key, Dependency, Resource, Cost>(
+            std::move(name), id, parent, input, output, Entries, Resources,
+            NoDependency, std::move(key), std::move(dependency),
+            std::move(resource), std::move(cost), observations) {}
+};
+
 template <typename T, typename Cost>
   requires std::invocable<const Cost &, const T &> &&
            std::integral<std::invoke_result_t<const Cost &, const T &>>
-class QueueCredit final : public SimObject {
+class QueueCredit : public SimObject {
 public:
   static constexpr std::string_view contractName = "ac.credit";
   static constexpr ObjectKind componentKind = ObjectKind::Scheduler;
@@ -671,6 +712,21 @@ private:
   bool proposed_ = false;
 };
 
+template <typename T, size_t Lanes, typename Cost>
+  requires(Lanes > 0) && std::invocable<const Cost &, const T &> &&
+          std::integral<std::invoke_result_t<const Cost &, const T &>>
+class Engine final : public QueueCredit<T, Cost> {
+public:
+  static constexpr std::string_view contractName = "ac.engine";
+  static constexpr ObjectKind componentKind = ObjectKind::Scheduler;
+
+  Engine(std::string name, ObjectId id, SimObject *parent, SimQueue<T> &input,
+         SimQueue<T> &output, Cost cost = {},
+         ObservationSink *observations = nullptr)
+      : QueueCredit<T, Cost>(std::move(name), id, parent, input, output, Lanes,
+                             std::move(cost), observations) {}
+};
+
 template <typename T, typename Data, typename Address, typename Write,
           typename WriteData, typename Response>
   requires std::invocable<const Address &, const T &> &&
@@ -685,7 +741,7 @@ template <typename T, typename Data, typename Address, typename Write,
            std::convertible_to<
                std::invoke_result_t<const Response &, const T &, const Data &>,
                T>
-class QueueMemory final : public SimObject {
+class QueueMemory : public SimObject {
 public:
   static constexpr std::string_view contractName = "ac.memory";
   static constexpr ObjectKind componentKind = ObjectKind::Memory;
@@ -759,6 +815,37 @@ private:
   [[no_unique_address]] Response response_;
   std::optional<std::pair<size_t, Data>> pendingWrite_;
   bool fired_ = false;
+};
+
+template <typename T, typename Data, size_t Entries, Data Init,
+          typename Address, typename Write, typename WriteData,
+          typename Response>
+  requires(Entries > 0) && std::invocable<const Address &, const T &> &&
+          std::integral<std::invoke_result_t<const Address &, const T &>> &&
+          std::invocable<const Write &, const T &> &&
+          std::convertible_to<std::invoke_result_t<const Write &, const T &>,
+                              bool> &&
+          std::invocable<const WriteData &, const T &> &&
+          std::convertible_to<
+              std::invoke_result_t<const WriteData &, const T &>, Data> &&
+          std::invocable<const Response &, const T &, const Data &> &&
+          std::convertible_to<
+              std::invoke_result_t<const Response &, const T &, const Data &>,
+              T>
+class Table final
+    : public QueueMemory<T, Data, Address, Write, WriteData, Response> {
+public:
+  static constexpr std::string_view contractName = "ac.table";
+  static constexpr ObjectKind componentKind = ObjectKind::Memory;
+
+  Table(std::string name, ObjectId id, SimObject *parent, SimQueue<T> &input,
+        SimQueue<T> &output, Address address = {}, Write write = {},
+        WriteData writeData = {}, Response response = {},
+        ObservationSink *observations = nullptr)
+      : QueueMemory<T, Data, Address, Write, WriteData, Response>(
+            std::move(name), id, parent, input, output, Entries, Init,
+            std::move(address), std::move(write), std::move(writeData),
+            std::move(response), observations) {}
 };
 
 template <typename T> class QueueSink final : public SimObject {

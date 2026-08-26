@@ -61,7 +61,7 @@
         {"name": "latency", "kind": "instance", "required": false, "default": 1, "cpp_mapping": "constructor_constant", "verilog_mapping": "parameter"}
       ],
       "providers": {
-        "cpp": {"header": "gfsim/queue_blocks.h", "symbol": "gfsim::QueueCredit", "optimized": true},
+        "cpp": {"header": "gfsim/queue_blocks.h", "symbol": "gfsim::Engine", "optimized": true},
         "verilog": {"realization": "fixed_slot_register_bank_and_countdown", "optimized": true}
       },
       "refinement_observations": ["accepted_transaction", "completed_transaction", "active_lanes"]
@@ -108,7 +108,7 @@
         {"name": "latency", "kind": "instance", "required": false, "default": 1, "cpp_mapping": "constructor_constant", "verilog_mapping": "parameter"}
       ],
       "providers": {
-        "cpp": {"header": "gfsim/queue_blocks.h", "symbol": "gfsim::QueueDependency", "optimized": true},
+        "cpp": {"header": "gfsim/queue_blocks.h", "symbol": "gfsim::Issue", "optimized": true},
         "verilog": {"realization": "packed_dependency_window_resource_reservation_and_countdown", "optimized": true}
       },
       "refinement_observations": ["accepted_transaction", "issued_transaction", "completed_transaction"]
@@ -152,7 +152,7 @@
         {"name": "latency", "kind": "instance", "required": false, "default": 1, "cpp_mapping": "constructor_constant", "verilog_mapping": "parameter"}
       ],
       "providers": {
-        "cpp": {"header": "gfsim/queue_blocks.h", "symbol": "gfsim::QueueReorder", "optimized": true},
+        "cpp": {"header": "gfsim/queue_blocks.h", "symbol": "gfsim::Reorder", "optimized": true},
         "verilog": {"realization": "tagged_register_bank_and_expected_key", "optimized": true}
       },
       "refinement_observations": ["accepted_transaction", "retired_transaction", "sequence_order"]
@@ -199,7 +199,7 @@
         {"name": "latency", "kind": "instance", "required": false, "default": 1, "cpp_mapping": "constructor_constant", "verilog_mapping": "parameter"}
       ],
       "providers": {
-        "cpp": {"header": "gfsim/queue_blocks.h", "symbol": "gfsim::QueueMemory", "optimized": true},
+        "cpp": {"header": "gfsim/queue_blocks.h", "symbol": "gfsim::Table", "optimized": true},
         "verilog": {"realization": "pyc_sync_mem_with_aligned_request_state", "optimized": true}
       },
       "refinement_observations": ["request_transaction", "response_transaction", "memory_write"]

@@ -159,6 +159,7 @@ class DependencyBinding:
     latency: int
     scope: tuple[str, ...]
     order: int
+    provider: str = "dependency"
 
 
 @dataclass(frozen=True, slots=True)
@@ -172,6 +173,7 @@ class CreditBinding:
     latency: int
     scope: tuple[str, ...]
     order: int
+    provider: str = "credit"
 
 
 @dataclass(frozen=True, slots=True)
@@ -213,6 +215,7 @@ class MemoryBinding:
     latency: int
     scope: tuple[str, ...]
     order: int
+    provider: str = "memory"
 
 
 @dataclass(frozen=True, slots=True)
@@ -2095,6 +2098,7 @@ def parse_queue_program(
                             latency,
                             scope_path,
                             current_order,
+                            provider="issue",
                         )
                     )
                 elif call_name(call) == "engine":
@@ -2133,6 +2137,7 @@ def parse_queue_program(
                         latency,
                         scope_path,
                         current_order,
+                        provider="engine",
                     )
                     credits.append(credits_binding)
                 elif call_name(call) == "reorder":
@@ -2250,6 +2255,7 @@ def parse_queue_program(
                             latency,
                             scope_path,
                             current_order,
+                            provider="table",
                         )
                     )
                 elif (
