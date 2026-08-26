@@ -269,6 +269,7 @@ class QueueProgram:
     observations: tuple[ObservationBinding, ...]
     expectations: tuple[ExpectBinding, ...]
     sinks: tuple[SinkBinding, ...]
+    specialization_fingerprint: str | None = None
 
 
 def _decorator_name(node: ast.expr) -> str:
@@ -472,6 +473,7 @@ def parse_queue_program(
     text: str,
     system: str,
     static_arguments: Mapping[str, StaticValue] | None = None,
+    specialization_fingerprint: str | None = None,
 ) -> QueueProgram:
     tree = ast.parse(text, filename="<queue-model>", type_comments=True)
     for node in tree.body:
@@ -501,6 +503,17 @@ def parse_queue_program(
             f"ACPY-QUEUE-001: system {system!r} is missing or ambiguous"
         )
     function = candidates[0]
+    if specialization_fingerprint is not None:
+        prefix = "sha256:"
+        digest = specialization_fingerprint.removeprefix(prefix)
+        if (
+            not specialization_fingerprint.startswith(prefix)
+            or len(digest) != 64
+            or any(character not in "0123456789abcdef" for character in digest)
+        ):
+            raise QueueFrontendError(
+                "ACPY-QUEUE-022: specialization fingerprint is invalid"
+            )
     if function.args.vararg is not None or function.args.kwarg is not None:
         raise QueueFrontendError(
             "ACPY-QUEUE-001: a queue system cannot use variadic parameters"
@@ -2623,6 +2636,7 @@ def parse_queue_program(
         tuple(observations),
         tuple(expectations),
         tuple(sinks),
+        specialization_fingerprint,
     )
 
 
@@ -2820,9 +2834,14 @@ class _ExpressionEmitter:
 
 
 def lower_queue_program(program: QueueProgram) -> str:
+    specialization = (
+        ""
+        if program.specialization_fingerprint is None
+        else f', ac.specialization = "{program.specialization_fingerprint}"'
+    )
     lines = [
         f'module attributes {{ac.contract_epoch = "0.2", '
-        f'ac.system = "{program.system}"}} {{'
+        f'ac.system = "{program.system}"{specialization}}} {{'
     ]
     payloads = {item.name: item for item in program.payloads}
     if program.payloads:
@@ -3625,7 +3644,13 @@ def lower_queue_source(
     text: str,
     system: str,
     static_arguments: Mapping[str, StaticValue] | None = None,
+    specialization_fingerprint: str | None = None,
 ) -> str:
     return lower_queue_program(
-        parse_queue_program(text, system, static_arguments=static_arguments)
+        parse_queue_program(
+            text,
+            system,
+            static_arguments=static_arguments,
+            specialization_fingerprint=specialization_fingerprint,
+        )
     )

@@ -64,6 +64,7 @@ struct QueueBlockPlan {
 
 struct QueueGraphPlan {
   std::string system;
+  std::string specializationFingerprint;
   std::vector<QueuePayloadPlan> payloads;
   std::vector<std::string> scopes;
   std::vector<QueuePlan> queues;

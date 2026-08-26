@@ -125,6 +125,7 @@ class JitSpecialization:
             self._source(),
             self.definition.__name__,
             static_arguments=dict(self.arguments),
+            specialization_fingerprint=self.fingerprint,
         )
 
     def lower_cpp(self) -> str:
@@ -137,6 +138,7 @@ class JitSpecialization:
             self._source(),
             self.definition.__name__,
             static_arguments=dict(self.arguments),
+            specialization_fingerprint=self.fingerprint,
         )
         return lower_queue_program_to_cpp(program)
 

@@ -201,6 +201,8 @@ class ConfigAndJitTest(unittest.TestCase):
         acir = module.specialization.lower_acir()
         cpp = module.specialization.lower_cpp()
 
+        self.assertIn(module.specialization.fingerprint, acir)
+        self.assertIn(module.specialization.fingerprint, cpp)
         self.assertIn("ac.dependency", acir)
         self.assertIn("ac.reorder", acir)
         self.assertIn("gfsim::Schedule<PTOInst, 16, 4, 255", cpp)
@@ -316,6 +318,13 @@ class JitQueueLoweringTest(unittest.TestCase):
                 JIT_SOURCE.replace("cfg: ac.const[Config]", "cfg: Config"),
                 "pipeline",
                 static_arguments={"cfg": 4},
+            )
+        with self.assertRaisesRegex(QueueFrontendError, "fingerprint is invalid"):
+            lower_queue_source(
+                JIT_SOURCE,
+                "pipeline",
+                static_arguments={"cfg": 4},
+                specialization_fingerprint="sha256:bad",
             )
 
     def test_only_compute_accepts_function_style_lambda(self) -> None:

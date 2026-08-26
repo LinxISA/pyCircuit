@@ -1,6 +1,7 @@
 #include "acir/CodeGen/QueueGraphPlan.h"
 
 #include "acir/Bindings/Binding.h"
+#include "acir/CodeGen/Manifest.h"
 #include "acir/Dialect/ACIR/ACIROps.h"
 #include "acir/Dialect/ACIR/ACIRTypes.h"
 
@@ -212,6 +213,12 @@ public:
     if (!system || system.getValue().empty())
       return planError("module requires non-empty ac.system");
     plan.system = system.getValue().str();
+    if (auto specialization =
+            module->getAttrOfType<mlir::StringAttr>("ac.specialization")) {
+      if (!isValidFingerprint(specialization.getValue()))
+        return planError("module ac.specialization fingerprint is invalid");
+      plan.specializationFingerprint = specialization.getValue().str();
+    }
     if (auto error = extractBlock(*module.getBody(), {}))
       return std::move(error);
     if (auto error = validateGraph())
@@ -686,6 +693,9 @@ llvm::Expected<QueueGraphPlan> buildQueueGraphPlan(mlir::ModuleOp module) {
 llvm::Error verifyQueueGraphPlan(const QueueGraphPlan &plan) {
   if (plan.system.empty() || plan.queues.empty() || plan.blocks.empty())
     return planError("QueueGraph plan is incomplete");
+  if (!plan.specializationFingerprint.empty() &&
+      !isValidFingerprint(plan.specializationFingerprint))
+    return planError("QueueGraph specialization fingerprint is invalid");
 
   llvm::StringSet<> queueNames;
   llvm::StringMap<unsigned> producers;
@@ -828,14 +838,18 @@ llvm::Expected<std::string> QueueGraphPlan::canonicalJson() const {
                            {"init", block.init},
                            {"yields", std::move(yields)}});
   }
-  llvm::json::Object root{{"blocks", std::move(blockValues)},
-                          {"contract_epoch", "0.2"},
-                          {"payloads", std::move(payloadValues)},
-                          {"queues", std::move(queueValues)},
-                          {"schema", "agentic-circuit-queue-graph-plan"},
-                          {"scopes", std::move(scopeValues)},
-                          {"system", system},
-                          {"version", "0.2"}};
+  llvm::json::Object root{
+      {"blocks", std::move(blockValues)},
+      {"contract_epoch", "0.2"},
+      {"payloads", std::move(payloadValues)},
+      {"queues", std::move(queueValues)},
+      {"schema", "agentic-circuit-queue-graph-plan"},
+      {"scopes", std::move(scopeValues)},
+      {"specialization", specializationFingerprint.empty()
+                             ? llvm::json::Value(nullptr)
+                             : llvm::json::Value(specializationFingerprint)},
+      {"system", system},
+      {"version", "0.2"}};
   return bindings::canonicalizeJson(llvm::json::Value(std::move(root)));
 }
 

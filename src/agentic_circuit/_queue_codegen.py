@@ -403,6 +403,8 @@ def lower_queue_program_to_cpp(program: QueueProgram) -> str:
         "namespace ac_generated {",
         "",
     ]
+    if program.specialization_fingerprint is not None:
+        lines.insert(1, f"// Specialization: {program.specialization_fingerprint}")
     for payload in program.payloads:
         lines.extend(_emit_payload(payload))
     for queue in program.queues:

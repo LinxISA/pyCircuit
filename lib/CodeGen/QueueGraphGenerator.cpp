@@ -320,8 +320,10 @@ llvm::Expected<std::string> generateQueueGraphCpp(const QueueGraphPlan &plan) {
     blockIds[block->name + "#" + std::to_string(index)] = nextId++;
 
   std::ostringstream output;
-  output << "// Generated from frozen ACIR QueueGraph plan; do not edit.\n"
-            "#include \"gfsim/dispatch.h\"\n"
+  output << "// Generated from frozen ACIR QueueGraph plan; do not edit.\n";
+  if (!plan.specializationFingerprint.empty())
+    output << "// Specialization: " << plan.specializationFingerprint << "\n";
+  output << "#include \"gfsim/dispatch.h\"\n"
             "#include \"gfsim/object.h\"\n"
             "#include \"gfsim/queue.h\"\n"
             "#include \"gfsim/queue_blocks.h\"\n\n"
