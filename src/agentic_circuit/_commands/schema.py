@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import NoReturn
 
 from .._capabilities import (
+    block_spec,
     capability_document,
     diagnostic_catalog,
     load_json,
@@ -54,11 +55,7 @@ def _component_records(kind: str) -> list[tuple[str, dict[str, JsonValue]]]:
 def _select(
     records: list[tuple[str, dict[str, JsonValue]]], name: str
 ) -> dict[str, JsonValue]:
-    candidates = [
-        record
-        for identity, record in records
-        if name == identity
-    ]
+    candidates = [record for identity, record in records if name == identity]
     if len(candidates) != 1:
         _fail(f"schema identity is unknown: {name}")
     return candidates[0]
@@ -79,9 +76,7 @@ def _diagnostics(name: str | None) -> dict[str, JsonValue]:
     if type(entries) is not list or not all(type(item) is dict for item in entries):
         raise ValueError("packaged diagnostic catalog is invalid")
     if name is None:
-        return _listing(
-            "diagnostic", [str(item["code"]) for item in entries]
-        )
+        return _listing("diagnostic", [str(item["code"]) for item in entries])
     matches = [item for item in entries if item.get("code") == name]
     if len(matches) != 1:
         _fail(f"diagnostic code is unknown: {name}")
@@ -97,6 +92,18 @@ def _opcodes(name: str | None) -> dict[str, JsonValue]:
     matches = [item for item in entries if item.get("operation") == name]
     if len(matches) != 1:
         _fail(f"opcode identity is unknown: {name}")
+    return matches[0]
+
+
+def _blocks(name: str | None) -> dict[str, JsonValue]:
+    entries = block_spec().get("blocks")
+    if type(entries) is not list or not all(type(item) is dict for item in entries):
+        raise ValueError("packaged high-level BlockSpec is invalid")
+    if name is None:
+        return _listing("block", [str(item["operation"]) for item in entries])
+    matches = [item for item in entries if item.get("operation") == name]
+    if len(matches) != 1:
+        _fail(f"block identity is unknown: {name}")
     return matches[0]
 
 
@@ -118,6 +125,8 @@ def run(arguments: object, sink: OutputSink) -> int:
         document = _diagnostics(name)
     elif kind == "opcode":
         document = _opcodes(name)
+    elif kind == "block":
+        document = _blocks(name)
     elif kind == "interface":
         names = ["ac.Stream"]
         if name is None:

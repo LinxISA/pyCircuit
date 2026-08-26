@@ -1,0 +1,208 @@
+{
+  "schema": "agentic-circuit-block-spec",
+  "version": "0.3",
+  "contract_epoch": "0.2",
+  "blocks": [
+    {
+      "name": "barrier",
+      "operation": "ac.barrier",
+      "lowers_to": "ac.barrier",
+      "category": "scheduling",
+      "lambda_regions": 0,
+      "ports": [
+        {"name": "inputs", "direction": "in", "arity": {"min": 2, "max": null}, "payload": "input", "ownership": "borrowed_simqueue"},
+        {"name": "outputs", "direction": "out", "arity": {"min": 2, "max": null}, "payload": "input", "ownership": "borrowed_simqueue"}
+      ],
+      "parameters": [
+        {"name": "depth", "kind": "instance", "required": false, "default": 1, "cpp_mapping": "constructor_constant", "verilog_mapping": "parameter"},
+        {"name": "latency", "kind": "instance", "required": false, "default": 1, "cpp_mapping": "constructor_constant", "verilog_mapping": "parameter"}
+      ],
+      "providers": {
+        "cpp": {"header": "gfsim/queue_blocks.h", "symbol": "gfsim::QueueBarrier", "optimized": true},
+        "verilog": {"realization": "all_input_valid_and_all_output_ready_atomic_handshake", "optimized": true}
+      },
+      "refinement_observations": ["input_transactions", "output_transactions", "barrier_firing"]
+    },
+    {
+      "name": "compute",
+      "operation": "ac.compute",
+      "lowers_to": "ac.transform",
+      "category": "compute",
+      "lambda_regions": 1,
+      "ports": [
+        {"name": "inputs", "direction": "in", "arity": {"min": 1, "max": null}, "payload": "input", "ownership": "borrowed_simqueue"},
+        {"name": "outputs", "direction": "out", "arity": {"min": 1, "max": null}, "payload": "region_yield", "ownership": "borrowed_simqueue"}
+      ],
+      "parameters": [
+        {"name": "payload", "kind": "type", "required": true, "default": null, "cpp_mapping": "inferred_template_type", "verilog_mapping": "inferred_packed_type"},
+        {"name": "depth", "kind": "instance", "required": false, "default": 1, "cpp_mapping": "constructor_constant", "verilog_mapping": "parameter"},
+        {"name": "latency", "kind": "instance", "required": false, "default": 1, "cpp_mapping": "constructor_constant", "verilog_mapping": "parameter"}
+      ],
+      "providers": {
+        "cpp": {"header": "gfsim/queue_blocks.h", "symbol": "gfsim::QueueTransform", "optimized": true},
+        "verilog": {"realization": "pure_comb_logic_plus_atomic_ready_valid_storage", "optimized": true}
+      },
+      "refinement_observations": ["accepted_transaction", "output_transaction"]
+    },
+    {
+      "name": "engine",
+      "operation": "ac.engine",
+      "lowers_to": "ac.credit",
+      "category": "execution",
+      "lambda_regions": 0,
+      "ports": [
+        {"name": "input", "direction": "in", "arity": {"min": 1, "max": 1}, "payload": "input", "ownership": "borrowed_simqueue"},
+        {"name": "output", "direction": "out", "arity": {"min": 1, "max": 1}, "payload": "input", "ownership": "borrowed_simqueue"}
+      ],
+      "parameters": [
+        {"name": "cost", "kind": "field", "required": true, "default": null, "cpp_mapping": "typed_accessor", "verilog_mapping": "packed_field_slice"},
+        {"name": "lanes", "kind": "structural", "required": false, "default": 1, "cpp_mapping": "template_argument", "verilog_mapping": "parameter"},
+        {"name": "depth", "kind": "instance", "required": false, "default": 1, "cpp_mapping": "constructor_constant", "verilog_mapping": "parameter"},
+        {"name": "latency", "kind": "instance", "required": false, "default": 1, "cpp_mapping": "constructor_constant", "verilog_mapping": "parameter"}
+      ],
+      "providers": {
+        "cpp": {"header": "gfsim/queue_blocks.h", "symbol": "gfsim::QueueCredit", "optimized": true},
+        "verilog": {"realization": "fixed_slot_register_bank_and_countdown", "optimized": true}
+      },
+      "refinement_observations": ["accepted_transaction", "completed_transaction", "active_lanes"]
+    },
+    {
+      "name": "fork",
+      "operation": "ac.fork",
+      "lowers_to": "ac.fork",
+      "category": "transport",
+      "lambda_regions": 0,
+      "ports": [
+        {"name": "input", "direction": "in", "arity": {"min": 1, "max": 1}, "payload": "input", "ownership": "borrowed_simqueue"},
+        {"name": "outputs", "direction": "out", "arity": {"min": 2, "max": null}, "payload": "input", "ownership": "borrowed_simqueue"}
+      ],
+      "parameters": [
+        {"name": "depth", "kind": "instance", "required": false, "default": 1, "cpp_mapping": "constructor_constant", "verilog_mapping": "parameter"},
+        {"name": "latency", "kind": "instance", "required": false, "default": 1, "cpp_mapping": "constructor_constant", "verilog_mapping": "parameter"}
+      ],
+      "providers": {
+        "cpp": {"header": "gfsim/queue_blocks.h", "symbol": "gfsim::QueueFork", "optimized": true},
+        "verilog": {"realization": "per_output_delivered_registers", "optimized": true}
+      },
+      "refinement_observations": ["input_transaction", "output_transactions"]
+    },
+    {
+      "name": "issue",
+      "operation": "ac.issue",
+      "lowers_to": "ac.dependency",
+      "category": "scheduling",
+      "lambda_regions": 0,
+      "ports": [
+        {"name": "enqueue", "direction": "in", "arity": {"min": 1, "max": 1}, "payload": "input", "ownership": "borrowed_simqueue"},
+        {"name": "issued", "direction": "out", "arity": {"min": 1, "max": 1}, "payload": "input", "ownership": "borrowed_simqueue"}
+      ],
+      "parameters": [
+        {"name": "by", "kind": "field", "required": true, "default": null, "cpp_mapping": "typed_accessor", "verilog_mapping": "packed_field_slice"},
+        {"name": "waits_for", "kind": "field", "required": true, "default": null, "cpp_mapping": "typed_accessor", "verilog_mapping": "packed_field_slice"},
+        {"name": "resource", "kind": "field", "required": true, "default": null, "cpp_mapping": "typed_accessor", "verilog_mapping": "packed_field_slice"},
+        {"name": "cost", "kind": "field", "required": true, "default": null, "cpp_mapping": "typed_accessor", "verilog_mapping": "packed_field_slice"},
+        {"name": "entries", "kind": "structural", "required": false, "default": 16, "cpp_mapping": "template_argument", "verilog_mapping": "parameter"},
+        {"name": "resources", "kind": "structural", "required": false, "default": 1, "cpp_mapping": "template_argument", "verilog_mapping": "parameter"},
+        {"name": "no_dependency", "kind": "instance", "required": false, "default": 0, "cpp_mapping": "constexpr_argument", "verilog_mapping": "localparam"},
+        {"name": "depth", "kind": "instance", "required": false, "default": 1, "cpp_mapping": "constructor_constant", "verilog_mapping": "parameter"},
+        {"name": "latency", "kind": "instance", "required": false, "default": 1, "cpp_mapping": "constructor_constant", "verilog_mapping": "parameter"}
+      ],
+      "providers": {
+        "cpp": {"header": "gfsim/queue_blocks.h", "symbol": "gfsim::QueueDependency", "optimized": true},
+        "verilog": {"realization": "packed_dependency_window_resource_reservation_and_countdown", "optimized": true}
+      },
+      "refinement_observations": ["accepted_transaction", "issued_transaction", "completed_transaction"]
+    },
+    {
+      "name": "merge",
+      "operation": "ac.merge",
+      "lowers_to": "ac.merge",
+      "category": "transport",
+      "lambda_regions": 0,
+      "ports": [
+        {"name": "inputs", "direction": "in", "arity": {"min": 2, "max": null}, "payload": "all_equal", "ownership": "borrowed_simqueue"},
+        {"name": "output", "direction": "out", "arity": {"min": 1, "max": 1}, "payload": "all_equal", "ownership": "borrowed_simqueue"}
+      ],
+      "parameters": [
+        {"name": "policy", "kind": "policy", "required": false, "default": "priority", "cpp_mapping": "template_argument", "verilog_mapping": "generate_policy"},
+        {"name": "depth", "kind": "instance", "required": false, "default": 1, "cpp_mapping": "constructor_constant", "verilog_mapping": "parameter"},
+        {"name": "latency", "kind": "instance", "required": false, "default": 1, "cpp_mapping": "constructor_constant", "verilog_mapping": "parameter"}
+      ],
+      "providers": {
+        "cpp": {"header": "gfsim/queue_blocks.h", "symbol": "gfsim::QueueMerge", "optimized": true},
+        "verilog": {"realization": "priority_or_round_robin_ready_valid_arbiter", "optimized": true}
+      },
+      "refinement_observations": ["selected_input_transaction", "output_transaction"]
+    },
+    {
+      "name": "reorder",
+      "operation": "ac.reorder",
+      "lowers_to": "ac.reorder",
+      "category": "scheduling",
+      "lambda_regions": 0,
+      "ports": [
+        {"name": "input", "direction": "in", "arity": {"min": 1, "max": 1}, "payload": "input", "ownership": "borrowed_simqueue"},
+        {"name": "output", "direction": "out", "arity": {"min": 1, "max": 1}, "payload": "input", "ownership": "borrowed_simqueue"}
+      ],
+      "parameters": [
+        {"name": "by", "kind": "field", "required": true, "default": null, "cpp_mapping": "typed_accessor", "verilog_mapping": "packed_field_slice"},
+        {"name": "entries", "kind": "structural", "required": false, "default": 16, "cpp_mapping": "template_argument", "verilog_mapping": "parameter"},
+        {"name": "start", "kind": "instance", "required": false, "default": 0, "cpp_mapping": "constexpr_argument", "verilog_mapping": "localparam"},
+        {"name": "depth", "kind": "instance", "required": false, "default": 1, "cpp_mapping": "constructor_constant", "verilog_mapping": "parameter"},
+        {"name": "latency", "kind": "instance", "required": false, "default": 1, "cpp_mapping": "constructor_constant", "verilog_mapping": "parameter"}
+      ],
+      "providers": {
+        "cpp": {"header": "gfsim/queue_blocks.h", "symbol": "gfsim::QueueReorder", "optimized": true},
+        "verilog": {"realization": "tagged_register_bank_and_expected_key", "optimized": true}
+      },
+      "refinement_observations": ["accepted_transaction", "retired_transaction", "sequence_order"]
+    },
+    {
+      "name": "route",
+      "operation": "ac.route",
+      "lowers_to": "ac.route",
+      "category": "transport",
+      "lambda_regions": 0,
+      "ports": [
+        {"name": "input", "direction": "in", "arity": {"min": 1, "max": 1}, "payload": "input", "ownership": "borrowed_simqueue"},
+        {"name": "outputs", "direction": "out", "arity": {"min": 2, "max": null}, "payload": "input", "ownership": "borrowed_simqueue"}
+      ],
+      "parameters": [
+        {"name": "by", "kind": "field", "required": true, "default": null, "cpp_mapping": "typed_accessor", "verilog_mapping": "packed_field_slice"},
+        {"name": "depth", "kind": "instance", "required": false, "default": 1, "cpp_mapping": "constructor_constant", "verilog_mapping": "parameter"},
+        {"name": "latency", "kind": "instance", "required": false, "default": 1, "cpp_mapping": "constructor_constant", "verilog_mapping": "parameter"}
+      ],
+      "providers": {
+        "cpp": {"header": "gfsim/queue_blocks.h", "symbol": "gfsim::QueueRoute", "optimized": true},
+        "verilog": {"realization": "selector_decoder_valid_demux_and_ready_mux", "optimized": true}
+      },
+      "refinement_observations": ["input_transaction", "selected_output_transaction"]
+    },
+    {
+      "name": "table",
+      "operation": "ac.table",
+      "lowers_to": "ac.memory",
+      "category": "scheduling",
+      "lambda_regions": 0,
+      "ports": [
+        {"name": "request", "direction": "in", "arity": {"min": 1, "max": 1}, "payload": "input", "ownership": "borrowed_simqueue"},
+        {"name": "response", "direction": "out", "arity": {"min": 1, "max": 1}, "payload": "input", "ownership": "borrowed_simqueue"}
+      ],
+      "parameters": [
+        {"name": "address", "kind": "field", "required": true, "default": null, "cpp_mapping": "typed_accessor", "verilog_mapping": "packed_field_slice"},
+        {"name": "write", "kind": "field", "required": true, "default": null, "cpp_mapping": "typed_accessor", "verilog_mapping": "packed_field_slice"},
+        {"name": "data", "kind": "field", "required": true, "default": null, "cpp_mapping": "typed_accessor", "verilog_mapping": "packed_field_slice"},
+        {"name": "result", "kind": "field", "required": true, "default": null, "cpp_mapping": "typed_accessor", "verilog_mapping": "packed_field_slice"},
+        {"name": "entries", "kind": "structural", "required": false, "default": 16, "cpp_mapping": "template_argument", "verilog_mapping": "parameter"},
+        {"name": "init", "kind": "instance", "required": false, "default": 0, "cpp_mapping": "constexpr_argument", "verilog_mapping": "localparam"},
+        {"name": "depth", "kind": "instance", "required": false, "default": 1, "cpp_mapping": "constructor_constant", "verilog_mapping": "parameter"},
+        {"name": "latency", "kind": "instance", "required": false, "default": 1, "cpp_mapping": "constructor_constant", "verilog_mapping": "parameter"}
+      ],
+      "providers": {
+        "cpp": {"header": "gfsim/queue_blocks.h", "symbol": "gfsim::QueueMemory", "optimized": true},
+        "verilog": {"realization": "pyc_sync_mem_with_aligned_request_state", "optimized": true}
+      },
+      "refinement_observations": ["request_transaction", "response_transaction", "memory_write"]
+    }
+  ]
+}

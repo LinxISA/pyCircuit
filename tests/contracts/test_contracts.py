@@ -94,6 +94,38 @@ def assert_exact_ci_cache_commands(test_case, workflow):
 
 
 class RepositoryContractsTest(unittest.TestCase):
+    def test_v03_high_level_block_spec_is_closed_and_provider_complete(self):
+        from jsonschema import Draft202012Validator
+
+        schema = json.loads((ROOT / "schemas/block-spec.schema.json").read_text())
+        catalog = json.loads((ROOT / "schemas/blocks-v0.3.json").read_text())
+        Draft202012Validator(schema).validate(catalog)
+        blocks = catalog["blocks"]
+        self.assertEqual(
+            [
+                "barrier",
+                "compute",
+                "engine",
+                "fork",
+                "issue",
+                "merge",
+                "reorder",
+                "route",
+                "table",
+            ],
+            [block["name"] for block in blocks],
+        )
+        for block in blocks:
+            self.assertEqual(f'ac.{block["name"]}', block["operation"])
+            self.assertTrue(block["providers"]["cpp"]["optimized"])
+            self.assertTrue(block["providers"]["verilog"]["optimized"])
+            self.assertTrue(block["refinement_observations"])
+            self.assertTrue(
+                all(port["ownership"] == "borrowed_simqueue" for port in block["ports"])
+            )
+        lambda_blocks = [block["name"] for block in blocks if block["lambda_regions"]]
+        self.assertEqual(["compute"], lambda_blocks)
+
     def test_official_opcode_catalog_is_closed_backend_complete_and_standard(self):
         from jsonschema import Draft202012Validator
 
@@ -412,7 +444,7 @@ class RepositoryContractsTest(unittest.TestCase):
             r'^contract-epoch\s*=\s*"([^"]+)"\s*$', pyproject, re.MULTILINE
         )
 
-        self.assertEqual(11, len(schema_epochs))
+        self.assertEqual(12, len(schema_epochs))
         self.assertEqual(
             {CONTRACT_EPOCH}, set(schema_epochs.values()), schema_epochs
         )
@@ -436,7 +468,7 @@ class RepositoryContractsTest(unittest.TestCase):
             )
             Draft202012Validator.check_schema(document)
             checked.append(path.name)
-        self.assertEqual(11, len(checked), checked)
+        self.assertEqual(12, len(checked), checked)
 
     def test_trace_source_decoder_uses_the_runtime_decoder_concept(self):
         record = json.loads((ROOT / "schemas/stdlib/TraceSource.json").read_text())

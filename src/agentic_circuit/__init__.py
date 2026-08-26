@@ -20,12 +20,14 @@ from ._definitions import (
     system,
     transaction,
 )
+from ._jit import config, jit
 from ._resources import address_map, address_space, queue
 from ._types import (
     Endpoint,
     Flow,
     ResourceRef,
     Static,
+    const,
     s8,
     s16,
     s32,
@@ -69,6 +71,20 @@ __all__ = (
     "observe",
     "expect",
     "atomic",
+    "compute",
+    "config",
+    "const",
+    "jit",
+    "route",
+    "merge",
+    "issue",
+    "engine",
+    "reorder",
+    "round_robin",
+    "priority",
+    "fork",
+    "barrier",
+    "table",
     "u1",
     "u2",
     "u4",
@@ -131,3 +147,109 @@ def expect(value: object, *, predicate: object, message: str) -> Never:
 
 def atomic() -> Never:
     return _not_implemented("atomic")
+
+
+def compute(
+    value: object,
+    function: object,
+    *,
+    depth: int = 1,
+    latency: int = 1,
+) -> Never:
+    return _not_implemented("compute")
+
+
+round_robin = "round_robin"
+priority = "priority"
+
+
+def route(
+    value: object,
+    *,
+    by: object,
+    outputs: int,
+    depth: int = 1,
+    latency: int = 1,
+) -> Never:
+    return _not_implemented("route")
+
+
+def merge(
+    *values: object,
+    policy: object = priority,
+    depth: int = 1,
+    latency: int = 1,
+) -> Never:
+    return _not_implemented("merge")
+
+
+def issue(
+    value: object,
+    *,
+    by: object,
+    waits_for: object,
+    resource: object,
+    cost: object,
+    entries: int = 16,
+    resources: int = 1,
+    no_dependency: int = 0,
+    depth: int = 1,
+    latency: int = 1,
+) -> Never:
+    return _not_implemented("issue")
+
+
+def engine(
+    value: object,
+    *,
+    cost: object,
+    lanes: int = 1,
+    depth: int = 1,
+    latency: int = 1,
+) -> Never:
+    return _not_implemented("engine")
+
+
+def reorder(
+    value: object,
+    *,
+    by: object,
+    entries: int = 16,
+    start: int = 0,
+    depth: int = 1,
+    latency: int = 1,
+) -> Never:
+    return _not_implemented("reorder")
+
+
+def fork(
+    value: object,
+    *,
+    outputs: int,
+    depth: int = 1,
+    latency: int = 1,
+) -> Never:
+    return _not_implemented("fork")
+
+
+def barrier(
+    *values: object,
+    depth: int = 1,
+    latency: int = 1,
+) -> Never:
+    return _not_implemented("barrier")
+
+
+def table(
+    value: object,
+    *,
+    address: object,
+    write: object,
+    data: object,
+    result: object,
+    entries: int = 16,
+    init: int = 0,
+    depth: int = 1,
+    latency: int = 1,
+) -> Never:
+    return _not_implemented("table")
