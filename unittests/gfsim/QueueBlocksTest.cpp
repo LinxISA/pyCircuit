@@ -142,6 +142,8 @@ TEST(QueueBlocksTest, HighLevelProvidersFreezeStructuralTemplateParameters) {
       Schedule<DependencyValue, 8, 2, 255, DependencyKey, DependencyPredecessor,
                DependencyResource, DependencyCost>;
   using Engine4 = Engine<DependencyValue, 4, DependencyCost>;
+  using ComputeInt = Compute<int, int, Increment>;
+  using Pipeline2 = Pipeline<int, 2>;
   using Ordered64 = Reorder<SequencedValue, 64, 0, SequenceKey>;
   using Table32 = Table<MemoryRequest, uint16_t, 32, 0, MemoryAddress,
                         MemoryWrite, MemoryWriteData, MemoryResponse>;
@@ -149,6 +151,8 @@ TEST(QueueBlocksTest, HighLevelProvidersFreezeStructuralTemplateParameters) {
   static_assert(!std::is_same_v<Schedule4, Schedule2>);
   EXPECT_EQ(Schedule4::contractName, "ac.schedule");
   EXPECT_EQ(Engine4::contractName, "ac.engine");
+  EXPECT_EQ(ComputeInt::contractName, "ac.compute");
+  EXPECT_EQ(Pipeline2::contractName, "ac.pipeline");
   EXPECT_EQ(Ordered64::contractName, "ac.reorder");
   EXPECT_EQ(Table32::contractName, "ac.table");
 
@@ -163,11 +167,19 @@ TEST(QueueBlocksTest, HighLevelProvidersFreezeStructuralTemplateParameters) {
   SimQueue<MemoryRequest> memoryInput("memory_input", 8, nullptr, 2);
   SimQueue<MemoryRequest> memoryOutput("memory_output", 9, nullptr, 2);
   Table32 table("table", 10, nullptr, memoryInput, memoryOutput);
+  SimQueue<int> computeInput("compute_input", 11, nullptr, 2);
+  SimQueue<int> computeOutput("compute_output", 12, nullptr, 2);
+  ComputeInt compute("compute", 13, nullptr, computeInput, computeOutput);
+  SimQueue<int> pipelineOutput("pipeline_output", 14, nullptr, 2,
+                               std::numeric_limits<size_t>::max(), nullptr, 2);
+  Pipeline2 pipeline("pipeline", 15, nullptr, computeOutput, pipelineOutput);
 
   EXPECT_EQ(schedule.active(), 0u);
   EXPECT_EQ(engine.active(), 0u);
   EXPECT_EQ(reorder.active(), 0u);
   EXPECT_EQ(table.at(0), 0u);
+  EXPECT_FALSE(compute.hasPendingCommit());
+  EXPECT_FALSE(pipeline.hasPendingCommit());
 }
 
 TEST(QueueBlocksTest, TransformCommitsOnlyAcrossTheQueueBarrier) {

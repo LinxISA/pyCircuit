@@ -23,7 +23,7 @@ template <typename Input, typename Output, typename Policy>
   requires std::invocable<const Policy &, const Input &> &&
            std::convertible_to<
                std::invoke_result_t<const Policy &, const Input &>, Output>
-class QueueTransform final : public SimObject {
+class QueueTransform : public SimObject {
 public:
   static constexpr std::string_view contractName = "ac.transform";
   static constexpr ObjectKind componentKind = ObjectKind::Compute;
@@ -63,6 +63,44 @@ private:
   SimQueue<Output> &output_;
   [[no_unique_address]] Policy policy_;
   bool fired_ = false;
+};
+
+template <typename Input, typename Output, typename Policy>
+  requires std::invocable<const Policy &, const Input &> &&
+           std::convertible_to<
+               std::invoke_result_t<const Policy &, const Input &>, Output>
+class Compute final : public QueueTransform<Input, Output, Policy> {
+public:
+  static constexpr std::string_view contractName = "ac.compute";
+  static constexpr ObjectKind componentKind = ObjectKind::Compute;
+
+  Compute(std::string name, ObjectId id, SimObject *parent,
+          SimQueue<Input> &input, SimQueue<Output> &output, Policy policy = {},
+          ObservationSink *observations = nullptr)
+      : QueueTransform<Input, Output, Policy>(std::move(name), id, parent,
+                                              input, output, std::move(policy),
+                                              observations) {}
+};
+
+template <typename T> struct Identity {
+  T operator()(const T &value) const { return value; }
+};
+
+template <typename T, size_t Stages>
+  requires(Stages > 0)
+class Pipeline final : public QueueTransform<T, T, Identity<T>> {
+public:
+  static constexpr std::string_view contractName = "ac.pipeline";
+  static constexpr ObjectKind componentKind = ObjectKind::Compute;
+
+  Pipeline(std::string name, ObjectId id, SimObject *parent, SimQueue<T> &input,
+           SimQueue<T> &output, ObservationSink *observations = nullptr)
+      : QueueTransform<T, T, Identity<T>>(std::move(name), id, parent, input,
+                                          output, {}, observations) {
+    if (output.latency() != Stages)
+      throw std::invalid_argument(
+          "Pipeline stages must match output SimQueue latency");
+  }
 };
 
 template <typename Policy, typename InputTypes, typename OutputTypes>

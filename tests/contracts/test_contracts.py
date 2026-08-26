@@ -102,15 +102,20 @@ class RepositoryContractsTest(unittest.TestCase):
         Draft202012Validator(schema).validate(catalog)
         blocks = catalog["blocks"]
         self.assertEqual(
+            sorted(block["name"] for block in blocks),
+            [block["name"] for block in blocks],
+        )
+        self.assertEqual(
             [
                 "barrier",
                 "compute",
                 "engine",
                 "fork",
-                "schedule",
                 "merge",
+                "pipeline",
                 "reorder",
                 "route",
+                "schedule",
                 "table",
             ],
             [block["name"] for block in blocks],

@@ -35,6 +35,7 @@ PUBLIC = {
     "expect",
     "atomic",
     "compute",
+    "pipeline",
     "config",
     "const",
     "jit",
@@ -139,6 +140,7 @@ class PublicApiTest(unittest.TestCase):
             ),
             lambda: api.atomic(),
             lambda: api.compute(object(), lambda value: value),
+            lambda: api.pipeline(object(), stages=2),
             lambda: api.route(object(), by=object(), outputs=2),
             lambda: api.merge(object(), object()),
             lambda: api.schedule(

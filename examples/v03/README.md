@@ -3,7 +3,7 @@
 `davincioo_jit.py` is the first v0.3 vertical slice. It keeps every dynamic
 connection as a typed Queue SSA edge, freezes one `CoreConfig` through
 `ac.jit`, and uses only the simple high-level block names `compute`, `route`,
-`merge`, `schedule`, and `reorder`.
+`pipeline`, `merge`, `schedule`, and `reorder`.
 
 Only `compute` carries a lambda. The remaining blocks select typed payload
 fields with compile-time descriptors and lower to the existing optimized

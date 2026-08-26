@@ -72,6 +72,7 @@ __all__ = (
     "expect",
     "atomic",
     "compute",
+    "pipeline",
     "config",
     "const",
     "jit",
@@ -157,6 +158,15 @@ def compute(
     latency: int = 1,
 ) -> Never:
     return _not_implemented("compute")
+
+
+def pipeline(
+    value: object,
+    *,
+    stages: int = 1,
+    depth: int = 1,
+) -> Never:
+    return _not_implemented("pipeline")
 
 
 round_robin = "round_robin"

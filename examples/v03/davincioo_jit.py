@@ -31,9 +31,12 @@ def davincioo(cfg: ac.const[CoreConfig]) -> None:
             latency=1,
         )
 
+    with ac.scope("pipeline"):
+        pipelined = ac.pipeline(decoded, stages=2, depth=4)
+
     with ac.scope("dispatch"):
         scalar, vector, cube, tma = ac.route(
-            decoded,
+            pipelined,
             by=PTOInst.engine,
             outputs=cfg.engines,
             depth=8,

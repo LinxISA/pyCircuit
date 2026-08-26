@@ -905,10 +905,15 @@ def lower_queue_program_to_cpp(program: QueueProgram) -> str:
         if queue.input_name is None:
             continue
         payload = _cpp_type(queue.payload)
-        lines.append(
-            f"  gfsim::QueueTransform<{payload}, {payload}, {queue.name}_policy> "
-            f"{queue.name}_block_;"
-        )
+        if queue.provider == "compute":
+            provider = f"gfsim::Compute<{payload}, {payload}, {queue.name}_policy>"
+        elif queue.provider == "pipeline":
+            provider = f"gfsim::Pipeline<{payload}, {queue.latency}>"
+        else:
+            provider = (
+                f"gfsim::QueueTransform<{payload}, {payload}, {queue.name}_policy>"
+            )
+        lines.append(f"  {provider} {queue.name}_block_;")
     for index, route in enumerate(program.routes):
         payload = _cpp_type(
             next(

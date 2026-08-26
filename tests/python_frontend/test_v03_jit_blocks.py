@@ -86,6 +86,7 @@ def core(cfg: ac.const[Config]) -> None:
         lanes=cfg.engines,
         depth=4,
     )
+    engine_pipe = ac.pipeline(engine_done, stages=2, depth=2)
     retired = ac.reorder(
         completed,
         by=Token.sequence,
@@ -94,7 +95,7 @@ def core(cfg: ac.const[Config]) -> None:
         depth=4,
     )
     ac.sink(retired)
-    ac.sink(engine_done)
+    ac.sink(engine_pipe)
 """
 
 
@@ -206,6 +207,7 @@ class ConfigAndJitTest(unittest.TestCase):
         self.assertIn("ac.dependency", acir)
         self.assertIn("ac.reorder", acir)
         self.assertIn("gfsim::Schedule<PTOInst, 16, 4, 255", cpp)
+        self.assertIn("gfsim::Pipeline<PTOInst, 2>", cpp)
         self.assertIn("gfsim::Reorder<PTOInst, 64, 0", cpp)
         with tempfile.TemporaryDirectory() as directory:
             source = Path(directory) / "model.cpp"
@@ -365,8 +367,26 @@ class JitQueueLoweringTest(unittest.TestCase):
             lowered,
         )
         self.assertIn("%engine_done = ac.credit %engine_input credits 4", lowered)
+        self.assertIn(
+            "%engine_pipe = ac.transform %engine_done depths [2] latencies [2]",
+            lowered,
+        )
         self.assertIn("%retired = ac.reorder %completed capacity 16", lowered)
         self.assertNotIn("lambda", lowered)
+        from agentic_circuit._queue_codegen import lower_queue_program_to_cpp
+        from agentic_circuit._queue_frontend import parse_queue_program
+
+        cpp = lower_queue_program_to_cpp(
+            parse_queue_program(
+                HIGH_LEVEL_SOURCE,
+                "core",
+                static_arguments={
+                    "cfg": FrozenMap((("engines", 4), ("entries", 16))),
+                },
+            )
+        )
+        self.assertIn("gfsim::Compute<Token, Token", cpp)
+        self.assertIn("gfsim::Pipeline<Token, 2>", cpp)
 
     def test_high_level_non_compute_lambda_is_rejected(self) -> None:
         from agentic_circuit._queue_frontend import (

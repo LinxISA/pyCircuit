@@ -47,6 +47,7 @@ class QueueBinding:
     select_output: bool = False
     firing_effect: bool = False
     atomic_group: int | None = None
+    provider: str = "transform"
 
 
 @dataclass(frozen=True, slots=True)
@@ -2002,6 +2003,31 @@ def parse_queue_program(
                         scope_path,
                         current_order,
                         atomic_group=atomic_group,
+                        provider="compute",
+                    )
+                elif call_name(call) == "pipeline" and len(call.args) == 1:
+                    if any(
+                        keyword.arg is None or keyword.arg not in {"stages", "depth"}
+                        for keyword in call.keywords
+                    ):
+                        raise QueueFrontendError(
+                            "ACPY-QUEUE-024: pipeline parameters are invalid"
+                        )
+                    input_name = queue_reference(call.args[0], aliases)
+                    incoming = by_name[input_name]
+                    stages = _positive_int(call, "stages", 1)
+                    binding = QueueBinding(
+                        name,
+                        incoming.payload,
+                        _positive_int(call, "depth", 1),
+                        stages,
+                        incoming.name,
+                        "item",
+                        ast.Name(id="item", ctx=ast.Load()),
+                        scope_path,
+                        current_order,
+                        atomic_group=atomic_group,
+                        provider="pipeline",
                     )
                 elif call_name(call) == "merge":
                     if len(call.args) < 2 or any(
