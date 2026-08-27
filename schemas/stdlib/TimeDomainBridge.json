@@ -1,7 +1,7 @@
 {
   "schema_kind": "agentic-circuit-component",
   "schema_version": "0.1",
-  "contract_epoch": "0.2",
+  "contract_epoch": "0.3",
   "canonical_name": "ac.TimeDomainBridge",
   "family": "adaptation",
   "provider_namespace": "ac",
@@ -119,5 +119,5 @@
     "gauges": [],
     "histograms": []
   },
-  "schema_fingerprint": "sha256:1dd4277d628cc341f5e02b5405ee87ee6d3e9f8de121f7d8df80678569a9e50b"
+  "schema_fingerprint": "sha256:77f73e3950a3c34f20a93f72c831404975b3c69e39407b09dfd381cf23f86cce"
 }

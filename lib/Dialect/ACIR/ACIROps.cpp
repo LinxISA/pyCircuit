@@ -1154,13 +1154,104 @@ LogicalResult VarWithOp::verify() {
   return success();
 }
 
-LogicalResult MemoryOp::verify() {
+static std::string queueScopePath(Operation *operation) {
+  SmallVector<StringRef> parts;
+  for (Operation *parent = operation->getParentOp(); parent;
+       parent = parent->getParentOp())
+    if (auto scope = dyn_cast<ScopeOp>(parent))
+      parts.push_back(scope.getSymName());
+  std::string path;
+  for (StringRef part : llvm::reverse(parts)) {
+    path.push_back('/');
+    path.append(part);
+  }
+  return path.empty() ? "/" : path;
+}
+
+LogicalResult MemoryInstanceOp::verify() {
+  auto data = dyn_cast<IntegerType>(getDataType());
+  if (!data || data.getWidth() == 0 || data.getWidth() > 64)
+    return emitOpError("data type must be an integer no wider than 64 bits");
+  if (getEntries() <= 0 || getLatency() <= 0)
+    return emitOpError("entries and latency must be positive");
+  if (getInit() != 0)
+    return emitOpError("memory init must be zero");
+  if (getOwner().empty() || !getOwner().starts_with('/') ||
+      (getOwner().size() > 1 && getOwner().ends_with('/')))
+    return emitOpError("owner must be a canonical absolute scope path");
+  if (getStableId().empty())
+    return emitOpError("stable_id must be non-empty");
+
+  Operation *root = getOperation();
+  while (root->getParentOp())
+    root = root->getParentOp();
+  std::string expectedStableId = "memory/";
+  if (getOwner() != "/") {
+    expectedStableId.append(getOwner().drop_front());
+    expectedStableId.push_back('/');
+  }
+  expectedStableId.append(getSymName());
+  if (getStableId() != expectedStableId)
+    return emitOpError("stable_id must match canonical owner/symbol identity");
+  bool ownerExists = getOwner() == "/";
+  bool duplicateStableId = false;
+  root->walk([&](Operation *operation) {
+    if (auto scope = dyn_cast<ScopeOp>(operation)) {
+      std::string path = queueScopePath(scope);
+      if (path != "/")
+        path.push_back('/');
+      path.append(scope.getSymName());
+      ownerExists |= path == getOwner();
+    }
+    if (auto other = dyn_cast<MemoryInstanceOp>(operation))
+      duplicateStableId |= other != *this && other.getStableId() == getStableId();
+  });
+  if (!ownerExists)
+    return emitOpError("owner does not name a declared scope path");
+  if (duplicateStableId)
+    return emitOpError("stable_id must be unique");
+  unsigned requests = 0;
+  root->walk([&](MemoryRequestOp request) {
+    auto resolved = dyn_cast_or_null<MemoryInstanceOp>(
+        SymbolTable::lookupNearestSymbolFrom(request, request.getInstanceAttr()));
+    if (resolved == *this)
+      ++requests;
+  });
+  if (requests == 0)
+    return emitOpError("must have at least one memory.request endpoint");
+  return success();
+}
+
+LogicalResult MemoryRequestOp::verify() {
   if (getInput().getType() != getOutput().getType())
     return emitOpError("output queue must match input queue type");
-  if (getEntries() <= 0 || getDepth() <= 0 || getLatency() <= 0)
-    return emitOpError("entries, depth, and latency must be positive");
-  if (getInit() != 0)
-    return emitOpError("v0.2 memory init must be zero");
+  if (getOrdinal() < 0 || getDepth() <= 0)
+    return emitOpError("ordinal must be non-negative and depth positive");
+
+  auto instance = dyn_cast_or_null<MemoryInstanceOp>(
+      SymbolTable::lookupNearestSymbolFrom(*this, getInstanceAttr()));
+  if (!instance)
+    return emitOpError() << "unresolved memory instance " << getInstance();
+  const std::string requestScope = queueScopePath(*this);
+  StringRef owner = instance.getOwner();
+  StringRef requestPath(requestScope);
+  const bool visible =
+      owner == "/" || requestPath == owner ||
+      (requestPath.size() > owner.size() && requestPath.starts_with(owner) &&
+       requestPath[owner.size()] == '/');
+  if (!visible)
+    return emitOpError("memory instance is outside the request scope ancestry");
+  auto endpointPath = (*this)->getAttrOfType<StringAttr>("ac.endpoint_path");
+  auto endpointName = (*this)->getAttrOfType<StringAttr>("ac.name");
+  if (!endpointPath || endpointPath.getValue().empty() || !endpointName ||
+      endpointName.getValue().empty())
+    return emitOpError("requires stable ac.endpoint_path and ac.name");
+  std::string expectedEndpointPath = requestScope;
+  if (expectedEndpointPath != "/")
+    expectedEndpointPath.push_back('/');
+  expectedEndpointPath.append(endpointName.getValue());
+  if (endpointPath.getValue() != expectedEndpointPath)
+    return emitOpError("ac.endpoint_path must match canonical scope/name path");
 
   Type payload = cast<QueueType>(getInput().getType()).getElementType();
   Operation *declaration = recordDecl(*this, payload);
@@ -1170,6 +1261,8 @@ LogicalResult MemoryOp::verify() {
   if (!fieldIndex)
     return emitOpError() << "unknown result_field '" << getResultField() << "'";
   Type dataType = fieldType(declaration, *fieldIndex);
+  if (dataType != instance.getDataType())
+    return emitOpError("result_field type must match memory instance data type");
   auto dataInteger = dyn_cast<IntegerType>(dataType);
   if (!dataInteger || dataInteger.getWidth() > 64)
     return emitOpError(
@@ -1207,13 +1300,51 @@ LogicalResult MemoryOp::verify() {
     return emitOpError(
         "address must yield an integer Var no wider than 64 bits");
   if (addressInteger.getWidth() < 64 &&
-      static_cast<uint64_t>(getEntries()) >
+      static_cast<uint64_t>(instance.getEntries()) >
           (uint64_t{1} << addressInteger.getWidth()))
     return emitOpError("entries must fit address width");
   if (!write->isInteger(1))
     return emitOpError("write must yield !ac.var<i1>");
   if (*data != dataType)
     return emitOpError("data must match result_field type");
+
+  Operation *root = getOperation();
+  while (root->getParentOp())
+    root = root->getParentOp();
+  DenseSet<int64_t> ordinals;
+  StringSet<> endpointPaths;
+  Type payloadType;
+  uint64_t maximumOrdinal = 0;
+  unsigned endpointCount = 0;
+  WalkResult endpointResult = root->walk([&](MemoryRequestOp request) {
+    auto resolved = dyn_cast_or_null<MemoryInstanceOp>(
+        SymbolTable::lookupNearestSymbolFrom(request, request.getInstanceAttr()));
+    if (resolved != instance)
+      return WalkResult::advance();
+    ++endpointCount;
+    maximumOrdinal = std::max(maximumOrdinal, request.getOrdinal());
+    if (!ordinals.insert(request.getOrdinal()).second) {
+      request.emitOpError("duplicate endpoint ordinal for memory instance");
+      return WalkResult::interrupt();
+    }
+    auto path = request->getAttrOfType<StringAttr>("ac.endpoint_path");
+    if (!path || !endpointPaths.insert(path.getValue()).second) {
+      request.emitOpError("duplicate or missing endpoint path for memory instance");
+      return WalkResult::interrupt();
+    }
+    Type candidate = cast<QueueType>(request.getInput().getType()).getElementType();
+    if (!payloadType)
+      payloadType = candidate;
+    else if (payloadType != candidate) {
+      request.emitOpError("all endpoints of one memory must use one payload type");
+      return WalkResult::interrupt();
+    }
+    return WalkResult::advance();
+  });
+  if (endpointResult.wasInterrupted())
+    return failure();
+  if (maximumOrdinal + 1 != endpointCount)
+    return emitOpError("memory endpoint ordinals must be contiguous from zero");
   return success();
 }
 

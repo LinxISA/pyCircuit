@@ -71,7 +71,7 @@ class CapabilityDocument:
         return {
             "schema": "agentic-circuit-capabilities",
             "version": "0.1",
-            "contract_epoch": "0.2",
+            "contract_epoch": "0.3",
             "contract_identities": dict(self.contract_identities),
             "items": [dict(item) for item in self.items],
             "compiler_build_id": self.compiler_build_id,

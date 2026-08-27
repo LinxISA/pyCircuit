@@ -28,7 +28,7 @@ LEDGER_PATH = "docs/implementation/spec-coverage.md"
 DIALECTS = {
     "acir": {
         "manifest": "contracts/acir-v0.2.yaml",
-        "contract_epoch": "0.2",
+        "contract_epoch": "0.3",
         "ops_td": "include/acir/Dialect/ACIR/ACIROps.td",
         "types_td": "include/acir/Dialect/ACIR/ACIRTypes.td",
         "registration": "lib/Dialect/ACIR/ACIRTypes.cpp",
@@ -39,7 +39,7 @@ DIALECTS = {
     },
     "acsim": {
         "manifest": "contracts/acsim-v0.1.yaml",
-        "contract_epoch": "0.2",
+        "contract_epoch": "0.3",
         "ops_td": "include/acir/Dialect/ACSim/ACSimOps.td",
         "types_td": "include/acir/Dialect/ACSim/ACSimTypes.td",
         "registration": "lib/Dialect/ACSim/ACSimTypes.cpp",

@@ -1,14 +1,14 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "urn:pto-isa:agentic-circuit:schema:opcode-catalog:0.2",
-  "title": "Agentic Circuit Official Opcode Catalog 0.2",
+  "$id": "urn:pto-isa:agentic-circuit:schema:opcode-catalog:0.3",
+  "title": "Agentic Circuit Official Opcode Catalog 0.3",
   "type": "object",
   "additionalProperties": false,
   "required": ["schema", "version", "contract_epoch", "entries"],
   "properties": {
     "schema": {"const": "agentic-circuit-opcode-catalog"},
-    "version": {"const": "0.2"},
-    "contract_epoch": {"const": "0.2"},
+    "version": {"const": "0.3"},
+    "contract_epoch": {"const": "0.3"},
     "entries": {
       "type": "array",
       "minItems": 1,
@@ -80,13 +80,14 @@
         },
         "operation": {
           "type": "string",
-          "pattern": "^ac\\.[a-z][a-z0-9_]*$"
+          "pattern": "^ac\\.[a-z][a-z0-9_]*(?:\\.[a-z][a-z0-9_]*)*$"
         },
         "outputs": {"$ref": "#/$defs/arity"},
         "payload_relation": {
           "enum": [
             "all_payloads_equal",
             "consume_input_payload",
+            "declared_storage_owner",
             "declared_output_payload",
             "input_output_payload_equal",
             "observe_input_payload",

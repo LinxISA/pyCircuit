@@ -182,6 +182,30 @@ TEST(QueueBlocksTest, HighLevelProvidersFreezeStructuralTemplateParameters) {
   EXPECT_FALSE(pipeline.hasPendingCommit());
 }
 
+struct SharedMemoryAddress {
+  uint8_t operator()(size_t, const MemoryRequest &request) const {
+    return request.address;
+  }
+};
+struct SharedMemoryWrite {
+  bool operator()(size_t, const MemoryRequest &request) const {
+    return request.write;
+  }
+};
+struct SharedMemoryWriteData {
+  uint16_t operator()(size_t, const MemoryRequest &request) const {
+    return request.data;
+  }
+};
+struct SharedMemoryResponse {
+  MemoryRequest operator()(size_t, const MemoryRequest &request,
+                           const uint16_t &oldData) const {
+    MemoryRequest response = request;
+    response.data = oldData;
+    return response;
+  }
+};
+
 TEST(QueueBlocksTest, TransformCommitsOnlyAcrossTheQueueBarrier) {
   SimQueue<int> input("input", 1, nullptr, 2);
   SimQueue<int> output("output", 2, nullptr, 2);
@@ -566,6 +590,103 @@ TEST(QueueBlocksTest, MemoryRejectsOutOfRangeAddress) {
   EXPECT_EQ(memory.runtimeFailureCode(), "memory_address_out_of_range");
   EXPECT_FALSE(memory.hasPendingCommit());
   EXPECT_TRUE(output.isEmpty());
+}
+
+TEST(QueueBlocksTest, SharedMemoryUsesPriorityAndBlocksUntilResponseAccepted) {
+  SimQueue<MemoryRequest> input0("input0", 1, nullptr, 2);
+  SimQueue<MemoryRequest> input1("input1", 2, nullptr, 2);
+  SimQueue<MemoryRequest> output0("output0", 3, nullptr, 1);
+  SimQueue<MemoryRequest> output1("output1", 4, nullptr, 1);
+  QueueMemoryArbiter<MemoryRequest, uint16_t, 2, SharedMemoryAddress,
+                     SharedMemoryWrite, SharedMemoryWriteData,
+                     SharedMemoryResponse>
+      memory("memory", 5, nullptr, {&input0, &input1}, {&output0, &output1},
+             16);
+  ASSERT_TRUE(input0.proposePush({3, true, 42}));
+  ASSERT_TRUE(input1.proposePush({3, false, 0}));
+  ASSERT_TRUE(output0.proposePush({0, false, 99}));
+  input0.doXfer({0, 0});
+  input1.doXfer({0, 0});
+  output0.doXfer({0, 0});
+
+  memory.doWork({1, 0});
+  input0.doXfer({1, 0});
+  input1.doXfer({1, 0});
+  memory.doXfer({1, 0});
+  EXPECT_TRUE(memory.busy());
+  EXPECT_EQ(memory.selectedEndpoint(), 0u);
+  EXPECT_EQ(input0.committedSize(), 0u);
+  EXPECT_EQ(input1.committedSize(), 1u);
+  EXPECT_EQ(memory.at(3), 42u);
+
+  memory.doWork({2, 0});
+  EXPECT_FALSE(memory.hasPendingCommit());
+  ASSERT_TRUE(output0.proposePop());
+  output0.doXfer({2, 0});
+  memory.doWork({2, 1});
+  output0.doXfer({2, 1});
+  memory.doXfer({2, 1});
+  EXPECT_FALSE(memory.busy());
+  memory.doWork({2, 1});
+  EXPECT_EQ(input1.committedSize(), 1u);
+
+  memory.doWork({3, 0});
+  input1.doXfer({3, 0});
+  memory.doXfer({3, 0});
+  EXPECT_EQ(input1.committedSize(), 0u);
+}
+
+TEST(QueueBlocksTest, SharedMemoryLatencyDelaysResponseAndBackpressuresRequests) {
+  SimQueue<MemoryRequest> input("input", 1, nullptr, 2);
+  SimQueue<MemoryRequest> output("output", 2, nullptr, 1);
+  QueueMemoryArbiter<MemoryRequest, uint16_t, 1, SharedMemoryAddress,
+                     SharedMemoryWrite, SharedMemoryWriteData,
+                     SharedMemoryResponse>
+      memory("memory", 3, nullptr, {&input}, {&output}, 16, 0, 3);
+  EXPECT_EQ(memory.latency(), 3u);
+  ASSERT_TRUE(input.proposePush({3, false, 0}));
+  input.doXfer({0, 0});
+
+  memory.doWork({1, 0});
+  input.doXfer({1, 0});
+  memory.doXfer({1, 0});
+  ASSERT_TRUE(memory.busy());
+  ASSERT_TRUE(input.proposePush({7, false, 0}));
+  input.doXfer({2, 0});
+
+  for (uint64_t tick : {2, 3}) {
+    memory.doWork({tick, 0});
+    EXPECT_TRUE(memory.hasPendingCommit());
+    EXPECT_EQ(input.committedSize(), 1u);
+    EXPECT_TRUE(output.isEmpty());
+    memory.doXfer({tick, 0});
+  }
+
+  memory.doWork({4, 0});
+  EXPECT_TRUE(memory.hasPendingCommit());
+  output.doXfer({4, 0});
+  memory.doXfer({4, 0});
+  EXPECT_FALSE(memory.busy());
+  EXPECT_EQ(input.committedSize(), 1u);
+  EXPECT_EQ(output.committedSize(), 1u);
+
+  memory.doWork({4, 0});
+  EXPECT_FALSE(memory.hasPendingCommit());
+  memory.doWork({5, 0});
+  input.doXfer({5, 0});
+  memory.doXfer({5, 0});
+  EXPECT_TRUE(memory.busy());
+  EXPECT_EQ(input.committedSize(), 0u);
+}
+
+TEST(QueueBlocksTest, SharedMemoryRejectsZeroLatency) {
+  SimQueue<MemoryRequest> input("input", 1, nullptr, 1);
+  SimQueue<MemoryRequest> output("output", 2, nullptr, 1);
+  EXPECT_THROW((QueueMemoryArbiter<MemoryRequest, uint16_t, 1,
+                                  SharedMemoryAddress, SharedMemoryWrite,
+                                  SharedMemoryWriteData, SharedMemoryResponse>(
+                   "memory", 3, nullptr, {&input}, {&output}, 16, 0, 0)),
+               std::invalid_argument);
 }
 
 TEST(QueueBlocksTest, QueueLatencyDelaysVisibilityButReservesCapacity) {

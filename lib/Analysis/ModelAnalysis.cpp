@@ -1000,10 +1000,10 @@ LogicalResult ModelAnalysis::verifyFrozenIntegrity() {
   auto epoch = model->getAttrOfType<StringAttr>("ac.freeze_epoch");
   auto digest = model->getAttrOfType<StringAttr>("ac.topology_digest");
   auto owners = model->getAttrOfType<ArrayAttr>("ac.frozen_owners");
-  if (!marker || !marker.getValue() || !epoch || epoch.getValue() != "0.2" ||
+  if (!marker || !marker.getValue() || !epoch || epoch.getValue() != "0.3" ||
       !digest || digest.getValue().size() != 64 || !owners)
     return model.emitError(
-        "malformed topology freeze marker; expected epoch 0.2, owner manifest, "
+        "malformed topology freeze marker; expected epoch 0.3, owner manifest, "
         "and SHA-256 digest");
   LogicalResult skeletonResult = success();
   model.walk([&](ac::ProcessOp process) {
@@ -1045,10 +1045,10 @@ LogicalResult ModelAnalysis::verify() {
     return failure();
 
   auto epoch = model->getAttrOfType<StringAttr>("ac.contract_epoch");
-  if (!epoch || epoch.getValue() != "0.2")
+  if (!epoch || epoch.getValue() != "0.3")
     return model.emitError(
         "expected top-level 'ac.contract_epoch' string attribute equal to "
-        "\"0.2\"");
+        "\"0.3\"");
 
   if (failed(verifyPureProcessCalls()))
     return failure();

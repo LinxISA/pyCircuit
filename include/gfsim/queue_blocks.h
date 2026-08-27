@@ -886,6 +886,190 @@ public:
             std::move(response), observations) {}
 };
 
+/// One physical, single-outstanding memory shared by a statically ordered set
+/// of logical request/response endpoints.  Requests are accepted in endpoint
+/// index order only while idle.  The selected response is retained until its
+/// response Queue accepts it; no other request is admitted while busy.
+template <typename T, typename Data, size_t N, typename Address, typename Write,
+          typename WriteData, typename Response>
+  requires std::invocable<const Address &, size_t, const T &> &&
+           std::integral<
+               std::invoke_result_t<const Address &, size_t, const T &>> &&
+           std::invocable<const Write &, size_t, const T &> &&
+           std::convertible_to<
+               std::invoke_result_t<const Write &, size_t, const T &>, bool> &&
+           std::invocable<const WriteData &, size_t, const T &> &&
+           std::convertible_to<std::invoke_result_t<const WriteData &, size_t,
+                                                    const T &>,
+                               Data> &&
+           std::invocable<const Response &, size_t, const T &, const Data &> &&
+           std::convertible_to<std::invoke_result_t<const Response &, size_t,
+                                                    const T &, const Data &>,
+                               T>
+class QueueMemoryArbiter final : public SimObject {
+public:
+  static constexpr std::string_view contractName = "ac.memory.instance";
+  static constexpr ObjectKind componentKind = ObjectKind::Memory;
+
+  QueueMemoryArbiter(std::string name, ObjectId id, SimObject *parent,
+                     std::array<SimQueue<T> *, N> inputs,
+                     std::array<SimQueue<T> *, N> outputs, size_t entries,
+                     Data init = {}, size_t latency = 1, Address address = {},
+                     Write write = {},
+                     WriteData writeData = {}, Response response = {},
+                     ObservationSink *observations = nullptr)
+      : SimObject(componentKind, std::move(name), id, parent, observations),
+        inputs_(inputs), outputs_(outputs), init_(init), storage_(entries, init),
+        latency_(latency), address_(std::move(address)),
+        write_(std::move(write)), writeData_(std::move(writeData)),
+        response_(std::move(response)) {
+    if (latency_ == 0)
+      throw std::invalid_argument("memory latency must be positive");
+  }
+
+  void doWork(Epoch epoch) override {
+    if (fired_)
+      return;
+    if (busy_) {
+      if (!responseReady_ || epoch < *responseReady_) {
+        ticking_ = true;
+        fired_ = true;
+        workEpoch_ = epoch;
+        return;
+      }
+      if (!outputs_[selected_]->canProposePush() || !pendingResponse_)
+        return;
+      if (!outputs_[selected_]->proposePush(*pendingResponse_))
+        return;
+      completing_ = true;
+      fired_ = true;
+      workEpoch_ = epoch;
+      return;
+    }
+    if (completedEpoch_ && *completedEpoch_ == epoch)
+      return;
+    for (size_t endpoint = 0; endpoint < N; ++endpoint) {
+      if (!inputs_[endpoint]->canProposePop())
+        continue;
+      const T *head = inputs_[endpoint]->peek();
+      if (!head)
+        continue;
+      using AddressResult =
+          std::invoke_result_t<const Address &, size_t, const T &>;
+      const AddressResult rawAddress =
+          std::invoke(std::as_const(address_), endpoint, *head);
+      if constexpr (std::signed_integral<AddressResult>)
+        if (rawAddress < 0) {
+          setRuntimeFailureCode("memory_address_out_of_range");
+          return;
+        }
+      const uint64_t address = static_cast<uint64_t>(rawAddress);
+      if (address >= storage_.size()) {
+        setRuntimeFailureCode("memory_address_out_of_range");
+        return;
+      }
+      const Data oldData = storage_[address];
+      if (epoch.time > std::numeric_limits<uint64_t>::max() - latency_) {
+        setRuntimeFailureCode("memory_latency_overflow");
+        return;
+      }
+      pendingResponse_ = std::invoke(std::as_const(response_), endpoint, *head,
+                                     oldData);
+      responseReady_ = Epoch{epoch.time + latency_, 0};
+      if (!inputs_[endpoint]->proposePop()) {
+        pendingResponse_.reset();
+        responseReady_.reset();
+        return;
+      }
+      if (static_cast<bool>(
+              std::invoke(std::as_const(write_), endpoint, *head)))
+        pendingWrite_ = std::pair<size_t, Data>{
+            static_cast<size_t>(address),
+            static_cast<Data>(std::invoke(std::as_const(writeData_), endpoint,
+                                          *head))};
+      selected_ = endpoint;
+      accepting_ = true;
+      fired_ = true;
+      workEpoch_ = epoch;
+      return;
+    }
+  }
+
+  void doXfer(Epoch) override {
+    if (accepting_) {
+      if (pendingWrite_) {
+        storage_[pendingWrite_->first] = std::move(pendingWrite_->second);
+        pendingWrite_.reset();
+      }
+      busy_ = true;
+    }
+    if (completing_) {
+      busy_ = false;
+      pendingResponse_.reset();
+      responseReady_.reset();
+      completedEpoch_ = workEpoch_;
+    }
+    accepting_ = false;
+    completing_ = false;
+    ticking_ = false;
+    fired_ = false;
+  }
+
+  bool hasPendingCommit() const override { return fired_; }
+  bool isRunnable(Epoch epoch) const override {
+    if (fired_)
+      return false;
+    if (busy_) {
+      if (!responseReady_ || epoch < *responseReady_)
+        return true;
+      return pendingResponse_.has_value() &&
+             outputs_[selected_]->canProposePush();
+    }
+    if (completedEpoch_ && *completedEpoch_ == epoch)
+      return false;
+    return std::any_of(inputs_.begin(), inputs_.end(),
+                       [](const SimQueue<T> *queue) {
+                         return queue->canProposePop();
+                       });
+  }
+  bool busy() const { return busy_; }
+  size_t latency() const { return latency_; }
+  size_t selectedEndpoint() const { return selected_; }
+  const Data &at(size_t address) const { return storage_.at(address); }
+  void reset() override {
+    std::fill(storage_.begin(), storage_.end(), init_);
+    pendingResponse_.reset();
+    responseReady_.reset();
+    pendingWrite_.reset();
+    completedEpoch_.reset();
+    busy_ = accepting_ = completing_ = ticking_ = fired_ = false;
+    selected_ = 0;
+    clearRuntimeFailureCode();
+  }
+
+private:
+  std::array<SimQueue<T> *, N> inputs_;
+  std::array<SimQueue<T> *, N> outputs_;
+  Data init_;
+  std::vector<Data> storage_;
+  size_t latency_ = 1;
+  [[no_unique_address]] Address address_;
+  [[no_unique_address]] Write write_;
+  [[no_unique_address]] WriteData writeData_;
+  [[no_unique_address]] Response response_;
+  std::optional<T> pendingResponse_;
+  std::optional<Epoch> responseReady_;
+  std::optional<std::pair<size_t, Data>> pendingWrite_;
+  std::optional<Epoch> completedEpoch_;
+  Epoch workEpoch_{};
+  size_t selected_ = 0;
+  bool busy_ = false;
+  bool accepting_ = false;
+  bool completing_ = false;
+  bool ticking_ = false;
+  bool fired_ = false;
+};
+
 template <typename T> class QueueSink final : public SimObject {
 public:
   static constexpr std::string_view contractName = "ac.sink";

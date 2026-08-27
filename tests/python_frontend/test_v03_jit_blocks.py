@@ -442,7 +442,12 @@ class JitQueueLoweringTest(unittest.TestCase):
 
         self.assertIn("%left, %right = ac.fork %incoming", lowered)
         self.assertIn("%left_ready, %right_ready = ac.barrier %left, %right", lowered)
-        self.assertIn("%response = ac.memory %left_ready entries 32", lowered)
+        self.assertIn(
+            "ac.memory.instance @response__table data i16 entries 32", lowered
+        )
+        self.assertIn(
+            "%response = ac.memory.request @response__table, %left_ready", lowered
+        )
         self.assertIn('result_field "data"', lowered)
         program = parse_queue_program(
             STRUCTURAL_BLOCK_SOURCE,
@@ -454,7 +459,9 @@ class JitQueueLoweringTest(unittest.TestCase):
         cpp = lower_queue_program_to_cpp(program)
         self.assertIn("gfsim::QueueFork", cpp)
         self.assertIn("gfsim::QueueBarrier", cpp)
-        self.assertIn("gfsim::Table<Request, std::uint16_t, 32, 0", cpp)
+        self.assertIn(
+            "gfsim::QueueMemoryArbiter<Request, std::uint16_t, 1", cpp
+        )
 
     def test_multirate_queue_metadata_and_cpp_templates_are_frozen(self) -> None:
         from agentic_circuit._queue_codegen import lower_queue_program_to_cpp

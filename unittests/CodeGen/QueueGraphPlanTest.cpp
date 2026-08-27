@@ -13,7 +13,7 @@ namespace acir::codegen {
 namespace {
 
 constexpr llvm::StringLiteral kQueueGraph = R"mlir(
-module attributes {ac.contract_epoch = "0.2", ac.system = "pipeline"} {
+module attributes {ac.contract_epoch = "0.3", ac.system = "pipeline"} {
   %input = ac.source depth 4 latency 1 {ac.name = "input"} : !ac.queue<i64>
   %left, %right = ac.route %input depths [2, 2] latencies [1, 1] {
   ^selector(%item: !ac.var<i64>):
@@ -27,7 +27,7 @@ module attributes {ac.contract_epoch = "0.2", ac.system = "pipeline"} {
 )mlir";
 
 constexpr llvm::StringLiteral kStructuredTransform = R"mlir(
-module attributes {ac.contract_epoch = "0.2", ac.system = "structured"} {
+module attributes {ac.contract_epoch = "0.3", ac.system = "structured"} {
   ac.type_scope @types {
     ac.struct @Item fields [{name = "value", type = i64}]
   } {dlti.dl_spec = #dlti.dl_spec<!ac.struct<@types::@Item> = {abi_alignment = 8 : i64, endianness = "little", preferred_alignment = 8 : i64, size = 8 : i64}>}
@@ -45,7 +45,7 @@ module attributes {ac.contract_epoch = "0.2", ac.system = "structured"} {
 )mlir";
 
 constexpr llvm::StringLiteral kMultipleConsumers = R"mlir(
-module attributes {ac.contract_epoch = "0.2", ac.system = "bad"} {
+module attributes {ac.contract_epoch = "0.3", ac.system = "bad"} {
   %input = ac.source depth 2 latency 1 {ac.name = "input"} : !ac.queue<i64>
   ac.sink %input {ac.name = "left"} : !ac.queue<i64>
   ac.sink %input {ac.name = "right"} : !ac.queue<i64>
@@ -53,7 +53,7 @@ module attributes {ac.contract_epoch = "0.2", ac.system = "bad"} {
 )mlir";
 
 constexpr llvm::StringLiteral kObservationUse = R"mlir(
-module attributes {ac.contract_epoch = "0.2", ac.system = "observed"} {
+module attributes {ac.contract_epoch = "0.3", ac.system = "observed"} {
   %input = ac.source depth 2 latency 1 {ac.name = "input"} : !ac.queue<i64>
   ac.observe %input name "head" : !ac.queue<i64>
   ac.sink %input {ac.name = "sink_0"} : !ac.queue<i64>
@@ -93,10 +93,10 @@ TEST(QueueGraphPlanTest, CanonicalJsonIsByteIdenticalAndClosed) {
   auto second = plan->canonicalJson();
   ASSERT_TRUE(bool(second)) << llvm::toString(second.takeError());
   EXPECT_EQ(*first, *second);
-  EXPECT_NE(first->find("\"contract_epoch\":\"0.2\""), std::string::npos);
+  EXPECT_NE(first->find("\"contract_epoch\":\"0.3\""), std::string::npos);
   EXPECT_NE(first->find("\"schema\":\"agentic-circuit-queue-graph-plan\""),
             std::string::npos);
-  EXPECT_NE(first->find("\"version\":\"0.2\""), std::string::npos);
+  EXPECT_NE(first->find("\"version\":\"0.3\""), std::string::npos);
   EXPECT_NE(first->find("\"name\":\"merged\""), std::string::npos);
 }
 
@@ -165,16 +165,16 @@ TEST(QueueGraphPlanTest, RejectsLegacyContractEpochBeforePlanning) {
   mlir::MLIRContext context;
   context.loadDialect<ac::ACIRDialect, mlir::DLTIDialect>();
   std::string legacy = kQueueGraph.str();
-  size_t epoch = legacy.find("ac.contract_epoch = \"0.2\"");
+  size_t epoch = legacy.find("ac.contract_epoch = \"0.3\"");
   ASSERT_NE(epoch, std::string::npos);
-  legacy.replace(epoch, std::string("ac.contract_epoch = \"0.2\"").size(),
-                 "ac.contract_epoch = \"0.1\"");
+  legacy.replace(epoch, std::string("ac.contract_epoch = \"0.3\"").size(),
+                 "ac.contract_epoch = \"0.2\"");
   auto module = mlir::parseSourceString<mlir::ModuleOp>(legacy, &context);
   ASSERT_TRUE(module);
   auto plan = buildQueueGraphPlan(*module);
   ASSERT_FALSE(bool(plan));
   EXPECT_NE(llvm::toString(plan.takeError())
-                .find("module requires ac.contract_epoch exactly '0.2'"),
+                .find("module requires ac.contract_epoch exactly '0.3'"),
             std::string::npos);
 }
 
@@ -420,35 +420,57 @@ TEST(QueueGraphPlanTest, EmitsOldDataMemoryForBothBackends) {
        {{"address", "i4"}, {"write", "i1"}, {"data", "i16"}, {"tag", "i8"}}}};
   constexpr llvm::StringLiteral requestType =
       "!ac.struct<@types::@MemoryRequest>";
-  plan.queues = {{"input", requestType.str(), "/", 4, 1},
-                 {"output", requestType.str(), "/", 4, 1}};
-  plan.blocks.push_back({"source", "input", "/", {}, {"input"}, {4}, {1}});
-  QueueBlockPlan memory{"memory",   "output", "/", {"input"},
-                        {"output"}, {4},      {1}};
+  plan.queues = {{"input0", requestType.str(), "/", 4, 1},
+                 {"input1", requestType.str(), "/", 4, 1},
+                 {"output0", requestType.str(), "/", 4, 1},
+                 {"output1", requestType.str(), "/", 4, 1}};
+  plan.blocks.push_back(
+      {"source", "input0", "/", {}, {"input0"}, {4}, {1}});
+  plan.blocks.push_back(
+      {"source", "input1", "/", {}, {"input1"}, {4}, {1}});
+  plan.memoryInstances.push_back(
+      {"sram", "i16", 15, 0, 3, "memory/sram", "/"});
+  QueueBlockPlan memory{"memory_request", "output0", "/", {"input0"},
+                        {"output0"}, {4},      {1}};
   memory.expressions = {
       {"v0", "get", "i4", {"item"}, "address", "", ""},
       {"v1", "get", "i1", {"item"}, "write", "", ""},
       {"v2", "get", "i16", {"item"}, "data", "", ""},
   };
   memory.yields = {"v0", "v1", "v2"};
-  memory.entries = 16;
-  memory.init = 0;
   memory.resultField = "data";
+  memory.memoryInstance = "sram";
+  memory.endpointOrdinal = 0;
+  plan.memoryRequests.push_back(
+      {"sram", "output0", "/", "input0", "output0", 0, 4, "data"});
+  plan.blocks.push_back(memory);
+  memory.name = "output1";
+  memory.inputs = {"input1"};
+  memory.outputs = {"output1"};
+  memory.endpointOrdinal = 1;
+  plan.memoryRequests.push_back(
+      {"sram", "output1", "/", "input1", "output1", 1, 4, "data"});
   plan.blocks.push_back(std::move(memory));
-  plan.blocks.push_back({"sink", "sink_0", "/", {"output"}, {}});
+  plan.blocks.push_back({"sink", "sink_0", "/", {"output0"}, {}});
+  plan.blocks.push_back({"sink", "sink_1", "/", {"output1"}, {}});
 
   auto cpp = generateQueueGraphCpp(plan);
   ASSERT_TRUE(bool(cpp)) << llvm::toString(cpp.takeError());
-  EXPECT_NE(cpp->find("gfsim::QueueMemory<MemoryRequest, std::uint16_t"),
+  EXPECT_NE(cpp->find("gfsim::QueueMemoryArbiter<MemoryRequest, std::uint16_t"),
             std::string::npos);
   EXPECT_NE(cpp->find("result.data = old_data"), std::string::npos);
-  EXPECT_NE(cpp->find(", input_, output_, 16, 0)"), std::string::npos);
+  EXPECT_NE(cpp->find("std::array<gfsim::SimQueue<MemoryRequest> *, 2>{&input0_, &input1_}"),
+            std::string::npos);
 
   auto pyc = generateQueueGraphPyc(plan);
   ASSERT_TRUE(bool(pyc)) << llvm::toString(pyc.takeError());
+  EXPECT_NE(pyc->find("pyc.sub"), std::string::npos);
   EXPECT_NE(pyc->find("pyc.sync_mem"), std::string::npos);
-  EXPECT_NE(pyc->find("{depth = 16, name = \"output\"}"), std::string::npos);
+  EXPECT_EQ(pyc->find("pyc.sync_mem", pyc->find("pyc.sync_mem") + 1),
+            std::string::npos);
+  EXPECT_NE(pyc->find("{depth = 15, name = \"sram\"}"), std::string::npos);
   EXPECT_NE(pyc->find("pyc.concat"), std::string::npos);
+  EXPECT_NE(pyc->find("memory_address_out_of_range"), std::string::npos);
 }
 
 TEST(QueueGraphPlanTest, EmitsQueuePredicateAsPycComparison) {

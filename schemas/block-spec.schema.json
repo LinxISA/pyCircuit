@@ -8,7 +8,7 @@
   "properties": {
     "schema": {"const": "agentic-circuit-block-spec"},
     "version": {"const": "0.3"},
-    "contract_epoch": {"const": "0.2"},
+    "contract_epoch": {"const": "0.3"},
     "blocks": {
       "type": "array",
       "minItems": 1,
@@ -22,7 +22,7 @@
     },
     "operation": {
       "type": "string",
-      "pattern": "^ac\\.[a-z][a-z0-9_]*$"
+      "pattern": "^ac\\.[a-z][a-z0-9_]*(?:\\.[a-z][a-z0-9_]*)*$"
     },
     "arity": {
       "type": "object",
@@ -141,9 +141,19 @@
       "properties": {
         "name": {"$ref": "#/$defs/name"},
         "operation": {"$ref": "#/$defs/operation"},
-        "lowers_to": {"$ref": "#/$defs/operation"},
+        "lowers_to": {
+          "oneOf": [
+            {"$ref": "#/$defs/operation"},
+            {
+              "type": "array",
+              "minItems": 1,
+              "items": {"$ref": "#/$defs/operation"},
+              "uniqueItems": true
+            }
+          ]
+        },
         "category": {
-          "enum": ["compute", "transport", "scheduling", "execution"]
+          "enum": ["compute", "transport", "scheduling", "execution", "storage"]
         },
         "lambda_regions": {"type": "integer", "minimum": 0, "maximum": 1},
         "ports": {

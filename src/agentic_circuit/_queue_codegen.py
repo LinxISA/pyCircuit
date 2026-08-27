@@ -522,7 +522,7 @@ def lower_queue_program_to_cpp(program: QueueProgram) -> str:
             lines.extend(
                 (
                     f"struct memory_{index}_{suffix}_policy {{",
-                    f"  {result_type} operator()(const {payload} &item) const {{",
+                    f"  {result_type} operator()(size_t, const {payload} &item) const {{",
                     f"    return static_cast<{result_type}>({expression});",
                     "  }",
                     "};",
@@ -532,7 +532,7 @@ def lower_queue_program_to_cpp(program: QueueProgram) -> str:
         lines.extend(
             (
                 f"struct memory_{index}_response_policy {{",
-                f"  {payload} operator()(const {payload} &item, "
+                f"  {payload} operator()(size_t, const {payload} &item, "
                 f"const {data_type} &old_data) const {{",
                 "    auto result = item;",
                 f"    result.{memory.result_field} = old_data;",
@@ -615,14 +615,15 @@ def lower_queue_program_to_cpp(program: QueueProgram) -> str:
             f"{suffix}"
         )
     for index, memory in enumerate(program.memories):
-        suffix = (
-            ")" if memory.provider == "table" else f", {memory.entries}, {memory.init})"
-        )
+        payload = _cpp_type(queues_by_name[memory.input_name].payload)
         initializers.append(
-            f'memory_{index}_block_("{memory.provider}_{index}", '
+            f'memory_{index}_block_("table_{index}", '
             f"{ids.memories[index]}, {module_ptr(memory.scope)}, "
-            f"{queue_ref(memory.input_name)}, {queue_ref(memory.output_name)}"
-            f"{suffix}"
+            f"std::array<gfsim::SimQueue<{payload}> *, 1>{{"
+            f"&{queue_ref(memory.input_name)}}}, "
+            f"std::array<gfsim::SimQueue<{payload}> *, 1>{{"
+            f"&{queue_ref(memory.output_name)}}}, {memory.entries}, "
+            f"{memory.init}, {memory.latency})"
         )
     for index, fanout in enumerate(fanouts):
         payload = _cpp_type(fanout.payload)
@@ -885,13 +886,9 @@ def lower_queue_program_to_cpp(program: QueueProgram) -> str:
     for index, memory in enumerate(program.memories):
         payload = _cpp_type(queues_by_name[memory.input_name].payload)
         data_type = _cpp_type(memory.data_type)
-        provider = (
-            f"gfsim::Table<{payload}, {data_type}, {memory.entries}, {memory.init}, "
-            if memory.provider == "table"
-            else f"gfsim::QueueMemory<{payload}, {data_type}, "
-        )
         lines.append(
-            f"  {provider}memory_{index}_address_policy, "
+            f"  gfsim::QueueMemoryArbiter<{payload}, {data_type}, 1, "
+            f"memory_{index}_address_policy, "
             f"memory_{index}_write_policy, memory_{index}_data_policy, "
             f"memory_{index}_response_policy> memory_{index}_block_;"
         )

@@ -12,7 +12,7 @@
         "component_schema": "phase5.Npu",
         "component_schema_fingerprint": "sha256:b73f20a98925a095ead397f5fd1c8945811e5b616bb3b337d6023ebe0aadb5dc",
         "construction": {"arguments": [], "kind": "constructor"},
-        "contract_epoch": "0.2",
+        "contract_epoch": "0.3",
         "cpp": {
           "concept": "gfsim::Component",
           "entry_points": {
@@ -51,7 +51,7 @@
         "component_schema": "phase5.Npu",
         "component_schema_fingerprint": "sha256:b73f20a98925a095ead397f5fd1c8945811e5b616bb3b337d6023ebe0aadb5dc",
         "construction": {"arguments": [], "kind": "constructor"},
-        "contract_epoch": "0.2",
+        "contract_epoch": "0.3",
         "cpp": {
           "concept": "gfsim::Component",
           "entry_points": {
@@ -90,7 +90,7 @@
         "component_schema": "phase5.NpuNode",
         "component_schema_fingerprint": "sha256:7dd7e416bc98ca4b871dc2d016b6fcce99c57a7c50c16d8c600b95b90b5133bb",
         "construction": {"arguments": [], "kind": "constructor"},
-        "contract_epoch": "0.2",
+        "contract_epoch": "0.3",
         "cpp": {
           "concept": "gfsim::Component",
           "entry_points": {
@@ -129,7 +129,7 @@
         "component_schema": "phase5.NpuNode",
         "component_schema_fingerprint": "sha256:7dd7e416bc98ca4b871dc2d016b6fcce99c57a7c50c16d8c600b95b90b5133bb",
         "construction": {"arguments": [], "kind": "constructor"},
-        "contract_epoch": "0.2",
+        "contract_epoch": "0.3",
         "cpp": {
           "concept": "gfsim::Component",
           "entry_points": {
@@ -164,7 +164,7 @@
       "binding_schema": "acsim-binding-0.1",
       "component_schema": "phase5.Npu",
       "component_schema_fingerprint": "sha256:b73f20a98925a095ead397f5fd1c8945811e5b616bb3b337d6023ebe0aadb5dc",
-      "contract_epoch": "0.2",
+      "contract_epoch": "0.3",
       "effect": "stateful",
       "function_type": "() -> ()",
       "parameters": [],
@@ -181,7 +181,7 @@
       "binding_schema": "acsim-binding-0.1",
       "component_schema": "phase5.NpuNode",
       "component_schema_fingerprint": "sha256:7dd7e416bc98ca4b871dc2d016b6fcce99c57a7c50c16d8c600b95b90b5133bb",
-      "contract_epoch": "0.2",
+      "contract_epoch": "0.3",
       "effect": "stateful",
       "function_type": "() -> ()",
       "parameters": [],

@@ -2,7 +2,7 @@
 
 Agentic Circuit is a Python and MLIR-based architecture construction system
 that generates a structured, pure C++ graph-flow simulator named `gfsim`.
-The v0.2 upgrade branch uses exact global contract epoch `0.2` and rejects
+The explicit-memory upgrade uses exact global contract epoch `0.3` and rejects
 legacy epoch `0.1` artifacts.
 
 ## Development baseline

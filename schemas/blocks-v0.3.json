@@ -1,7 +1,7 @@
 {
   "schema": "agentic-circuit-block-spec",
   "version": "0.3",
-  "contract_epoch": "0.2",
+  "contract_epoch": "0.3",
   "blocks": [
     {
       "name": "barrier",
@@ -704,8 +704,8 @@
     {
       "name": "table",
       "operation": "ac.table",
-      "lowers_to": "ac.memory",
-      "category": "scheduling",
+      "lowers_to": ["ac.memory.instance", "ac.memory.request"],
+      "category": "storage",
       "lambda_regions": 0,
       "ports": [
         {
@@ -767,7 +767,7 @@
           "kind": "structural",
           "required": false,
           "default": 16,
-          "cpp_mapping": "template_argument",
+          "cpp_mapping": "constructor_constant",
           "verilog_mapping": "parameter"
         },
         {
@@ -775,7 +775,7 @@
           "kind": "instance",
           "required": false,
           "default": 0,
-          "cpp_mapping": "constexpr_argument",
+          "cpp_mapping": "constructor_constant",
           "verilog_mapping": "localparam"
         },
         {
@@ -798,7 +798,7 @@
       "providers": {
         "cpp": {
           "header": "gfsim/queue_blocks.h",
-          "symbol": "gfsim::Table",
+          "symbol": "gfsim::QueueMemoryArbiter",
           "optimized": true
         },
         "verilog": {
