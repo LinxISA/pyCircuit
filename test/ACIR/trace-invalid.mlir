@@ -15,7 +15,7 @@
 // RUN: %not %acir_opt %t/position-non-cursor.mlir 2>&1 | %FileCheck %s --check-prefix=POSITION-TYPE
 
 //--- forked-cursor.mlir
-builtin.module attributes {ac.contract_epoch = "0.2"} {
+builtin.module attributes {ac.contract_epoch = "0.3"} {
   ac.module @M() parameters {} graph {
     ac.process @p kind "workload" {
       %cursor = ac.trace.open source "input"
@@ -29,7 +29,7 @@ builtin.module attributes {ac.contract_epoch = "0.2"} {
 // CURSOR: trace cursor provenance has more than one advancing consumer
 
 //--- noncursor.mlir
-builtin.module attributes {ac.contract_epoch = "0.2"} {
+builtin.module attributes {ac.contract_epoch = "0.3"} {
   ac.module @M() parameters {} graph {
     ac.process @p kind "workload" {
       %bad = arith.constant 0 : index
@@ -42,7 +42,7 @@ builtin.module attributes {ac.contract_epoch = "0.2"} {
 // TYPE: trace cursor must originate from ac.trace.open or ac.trace.next
 
 //--- wrong-owner.mlir
-builtin.module attributes {ac.contract_epoch = "0.2"} {
+builtin.module attributes {ac.contract_epoch = "0.3"} {
   ac.module @M() parameters {} graph {
     ac.process @p kind "workload" {
       %cursor = ac.trace.open source "input"
@@ -55,7 +55,7 @@ builtin.module attributes {ac.contract_epoch = "0.2"} {
 // OWNER: trace cursor owner does not match 'from source'
 
 //--- duplicate-document-owner.mlir
-builtin.module attributes {ac.contract_epoch = "0.2"} {
+builtin.module attributes {ac.contract_epoch = "0.3"} {
   ac.module @M() parameters {} graph {
     ac.process @left kind "workload" {
       %cursor = ac.trace.open source "pto"
@@ -71,7 +71,7 @@ builtin.module attributes {ac.contract_epoch = "0.2"} {
 // MULTI-OWNER: trace source 'pto' must have exactly one cursor owner
 
 //--- source-is-not-path.mlir
-builtin.module attributes {ac.contract_epoch = "0.2"} {
+builtin.module attributes {ac.contract_epoch = "0.3"} {
   ac.module @M() parameters {} graph {
     ac.process @workload kind "workload" {
       %cursor = ac.trace.open source "traces/model.json"
@@ -83,7 +83,7 @@ builtin.module attributes {ac.contract_epoch = "0.2"} {
 // SOURCE-ID: trace source must be one stable logical identifier segment
 
 //--- duplicate-cursor.mlir
-builtin.module attributes {ac.contract_epoch = "0.2"} {
+builtin.module attributes {ac.contract_epoch = "0.3"} {
   ac.module @M() parameters {} graph {
     ac.process @workload kind "workload" {
       %first = ac.trace.open source "pto"
@@ -96,7 +96,7 @@ builtin.module attributes {ac.contract_epoch = "0.2"} {
 // DUPLICATE-CURSOR: trace source 'pto' must have exactly one cursor owner
 
 //--- forwarded-fork.mlir
-builtin.module attributes {ac.contract_epoch = "0.2"} {
+builtin.module attributes {ac.contract_epoch = "0.3"} {
   ac.module @M(i1) parameters {} graph {
   ^bb0(%condition : i1):
     ac.process @p kind "workload" captures(%condition : i1) {
@@ -117,7 +117,7 @@ builtin.module attributes {ac.contract_epoch = "0.2"} {
 // FORWARDED-FORK: trace cursor provenance has more than one advancing consumer
 
 //--- ambiguous-merge.mlir
-builtin.module attributes {ac.contract_epoch = "0.2"} {
+builtin.module attributes {ac.contract_epoch = "0.3"} {
   ac.module @M(i1) parameters {} graph {
   ^bb0(%condition : i1):
     ac.process @p kind "workload" captures(%condition : i1) {
@@ -138,7 +138,7 @@ builtin.module attributes {ac.contract_epoch = "0.2"} {
 // AMBIGUOUS: trace cursor forwarding merges distinct provenance
 
 //--- cursor-noncursor-merge.mlir
-builtin.module attributes {ac.contract_epoch = "0.2"} {
+builtin.module attributes {ac.contract_epoch = "0.3"} {
   ac.module @M(i1) parameters {} graph {
   ^bb0(%condition : i1):
     ac.process @p kind "workload" captures(%condition : i1) {
@@ -159,7 +159,7 @@ builtin.module attributes {ac.contract_epoch = "0.2"} {
 // NONCURSOR-MERGE: trace cursor forwarding merges cursor and non-cursor values
 
 //--- for-induction-cursor.mlir
-builtin.module attributes {ac.contract_epoch = "0.2"} {
+builtin.module attributes {ac.contract_epoch = "0.3"} {
   ac.module @M() parameters {} graph {
     ac.process @p kind "workload" {
       %cursor = ac.trace.open source "pto"
@@ -181,7 +181,7 @@ builtin.module attributes {ac.contract_epoch = "0.2"} {
 // DECODE-NOT-PROCESS: operation is not legal in an ac.module structural Graph region
 
 //--- decode-non-next.mlir
-builtin.module attributes {ac.contract_epoch = "0.2"} {
+builtin.module attributes {ac.contract_epoch = "0.3"} {
   ac.module @M() parameters {} graph {
     ac.process @p kind "workload" {
       %cursor = ac.trace.open source "input"
@@ -195,7 +195,7 @@ builtin.module attributes {ac.contract_epoch = "0.2"} {
 }
 
 //--- decode-not-in-process.mlir
-builtin.module attributes {ac.contract_epoch = "0.2"} {
+builtin.module attributes {ac.contract_epoch = "0.3"} {
   ac.module @M() parameters {} graph {
     %cursor = ac.trace.open source "input"
     %next, %raw, %advanced = ac.trace.next %cursor from source "input" : i32
@@ -205,7 +205,7 @@ builtin.module attributes {ac.contract_epoch = "0.2"} {
 }
 
 //--- eof-non-cursor.mlir
-builtin.module attributes {ac.contract_epoch = "0.2"} {
+builtin.module attributes {ac.contract_epoch = "0.3"} {
   ac.module @M() parameters {} graph {
     ac.process @p kind "workload" {
       %bad = arith.constant 1 : i32
@@ -218,7 +218,7 @@ builtin.module attributes {ac.contract_epoch = "0.2"} {
 // EOF-TYPE: error: use of value '%bad' expects different type than prior uses: 'index' vs 'i32'
 
 //--- position-non-cursor.mlir
-builtin.module attributes {ac.contract_epoch = "0.2"} {
+builtin.module attributes {ac.contract_epoch = "0.3"} {
   ac.module @M() parameters {} graph {
     ac.process @p kind "workload" {
       %bad = arith.constant 1 : i32

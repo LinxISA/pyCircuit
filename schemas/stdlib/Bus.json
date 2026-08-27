@@ -1,7 +1,7 @@
 {
   "schema_kind": "agentic-circuit-component",
   "schema_version": "0.1",
-  "contract_epoch": "0.2",
+  "contract_epoch": "0.3",
   "canonical_name": "ac.Bus",
   "family": "interconnect",
   "provider_namespace": "ac",
@@ -115,5 +115,5 @@
     "gauges": [],
     "histograms": []
   },
-  "schema_fingerprint": "sha256:246580c627a0c897874d3d1cb2aa31606700c6e916db82a3ab21158ee9f4e150"
+  "schema_fingerprint": "sha256:52650a3dce32c6870da36e35d159e17bf1050cb4ba28fa77082b6065037e09b2"
 }

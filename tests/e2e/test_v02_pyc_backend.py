@@ -354,7 +354,7 @@ int main() {{
             self.assertIn("pyc.eq", pyc)
             self.assertIn("pyc.fifo", pyc)
             manifest = json.loads((output / "manifest.json").read_text())
-            self.assertEqual("0.2", manifest["contract_epoch"])
+            self.assertEqual("0.3", manifest["contract_epoch"])
             verilog = "\n".join(
                 path.read_text(encoding="utf-8")
                 for path in sorted((output / "verilog").glob("*.v"))
@@ -426,9 +426,9 @@ int main() {{
             )
             self.assertEqual(0, completed.returncode, completed.stderr)
             manifest = json.loads((output / "manifest.json").read_text())
-            self.assertEqual("0.2", manifest["contract_epoch"])
+            self.assertEqual("0.3", manifest["contract_epoch"])
             pyc = (output / "model.pyc").read_text(encoding="utf-8")
-            self.assertEqual(2, pyc.count("pyc.reg"))
+            self.assertEqual(3, pyc.count("pyc.reg"))
             self.assertIn("%out0_ready", pyc)
             self.assertIn("%out1_ready", pyc)
 
@@ -791,10 +791,15 @@ int main() {
             pyc = (output / "model.pyc").read_text(encoding="utf-8")
             self.assertEqual(2, pyc.count("pyc.reg"))
             self.assertEqual(1, pyc.count("pyc.sync_mem"))
-            self.assertIn('{depth = 16, name = "responses"}', pyc)
+            self.assertIn('{depth = 16, name = "sram"}', pyc)
             manifest = json.loads((output / "manifest.json").read_text())
             self.assertEqual(
-                ["ac.memory", "ac.sink", "ac.source"],
+                [
+                    "ac.memory.instance",
+                    "ac.memory.request",
+                    "ac.sink",
+                    "ac.source",
+                ],
                 manifest["opcode_lowering_inventory"],
             )
 

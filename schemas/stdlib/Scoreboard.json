@@ -1,7 +1,7 @@
 {
   "schema_kind": "agentic-circuit-component",
   "schema_version": "0.1",
-  "contract_epoch": "0.2",
+  "contract_epoch": "0.3",
   "canonical_name": "ac.Scoreboard",
   "family": "control",
   "provider_namespace": "ac",
@@ -145,5 +145,5 @@
     ],
     "histograms": []
   },
-  "schema_fingerprint": "sha256:bd125a8a16e51c090b5ceb89771b7143edfdc6e16eb4e0030d40e4ea280795ab"
+  "schema_fingerprint": "sha256:2204843d83c1385cd52e0aca40542bfb768a834f8237520ebf82b8ec222269e3"
 }

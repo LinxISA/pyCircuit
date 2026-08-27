@@ -10,9 +10,9 @@
         "binding": "phase5_Showcase_binding",
         "binding_schema": "acsim-binding-0.1",
         "component_schema": "phase5.Showcase",
-        "component_schema_fingerprint": "sha256:0fc0626924debbf545826bad7c14bd2a33bf0aa222ca02aaca8551f29e8f37d8",
+        "component_schema_fingerprint": "sha256:a3fca7d4bda8df9f50840a9b9c32b83b6eeca3b1c946f653aa913cec2cd1b405",
         "construction": {"arguments": [0], "kind": "constructor"},
-        "contract_epoch": "0.2",
+        "contract_epoch": "0.3",
         "cpp": {
           "concept": "gfsim::Component",
           "entry_points": {
@@ -28,7 +28,7 @@
         },
         "cpp_type": "phase5_showcase_type",
         "effect": "stateful",
-        "fingerprint": "sha256:7f93e5524d3cc5d5af72a816729e1cb710124cf5fc203046f826f8a479666e9c",
+        "fingerprint": "sha256:1c4c15f3f7d7879acd91ce9c62829df5381570d9f8517a3fa4c32fec0a5ddd9f",
         "implementation": "gfsim.Phase5TraceSource",
         "ownership": {"kind": "unique", "placement": "member_or_array"},
         "parameters": [{
@@ -56,9 +56,9 @@
         "binding": "phase5_Showcase_binding",
         "binding_schema": "acsim-binding-0.1",
         "component_schema": "phase5.Showcase",
-        "component_schema_fingerprint": "sha256:0fc0626924debbf545826bad7c14bd2a33bf0aa222ca02aaca8551f29e8f37d8",
+        "component_schema_fingerprint": "sha256:a3fca7d4bda8df9f50840a9b9c32b83b6eeca3b1c946f653aa913cec2cd1b405",
         "construction": {"arguments": [0], "kind": "constructor"},
-        "contract_epoch": "0.2",
+        "contract_epoch": "0.3",
         "cpp": {
           "concept": "gfsim::Component",
           "entry_points": {
@@ -74,7 +74,7 @@
         },
         "cpp_type": "phase5_showcase_type",
         "effect": "stateful",
-        "fingerprint": "sha256:7f93e5524d3cc5d5af72a816729e1cb710124cf5fc203046f826f8a479666e9c",
+        "fingerprint": "sha256:1c4c15f3f7d7879acd91ce9c62829df5381570d9f8517a3fa4c32fec0a5ddd9f",
         "implementation": "gfsim.Phase5TraceSource",
         "ownership": {"kind": "unique", "placement": "member_or_array"},
         "parameters": [{
@@ -98,8 +98,8 @@
     "binding": "phase5_Showcase_binding",
     "binding_schema": "acsim-binding-0.1",
     "component_schema": "phase5.Showcase",
-    "component_schema_fingerprint": "sha256:0fc0626924debbf545826bad7c14bd2a33bf0aa222ca02aaca8551f29e8f37d8",
-    "contract_epoch": "0.2",
+    "component_schema_fingerprint": "sha256:a3fca7d4bda8df9f50840a9b9c32b83b6eeca3b1c946f653aa913cec2cd1b405",
+    "contract_epoch": "0.3",
     "effect": "stateful",
     "function_type": "() -> ()",
     "parameters": [{"acir_type": "i64", "name": "scenario", "ordinal": 0, "value": 0}],

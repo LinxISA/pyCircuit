@@ -2,7 +2,7 @@
 
 | 字段 | 内容 |
 | --- | --- |
-| 目标版本 | Queue/Var contract epoch `0.2` |
+| 目标版本 | Explicit Memory contract epoch `0.3` |
 | 状态 | 已在 `main` 实现；本文是团队阅读入口 |
 | 适用读者 | Python 前端、ACIR、gfsim、PYC/Verilog 和模型验证开发者 |
 | 规范主文档 | [Agentic Circuit Queue/Var v0.2 Specification Manual](agentic-circuit-v0.2.md) |
@@ -314,13 +314,13 @@ class Request:
 
 @ac.system
 def memory_pipeline() -> None:
+    sram = ac.memory(ac.u16, entries=16, init=0)
     requests = ac.source(Request)
-    responses = requests.memory(
+    responses = sram.request(
+        requests,
         address=lambda item: item.address,
         write=lambda item: item.write,
         data=lambda item: item.data,
-        entries=16,
-        init=0,
         result_field="data",
         depth=4,
         latency=1,
@@ -328,7 +328,9 @@ def memory_pipeline() -> None:
     ac.sink(responses)
 ```
 
-v0.2 只允许 `init=0`。PYC 后端使用 `pyc.sync_mem`，并用寄存器对齐请求和同步读响应。
+只允许 `init=0`。一个实例可以连接多个逻辑 endpoint，但只有一个物理端口和一个
+outstanding request。endpoint 按冻结 ordinal 固定优先级仲裁；`busy` 时全部反压，
+直到选中 response Queue 接纳响应。PYC 每个实例只生成一个 `pyc.sync_mem`。
 
 可执行示例：
 [`pyc_memory_pipeline.py`](../../examples/v02/pyc_memory_pipeline.py)。
@@ -641,7 +643,7 @@ QueueGraph、gfsim、PYC、测试和 opcode catalog。
 | loop 被拒绝 | 不是受支持的单 Queue 有界 feedback 形状 | 简化为一次 Queue update，或显式组合 route/merge/feedback |
 | PYC 拒绝 `ac.expect` | verification leaf 不能进入 design | 把 assertion 放入 PYC testbench boundary |
 | 后端结果内部 cycle 不同 | gfsim 与 RTL IR 不同 | 比较声明的 transaction/state/refinement projection |
-| artifact epoch 不匹配 | v0.2 是 hard break | 重新生成 exact epoch `0.2` artifact，不使用兼容 shim |
+| artifact epoch 不匹配 | v0.3 是 hard break | 重新生成 exact epoch `0.3` artifact，不使用兼容 shim |
 
 ## 修改公共契约的完成条件
 

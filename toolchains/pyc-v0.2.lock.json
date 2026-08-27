@@ -5,5 +5,5 @@
   "pycircuit_commit": "cc0203928b0c078468f2549a2477f891a17552e0",
   "repository": "https://github.com/LinxISA/pyCircuit",
   "schema": "agentic-circuit-pyc-toolchain-lock",
-  "version": "0.2"
+  "version": "0.3"
 }

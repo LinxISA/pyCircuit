@@ -12,7 +12,7 @@
       "component_schema": "ac.Leaf",
       "component_schema_fingerprint": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
       "construction": {"arguments": [8], "kind": "constructor"},
-      "contract_epoch": "0.2",
+      "contract_epoch": "0.3",
       "cpp": {"concept": "gfsim::PureModel", "entry_points": {"pure": "gfsim::leaf", "reset": "", "validate": "", "work": "", "xfer": ""}, "header": "gfsim/leaf.hpp", "symbol": "gfsim::Leaf", "target": "gfsim"},
       "cpp_type": "cpp_i32",
       "effect": "pure",

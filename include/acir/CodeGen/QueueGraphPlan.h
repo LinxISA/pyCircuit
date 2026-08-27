@@ -59,7 +59,30 @@ struct QueueBlockPlan {
   uint64_t entries = 0;
   uint64_t init = 0;
   std::string resultField;
+  std::string memoryInstance;
+  uint64_t endpointOrdinal = 0;
   std::string message;
+};
+
+struct MemoryInstancePlan {
+  std::string name;
+  std::string dataType;
+  uint64_t entries = 0;
+  uint64_t init = 0;
+  std::string stableId;
+  std::string ownerPath;
+};
+
+struct MemoryRequestPlan {
+  std::string instance;
+  std::string name;
+  std::string scope;
+  std::string input;
+  std::string output;
+  uint64_t ordinal = 0;
+  uint64_t depth = 1;
+  uint64_t latency = 1;
+  std::string resultField;
 };
 
 struct QueueGraphPlan {
@@ -68,6 +91,8 @@ struct QueueGraphPlan {
   std::vector<std::string> scopes;
   std::vector<QueuePlan> queues;
   std::vector<QueueBlockPlan> blocks;
+  std::vector<MemoryInstancePlan> memoryInstances;
+  std::vector<MemoryRequestPlan> memoryRequests;
 
   llvm::Expected<std::string> canonicalJson() const;
 };

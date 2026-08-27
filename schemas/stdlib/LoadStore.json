@@ -1,7 +1,7 @@
 {
   "schema_kind": "agentic-circuit-component",
   "schema_version": "0.1",
-  "contract_epoch": "0.2",
+  "contract_epoch": "0.3",
   "canonical_name": "ac.LoadStore",
   "family": "transport",
   "provider_namespace": "ac",
@@ -149,5 +149,5 @@
     ],
     "histograms": []
   },
-  "schema_fingerprint": "sha256:5088041b9e50df70db34f8f7120de0d5c4ebe6617f7c5a9875892a24b76db82f"
+  "schema_fingerprint": "sha256:e213f2629732f381e679e3aa3176ff897308738d0e718fa4a56224ed5a8e0514"
 }
