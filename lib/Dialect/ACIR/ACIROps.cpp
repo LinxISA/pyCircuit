@@ -1119,8 +1119,8 @@ LogicalResult VarPopcountOp::verify() {
   for (unsigned width = inputInt.getWidth(); width != 0; width >>= 1)
     ++required;
   if (resultInt.getWidth() != required)
-    return emitOpError() << "result width must be ceil(log2(input_width + 1)) = "
-                         << required;
+    return emitOpError()
+           << "result width must be ceil(log2(input_width + 1)) = " << required;
   return success();
 }
 

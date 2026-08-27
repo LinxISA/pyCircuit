@@ -168,10 +168,11 @@ emitTransform(const QueueGraphPlan &plan, const QueueBlockPlan &block,
         body << "    " << result << " = pyc.popcount " << *first
              << " {primitive_id = \"dataflow.popcount.v1\", "
                 "implementation_id = \"internal.reference.popcount.v1\", "
-                "qualification_report = \"INT-11/smoke/comparison_report.json\"} : "
+                "qualification_report = "
+                "\"INT-11/smoke/comparison_report.json\"} : "
              << *sourceType << " -> " << *resultType << "\n";
       } else if (expression.kind == "add" || expression.kind == "sub" ||
-          expression.kind == "mul") {
+                 expression.kind == "mul") {
         result = newValue();
         if (expression.operands.size() != 2)
           return pycError("binary transform expression arity mismatch");
@@ -1008,12 +1009,12 @@ llvm::Expected<std::string> generateQueueGraphPyc(const QueueGraphPlan &plan) {
           }
           body << " -> " << reqType << "\n";
           std::string grant = newValue();
-          body << "    " << grant
-               << " = pyc.rr_arbiter " << req << ", " << cursor
-               << " {num_inputs = " << valids.size()
+          body << "    " << grant << " = pyc.rr_arbiter " << req << ", "
+               << cursor << " {num_inputs = " << valids.size()
                << ", primitive_id = \"control.rr_arbiter.v1\", "
                   "implementation_id = \"internal.reference.rr_arbiter.v1\", "
-                  "qualification_report = \"DF-09/smoke_v072/arbiter_candidates\"} : "
+                  "qualification_report = "
+                  "\"DF-09/smoke_v072/arbiter_candidates\"} : "
                << reqType << ", " << pointerType << " -> " << reqType << "\n";
           grants.reserve(valids.size());
           for (size_t input = 0; input < valids.size(); ++input) {
