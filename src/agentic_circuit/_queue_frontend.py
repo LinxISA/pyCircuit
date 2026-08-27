@@ -200,6 +200,7 @@ class MemoryInstanceBinding:
     data_type: str
     entries: int
     init: int
+    latency: int
     scope: tuple[str, ...]
     order: int
 
@@ -214,6 +215,31 @@ class MemoryRequestBinding:
     write: ast.expr
     data: ast.expr
     result_field: str
+    depth: int
+    scope: tuple[str, ...]
+    order: int
+
+
+@dataclass(frozen=True, slots=True)
+class StaticMemoryArrayBinding:
+    name: str
+    members: tuple[str, ...]
+    data_type: str
+    entries: int
+    init: int
+    latency: int
+    scope: tuple[str, ...]
+    order: int
+
+
+@dataclass(frozen=True, slots=True)
+class SelectedMemoryBinding:
+    name: str
+    array: str
+    input_name: str
+    routed_inputs: tuple[str, ...]
+    argument: str
+    selector: ast.expr
     depth: int
     latency: int
     scope: tuple[str, ...]
@@ -577,6 +603,9 @@ def parse_queue_program(text: str, system: str) -> QueueProgram:
     memory_instances: list[MemoryInstanceBinding] = []
     memory_requests: list[MemoryRequestBinding] = []
     memory_by_name: dict[str, MemoryInstanceBinding] = {}
+    memory_arrays: dict[str, StaticMemoryArrayBinding] = {}
+    selected_memories: dict[str, SelectedMemoryBinding] = {}
+    consumed_selected_memories: set[str] = set()
     atomics: list[AtomicBinding] = []
     sinks: list[SinkBinding] = []
     observations: list[ObservationBinding] = []
@@ -672,6 +701,117 @@ def parse_queue_program(text: str, system: str) -> QueueProgram:
             None,
             scope=scope_path,
             order=current_order,
+        )
+
+    def memory_instance_binding(
+        name: str,
+        call: ast.Call,
+        scope_path: tuple[str, ...],
+        current_order: int,
+        static_values: dict[str, int] | None = None,
+    ) -> MemoryInstanceBinding:
+        if call_name(call) != "memory" or len(call.args) != 1:
+            raise QueueFrontendError(
+                "ACPY-QUEUE-015: memory requires one data type"
+            )
+        if any(
+            keyword.arg is None
+            or keyword.arg not in {"entries", "init", "latency"}
+            for keyword in call.keywords
+        ):
+            raise QueueFrontendError(
+                "ACPY-QUEUE-015: memory instance has an unsupported keyword"
+            )
+        data_type = _payload(call.args[0], payload_map)
+        if not data_type.startswith("i"):
+            raise QueueFrontendError(
+                "ACPY-QUEUE-015: memory data type must be an integer"
+            )
+        entries = _positive_int(call, "entries", 16, static_values)
+        init = _nonnegative_int(call, "init", 0, static_values)
+        latency = _positive_int(call, "latency", 1, static_values)
+        if init != 0:
+            raise QueueFrontendError("ACPY-QUEUE-015: memory init must be zero")
+        return MemoryInstanceBinding(
+            name, data_type, entries, init, latency, scope_path, current_order
+        )
+
+    def memory_request_parameters(
+        call: ast.Call,
+        incoming: QueueBinding,
+        data_type: str,
+        extra_keywords: set[str] | None = None,
+    ) -> tuple[str, ast.expr, ast.expr, ast.expr, str, int]:
+        allowed_keywords = {
+            "address",
+            "write",
+            "data",
+            "result_field",
+            "depth",
+            *(extra_keywords or set()),
+        }
+        if any(
+            keyword.arg is None or keyword.arg not in allowed_keywords
+            for keyword in call.keywords
+        ):
+            raise QueueFrontendError(
+                "ACPY-QUEUE-015: memory request has an unsupported keyword"
+            )
+        policies: dict[str, ast.expr] = {}
+        for policy in ("address", "write", "data"):
+            values = [
+                keyword.value for keyword in call.keywords if keyword.arg == policy
+            ]
+            if len(values) != 1:
+                raise QueueFrontendError(
+                    "ACPY-QUEUE-015: memory request requires one "
+                    f"{policy} lambda"
+                )
+            policies[policy] = values[0]
+        arguments_and_values = [_lambda(policies[item]) for item in policies]
+        if len({argument for argument, _ in arguments_and_values}) != 1:
+            raise QueueFrontendError(
+                "ACPY-QUEUE-015: memory request lambdas require one argument name"
+            )
+        result_fields = [
+            keyword.value
+            for keyword in call.keywords
+            if keyword.arg == "result_field"
+        ]
+        if (
+            len(result_fields) != 1
+            or not isinstance(result_fields[0], ast.Constant)
+            or type(result_fields[0].value) is not str
+            or not result_fields[0].value
+        ):
+            raise QueueFrontendError(
+                "ACPY-QUEUE-015: memory request requires one static result_field"
+            )
+        payload = next(
+            (
+                declaration
+                for declaration in payloads
+                if declaration.acir_type == incoming.payload
+            ),
+            None,
+        )
+        result_field = result_fields[0].value
+        field_types = dict(payload.fields) if payload is not None else {}
+        if result_field not in field_types:
+            raise QueueFrontendError(
+                "ACPY-QUEUE-015: memory result_field is unknown"
+            )
+        if field_types[result_field] != data_type:
+            raise QueueFrontendError(
+                "ACPY-QUEUE-015: memory result_field must match instance data type"
+            )
+        return (
+            arguments_and_values[0][0],
+            arguments_and_values[0][1],
+            arguments_and_values[1][1],
+            arguments_and_values[2][1],
+            result_field,
+            _positive_int(call, "depth", 1),
         )
 
     def collection_binding(
@@ -805,28 +945,18 @@ def parse_queue_program(text: str, system: str) -> QueueProgram:
             ):
                 name = statement.targets[0].id
                 call = statement.value
-                if name in by_name or name in collections or name in memory_by_name:
+                if (
+                    name in by_name
+                    or name in collections
+                    or name in memory_by_name
+                    or name in memory_arrays
+                    or name in selected_memories
+                ):
                     raise QueueFrontendError(
                         "ACPY-QUEUE-015: memory instance requires one fresh name"
                     )
-                if any(
-                    keyword.arg is None or keyword.arg not in {"entries", "init"}
-                    for keyword in call.keywords
-                ):
-                    raise QueueFrontendError(
-                        "ACPY-QUEUE-015: memory instance has an unsupported keyword"
-                    )
-                data_type = _payload(call.args[0], payload_map)
-                if not data_type.startswith("i"):
-                    raise QueueFrontendError(
-                        "ACPY-QUEUE-015: memory data type must be an integer"
-                    )
-                entries = _positive_int(call, "entries", 16)
-                init = _nonnegative_int(call, "init", 0)
-                if init != 0:
-                    raise QueueFrontendError("ACPY-QUEUE-015: memory init must be zero")
-                instance = MemoryInstanceBinding(
-                    name, data_type, entries, init, scope_path, current_order
+                instance = memory_instance_binding(
+                    name, call, scope_path, current_order
                 )
                 memory_instances.append(instance)
                 memory_by_name[name] = instance
@@ -1097,13 +1227,82 @@ def parse_queue_program(text: str, system: str) -> QueueProgram:
                 and call_name(statement.value) in {"array", "map", "set"}
             ):
                 name = statement.targets[0].id
-                if name in by_name or name in collections:
+                if (
+                    name in by_name
+                    or name in collections
+                    or name in memory_by_name
+                    or name in memory_arrays
+                    or name in selected_memories
+                ):
                     raise QueueFrontendError(
                         "ACPY-QUEUE-005: collection assignment requires one fresh name"
                     )
+                call = statement.value
+                is_memory_array = False
+                if call_name(call) == "array" and len(call.args) == 2:
+                    _, generator = _lambda(call.args[1])
+                    is_memory_array = (
+                        isinstance(generator, ast.Call)
+                        and call_name(generator) == "memory"
+                    )
+                if is_memory_array:
+                    extent = _static_int(call.args[0], {})
+                    if extent is None or extent <= 0:
+                        raise QueueFrontendError(
+                            "ACPY-QUEUE-015: memory array requires a positive "
+                            "compile-time extent"
+                        )
+                    argument, generator = _lambda(call.args[1])
+                    assert isinstance(generator, ast.Call)
+                    pending: list[MemoryInstanceBinding] = []
+                    for index in range(extent):
+                        member_name = f"{name}__{index}"
+                        if (
+                            member_name in by_name
+                            or member_name in collections
+                            or member_name in memory_by_name
+                            or member_name in memory_arrays
+                            or member_name in selected_memories
+                        ):
+                            raise QueueFrontendError(
+                                "ACPY-QUEUE-015: memory array element name "
+                                "collides with an existing binding"
+                            )
+                        pending.append(
+                            memory_instance_binding(
+                                member_name,
+                                generator,
+                                scope_path,
+                                current_order,
+                                {argument: index},
+                            )
+                        )
+                    configurations = {
+                        (item.data_type, item.entries, item.init, item.latency)
+                        for item in pending
+                    }
+                    if len(configurations) != 1:
+                        raise QueueFrontendError(
+                            "ACPY-QUEUE-015: memory array elements must be homogeneous"
+                        )
+                    for instance in pending:
+                        memory_instances.append(instance)
+                        memory_by_name[instance.name] = instance
+                    first = pending[0]
+                    memory_arrays[name] = StaticMemoryArrayBinding(
+                        name,
+                        tuple(instance.name for instance in pending),
+                        first.data_type,
+                        first.entries,
+                        first.init,
+                        first.latency,
+                        scope_path,
+                        current_order,
+                    )
+                    continue
                 collection = collection_binding(
                     name,
-                    statement.value,
+                    call,
                     scope_path,
                     current_order,
                     aliases,
@@ -1112,6 +1311,103 @@ def parse_queue_program(text: str, system: str) -> QueueProgram:
                 collections[name] = collection
                 collection_bindings.append(
                     CollectionBinding(name, collection, scope_path, current_order)
+                )
+                continue
+            if (
+                isinstance(statement, ast.Assign)
+                and len(statement.targets) == 1
+                and isinstance(statement.targets[0], ast.Name)
+                and isinstance(statement.value, ast.Call)
+                and isinstance(statement.value.func, ast.Attribute)
+                and statement.value.func.attr == "select"
+                and isinstance(statement.value.func.value, ast.Name)
+                and statement.value.func.value.id in memory_arrays
+            ):
+                name = statement.targets[0].id
+                if (
+                    name in by_name
+                    or name in collections
+                    or name in memory_by_name
+                    or name in memory_arrays
+                    or name in selected_memories
+                ):
+                    raise QueueFrontendError(
+                        "ACPY-QUEUE-015: selected memory requires one fresh name"
+                    )
+                call = statement.value
+                if len(call.args) != 1 or any(
+                    keyword.arg is None
+                    or keyword.arg not in {"key", "depth", "latency"}
+                    for keyword in call.keywords
+                ):
+                    raise QueueFrontendError(
+                        "ACPY-QUEUE-015: memory array select requires one request Queue"
+                    )
+                keys = [
+                    keyword.value for keyword in call.keywords if keyword.arg == "key"
+                ]
+                if len(keys) != 1:
+                    raise QueueFrontendError(
+                        "ACPY-QUEUE-015: memory array select requires one key lambda"
+                    )
+                array = memory_arrays[call.func.value.id]
+                if len(scope_path) < len(array.scope) or (
+                    scope_path[: len(array.scope)] != array.scope
+                ):
+                    raise QueueFrontendError(
+                        "ACPY-QUEUE-015: memory array is only visible in its "
+                        "declaration scope and descendants"
+                    )
+                input_name = queue_reference(call.args[0], aliases)
+                incoming = by_name[input_name]
+                argument, selector = _lambda(keys[0])
+                depth = _positive_int(call, "depth", 1)
+                latency = _positive_int(call, "latency", 1)
+                routed_inputs = tuple(
+                    f"{name}__bank{index}_request"
+                    for index in range(len(array.members))
+                )
+                for routed in routed_inputs:
+                    if routed in by_name:
+                        raise QueueFrontendError(
+                            "ACPY-QUEUE-015: selected memory synthetic Queue "
+                            "name collides with an existing binding"
+                        )
+                    output = QueueBinding(
+                        routed,
+                        incoming.payload,
+                        depth,
+                        latency,
+                        None,
+                        scope=scope_path,
+                        order=current_order,
+                        route_output=True,
+                    )
+                    queues.append(output)
+                    by_name[routed] = output
+                routes.append(
+                    RouteBinding(
+                        input_name,
+                        routed_inputs,
+                        argument,
+                        selector,
+                        depth,
+                        latency,
+                        scope_path,
+                        current_order,
+                    )
+                )
+                selected_memories[name] = SelectedMemoryBinding(
+                    name,
+                    array.name,
+                    input_name,
+                    routed_inputs,
+                    argument,
+                    selector,
+                    depth,
+                    latency,
+                    scope_path,
+                    current_order,
                 )
                 continue
             if (
@@ -1674,6 +1970,144 @@ def parse_queue_program(text: str, system: str) -> QueueProgram:
                 and isinstance(statement.value.func, ast.Attribute)
                 and statement.value.func.attr == "request"
                 and isinstance(statement.value.func.value, ast.Name)
+                and statement.value.func.value.id in selected_memories
+                and not statement.value.args
+            ):
+                name = statement.targets[0].id
+                if (
+                    name in by_name
+                    or name in collections
+                    or name in memory_by_name
+                    or name in memory_arrays
+                    or name in selected_memories
+                ):
+                    raise QueueFrontendError(
+                        "ACPY-QUEUE-015: memory request output requires one fresh name"
+                    )
+                call = statement.value
+                selected_name = call.func.value.id
+                selected = selected_memories[selected_name]
+                if selected_name in consumed_selected_memories:
+                    raise QueueFrontendError(
+                        "ACPY-QUEUE-015: selected memory may be requested only once"
+                    )
+                if selected.scope != scope_path:
+                    raise QueueFrontendError(
+                        "ACPY-QUEUE-015: selected memory must be requested in the "
+                        "same lexical scope"
+                    )
+                incoming = by_name[selected.input_name]
+                array = memory_arrays[selected.array]
+                (
+                    argument,
+                    address,
+                    write,
+                    data,
+                    result_field,
+                    depth,
+                ) = memory_request_parameters(
+                    call,
+                    incoming,
+                    array.data_type,
+                    {"merge_policy", "merge_depth", "merge_latency"},
+                )
+                merge_policies = [
+                    keyword.value
+                    for keyword in call.keywords
+                    if keyword.arg == "merge_policy"
+                ]
+                if len(merge_policies) > 1 or (
+                    merge_policies
+                    and (
+                        not isinstance(merge_policies[0], ast.Constant)
+                        or merge_policies[0].value not in {"priority", "round_robin"}
+                    )
+                ):
+                    raise QueueFrontendError(
+                        "ACPY-QUEUE-015: merge_policy must be priority or round_robin"
+                    )
+                merge_policy = (
+                    merge_policies[0].value if merge_policies else "priority"
+                )
+                merge_depth = _positive_int(call, "merge_depth", 1)
+                merge_latency = _positive_int(call, "merge_latency", 1)
+                response_names = tuple(
+                    f"{name}__bank{index}"
+                    for index in range(len(array.members))
+                )
+                for instance_name, input_name, output_name in zip(
+                    array.members,
+                    selected.routed_inputs,
+                    response_names,
+                    strict=True,
+                ):
+                    if output_name in by_name:
+                        raise QueueFrontendError(
+                            "ACPY-QUEUE-015: selected memory response Queue "
+                            "name collides with an existing binding"
+                        )
+                    output = QueueBinding(
+                        output_name,
+                        incoming.payload,
+                        depth,
+                        1,
+                        None,
+                        scope=scope_path,
+                        order=current_order,
+                        memory_output=True,
+                    )
+                    queues.append(output)
+                    by_name[output_name] = output
+                    memory_requests.append(
+                        MemoryRequestBinding(
+                            instance_name,
+                            input_name,
+                            output_name,
+                            argument,
+                            address,
+                            write,
+                            data,
+                            result_field,
+                            depth,
+                            scope_path,
+                            current_order,
+                        )
+                    )
+                merge_order = current_order + 1
+                output = QueueBinding(
+                    name,
+                    incoming.payload,
+                    merge_depth,
+                    merge_latency,
+                    None,
+                    scope=scope_path,
+                    order=merge_order,
+                    merge_output=True,
+                )
+                queues.append(output)
+                by_name[name] = output
+                merges.append(
+                    MergeBinding(
+                        response_names,
+                        name,
+                        str(merge_policy),
+                        merge_depth,
+                        merge_latency,
+                        scope_path,
+                        merge_order,
+                    )
+                )
+                consumed_selected_memories.add(selected_name)
+                order += 1
+                continue
+            if (
+                isinstance(statement, ast.Assign)
+                and len(statement.targets) == 1
+                and isinstance(statement.targets[0], ast.Name)
+                and isinstance(statement.value, ast.Call)
+                and isinstance(statement.value.func, ast.Attribute)
+                and statement.value.func.attr == "request"
+                and isinstance(statement.value.func.value, ast.Name)
                 and len(statement.value.args) == 1
             ):
                 name = statement.targets[0].id
@@ -1700,77 +2134,19 @@ def parse_queue_program(text: str, system: str) -> QueueProgram:
                     raise QueueFrontendError(
                         "ACPY-QUEUE-015: memory request input is unbound"
                     )
-                allowed_keywords = {
-                    "address",
-                    "write",
-                    "data",
-                    "result_field",
-                    "depth",
-                    "latency",
-                }
-                if any(
-                    keyword.arg is None or keyword.arg not in allowed_keywords
-                    for keyword in call.keywords
-                ):
-                    raise QueueFrontendError(
-                        "ACPY-QUEUE-015: memory request has an unsupported keyword"
-                    )
-                policies: dict[str, ast.expr] = {}
-                for policy in ("address", "write", "data"):
-                    values = [
-                        keyword.value
-                        for keyword in call.keywords
-                        if keyword.arg == policy
-                    ]
-                    if len(values) != 1:
-                        raise QueueFrontendError(
-                            f"ACPY-QUEUE-015: memory request requires one {policy} lambda"
-                        )
-                    policies[policy] = values[0]
-                arguments_and_values = [_lambda(policies[name]) for name in policies]
-                if len({argument for argument, _ in arguments_and_values}) != 1:
-                    raise QueueFrontendError(
-                        "ACPY-QUEUE-015: memory request lambdas require one argument name"
-                    )
-                result_fields = [
-                    keyword.value
-                    for keyword in call.keywords
-                    if keyword.arg == "result_field"
-                ]
-                if (
-                    len(result_fields) != 1
-                    or not isinstance(result_fields[0], ast.Constant)
-                    or type(result_fields[0].value) is not str
-                    or not result_fields[0].value
-                ):
-                    raise QueueFrontendError(
-                        "ACPY-QUEUE-015: memory request requires one static result_field"
-                    )
-                payload = next(
-                    (
-                        declaration
-                        for declaration in payloads
-                        if declaration.acir_type == incoming.payload
-                    ),
-                    None,
-                )
-                result_field = result_fields[0].value
-                field_types = dict(payload.fields) if payload is not None else {}
-                if result_field not in field_types:
-                    raise QueueFrontendError(
-                        "ACPY-QUEUE-015: memory result_field is unknown"
-                    )
-                if field_types[result_field] != instance.data_type:
-                    raise QueueFrontendError(
-                        "ACPY-QUEUE-015: memory result_field must match instance data type"
-                    )
-                depth = _positive_int(call, "depth", 1)
-                latency = _positive_int(call, "latency", 1)
+                (
+                    argument,
+                    address,
+                    write,
+                    data,
+                    result_field,
+                    depth,
+                ) = memory_request_parameters(call, incoming, instance.data_type)
                 output = QueueBinding(
                     name,
                     incoming.payload,
                     depth,
-                    latency,
+                    1,
                     None,
                     scope=scope_path,
                     order=current_order,
@@ -1783,13 +2159,12 @@ def parse_queue_program(text: str, system: str) -> QueueProgram:
                         instance.name,
                         incoming.name,
                         name,
-                        arguments_and_values[0][0],
-                        arguments_and_values[0][1],
-                        arguments_and_values[1][1],
-                        arguments_and_values[2][1],
+                        argument,
+                        address,
+                        write,
+                        data,
                         result_field,
                         depth,
-                        latency,
                         scope_path,
                         current_order,
                     )
@@ -2160,6 +2535,12 @@ def parse_queue_program(text: str, system: str) -> QueueProgram:
             )
 
     visit(function.body, ())
+    unused_selected = sorted(set(selected_memories) - consumed_selected_memories)
+    if unused_selected:
+        raise QueueFrontendError(
+            "ACPY-QUEUE-015: selected memory is not requested: "
+            + ", ".join(repr(name) for name in unused_selected)
+        )
     requests_by_instance: dict[str, list[MemoryRequestBinding]] = {}
     for request in memory_requests:
         requests_by_instance.setdefault(request.instance, []).append(request)
@@ -2440,7 +2821,8 @@ def lower_queue_program(program: QueueProgram) -> str:
         )
         lines.append(
             f'  ac.memory.instance @{instance.name} data {instance.data_type} '
-            f'entries {instance.entries} init {instance.init} owner "{owner}" '
+            f'entries {instance.entries} init {instance.init} '
+            f'latency {instance.latency} owner "{owner}" '
             f'stable_id "memory/{stable_id}"'
         )
     by_name = {item.name: item for item in program.queues}
@@ -2808,6 +3190,10 @@ def lower_queue_program(program: QueueProgram) -> str:
                     raise QueueFrontendError(
                         "ACPY-QUEUE-011: runtime if condition must lower to bool"
                     )
+                if not route.boolean_selector and not selector_type.startswith("i"):
+                    raise QueueFrontendError(
+                        "ACPY-QUEUE-006: route key must lower to an integer"
+                    )
                 output_names = [
                     name if not path else f"{name}__local" for name in route.outputs
                 ]
@@ -3054,7 +3440,7 @@ def lower_queue_program(program: QueueProgram) -> str:
                     f"%{mapping[memory.input_name]} ordinal "
                     f"{memory_ordinals[(memory.instance, memory.output_name)]} "
                     f'result_field "{memory.result_field}" '
-                    f"depth {memory.depth} latency {memory.latency} address {{"
+                    f"depth {memory.depth} address {{"
                 )
                 for index, policy_name in enumerate(("address", "write", "data")):
                     if index:

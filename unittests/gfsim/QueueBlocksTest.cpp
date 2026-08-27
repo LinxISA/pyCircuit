@@ -536,6 +536,59 @@ TEST(QueueBlocksTest, SharedMemoryUsesPriorityAndBlocksUntilResponseAccepted) {
   EXPECT_EQ(input1.committedSize(), 0u);
 }
 
+TEST(QueueBlocksTest, SharedMemoryLatencyDelaysResponseAndBackpressuresRequests) {
+  SimQueue<MemoryRequest> input("input", 1, nullptr, 2);
+  SimQueue<MemoryRequest> output("output", 2, nullptr, 1);
+  QueueMemoryArbiter<MemoryRequest, uint16_t, 1, SharedMemoryAddress,
+                     SharedMemoryWrite, SharedMemoryWriteData,
+                     SharedMemoryResponse>
+      memory("memory", 3, nullptr, {&input}, {&output}, 16, 0, 3);
+  EXPECT_EQ(memory.latency(), 3u);
+  ASSERT_TRUE(input.proposePush({3, false, 0}));
+  input.doXfer({0, 0});
+
+  memory.doWork({1, 0});
+  input.doXfer({1, 0});
+  memory.doXfer({1, 0});
+  ASSERT_TRUE(memory.busy());
+  ASSERT_TRUE(input.proposePush({7, false, 0}));
+  input.doXfer({2, 0});
+
+  for (uint64_t tick : {2, 3}) {
+    memory.doWork({tick, 0});
+    EXPECT_TRUE(memory.hasPendingCommit());
+    EXPECT_EQ(input.committedSize(), 1u);
+    EXPECT_TRUE(output.isEmpty());
+    memory.doXfer({tick, 0});
+  }
+
+  memory.doWork({4, 0});
+  EXPECT_TRUE(memory.hasPendingCommit());
+  output.doXfer({4, 0});
+  memory.doXfer({4, 0});
+  EXPECT_FALSE(memory.busy());
+  EXPECT_EQ(input.committedSize(), 1u);
+  EXPECT_EQ(output.committedSize(), 1u);
+
+  memory.doWork({4, 0});
+  EXPECT_FALSE(memory.hasPendingCommit());
+  memory.doWork({5, 0});
+  input.doXfer({5, 0});
+  memory.doXfer({5, 0});
+  EXPECT_TRUE(memory.busy());
+  EXPECT_EQ(input.committedSize(), 0u);
+}
+
+TEST(QueueBlocksTest, SharedMemoryRejectsZeroLatency) {
+  SimQueue<MemoryRequest> input("input", 1, nullptr, 1);
+  SimQueue<MemoryRequest> output("output", 2, nullptr, 1);
+  EXPECT_THROW((QueueMemoryArbiter<MemoryRequest, uint16_t, 1,
+                                  SharedMemoryAddress, SharedMemoryWrite,
+                                  SharedMemoryWriteData, SharedMemoryResponse>(
+                   "memory", 3, nullptr, {&input}, {&output}, 16, 0, 0)),
+               std::invalid_argument);
+}
+
 TEST(QueueBlocksTest, QueueLatencyDelaysVisibilityButReservesCapacity) {
   SimQueue<int> queue("queue", 1, nullptr, 1,
                       std::numeric_limits<size_t>::max(), nullptr, 3);

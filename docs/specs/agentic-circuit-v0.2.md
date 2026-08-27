@@ -436,7 +436,7 @@ class MemoryRequest:
     tag: ac.u8
 
 
-sram = ac.memory(ac.u16, entries=16, init=0)
+sram = ac.memory(ac.u16, entries=16, init=0, latency=3)
 requests = ac.source(MemoryRequest, depth=4, latency=1)
 responses = sram.request(
     requests,
@@ -445,20 +445,23 @@ responses = sram.request(
     data=lambda item: item.data,
     result_field="data",
     depth=4,
-    latency=1,
 )
 ac.sink(responses)
 ```
 
-`entries`, `init`, `result_field`, `depth`, and `latency` are compile-time
-constants. `entries`, `depth`, and `latency` MUST be positive. The address MUST
+`entries`, `init`, instance `latency`, `result_field`, and `depth` are
+compile-time constants. `entries`, `depth`, and instance `latency` MUST be
+positive. The response Queue has fixed latency one. The address MUST
 be an integer Var no wider than 64 bits and wide enough to represent every
 entry. The write policy MUST return `!ac.var<i1>`. The data policy and result
 field MUST have the same integer type, no wider than 64 bits. v0.2 supports
 deterministic zero initialization only, so `init` MUST equal zero.
 
-Every accepted request performs a read. A response preserves the request's
-other fields and replaces `result_field` with the pre-transfer memory value. A
+Every accepted request performs a read. A request accepted in cycle `T` can
+offer its response no earlier than `T + latency`; the instance remains busy
+throughout that interval and while the response Queue is blocked. A response
+preserves the request's other fields and replaces `result_field` with the
+pre-transfer memory value. A
 write commits at Xfer. Therefore a read and write to the same address in one
 request returns old data and makes the new data visible to a later request.
 
@@ -769,7 +772,7 @@ verification entries declare their permitted boundary explicitly.
 | `ac.merge` | design | two or more to one | `policy`, `depth`, `latency` | priority or round-robin arbitration |
 | `ac.barrier` | design | two or more to the same count | output depths and latencies | positionally typed atomic synchronization |
 | `ac.credit` | design | one to one | `credits`, `depth`, `latency` | bounded parallel cost countdown and completion |
-| `ac.memory.instance` / `ac.memory.request` | design | shared instance, one-to-one endpoint | instance identity, ordinal, `entries`, `init`, `result_field`, `depth`, `latency` | fixed-priority single-outstanding old-data memory |
+| `ac.memory.instance` / `ac.memory.request` | design | shared instance, one-to-one endpoint | instance identity, ordinal, `entries`, `init`, instance `latency`, `result_field`, `depth` | fixed-priority single-outstanding old-data memory |
 | `ac.dependency` | design | one to one | `capacity`, `resources`, `no_dependency`, `depth`, `latency` | bounded predecessor tracking, resource reservation, and execution countdown |
 | `ac.reorder` | design | one to one | `capacity`, `start`, `depth`, `latency` | bounded key-ordered retirement |
 | `ac.feedback` | design | one to one | `depth`, `latency`, `max_iterations` | bounded stateful loop |
@@ -863,10 +866,10 @@ The declaration lowers to `ac.memory.instance`; every endpoint lowers to an
 `ac.memory.request` with a frozen ordinal and three pure policy regions.
 
 ```mlir
-ac.memory.instance @sram data i16 entries 16 init 0
+ac.memory.instance @sram data i16 entries 16 init 0 latency 3
     owner "/" stable_id "memory/sram"
 %response = ac.memory.request @sram, %request ordinal 0
-    result_field "data" depth 4 latency 1
+    result_field "data" depth 4
     address {
   ^address(%item: !ac.var<!ac.struct<@types::@MemoryRequest>>):
     %address = ac.var.get %item field "address"
@@ -896,6 +899,15 @@ endpoints use fixed ordinal priority. While one transaction is outstanding all
 request endpoints are backpressured; `busy` is released only when the selected
 response Queue accepts the response, and no request is reaccepted in that same
 epoch. Every backend realizes exactly one physical memory per instance.
+
+The Python frontend may statically elaborate a homogeneous memory array without
+adding a frozen operation. `banks.select(requests, key=...).request(...)`
+lowers to one `ac.route`, one ordinary memory instance and request per bank,
+and one response `ac.merge`. The route key selects exactly one bank. Banks have
+independent outstanding state, so responses from different banks may be
+reordered; callers that require request order retain a tag and use `reorder`.
+Memory arrays are one-dimensional in epoch 0.3 and require identical data type,
+entry count, and initialization across all banks.
 
 ### Explicit firing example
 

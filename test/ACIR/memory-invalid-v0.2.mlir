@@ -1,24 +1,31 @@
 // RUN: %split_file %s %t
 // RUN: %not %acir_opt %t/entries.mlir 2>&1 | %FileCheck %s --check-prefix=ENTRIES
+// RUN: %not %acir_opt %t/latency.mlir 2>&1 | %FileCheck %s --check-prefix=LATENCY
 // RUN: %not %acir_opt %t/init.mlir 2>&1 | %FileCheck %s --check-prefix=INIT
 // RUN: %not %acir_opt %t/write.mlir 2>&1 | %FileCheck %s --check-prefix=WRITE
 // RUN: %not %acir_opt %t/sibling.mlir 2>&1 | %FileCheck %s --check-prefix=OUTSIDE
 // RUN: %not %acir_opt %t/prefix.mlir 2>&1 | %FileCheck %s --check-prefix=OUTSIDE
 // RUN: %not %acir_opt %t/parent.mlir 2>&1 | %FileCheck %s --check-prefix=OUTSIDE
 
-// ENTRIES: error: 'ac.memory.instance' op entries must be positive
+// ENTRIES: error: 'ac.memory.instance' op entries and latency must be positive
+// LATENCY: error: 'ac.memory.instance' op entries and latency must be positive
 // INIT: error: 'ac.memory.instance' op memory init must be zero
 // WRITE: error: 'ac.memory.request' op write must yield !ac.var<i1>
 // OUTSIDE: error: 'ac.memory.request' op memory instance is outside the request scope ancestry
 
 //--- entries.mlir
 builtin.module attributes {ac.contract_epoch = "0.3"} {
-  ac.memory.instance @bad data i16 entries 0 init 0 owner "/" stable_id "memory/bad"
+  ac.memory.instance @bad data i16 entries 0 init 0 latency 1 owner "/" stable_id "memory/bad"
+}
+
+//--- latency.mlir
+builtin.module attributes {ac.contract_epoch = "0.3"} {
+  ac.memory.instance @bad data i16 entries 16 init 0 latency 0 owner "/" stable_id "memory/bad"
 }
 
 //--- init.mlir
 builtin.module attributes {ac.contract_epoch = "0.3"} {
-  ac.memory.instance @bad data i16 entries 16 init 1 owner "/" stable_id "memory/bad"
+  ac.memory.instance @bad data i16 entries 16 init 1 latency 1 owner "/" stable_id "memory/bad"
 }
 
 //--- write.mlir
@@ -26,9 +33,9 @@ builtin.module attributes {ac.contract_epoch = "0.3"} {
   ac.type_scope @types {
     ac.struct @Request fields [{name = "address", type = i8}, {name = "write", type = i1}, {name = "data", type = i16}]
   } {dlti.dl_spec = #dlti.dl_spec<!ac.struct<@types::@Request> = {abi_alignment = 2 : i64, endianness = "little", preferred_alignment = 2 : i64, size = 4 : i64}>}
-  ac.memory.instance @sram data i16 entries 16 init 0 owner "/" stable_id "memory/sram"
+  ac.memory.instance @sram data i16 entries 16 init 0 latency 1 owner "/" stable_id "memory/sram"
   %input = ac.source depth 1 latency 1 : !ac.queue<!ac.struct<@types::@Request>>
-  %bad = ac.memory.request @sram, %input ordinal 0 result_field "data" depth 1 latency 1 address {
+  %bad = ac.memory.request @sram, %input ordinal 0 result_field "data" depth 1 address {
   ^address(%item: !ac.var<!ac.struct<@types::@Request>>):
     %address = ac.var.get %item field "address" : !ac.var<!ac.struct<@types::@Request>> -> !ac.var<i8>
     ac.memory.yield %address : !ac.var<i8>
@@ -48,11 +55,11 @@ builtin.module attributes {ac.contract_epoch = "0.3"} {
   ac.type_scope @types {
     ac.struct @Request fields [{name = "address", type = i8}, {name = "write", type = i1}, {name = "data", type = i16}]
   } {dlti.dl_spec = #dlti.dl_spec<!ac.struct<@types::@Request> = {abi_alignment = 2 : i64, endianness = "little", preferred_alignment = 2 : i64, size = 4 : i64}>}
-  ac.memory.instance @sram data i16 entries 16 init 0 owner "/owner" stable_id "memory/owner/sram"
+  ac.memory.instance @sram data i16 entries 16 init 0 latency 1 owner "/owner" stable_id "memory/owner/sram"
   ac.scope @owner() { ac.scope.yield } : () -> ()
   ac.scope @sibling() {
     %input = ac.source depth 1 latency 1 : !ac.queue<!ac.struct<@types::@Request>>
-    %response = ac.memory.request @sram, %input ordinal 0 result_field "data" depth 1 latency 1 address {
+    %response = ac.memory.request @sram, %input ordinal 0 result_field "data" depth 1 address {
     ^address(%item: !ac.var<!ac.struct<@types::@Request>>):
       %address = ac.var.get %item field "address" : !ac.var<!ac.struct<@types::@Request>> -> !ac.var<i8>
       ac.memory.yield %address : !ac.var<i8>
@@ -75,11 +82,11 @@ builtin.module attributes {ac.contract_epoch = "0.3"} {
   ac.type_scope @types {
     ac.struct @Request fields [{name = "address", type = i8}, {name = "write", type = i1}, {name = "data", type = i16}]
   } {dlti.dl_spec = #dlti.dl_spec<!ac.struct<@types::@Request> = {abi_alignment = 2 : i64, endianness = "little", preferred_alignment = 2 : i64, size = 4 : i64}>}
-  ac.memory.instance @sram data i16 entries 16 init 0 owner "/owner" stable_id "memory/owner/sram"
+  ac.memory.instance @sram data i16 entries 16 init 0 latency 1 owner "/owner" stable_id "memory/owner/sram"
   ac.scope @owner() { ac.scope.yield } : () -> ()
   ac.scope @owner_prefix() {
     %input = ac.source depth 1 latency 1 : !ac.queue<!ac.struct<@types::@Request>>
-    %response = ac.memory.request @sram, %input ordinal 0 result_field "data" depth 1 latency 1 address {
+    %response = ac.memory.request @sram, %input ordinal 0 result_field "data" depth 1 address {
     ^address(%item: !ac.var<!ac.struct<@types::@Request>>):
       %address = ac.var.get %item field "address" : !ac.var<!ac.struct<@types::@Request>> -> !ac.var<i8>
       ac.memory.yield %address : !ac.var<i8>
@@ -102,10 +109,10 @@ builtin.module attributes {ac.contract_epoch = "0.3"} {
   ac.type_scope @types {
     ac.struct @Request fields [{name = "address", type = i8}, {name = "write", type = i1}, {name = "data", type = i16}]
   } {dlti.dl_spec = #dlti.dl_spec<!ac.struct<@types::@Request> = {abi_alignment = 2 : i64, endianness = "little", preferred_alignment = 2 : i64, size = 4 : i64}>}
-  ac.memory.instance @sram data i16 entries 16 init 0 owner "/owner" stable_id "memory/owner/sram"
+  ac.memory.instance @sram data i16 entries 16 init 0 latency 1 owner "/owner" stable_id "memory/owner/sram"
   ac.scope @owner() { ac.scope.yield } : () -> ()
   %input = ac.source depth 1 latency 1 : !ac.queue<!ac.struct<@types::@Request>>
-  %response = ac.memory.request @sram, %input ordinal 0 result_field "data" depth 1 latency 1 address {
+  %response = ac.memory.request @sram, %input ordinal 0 result_field "data" depth 1 address {
   ^address(%item: !ac.var<!ac.struct<@types::@Request>>):
     %address = ac.var.get %item field "address" : !ac.var<!ac.struct<@types::@Request>> -> !ac.var<i8>
     ac.memory.yield %address : !ac.var<i8>

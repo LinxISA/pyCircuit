@@ -69,6 +69,7 @@ struct MemoryInstancePlan {
   std::string dataType;
   uint64_t entries = 0;
   uint64_t init = 0;
+  uint64_t latency = 1;
   std::string stableId;
   std::string ownerPath;
 };
@@ -81,7 +82,6 @@ struct MemoryRequestPlan {
   std::string output;
   uint64_t ordinal = 0;
   uint64_t depth = 1;
-  uint64_t latency = 1;
   std::string resultField;
 };
 

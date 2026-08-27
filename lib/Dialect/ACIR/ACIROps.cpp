@@ -1172,8 +1172,8 @@ LogicalResult MemoryInstanceOp::verify() {
   auto data = dyn_cast<IntegerType>(getDataType());
   if (!data || data.getWidth() == 0 || data.getWidth() > 64)
     return emitOpError("data type must be an integer no wider than 64 bits");
-  if (getEntries() <= 0)
-    return emitOpError("entries must be positive");
+  if (getEntries() <= 0 || getLatency() <= 0)
+    return emitOpError("entries and latency must be positive");
   if (getInit() != 0)
     return emitOpError("memory init must be zero");
   if (getOwner().empty() || !getOwner().starts_with('/') ||
@@ -1223,8 +1223,8 @@ LogicalResult MemoryInstanceOp::verify() {
 LogicalResult MemoryRequestOp::verify() {
   if (getInput().getType() != getOutput().getType())
     return emitOpError("output queue must match input queue type");
-  if (getOrdinal() < 0 || getDepth() <= 0 || getLatency() <= 0)
-    return emitOpError("ordinal must be non-negative and depth/latency positive");
+  if (getOrdinal() < 0 || getDepth() <= 0)
+    return emitOpError("ordinal must be non-negative and depth positive");
 
   auto instance = dyn_cast_or_null<MemoryInstanceOp>(
       SymbolTable::lookupNearestSymbolFrom(*this, getInstanceAttr()));

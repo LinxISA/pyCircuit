@@ -11,7 +11,7 @@ class MemoryRequest:
 
 @ac.system
 def pyc_memory_pipeline() -> None:
-    sram = ac.memory(ac.u16, entries=16, init=0)
+    sram = ac.memory(ac.u16, entries=16, init=0, latency=3)
     requests = ac.source(MemoryRequest, depth=4, latency=1)
     responses = sram.request(
         requests,
@@ -20,6 +20,5 @@ def pyc_memory_pipeline() -> None:
         data=lambda item: item.data,
         result_field="data",
         depth=4,
-        latency=1,
     )
     ac.sink(responses)

@@ -118,7 +118,9 @@ def source(payload: object, *, depth: int = 1, latency: int = 1) -> Never:
     return _not_implemented("source")
 
 
-def memory(data_type: object, *, entries: int = 16, init: int = 0) -> Never:
+def memory(
+    data_type: object, *, entries: int = 16, init: int = 0, latency: int = 1
+) -> Never:
     return _not_implemented("memory")
 
 

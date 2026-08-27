@@ -287,7 +287,8 @@ private:
         plan.memoryInstances.push_back(
             {instance.getSymName().str(), printType(instance.getDataType()),
              uint64_t(instance.getEntries()), uint64_t(instance.getInit()),
-             instance.getStableId().str(), instance.getOwner().str()});
+             uint64_t(instance.getLatency()), instance.getStableId().str(),
+             instance.getOwner().str()});
         continue;
       }
       if (auto source = mlir::dyn_cast<ac::SourceOp>(operation)) {
@@ -546,7 +547,7 @@ private:
         std::vector<std::string> outputs;
         if (auto error = addOutputs(
                 memory, memory->getResults(), {int64_t(memory.getDepth())},
-                {int64_t(memory.getLatency())}, scope, outputs))
+                {1}, scope, outputs))
           return error;
         QueueBlockPlan blockPlan{"memory_request",
                                  outputs.front(),
@@ -554,7 +555,7 @@ private:
                                  {*input},
                                  outputs,
                                  {uint64_t(memory.getDepth())},
-                                 {uint64_t(memory.getLatency())}};
+                                 {1}};
         blockPlan.resultField = memory.getResultField().str();
         blockPlan.memoryInstance = memory.getInstance().str();
         blockPlan.endpointOrdinal = memory.getOrdinal();
@@ -573,7 +574,7 @@ private:
             {blockPlan.memoryInstance, blockPlan.name, blockPlan.scope,
              blockPlan.inputs.front(), blockPlan.outputs.front(),
              blockPlan.endpointOrdinal, blockPlan.depths.front(),
-             blockPlan.latencies.front(), blockPlan.resultField});
+             blockPlan.resultField});
         plan.blocks.push_back(std::move(blockPlan));
         continue;
       }
@@ -705,7 +706,8 @@ llvm::Error verifyQueueGraphPlan(const QueueGraphPlan &plan) {
   for (const MemoryInstancePlan &instance : plan.memoryInstances) {
     if (instance.name.empty() || !memoryInstances.try_emplace(instance.name, &instance).second)
       return planError("memory instance identities must be non-empty and unique");
-    if (instance.dataType.empty() || instance.entries == 0 || instance.init != 0 ||
+    if (instance.dataType.empty() || instance.entries == 0 ||
+        instance.init != 0 || instance.latency == 0 ||
         instance.stableId.empty() || instance.ownerPath.empty())
       return planError("memory instance metadata is incomplete");
   }
@@ -875,14 +877,15 @@ llvm::Expected<std::string> QueueGraphPlan::canonicalJson() const {
   for (const MemoryInstancePlan &instance : memoryInstances)
     memoryInstanceValues.push_back(llvm::json::Object{
         {"data_type", instance.dataType}, {"entries", instance.entries},
-        {"init", instance.init}, {"name", instance.name},
+        {"init", instance.init}, {"latency", instance.latency},
+        {"name", instance.name},
         {"owner_path", instance.ownerPath}, {"stable_id", instance.stableId}});
   llvm::json::Array memoryRequestValues;
   for (const MemoryRequestPlan &request : memoryRequests)
     memoryRequestValues.push_back(llvm::json::Object{
         {"depth", request.depth}, {"input", request.input},
-        {"instance", request.instance}, {"latency", request.latency},
-        {"name", request.name}, {"ordinal", request.ordinal},
+        {"instance", request.instance}, {"name", request.name},
+        {"ordinal", request.ordinal},
         {"output", request.output}, {"result_field", request.resultField},
         {"scope", request.scope}});
   llvm::json::Object root{{"blocks", std::move(blockValues)},

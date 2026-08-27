@@ -789,18 +789,29 @@ public:
   QueueMemoryArbiter(std::string name, ObjectId id, SimObject *parent,
                      std::array<SimQueue<T> *, N> inputs,
                      std::array<SimQueue<T> *, N> outputs, size_t entries,
-                     Data init = {}, Address address = {}, Write write = {},
+                     Data init = {}, size_t latency = 1, Address address = {},
+                     Write write = {},
                      WriteData writeData = {}, Response response = {},
                      ObservationSink *observations = nullptr)
       : SimObject(componentKind, std::move(name), id, parent, observations),
         inputs_(inputs), outputs_(outputs), init_(init), storage_(entries, init),
-        address_(std::move(address)), write_(std::move(write)),
-        writeData_(std::move(writeData)), response_(std::move(response)) {}
+        latency_(latency), address_(std::move(address)),
+        write_(std::move(write)), writeData_(std::move(writeData)),
+        response_(std::move(response)) {
+    if (latency_ == 0)
+      throw std::invalid_argument("memory latency must be positive");
+  }
 
   void doWork(Epoch epoch) override {
     if (fired_)
       return;
     if (busy_) {
+      if (!responseReady_ || epoch < *responseReady_) {
+        ticking_ = true;
+        fired_ = true;
+        workEpoch_ = epoch;
+        return;
+      }
       if (!outputs_[selected_]->canProposePush() || !pendingResponse_)
         return;
       if (!outputs_[selected_]->proposePush(*pendingResponse_))
@@ -833,10 +844,16 @@ public:
         return;
       }
       const Data oldData = storage_[address];
+      if (epoch.time > std::numeric_limits<uint64_t>::max() - latency_) {
+        setRuntimeFailureCode("memory_latency_overflow");
+        return;
+      }
       pendingResponse_ = std::invoke(std::as_const(response_), endpoint, *head,
                                      oldData);
+      responseReady_ = Epoch{epoch.time + latency_, 0};
       if (!inputs_[endpoint]->proposePop()) {
         pendingResponse_.reset();
+        responseReady_.reset();
         return;
       }
       if (static_cast<bool>(
@@ -864,10 +881,12 @@ public:
     if (completing_) {
       busy_ = false;
       pendingResponse_.reset();
+      responseReady_.reset();
       completedEpoch_ = workEpoch_;
     }
     accepting_ = false;
     completing_ = false;
+    ticking_ = false;
     fired_ = false;
   }
 
@@ -875,9 +894,12 @@ public:
   bool isRunnable(Epoch epoch) const override {
     if (fired_)
       return false;
-    if (busy_)
+    if (busy_) {
+      if (!responseReady_ || epoch < *responseReady_)
+        return true;
       return pendingResponse_.has_value() &&
              outputs_[selected_]->canProposePush();
+    }
     if (completedEpoch_ && *completedEpoch_ == epoch)
       return false;
     return std::any_of(inputs_.begin(), inputs_.end(),
@@ -886,14 +908,16 @@ public:
                        });
   }
   bool busy() const { return busy_; }
+  size_t latency() const { return latency_; }
   size_t selectedEndpoint() const { return selected_; }
   const Data &at(size_t address) const { return storage_.at(address); }
   void reset() override {
     std::fill(storage_.begin(), storage_.end(), init_);
     pendingResponse_.reset();
+    responseReady_.reset();
     pendingWrite_.reset();
     completedEpoch_.reset();
-    busy_ = accepting_ = completing_ = fired_ = false;
+    busy_ = accepting_ = completing_ = ticking_ = fired_ = false;
     selected_ = 0;
     clearRuntimeFailureCode();
   }
@@ -903,11 +927,13 @@ private:
   std::array<SimQueue<T> *, N> outputs_;
   Data init_;
   std::vector<Data> storage_;
+  size_t latency_ = 1;
   [[no_unique_address]] Address address_;
   [[no_unique_address]] Write write_;
   [[no_unique_address]] WriteData writeData_;
   [[no_unique_address]] Response response_;
   std::optional<T> pendingResponse_;
+  std::optional<Epoch> responseReady_;
   std::optional<std::pair<size_t, Data>> pendingWrite_;
   std::optional<Epoch> completedEpoch_;
   Epoch workEpoch_{};
@@ -915,6 +941,7 @@ private:
   bool busy_ = false;
   bool accepting_ = false;
   bool completing_ = false;
+  bool ticking_ = false;
   bool fired_ = false;
 };
 

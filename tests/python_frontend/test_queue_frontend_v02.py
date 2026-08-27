@@ -311,7 +311,7 @@ class Request:
 
 @ac.system
 def pipeline() -> None:
-    sram = ac.memory(ac.u16, entries=16, init=0)
+    sram = ac.memory(ac.u16, entries=16, init=0, latency=3)
     requests = ac.source(Request)
     responses = sram.request(
         requests,
@@ -320,7 +320,6 @@ def pipeline() -> None:
         data=lambda item: item.data,
         result_field="data",
         depth=4,
-        latency=1,
     )
     ac.sink(responses)
 """
@@ -337,7 +336,7 @@ class Request:
 @ac.system
 def pipeline() -> None:
     with ac.scope("owner"):
-        sram = ac.memory(ac.u16, entries=16, init=0)
+        sram = ac.memory(ac.u16, entries=16, init=0, latency=3)
         requests = ac.source(Request)
         responses = sram.request(
             requests,
@@ -346,9 +345,46 @@ def pipeline() -> None:
             data=lambda item: item.data,
             result_field="data",
             depth=4,
-            latency=1,
         )
         ac.sink(responses)
+"""
+
+MEMORY_ARRAY_SOURCE = """
+import agentic_circuit as ac
+
+@ac.struct
+class BankRequest:
+    bank: ac.u2
+    offset: ac.u4
+    write: ac.u1
+    data: ac.u16
+    tag: ac.u8
+
+@ac.system
+def pipeline() -> None:
+    requests = ac.source(BankRequest, depth=8, latency=1)
+    with ac.scope("sram"):
+        banks = ac.array(
+            4,
+            lambda _: ac.memory(ac.u16, entries=16, init=0, latency=2),
+        )
+        selected = banks.select(
+            requests,
+            key=lambda request: request.bank,
+            depth=2,
+            latency=1,
+        )
+        responses = selected.request(
+            address=lambda request: request.offset,
+            write=lambda request: request.write,
+            data=lambda request: request.data,
+            result_field="data",
+            depth=2,
+            merge_policy="priority",
+            merge_depth=3,
+            merge_latency=1,
+        )
+    ac.sink(responses)
 """
 
 CREDIT_SOURCE = """
@@ -602,12 +638,12 @@ class QueueFrontendV02Test(unittest.TestCase):
 
         lowered = lower_queue_source(MEMORY_SOURCE, "pipeline")
         self.assertIn(
-            "ac.memory.instance @sram data i16 entries 16 init 0",
+            "ac.memory.instance @sram data i16 entries 16 init 0 latency 3",
             lowered,
         )
         self.assertIn(
             "%responses = ac.memory.request @sram, %requests ordinal 0 "
-            'result_field "data" depth 4 latency 1 address',
+            'result_field "data" depth 4 address',
             lowered,
         )
         self.assertIn("} write {", lowered)
@@ -615,6 +651,13 @@ class QueueFrontendV02Test(unittest.TestCase):
         self.assertEqual(3, lowered.count("ac.memory.yield"))
         with self.assertRaisesRegex(QueueFrontendError, "memory init must be zero"):
             lower_queue_source(MEMORY_SOURCE.replace("init=0", "init=1"), "pipeline")
+        with self.assertRaisesRegex(QueueFrontendError, "latency must be positive"):
+            lower_queue_source(MEMORY_SOURCE.replace("latency=3", "latency=0"), "pipeline")
+        with self.assertRaisesRegex(QueueFrontendError, "unsupported keyword"):
+            lower_queue_source(
+                MEMORY_SOURCE.replace("depth=4,", "depth=4,\n        latency=1,"),
+                "pipeline",
+            )
 
     def test_memory_instance_freezes_multiple_endpoint_priority(self) -> None:
         from agentic_circuit._queue_frontend import lower_queue_source
@@ -630,7 +673,7 @@ class QueueFrontendV02Test(unittest.TestCase):
             "    other = sram.request(\n"
             "        right, address=lambda item: item.address,\n"
             "        write=lambda item: item.write, data=lambda item: item.data,\n"
-            "        result_field=\"data\", depth=2, latency=1,\n"
+            "        result_field=\"data\", depth=2,\n"
             "    )\n"
             "    ac.sink(responses)\n    ac.sink(other)",
         )
@@ -645,7 +688,7 @@ class QueueFrontendV02Test(unittest.TestCase):
 
         lowered = lower_queue_source(MEMORY_OWNED_SCOPE_SOURCE, "pipeline")
         self.assertIn(
-            'ac.memory.instance @sram data i16 entries 16 init 0 owner "/owner" '
+            'ac.memory.instance @sram data i16 entries 16 init 0 latency 3 owner "/owner" '
             'stable_id "memory/owner/sram"',
             lowered,
         )
@@ -655,6 +698,69 @@ class QueueFrontendV02Test(unittest.TestCase):
             lowered,
         )
 
+    def test_memory_array_select_statically_expands_existing_ops(self) -> None:
+        from agentic_circuit._queue_frontend import lower_queue_source
+
+        lowered = lower_queue_source(MEMORY_ARRAY_SOURCE, "pipeline")
+        self.assertEqual(4, lowered.count("ac.memory.instance"))
+        self.assertEqual(4, lowered.count("ac.memory.request"))
+        self.assertEqual(1, lowered.count("ac.route "))
+        self.assertEqual(1, lowered.count("ac.merge "))
+        for bank in range(4):
+            self.assertIn(
+                f'ac.memory.instance @banks__{bank} data i16 entries 16 init 0 latency 2 '
+                f'owner "/sram" stable_id "memory/sram/banks__{bank}"',
+                lowered,
+            )
+            self.assertIn(
+                f"ac.memory.request @banks__{bank}, "
+                f"%selected__bank{bank}_request__local ordinal 0",
+                lowered,
+            )
+        self.assertIn("depths [2, 2, 2, 2] latencies [1, 1, 1, 1]", lowered)
+        self.assertIn('ac.var.get %item field "bank"', lowered)
+        self.assertIn(
+            '%responses__local = ac.merge %responses__bank0__local, '
+            '%responses__bank1__local, %responses__bank2__local, '
+            '%responses__bank3__local policy "priority" depth 3 latency 1',
+            lowered,
+        )
+        self.assertEqual(lowered, lower_queue_source(MEMORY_ARRAY_SOURCE, "pipeline"))
+
+    def test_memory_array_select_rejects_invalid_elaboration(self) -> None:
+        from agentic_circuit._queue_frontend import (
+            QueueFrontendError,
+            lower_queue_source,
+        )
+
+        heterogeneous = MEMORY_ARRAY_SOURCE.replace(
+            "entries=16", "entries=_ + 1"
+        )
+        with self.assertRaisesRegex(QueueFrontendError, "must be homogeneous"):
+            lower_queue_source(heterogeneous, "pipeline")
+
+        noninteger_key = MEMORY_ARRAY_SOURCE.replace(
+            "key=lambda request: request.bank", "key=lambda request: request"
+        )
+        with self.assertRaisesRegex(QueueFrontendError, "route key must lower"):
+            lower_queue_source(noninteger_key, "pipeline")
+
+        request_start = MEMORY_ARRAY_SOURCE.index(
+            "        responses = selected.request("
+        )
+        unused = MEMORY_ARRAY_SOURCE[:request_start] + "    ac.sink(requests)\n"
+        with self.assertRaisesRegex(
+            QueueFrontendError, "selected memory is not requested"
+        ):
+            lower_queue_source(unused, "pipeline")
+
+        wrong_scope = MEMORY_ARRAY_SOURCE.replace(
+            "        responses = selected.request(",
+            "    responses = selected.request(",
+        )
+        with self.assertRaisesRegex(QueueFrontendError, "same lexical scope"):
+            lower_queue_source(wrong_scope, "pipeline")
+
     def test_memory_rejects_legacy_unconnected_type_and_scope_forms(self) -> None:
         from agentic_circuit._queue_frontend import (
             QueueFrontendError,
@@ -662,7 +768,7 @@ class QueueFrontendV02Test(unittest.TestCase):
         )
 
         legacy = MEMORY_SOURCE.replace(
-            "sram = ac.memory(ac.u16, entries=16, init=0)\n    ", ""
+            "sram = ac.memory(ac.u16, entries=16, init=0, latency=3)\n    ", ""
         ).replace("sram.request(\n        requests,", "requests.memory(")
         with self.assertRaisesRegex(QueueFrontendError, "Queue.memory was removed"):
             lower_queue_source(legacy, "pipeline")
@@ -675,8 +781,8 @@ class QueueFrontendV02Test(unittest.TestCase):
         with self.assertRaisesRegex(QueueFrontendError, "must match instance"):
             lower_queue_source(mismatch, "pipeline")
         illegal_scope = MEMORY_SOURCE.replace(
-            "sram = ac.memory(ac.u16, entries=16, init=0)",
-            'with ac.scope("owner"):\n        sram = ac.memory(ac.u16, entries=16, init=0)',
+            "sram = ac.memory(ac.u16, entries=16, init=0, latency=3)",
+            'with ac.scope("owner"):\n        sram = ac.memory(ac.u16, entries=16, init=0, latency=3)',
         )
         with self.assertRaisesRegex(QueueFrontendError, "declaration scope"):
             lower_queue_source(illegal_scope, "pipeline")

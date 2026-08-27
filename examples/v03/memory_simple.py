@@ -13,7 +13,7 @@ class MemoryRequest:
 @ac.system
 def memory_simple() -> None:
     # One physical SRAM is owned by the root scope. Both child scopes borrow it.
-    sram = ac.memory(ac.u16, entries=16, init=0)
+    sram = ac.memory(ac.u16, entries=16, init=0, latency=1)
 
     # Canonical endpoint ordinal 0: fixed-priority writer.
     with ac.scope("a_writer"):
@@ -25,7 +25,6 @@ def memory_simple() -> None:
             data=lambda request: request.data,
             result_field="data",
             depth=2,
-            latency=1,
         )
         ac.sink(write_responses)
 
@@ -40,6 +39,5 @@ def memory_simple() -> None:
             data=lambda request: request.data,
             result_field="data",
             depth=2,
-            latency=1,
         )
         ac.sink(read_responses)

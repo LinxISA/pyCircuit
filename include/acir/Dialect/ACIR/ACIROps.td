@@ -360,19 +360,19 @@ def ACIR_CreditYieldOp : ACIR_Op<"credit.yield", [
 
 def ACIR_MemoryInstanceOp : ACIR_Op<"memory.instance", [Symbol]> {
   let arguments = (ins SymbolNameAttr:$sym_name, TypeAttr:$data_type,
-                       I64Attr:$entries, I64Attr:$init, StrAttr:$owner,
-                       StrAttr:$stable_id);
+                       I64Attr:$entries, I64Attr:$init, I64Attr:$latency,
+                       StrAttr:$owner, StrAttr:$stable_id);
   let hasVerifier = 1;
   let assemblyFormat = [{
     $sym_name `data` $data_type `entries` $entries `init` $init
-    `owner` $owner `stable_id` $stable_id attr-dict
+    `latency` $latency `owner` $owner `stable_id` $stable_id attr-dict
   }];
 }
 
 def ACIR_MemoryRequestOp : ACIR_Op<"memory.request", [SingleBlock]> {
   let arguments = (ins FlatSymbolRefAttr:$instance, ACIR_QueueType:$input,
                        I64Attr:$ordinal, StrAttr:$result_field,
-                       I64Attr:$depth, I64Attr:$latency);
+                       I64Attr:$depth);
   let results = (outs ACIR_QueueType:$output);
   let regions = (region SizedRegion<1>:$address,
                         SizedRegion<1>:$write,
@@ -380,7 +380,7 @@ def ACIR_MemoryRequestOp : ACIR_Op<"memory.request", [SingleBlock]> {
   let hasVerifier = 1;
   let assemblyFormat = [{
     $instance `,` $input `ordinal` $ordinal `result_field` $result_field
-    `depth` $depth `latency` $latency `address` $address
+    `depth` $depth `address` $address
     `write` $write `data` $data attr-dict `:` qualified(type($input)) `->`
     qualified(type($output))
   }];

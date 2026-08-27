@@ -772,7 +772,7 @@ llvm::Expected<std::string> generateQueueGraphCpp(const QueueGraphPlan &plan) {
         ", std::array<gfsim::SimQueue<", *type, "> *, ", endpoints.size(),
         ">{", inputs, "}, std::array<gfsim::SimQueue<", *type, "> *, ",
         endpoints.size(), ">{", outputs, "}, ", instance.entries, ", ",
-        instance.init, ")");
+        instance.init, ", ", instance.latency, ")");
   }
   for (auto [index, initializer] : llvm::enumerate(initializers))
     output << "        " << initializer

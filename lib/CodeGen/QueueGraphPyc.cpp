@@ -6,6 +6,7 @@
 #include "llvm/ADT/StringRef.h"
 
 #include <algorithm>
+#include <bit>
 #include <sstream>
 #include <system_error>
 
@@ -1673,11 +1674,48 @@ llvm::Expected<std::string> generateQueueGraphPyc(const QueueGraphPlan &plan) {
          << instance.name << "\"} : " << addressType << ", " << *dataType
          << ", " << strobeType << "\n";
 
+    std::string responseMature = busy;
+    if (instance.latency > 1) {
+      const unsigned latencyWidth =
+          std::max(1u, static_cast<unsigned>(
+                           std::bit_width(instance.latency - 1)));
+      const std::string latencyType = "i" + std::to_string(latencyWidth);
+      std::string zeroLatency = emitConstant(0, latencyType);
+      std::string oneLatency = emitConstant(1, latencyType);
+      std::string initialLatency =
+          emitConstant(instance.latency - 1, latencyType);
+      std::string latencyNext = newValue();
+      std::string latencyEnable = newValue();
+      body << "    " << latencyNext << " = pyc.wire : " << latencyType
+           << "\n";
+      body << "    " << latencyEnable << " = pyc.wire : i1\n";
+      std::string remainingLatency = newValue();
+      body << "    " << remainingLatency << " = pyc.reg %clk, %rst, "
+           << latencyEnable << ", " << latencyNext << ", " << zeroLatency
+           << " : " << latencyType << "\n";
+      std::string latencyIsZero =
+          emitBinary("eq", remainingLatency, zeroLatency, latencyType);
+      std::string latencyActive =
+          emitBinary("and", busy, emitNot(latencyIsZero), "i1");
+      std::string decremented = emitBinary(
+          "sub", remainingLatency, oneLatency, latencyType);
+      std::string nextLatency = emitMux(
+          issue, initialLatency, decremented, latencyType);
+      std::string updateLatency =
+          emitBinary("or", issue, latencyActive, "i1");
+      body << "    pyc.assign " << latencyNext << ", " << nextLatency << " : "
+           << latencyType << "\n";
+      body << "    pyc.assign " << latencyEnable << ", " << updateLatency
+           << " : i1\n";
+      responseMature = emitBinary("and", busy, latencyIsZero, "i1");
+    }
+
     std::vector<std::string> accepted;
     for (size_t index = 0; index < endpoints.size(); ++index) {
       std::string selected =
           emitBinary("eq", owner, ownerConstants[index], ownerType);
-      std::string responseValid = emitBinary("and", busy, selected, "i1");
+      std::string responseValid =
+          emitBinary("and", responseMature, selected, "i1");
       auto response = emitFieldReplace(pendingRequest, firstInput->payloadType,
                                        endpoints[index]->resultField, readData);
       if (!response)

@@ -368,7 +368,7 @@ TEST(QueueGraphPlanTest, EmitsOldDataMemoryForBothBackends) {
   plan.blocks.push_back(
       {"source", "input1", "/", {}, {"input1"}, {4}, {1}});
   plan.memoryInstances.push_back(
-      {"sram", "i16", 16, 0, "memory/sram", "/"});
+      {"sram", "i16", 16, 0, 3, "memory/sram", "/"});
   QueueBlockPlan memory{"memory_request", "output0", "/", {"input0"},
                         {"output0"}, {4},      {1}};
   memory.expressions = {
@@ -381,14 +381,14 @@ TEST(QueueGraphPlanTest, EmitsOldDataMemoryForBothBackends) {
   memory.memoryInstance = "sram";
   memory.endpointOrdinal = 0;
   plan.memoryRequests.push_back(
-      {"sram", "output0", "/", "input0", "output0", 0, 4, 1, "data"});
+      {"sram", "output0", "/", "input0", "output0", 0, 4, "data"});
   plan.blocks.push_back(memory);
   memory.name = "output1";
   memory.inputs = {"input1"};
   memory.outputs = {"output1"};
   memory.endpointOrdinal = 1;
   plan.memoryRequests.push_back(
-      {"sram", "output1", "/", "input1", "output1", 1, 4, 1, "data"});
+      {"sram", "output1", "/", "input1", "output1", 1, 4, "data"});
   plan.blocks.push_back(std::move(memory));
   plan.blocks.push_back({"sink", "sink_0", "/", {"output0"}, {}});
   plan.blocks.push_back({"sink", "sink_1", "/", {"output1"}, {}});
@@ -403,6 +403,7 @@ TEST(QueueGraphPlanTest, EmitsOldDataMemoryForBothBackends) {
 
   auto pyc = generateQueueGraphPyc(plan);
   ASSERT_TRUE(bool(pyc)) << llvm::toString(pyc.takeError());
+  EXPECT_NE(pyc->find("pyc.sub"), std::string::npos);
   EXPECT_NE(pyc->find("pyc.sync_mem"), std::string::npos);
   EXPECT_EQ(pyc->find("pyc.sync_mem", pyc->find("pyc.sync_mem") + 1),
             std::string::npos);

@@ -30,6 +30,7 @@ PUBLIC = {
     "Flow",
     "Endpoint",
     "source",
+    "memory",
     "sink",
     "observe",
     "expect",
