@@ -50,6 +50,7 @@ operations:
   - ac.var.cmp
   - ac.var.get
   - ac.var.with
+  - ac.var.popcount
   - ac.packet.serialize
   - ac.packet.deserialize
   - ac.transform
