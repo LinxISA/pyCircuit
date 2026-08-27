@@ -27,6 +27,23 @@ first use and returns the content-addressed cached object later.
 identities. Native QueueGraph/gfsim supports it; PYC deliberately rejects
 `rate>1` until shared ordered FIFO lane lowering is implemented.
 
+### DavinciOO canonical PTO trace
+
+The trace runner converts the locked DavinciOO JSONL trace to canonical PTO
+trace JSON, specializes the high-level Python model, compiles generated gfsim,
+and checks completion order, retirement order, architectural values, and the
+453-cycle reference contract. It also emits a deterministic instruction
+swimlane.
+
+```bash
+.venv/bin/python tools/run-v03-davincioo.py
+```
+
+Checked-in evidence:
+
+- [`artifacts/davincioo-softmax-run.json`](artifacts/davincioo-softmax-run.json)
+- [`artifacts/davincioo-softmax-swimlane.svg`](artifacts/davincioo-softmax-swimlane.svg)
+
 ## Explicit memory (epoch 0.3)
 
 `memory_simple.py` declares one root-owned, 16-entry `u16` memory and connects

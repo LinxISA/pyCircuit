@@ -183,4 +183,14 @@ if(BUILD_TESTING)
     LABELS "e2e;phase5"
     ENVIRONMENT "AGENTIC_CIRCUIT_TEST_BUILD_DIR=${CMAKE_BINARY_DIR}"
   )
+  add_test(
+    NAME V03DavinciOOTraceTests
+    COMMAND "${Python3_EXECUTABLE}" -m unittest
+      tests.e2e.test_v03_davincioo_trace -v
+  )
+  set_tests_properties(V03DavinciOOTraceTests PROPERTIES
+    WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+    TIMEOUT 60
+    LABELS "e2e;davincioo;v0.3"
+  )
 endif()

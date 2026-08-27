@@ -43,6 +43,7 @@ public:
   size_t rate() const { return rate_; }
 
   size_t committedSize() const { return committed_.size(); }
+  const std::vector<T> &committedValues() const { return committed_; }
   size_t committedBytes() const {
     if constexpr (PacketTraits<T>::serializedSize == 0)
       return 0;

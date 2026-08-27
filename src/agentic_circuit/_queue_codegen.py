@@ -748,8 +748,7 @@ def lower_queue_program_to_cpp(program: QueueProgram) -> str:
     for index, _ in enumerate(program.sinks):
         lines.append(attach(program.sinks[index].scope, f"sink_{index}_"))
     lines.extend(("  }", ""))
-    source_queues = [queue for queue in program.queues if queue.input_name is None]
-    for queue in source_queues:
+    for queue in program.queues:
         payload = _cpp_type(queue.payload)
         lines.append(
             f"  gfsim::SimQueue<{payload}> &{queue.name}() {{ "
