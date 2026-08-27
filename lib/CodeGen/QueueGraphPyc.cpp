@@ -1626,6 +1626,18 @@ llvm::Expected<std::string> generateQueueGraphPyc(const QueueGraphPlan &plan) {
         selectBalanced(grants, writeData, *dataType).second;
     auto selectedRequest =
         selectBalanced(grants, endpointData, *requestType).second;
+    const bool fullAddressRange =
+        addressWidth < 64 &&
+        instance.entries == (uint64_t{1} << addressWidth);
+    if (!fullAddressRange) {
+      std::string addressLimit = emitConstant(instance.entries, addressType);
+      std::string addressSafe =
+          emitBinary("ult", selectedAddress, addressLimit, addressType);
+      std::string accessSafe =
+          emitBinary("or", emitNot(issue), addressSafe, "i1");
+      body << "    pyc.assert " << accessSafe
+           << " {msg = \"memory_address_out_of_range\"}\n";
+    }
 
     unsigned ownerWidth = 1;
     while ((uint64_t{1} << ownerWidth) < endpoints.size())

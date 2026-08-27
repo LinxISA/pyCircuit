@@ -935,6 +935,24 @@ def parse_queue_program(text: str, system: str) -> QueueProgram:
         for statement in statements:
             current_order = order
             order += 1
+            assigned_names: tuple[str, ...] = ()
+            if isinstance(statement, ast.Assign) and len(statement.targets) == 1:
+                target = statement.targets[0]
+                if isinstance(target, ast.Name):
+                    assigned_names = (target.id,)
+                elif isinstance(target, (ast.Tuple, ast.List)) and all(
+                    isinstance(item, ast.Name) for item in target.elts
+                ):
+                    assigned_names = tuple(item.id for item in target.elts)
+            if any(
+                name in memory_by_name
+                or name in memory_arrays
+                or name in selected_memories
+                for name in assigned_names
+            ):
+                raise QueueFrontendError(
+                    "ACPY-QUEUE-015: memory binding cannot be rebound"
+                )
             if (
                 isinstance(statement, ast.Assign)
                 and len(statement.targets) == 1

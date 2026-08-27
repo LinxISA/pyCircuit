@@ -786,6 +786,12 @@ class QueueFrontendV02Test(unittest.TestCase):
         )
         with self.assertRaisesRegex(QueueFrontendError, "declaration scope"):
             lower_queue_source(illegal_scope, "pipeline")
+        rebound = MEMORY_SOURCE.replace(
+            "requests = ac.source(Request)",
+            "sram = ac.source(Request)\n    requests = ac.source(Request)",
+        )
+        with self.assertRaisesRegex(QueueFrontendError, "cannot be rebound"):
+            lower_queue_source(rebound, "pipeline")
 
     def test_dependency_lowers_four_pure_policies(self) -> None:
         from agentic_circuit._queue_frontend import (

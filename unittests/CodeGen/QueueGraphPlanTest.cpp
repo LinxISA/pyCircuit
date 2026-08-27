@@ -368,7 +368,7 @@ TEST(QueueGraphPlanTest, EmitsOldDataMemoryForBothBackends) {
   plan.blocks.push_back(
       {"source", "input1", "/", {}, {"input1"}, {4}, {1}});
   plan.memoryInstances.push_back(
-      {"sram", "i16", 16, 0, 3, "memory/sram", "/"});
+      {"sram", "i16", 15, 0, 3, "memory/sram", "/"});
   QueueBlockPlan memory{"memory_request", "output0", "/", {"input0"},
                         {"output0"}, {4},      {1}};
   memory.expressions = {
@@ -407,8 +407,9 @@ TEST(QueueGraphPlanTest, EmitsOldDataMemoryForBothBackends) {
   EXPECT_NE(pyc->find("pyc.sync_mem"), std::string::npos);
   EXPECT_EQ(pyc->find("pyc.sync_mem", pyc->find("pyc.sync_mem") + 1),
             std::string::npos);
-  EXPECT_NE(pyc->find("{depth = 16, name = \"sram\"}"), std::string::npos);
+  EXPECT_NE(pyc->find("{depth = 15, name = \"sram\"}"), std::string::npos);
   EXPECT_NE(pyc->find("pyc.concat"), std::string::npos);
+  EXPECT_NE(pyc->find("memory_address_out_of_range"), std::string::npos);
 }
 
 TEST(QueueGraphPlanTest, EmitsQueuePredicateAsPycComparison) {

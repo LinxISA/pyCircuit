@@ -19,17 +19,17 @@ From the repository root:
 
 ```bash
 PYTHONPATH=src \
-  /home/lc/opt/agentic-circuit-toolchain/python-env/bin/python \
+  .venv/bin/python \
   tools/ac-queue-cxxgen.py examples/v03/memory_simple.py \
   --system memory_simple \
   --acir-output /tmp/memory_simple.mlir \
   --plan-output /tmp/memory_simple.plan.json \
-  --acir-opt build/gcc14/bin/acir-opt \
-  --queue-plan-tool build/gcc14/bin/acir-queue-plan \
-  --queue-cxxgen-tool build/gcc14/bin/acir-queue-cxxgen \
+  --acir-opt build/dev-llvm22/bin/acir-opt \
+  --queue-plan-tool build/dev-llvm22/bin/acir-queue-plan \
+  --queue-cxxgen-tool build/dev-llvm22/bin/acir-queue-cxxgen \
   --output examples/v03/memory_simple.generated.cpp
 
-/home/lc/opt/gcc14/bin/aarch64-conda-linux-gnu-g++ \
+c++ \
   -std=c++20 -Iinclude -Iexamples/v03 \
   examples/v03/memory_simple_harness.cpp \
   -o /tmp/memory_simple_sim
@@ -57,17 +57,17 @@ banks may be reordered, so the harness checks them by tag.
 
 ```bash
 PYTHONPATH=src \
-  /home/lc/opt/agentic-circuit-toolchain/python-env/bin/python \
+  .venv/bin/python \
   tools/ac-queue-cxxgen.py examples/v03/memory_banks.py \
   --system memory_banks \
   --acir-output /tmp/memory_banks.mlir \
   --plan-output /tmp/memory_banks.plan.json \
-  --acir-opt build/gcc14/bin/acir-opt \
-  --queue-plan-tool build/gcc14/bin/acir-queue-plan \
-  --queue-cxxgen-tool build/gcc14/bin/acir-queue-cxxgen \
+  --acir-opt build/dev-llvm22/bin/acir-opt \
+  --queue-plan-tool build/dev-llvm22/bin/acir-queue-plan \
+  --queue-cxxgen-tool build/dev-llvm22/bin/acir-queue-cxxgen \
   --output examples/v03/memory_banks.generated.cpp
 
-/home/lc/opt/gcc14/bin/aarch64-conda-linux-gnu-g++ \
+c++ \
   -std=c++20 -Iinclude -Iexamples/v03 \
   examples/v03/memory_banks_harness.cpp \
   -o /tmp/memory_banks_sim
@@ -92,17 +92,17 @@ releases `busy`.
 
 ```bash
 PYTHONPATH=src \
-  /home/lc/opt/agentic-circuit-toolchain/python-env/bin/python \
+  .venv/bin/python \
   tools/ac-queue-cxxgen.py examples/v03/memory_busy.py \
   --system memory_busy \
   --acir-output /tmp/memory_busy.mlir \
   --plan-output /tmp/memory_busy.plan.json \
-  --acir-opt build/gcc14/bin/acir-opt \
-  --queue-plan-tool build/gcc14/bin/acir-queue-plan \
-  --queue-cxxgen-tool build/gcc14/bin/acir-queue-cxxgen \
+  --acir-opt build/dev-llvm22/bin/acir-opt \
+  --queue-plan-tool build/dev-llvm22/bin/acir-queue-plan \
+  --queue-cxxgen-tool build/dev-llvm22/bin/acir-queue-cxxgen \
   --output examples/v03/memory_busy.generated.cpp
 
-/home/lc/opt/gcc14/bin/aarch64-conda-linux-gnu-g++ \
+c++ \
   -std=c++20 -Iinclude -Iexamples/v03 \
   examples/v03/memory_busy_harness.cpp \
   -o /tmp/memory_busy_sim
@@ -136,17 +136,17 @@ endpoint. The harness first seeds `DRAM[5]` with `0x1234`, runs one DMA copy to
 
 ```bash
 PYTHONPATH=src \
-  /home/lc/opt/agentic-circuit-toolchain/python-env/bin/python \
+  .venv/bin/python \
   tools/ac-queue-cxxgen.py examples/v03/dma.py \
   --system dma \
   --acir-output /tmp/dma.mlir \
   --plan-output /tmp/dma.plan.json \
-  --acir-opt build/gcc14/bin/acir-opt \
-  --queue-plan-tool build/gcc14/bin/acir-queue-plan \
-  --queue-cxxgen-tool build/gcc14/bin/acir-queue-cxxgen \
+  --acir-opt build/dev-llvm22/bin/acir-opt \
+  --queue-plan-tool build/dev-llvm22/bin/acir-queue-plan \
+  --queue-cxxgen-tool build/dev-llvm22/bin/acir-queue-cxxgen \
   --output examples/v03/dma.generated.cpp
 
-/home/lc/opt/gcc14/bin/aarch64-conda-linux-gnu-g++ \
+c++ \
   -std=c++20 -Iinclude -Iexamples/v03 \
   examples/v03/dma_harness.cpp \
   -o /tmp/dma_sim

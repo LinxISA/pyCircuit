@@ -1212,7 +1212,9 @@ LogicalResult MemoryInstanceOp::verify() {
     return emitOpError("stable_id must be unique");
   unsigned requests = 0;
   root->walk([&](MemoryRequestOp request) {
-    if (request.getInstance() == getSymName())
+    auto resolved = dyn_cast_or_null<MemoryInstanceOp>(
+        SymbolTable::lookupNearestSymbolFrom(request, request.getInstanceAttr()));
+    if (resolved == *this)
       ++requests;
   });
   if (requests == 0)
@@ -1315,7 +1317,9 @@ LogicalResult MemoryRequestOp::verify() {
   uint64_t maximumOrdinal = 0;
   unsigned endpointCount = 0;
   WalkResult endpointResult = root->walk([&](MemoryRequestOp request) {
-    if (request.getInstance() != getInstance())
+    auto resolved = dyn_cast_or_null<MemoryInstanceOp>(
+        SymbolTable::lookupNearestSymbolFrom(request, request.getInstanceAttr()));
+    if (resolved != instance)
       return WalkResult::advance();
     ++endpointCount;
     maximumOrdinal = std::max(maximumOrdinal, request.getOrdinal());
