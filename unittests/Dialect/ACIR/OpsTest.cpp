@@ -365,6 +365,7 @@ TEST(ACIROpsTest, RegistryContainsExactV02QueueVarOperations) {
       "ac.var.cmp",
       "ac.var.get",
       "ac.var.mul",
+      "ac.var.popcount",
       "ac.var.sub",
       "ac.var.with",
       "ac.require",
@@ -765,51 +766,32 @@ TEST(ACIROpsTest, RuntimeAndV02QueueVarRegistryIsExact) {
         << name.str();
   EXPECT_FALSE(mlir::OperationName("ac.try_issue", &context).isRegistered());
   EXPECT_FALSE(mlir::OperationName("ac.connect", &context).isRegistered());
-  const std::array<llvm::StringLiteral, 39> v02Names = {
-      "ac.transform",
-      "ac.transform.yield",
-      "ac.firing",
-      "ac.firing.yield",
-      "ac.queue.peek",
-      "ac.queue.pop",
-      "ac.queue.push",
-      "ac.source",
-      "ac.sink",
-      "ac.var.constant",
-      "ac.var.add",
-      "ac.var.sub",
-      "ac.var.mul",
-      "ac.var.get",
-      "ac.var.with",
-      "ac.scope",
-      "ac.scope.yield",
-      "ac.broadcast",
-      "ac.route",
-      "ac.route.yield",
-      "ac.select",
-      "ac.select.yield",
-      "ac.fork",
-      "ac.merge",
-      "ac.barrier",
-      "ac.dependency",
-      "ac.dependency.yield",
-      "ac.credit",
-      "ac.credit.yield",
-      "ac.memory",
-      "ac.memory.yield",
-      "ac.reorder",
-      "ac.reorder.yield",
-      "ac.feedback",
-      "ac.feedback.yield",
-      "ac.observe",
-      "ac.expect",
-      "ac.expect.yield",
-      "ac.var.cmp",
+  const std::array<llvm::StringLiteral, 40> v02Names = {
+      "ac.transform",    "ac.transform.yield",
+      "ac.firing",       "ac.firing.yield",
+      "ac.queue.peek",   "ac.queue.pop",
+      "ac.queue.push",   "ac.source",
+      "ac.sink",         "ac.var.constant",
+      "ac.var.add",      "ac.var.sub",
+      "ac.var.mul",      "ac.var.popcount",
+      "ac.var.get",      "ac.var.with",
+      "ac.scope",        "ac.scope.yield",
+      "ac.broadcast",    "ac.route",
+      "ac.route.yield",  "ac.select",
+      "ac.select.yield", "ac.fork",
+      "ac.merge",        "ac.barrier",
+      "ac.dependency",   "ac.dependency.yield",
+      "ac.credit",       "ac.credit.yield",
+      "ac.memory",       "ac.memory.yield",
+      "ac.reorder",      "ac.reorder.yield",
+      "ac.feedback",     "ac.feedback.yield",
+      "ac.observe",      "ac.expect",
+      "ac.expect.yield", "ac.var.cmp",
   };
   for (llvm::StringLiteral name : v02Names)
     EXPECT_TRUE(mlir::OperationName(name, &context).isRegistered())
         << name.str();
-  EXPECT_EQ(context.getRegisteredOperationsByDialect("ac").size(), 94u);
+  EXPECT_EQ(context.getRegisteredOperationsByDialect("ac").size(), 95u);
 }
 
 TEST(ACIROpsTest, ProcessLinearLivenessDoesNotRescanBlockPerValue) {
