@@ -8,6 +8,6 @@ module attributes {ac.contract_epoch = "0.2", ac.system = "arbiter"} {
 }
 
 // PYC: pyc.rr_arbiter
-// PYC: primitive_id = "control.rr_arbiter.v1"
-// PYC: implementation_id = "internal.reference.rr_arbiter.v1"
-// PYC: num_inputs = 2
+// PYC-SAME: primitive_id = "control.rr_arbiter.v1"
+// PYC-SAME: implementation_id = "internal.reference.rr_arbiter.v1"
+// PYC-SAME: num_inputs = 2
