@@ -145,6 +145,7 @@ install(
 install(FILES cmake/modules/AddACIR.cmake DESTINATION lib/cmake/AgenticCircuit/modules)
 install(DIRECTORY include/acir DESTINATION include)
 install(DIRECTORY include/gfsim DESTINATION include)
+install(DIRECTORY resources/pyc_runtime DESTINATION share/AgenticCircuit)
 install(
   DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/include/acir"
   DESTINATION include
