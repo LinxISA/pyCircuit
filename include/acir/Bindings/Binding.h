@@ -15,7 +15,7 @@
 namespace acir::bindings {
 
 inline constexpr llvm::StringLiteral BindingSchema = "acsim-binding-0.1";
-inline constexpr llvm::StringLiteral ContractEpoch = "0.2";
+inline constexpr llvm::StringLiteral ContractEpoch = "0.3";
 
 struct JsonParseLimits {
   size_t maxInputBytes = 1U << 20;

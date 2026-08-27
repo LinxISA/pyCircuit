@@ -1,7 +1,7 @@
 {
   "schema_kind": "agentic-circuit-component",
   "schema_version": "0.1",
-  "contract_epoch": "0.2",
+  "contract_epoch": "0.3",
   "canonical_name": "ac.Reassembler",
   "family": "transport",
   "provider_namespace": "ac",
@@ -119,5 +119,5 @@
     "gauges": [],
     "histograms": []
   },
-  "schema_fingerprint": "sha256:4cf037d2877b74afbb093aeb54c274021e647633468e462a1a7f4854757ed921"
+  "schema_fingerprint": "sha256:c660b63d8533f91eca4862e789e68e0451dac8bb8b4235fc1677513057cc3a16"
 }

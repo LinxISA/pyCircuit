@@ -5,7 +5,7 @@
 
 // This file covers all 16 SSA-legal ACIR v0.2 public types. Channel's 17th
 // parser/printer case is covered by ACIRTypesTest.PublicTypeInventoryRoundTrips.
-builtin.module attributes {ac.contract_epoch = "0.2"} {
+builtin.module attributes {ac.contract_epoch = "0.3"} {
   "ac.protocol"() <{sym_name = "test_protocol"}> ({
     "ac.role"() <{sym_name = "producer", dual = @consumer, cardinality = "exclusive"}> : () -> ()
     "ac.role"() <{sym_name = "consumer", dual = @producer, cardinality = "exclusive"}> : () -> ()

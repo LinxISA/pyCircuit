@@ -74,8 +74,24 @@ const std::vector<QueueBlockContract> Contracts = {
      false,
      "pyc_testbench_boundary_only",
      {"predicate_input", "assertion_outcome"}},
-    {"memory",
-     "ac.memory",
+    {"memory_instance",
+     "ac.memory.instance",
+     "state",
+     "design",
+     "stateful",
+     0,
+     0,
+     0,
+     0,
+     "declared_storage_owner",
+     {"data_type", "entries", "init", "latency", "stable_id", "owner"},
+     true,
+     "gfsim::QueueMemoryArbiter storage owner",
+     true,
+     "one_pyc.sync_mem_per_instance",
+     {"memory_write", "busy", "selected_endpoint"}},
+    {"memory_request",
+     "ac.memory.request",
      "state",
      "design",
      "stateful",
@@ -84,9 +100,9 @@ const std::vector<QueueBlockContract> Contracts = {
      1,
      1,
      "input_output_payload_equal",
-     {"entries", "init", "result_field", "depth", "latency"},
+     {"instance", "ordinal", "result_field", "depth"},
      true,
-     "gfsim::QueueMemory<T,Data,Address,Write,WriteData,Response>",
+     "gfsim::QueueMemoryArbiter<T,Data,N,...>",
      true,
      "pyc.sync_mem_with_aligned_request_state",
      {"request_transaction", "response_transaction", "memory_write"}},
@@ -344,10 +360,10 @@ llvm::Expected<std::string> canonicalQueueBlockCatalogJson() {
         {"role", contract->role},
     });
   }
-  llvm::json::Object root{{"contract_epoch", "0.2"},
+  llvm::json::Object root{{"contract_epoch", "0.3"},
                           {"entries", std::move(entries)},
                           {"schema", "agentic-circuit-opcode-catalog"},
-                          {"version", "0.2"}};
+                          {"version", "0.3"}};
   return bindings::canonicalizeJson(llvm::json::Value(std::move(root)));
 }
 

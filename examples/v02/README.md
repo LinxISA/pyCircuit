@@ -105,6 +105,6 @@ C++, and Verilog.
 `pyc_credit_pipeline.py` verifies bounded parallel in-flight slots, independent
 cost countdown, deterministic completion selection, automatic credit return,
 and PYC C++/Verilator cycle equivalence.
-`pyc_memory_pipeline.py` verifies a typed single-read/single-write memory,
-old-data read-during-write behavior, aligned request/response state, and the
-same `pyc.sync_mem` realization in PYC C++ and Verilog.
+`pyc_memory_pipeline.py` verifies an explicit typed memory instance, old-data
+read-during-write behavior, aligned request/response state, and exactly one
+`pyc.sync_mem` realization per instance in PYC C++ and Verilog.

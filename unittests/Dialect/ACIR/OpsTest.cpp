@@ -96,7 +96,7 @@ TEST(ACIROpsTest, V02QueueEffectsAreAttachedToExactSSAQueueHandles) {
   mlir::MLIRContext context;
   context.loadDialect<ACIRDialect>();
   auto module = mlir::parseSourceString<mlir::ModuleOp>(R"mlir(
-    module attributes {ac.contract_epoch = "0.2"} {
+    module attributes {ac.contract_epoch = "0.3"} {
       %input = ac.source depth 4 latency 1 : !ac.queue<i32>
       %output = ac.source depth 4 latency 1 : !ac.queue<i32>
       ac.firing(%input, %output) {
@@ -341,7 +341,8 @@ TEST(ACIROpsTest, RegistryContainsExactV02QueueVarOperations) {
       "ac.module.extern",
       "ac.module.generated",
       "ac.merge",
-      "ac.memory",
+      "ac.memory.instance",
+      "ac.memory.request",
       "ac.memory.yield",
       "ac.reorder",
       "ac.reorder.yield",
@@ -418,7 +419,7 @@ TEST(ACIROpsTest, PublicBuildersConstructEveryTaskSixOperation) {
   mlir::OpBuilder builder(&context);
   auto loc = builder.getUnknownLoc();
   auto file = mlir::ModuleOp::create(loc);
-  file->setAttr("ac.contract_epoch", builder.getStringAttr("0.2"));
+  file->setAttr("ac.contract_epoch", builder.getStringAttr("0.3"));
   builder.setInsertionPointToStart(file.getBody());
 
   auto emptyType = builder.getFunctionType({}, {});
@@ -513,7 +514,7 @@ TEST(ACIROpsTest, PublicBuildersConstructEveryTaskEightOperation) {
   mlir::OpBuilder builder(&context);
   auto loc = builder.getUnknownLoc();
   auto file = mlir::parseSourceString<mlir::ModuleOp>(R"mlir(
-    builtin.module attributes {ac.contract_epoch = "0.2"} {
+    builtin.module attributes {ac.contract_epoch = "0.3"} {
       ac.protocol @fifo {
         ac.role @sender dual @receiver cardinality "exclusive"
         ac.role @receiver dual @sender cardinality "exclusive"
@@ -765,7 +766,7 @@ TEST(ACIROpsTest, RuntimeAndV02QueueVarRegistryIsExact) {
         << name.str();
   EXPECT_FALSE(mlir::OperationName("ac.try_issue", &context).isRegistered());
   EXPECT_FALSE(mlir::OperationName("ac.connect", &context).isRegistered());
-  const std::array<llvm::StringLiteral, 39> v02Names = {
+  const std::array<llvm::StringLiteral, 40> v02Names = {
       "ac.transform",
       "ac.transform.yield",
       "ac.firing",
@@ -795,7 +796,8 @@ TEST(ACIROpsTest, RuntimeAndV02QueueVarRegistryIsExact) {
       "ac.dependency.yield",
       "ac.credit",
       "ac.credit.yield",
-      "ac.memory",
+      "ac.memory.instance",
+      "ac.memory.request",
       "ac.memory.yield",
       "ac.reorder",
       "ac.reorder.yield",
@@ -809,7 +811,7 @@ TEST(ACIROpsTest, RuntimeAndV02QueueVarRegistryIsExact) {
   for (llvm::StringLiteral name : v02Names)
     EXPECT_TRUE(mlir::OperationName(name, &context).isRegistered())
         << name.str();
-  EXPECT_EQ(context.getRegisteredOperationsByDialect("ac").size(), 94u);
+  EXPECT_EQ(context.getRegisteredOperationsByDialect("ac").size(), 95u);
 }
 
 TEST(ACIROpsTest, ProcessLinearLivenessDoesNotRescanBlockPerValue) {
@@ -820,7 +822,7 @@ TEST(ACIROpsTest, ProcessLinearLivenessDoesNotRescanBlockPerValue) {
   auto buildProcess = [&](unsigned valueCount) {
     std::string source;
     llvm::raw_string_ostream os(source);
-    os << "builtin.module attributes {ac.contract_epoch = \"0.2\"} {\n"
+    os << "builtin.module attributes {ac.contract_epoch = \"0.3\"} {\n"
           "  ac.module @Scale() parameters {} graph {\n"
           "    ac.process @worker kind \"control\" {\n";
     for (unsigned index = 0; index != valueCount; ++index)
@@ -1348,7 +1350,7 @@ TEST(ACIROpsTest, TraceSourcesHaveOneOwnerAcrossElaboratedHierarchy) {
   mlir::MLIRContext context;
   context.loadDialect<ACIRDialect>();
   auto singleOwner = mlir::parseSourceString<mlir::ModuleOp>(R"mlir(
-    builtin.module attributes {ac.contract_epoch = "0.2"} {
+    builtin.module attributes {ac.contract_epoch = "0.3"} {
       ac.module @Top() parameters {} graph {
         ac.process @workload kind "workload" {
           %cursor = ac.trace.open source "pto"
@@ -1388,7 +1390,7 @@ TEST(ACIROpsTest, TraceSourcesHaveOneOwnerAcrossElaboratedHierarchy) {
   };
 
   expectDuplicate(R"mlir(
-    builtin.module attributes {ac.contract_epoch = "0.2"} {
+    builtin.module attributes {ac.contract_epoch = "0.3"} {
       ac.module @Left() parameters {} graph {
         ac.process @workload kind "workload" {
           %cursor = ac.trace.open source "pto"
@@ -1415,7 +1417,7 @@ TEST(ACIROpsTest, TraceSourcesHaveOneOwnerAcrossElaboratedHierarchy) {
   )mlir");
 
   expectDuplicate(R"mlir(
-    builtin.module attributes {ac.contract_epoch = "0.2"} {
+    builtin.module attributes {ac.contract_epoch = "0.3"} {
       ac.module @Leaf() parameters {} graph {
         ac.process @workload kind "workload" {
           %cursor = ac.trace.open source "pto"
@@ -1504,7 +1506,7 @@ TEST(ACIROpsTest, StaticContractsUseFreezePhaseModuleEffects) {
   mlir::MLIRContext context;
   context.loadDialect<ACIRDialect>();
   auto file = mlir::parseSourceString<mlir::ModuleOp>(R"mlir(
-    builtin.module attributes {ac.contract_epoch = "0.2"} {
+    builtin.module attributes {ac.contract_epoch = "0.3"} {
       ac.module @M(i1) parameters {} graph {
       ^bb0(%condition : i1):
         ac.require %condition, "capacity"
@@ -2562,7 +2564,7 @@ TEST(ACIRFreezeEffectsTest, FrozenEffectsUseElaboratedAbsoluteOwnerSets) {
   acir::registerAllDialects(registry);
   mlir::MLIRContext context(registry);
   auto file = mlir::parseSourceString<mlir::ModuleOp>(R"mlir(
-    builtin.module attributes {ac.contract_epoch = "0.2"} {
+    builtin.module attributes {ac.contract_epoch = "0.3"} {
       ac.system @soc root @Top as "root" tick 0 "cycle"
           workload @Top::@workload seed {kind = "fixed", value = 0 : i64}
           instrumentation [] results {id = "default", format = "json"}

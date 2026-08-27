@@ -3,8 +3,8 @@
 | Field | Value |
 | --- | --- |
 | Specification | Serial Python, Queue/Var ACIR, typed gfsim, and PYC refinement |
-| Target contract epoch | `0.2` |
-| Status | Implemented candidate specification; epoch `0.2` is active on `main` |
+| Target contract epoch | `0.3` |
+| Status | Implemented candidate specification; epoch `0.3` is active on `main` |
 | Public namespace | `ac` |
 | Audience | Frontend, compiler, simulator, and RTL contributors |
 | Design background | [Queue/Var v0.2 proposal](agentic-circuit-queue-var-v0.2-proposal.md) |
@@ -38,7 +38,7 @@ The words **MUST**, **MUST NOT**, **SHOULD**, **SHOULD NOT**, and **MAY** are
 normative requirements for the v0.2 candidate.
 
 The global hard break from epoch `0.1` to `0.2` is active on `main`.
-Producers emit exact epoch `0.2`; consumers reject epoch `0.1` before
+Producers emit exact epoch `0.3`; consumers reject earlier epochs before
 interpreting the artifact. The toolchain provides no compatibility alias or
 best-effort conversion.
 
@@ -422,10 +422,10 @@ changing the barrier firing contract.
 
 ### Typed memory
 
-`memory` is the common single-read/single-write state block. The request and
-response use the same structure type. Three pure lambdas select the address,
-write enable, and write data; `result_field` names the response field replaced
-with the value read from memory.
+`memory` declares a physical single-read/single-write state instance. One or
+more logical request endpoints connect to it; requests and responses use one
+shared structure type. Three pure lambdas select the address, write enable, and
+write data; `result_field` names the response field replaced with old data.
 
 ```python
 @ac.struct
@@ -436,29 +436,32 @@ class MemoryRequest:
     tag: ac.u8
 
 
+sram = ac.memory(ac.u16, entries=16, init=0, latency=3)
 requests = ac.source(MemoryRequest, depth=4, latency=1)
-responses = requests.memory(
+responses = sram.request(
+    requests,
     address=lambda item: item.address,
     write=lambda item: item.write,
     data=lambda item: item.data,
-    entries=16,
-    init=0,
     result_field="data",
     depth=4,
-    latency=1,
 )
 ac.sink(responses)
 ```
 
-`entries`, `init`, `result_field`, `depth`, and `latency` are compile-time
-constants. `entries`, `depth`, and `latency` MUST be positive. The address MUST
+`entries`, `init`, instance `latency`, `result_field`, and `depth` are
+compile-time constants. `entries`, `depth`, and instance `latency` MUST be
+positive. The response Queue has fixed latency one. The address MUST
 be an integer Var no wider than 64 bits and wide enough to represent every
 entry. The write policy MUST return `!ac.var<i1>`. The data policy and result
 field MUST have the same integer type, no wider than 64 bits. v0.2 supports
 deterministic zero initialization only, so `init` MUST equal zero.
 
-Every accepted request performs a read. A response preserves the request's
-other fields and replaces `result_field` with the pre-transfer memory value. A
+Every accepted request performs a read. A request accepted in cycle `T` can
+offer its response no earlier than `T + latency`; the instance remains busy
+throughout that interval and while the response Queue is blocked. A response
+preserves the request's other fields and replaces `result_field` with the
+pre-transfer memory value. A
 write commits at Xfer. Therefore a read and write to the same address in one
 request returns old data and makes the new data visible to a later request.
 
@@ -769,7 +772,7 @@ verification entries declare their permitted boundary explicitly.
 | `ac.merge` | design | two or more to one | `policy`, `depth`, `latency` | priority or round-robin arbitration |
 | `ac.barrier` | design | two or more to the same count | output depths and latencies | positionally typed atomic synchronization |
 | `ac.credit` | design | one to one | `credits`, `depth`, `latency` | bounded parallel cost countdown and completion |
-| `ac.memory` | design | one to one | `entries`, `init`, `result_field`, `depth`, `latency` | synchronous old-data read and commit-time write |
+| `ac.memory.instance` / `ac.memory.request` | design | shared instance, one-to-one endpoint | instance identity, ordinal, `entries`, `init`, instance `latency`, `result_field`, `depth` | fixed-priority single-outstanding old-data memory |
 | `ac.dependency` | design | one to one | `capacity`, `resources`, `no_dependency`, `depth`, `latency` | bounded predecessor tracking, resource reservation, and execution countdown |
 | `ac.reorder` | design | one to one | `capacity`, `start`, `depth`, `latency` | bounded key-ordered retirement |
 | `ac.feedback` | design | one to one | `depth`, `latency`, `max_iterations` | bounded stateful loop |
@@ -859,12 +862,14 @@ the output count and contain only positive values.
 
 ### Memory example
 
-The Python memory call lowers to one typed `ac.memory` with three pure policy
-regions. The input and output Queue payload types are identical.
+The declaration lowers to `ac.memory.instance`; every endpoint lowers to an
+`ac.memory.request` with a frozen ordinal and three pure policy regions.
 
 ```mlir
-%response = ac.memory %request
-    entries 16 init 0 result_field "data" depth 4 latency 1
+ac.memory.instance @sram data i16 entries 16 init 0 latency 3
+    owner "/" stable_id "memory/sram"
+%response = ac.memory.request @sram, %request ordinal 0
+    result_field "data" depth 4
     address {
   ^address(%item: !ac.var<!ac.struct<@types::@MemoryRequest>>):
     %address = ac.var.get %item field "address"
@@ -880,13 +885,29 @@ regions. The input and output Queue payload types are identical.
     %data = ac.var.get %item field "data"
       : !ac.var<!ac.struct<@types::@MemoryRequest>> -> !ac.var<i16>
     ac.memory.yield %data : !ac.var<i16>
-} : !ac.queue<!ac.struct<@types::@MemoryRequest>>
+} {ac.endpoint_path = "/response", ac.name = "response"}
+    : !ac.queue<!ac.struct<@types::@MemoryRequest>>
     -> !ac.queue<!ac.struct<@types::@MemoryRequest>>
 ```
 
 The three regions MUST each contain one block argument matching the request
 payload, contain only pure Var operations, and terminate with exactly one
 `ac.memory.yield`.
+
+An instance is visible only from its declaration scope and descendants. Its
+endpoints use fixed ordinal priority. While one transaction is outstanding all
+request endpoints are backpressured; `busy` is released only when the selected
+response Queue accepts the response, and no request is reaccepted in that same
+epoch. Every backend realizes exactly one physical memory per instance.
+
+The Python frontend may statically elaborate a homogeneous memory array without
+adding a frozen operation. `banks.select(requests, key=...).request(...)`
+lowers to one `ac.route`, one ordinary memory instance and request per bank,
+and one response `ac.merge`. The route key selects exactly one bank. Banks have
+independent outstanding state, so responses from different banks may be
+reordered; callers that require request order retain a tag and use `reorder`.
+Memory arrays are one-dimensional in epoch 0.3 and require identical data type,
+entry count, and initialization across all banks.
 
 ### Explicit firing example
 

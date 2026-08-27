@@ -1,7 +1,7 @@
 {
   "schema_kind": "agentic-circuit-component",
   "schema_version": "0.1",
-  "contract_epoch": "0.2",
+  "contract_epoch": "0.3",
   "canonical_name": "ac.RegisterFile",
   "family": "storage",
   "provider_namespace": "ac",
@@ -149,5 +149,5 @@
     ],
     "histograms": []
   },
-  "schema_fingerprint": "sha256:ca73624956c7e62aedb1e673667abd8b0802d4b081201902e1a70f1e18181ae4"
+  "schema_fingerprint": "sha256:af20286039fb652d9d166c903d022c114c3a14daeb876c4b6e81d45c6f9aafa8"
 }

@@ -1,7 +1,7 @@
 {
   "schema_kind": "agentic-circuit-component",
   "schema_version": "0.1",
-  "contract_epoch": "0.2",
+  "contract_epoch": "0.3",
   "canonical_name": "ac.Tlb",
   "family": "storage",
   "provider_namespace": "ac",
@@ -149,5 +149,5 @@
     ],
     "histograms": []
   },
-  "schema_fingerprint": "sha256:ed41a90003807c98bb713b67e213aa48055d8205f1dcd4af812fbdb113b7d6c6"
+  "schema_fingerprint": "sha256:727f72c7d2e1becd27206d9a8116805c709f62478839c6c6a7407ac4311706a0"
 }
