@@ -318,10 +318,10 @@ llvm::Expected<std::string> generateQueueGraphCpp(const QueueGraphPlan &plan) {
     if (block.kind == "memory_request")
       memoryEndpoints[block.memoryInstance].push_back(&block);
   for (auto &entry : memoryEndpoints)
-    llvm::sort(entry.getValue(), [](const QueueBlockPlan *left,
-                                    const QueueBlockPlan *right) {
-      return left->endpointOrdinal < right->endpointOrdinal;
-    });
+    llvm::sort(entry.getValue(),
+               [](const QueueBlockPlan *left, const QueueBlockPlan *right) {
+                 return left->endpointOrdinal < right->endpointOrdinal;
+               });
   llvm::StringMap<uint64_t> queueIds;
   for (auto [index, queue] : llvm::enumerate(plan.queues))
     queueIds[queue.name] = index;
@@ -363,8 +363,7 @@ llvm::Expected<std::string> generateQueueGraphCpp(const QueueGraphPlan &plan) {
     if (block->kind != "transform" && block->kind != "route" &&
         block->kind != "select" && block->kind != "expect" &&
         block->kind != "dependency" && block->kind != "credit" &&
-        block->kind != "reorder" &&
-        block->kind != "feedback")
+        block->kind != "reorder" && block->kind != "feedback")
       continue;
     if (block->kind == "dependency") {
       const QueuePlan *input = findQueue(plan, block->inputs.front());
@@ -530,8 +529,8 @@ llvm::Expected<std::string> generateQueueGraphCpp(const QueueGraphPlan &plan) {
     if (!dataType)
       return dataType.takeError();
     constexpr llvm::StringLiteral policyNames[] = {"address", "write", "data"};
-    const std::array<std::string, 3> resultTypes = {
-        "std::uint64_t", "bool", *dataType};
+    const std::array<std::string, 3> resultTypes = {"std::uint64_t", "bool",
+                                                    *dataType};
     for (auto [policyIndex, policyName] : llvm::enumerate(policyNames)) {
       output << "struct memory_" << memoryIndex << '_' << policyName.str()
              << "_policy {\n  " << resultTypes[policyIndex]
@@ -539,17 +538,16 @@ llvm::Expected<std::string> generateQueueGraphCpp(const QueueGraphPlan &plan) {
              << " &item) const {\n    switch (endpoint) {\n";
       for (const QueueBlockPlan *endpoint : endpoints) {
         output << "    case " << endpoint->endpointOrdinal << ": {\n";
-        auto body = emitExpressionBody(*endpoint,
-                                       endpoint->yields[policyIndex], 6);
+        auto body =
+            emitExpressionBody(*endpoint, endpoint->yields[policyIndex], 6);
         if (!body)
           return body.takeError();
         output << *body << "    }\n";
       }
       output << "    default: return {};\n    }\n  }\n};\n\n";
     }
-    output << "struct memory_" << memoryIndex
-           << "_response_policy {\n  " << *inputType
-           << " operator()(size_t endpoint, const " << *inputType
+    output << "struct memory_" << memoryIndex << "_response_policy {\n  "
+           << *inputType << " operator()(size_t endpoint, const " << *inputType
            << " &item, const " << *dataType
            << " &old_data) const {\n    auto result = item;\n"
               "    switch (endpoint) {\n";
@@ -772,13 +770,13 @@ llvm::Expected<std::string> generateQueueGraphCpp(const QueueGraphPlan &plan) {
       inputs.append("&").append(queueMembers[endpoint->inputs.front()]);
       outputs.append("&").append(queueMembers[endpoint->outputs.front()]);
     }
-    appendInitializer(
-        initializers, "memory_", memoryIndex, "_(\"memory_", instance.name,
-        "\", ", memoryIds[instance.name], ", ", *parent,
-        ", std::array<gfsim::SimQueue<", *type, "> *, ", endpoints.size(),
-        ">{", inputs, "}, std::array<gfsim::SimQueue<", *type, "> *, ",
-        endpoints.size(), ">{", outputs, "}, ", instance.entries, ", ",
-        instance.init, ", ", instance.latency, ")");
+    appendInitializer(initializers, "memory_", memoryIndex, "_(\"memory_",
+                      instance.name, "\", ", memoryIds[instance.name], ", ",
+                      *parent, ", std::array<gfsim::SimQueue<", *type, "> *, ",
+                      endpoints.size(), ">{", inputs,
+                      "}, std::array<gfsim::SimQueue<", *type, "> *, ",
+                      endpoints.size(), ">{", outputs, "}, ", instance.entries,
+                      ", ", instance.init, ", ", instance.latency, ")");
   }
   for (auto [index, initializer] : llvm::enumerate(initializers))
     output << "        " << initializer
@@ -1099,9 +1097,9 @@ llvm::Expected<std::string> generateQueueGraphCpp(const QueueGraphPlan &plan) {
     output << "  gfsim::QueueMemoryArbiter<" << *type << ", " << *dataType
            << ", " << endpoints.size() << ", memory_" << memoryIndex
            << "_address_policy, memory_" << memoryIndex
-           << "_write_policy, memory_" << memoryIndex
-           << "_data_policy, memory_" << memoryIndex
-           << "_response_policy> memory_" << memoryIndex << "_;\n";
+           << "_write_policy, memory_" << memoryIndex << "_data_policy, memory_"
+           << memoryIndex << "_response_policy> memory_" << memoryIndex
+           << "_;\n";
   }
   output << "};\n\n} // namespace ac_generated\n";
   return output.str();

@@ -1223,7 +1223,8 @@ LogicalResult MemoryInstanceOp::verify() {
       ownerExists |= path == getOwner();
     }
     if (auto other = dyn_cast<MemoryInstanceOp>(operation))
-      duplicateStableId |= other != *this && other.getStableId() == getStableId();
+      duplicateStableId |=
+          other != *this && other.getStableId() == getStableId();
   });
   if (!ownerExists)
     return emitOpError("owner does not name a declared scope path");
@@ -1231,8 +1232,9 @@ LogicalResult MemoryInstanceOp::verify() {
     return emitOpError("stable_id must be unique");
   unsigned requests = 0;
   root->walk([&](MemoryRequestOp request) {
-    auto resolved = dyn_cast_or_null<MemoryInstanceOp>(
-        SymbolTable::lookupNearestSymbolFrom(request, request.getInstanceAttr()));
+    auto resolved =
+        dyn_cast_or_null<MemoryInstanceOp>(SymbolTable::lookupNearestSymbolFrom(
+            request, request.getInstanceAttr()));
     if (resolved == *this)
       ++requests;
   });
@@ -1281,7 +1283,8 @@ LogicalResult MemoryRequestOp::verify() {
     return emitOpError() << "unknown result_field '" << getResultField() << "'";
   Type dataType = fieldType(declaration, *fieldIndex);
   if (dataType != instance.getDataType())
-    return emitOpError("result_field type must match memory instance data type");
+    return emitOpError(
+        "result_field type must match memory instance data type");
   auto dataInteger = dyn_cast<IntegerType>(dataType);
   if (!dataInteger || dataInteger.getWidth() > 64)
     return emitOpError(
@@ -1336,8 +1339,9 @@ LogicalResult MemoryRequestOp::verify() {
   uint64_t maximumOrdinal = 0;
   unsigned endpointCount = 0;
   WalkResult endpointResult = root->walk([&](MemoryRequestOp request) {
-    auto resolved = dyn_cast_or_null<MemoryInstanceOp>(
-        SymbolTable::lookupNearestSymbolFrom(request, request.getInstanceAttr()));
+    auto resolved =
+        dyn_cast_or_null<MemoryInstanceOp>(SymbolTable::lookupNearestSymbolFrom(
+            request, request.getInstanceAttr()));
     if (resolved != instance)
       return WalkResult::advance();
     ++endpointCount;
@@ -1348,14 +1352,17 @@ LogicalResult MemoryRequestOp::verify() {
     }
     auto path = request->getAttrOfType<StringAttr>("ac.endpoint_path");
     if (!path || !endpointPaths.insert(path.getValue()).second) {
-      request.emitOpError("duplicate or missing endpoint path for memory instance");
+      request.emitOpError(
+          "duplicate or missing endpoint path for memory instance");
       return WalkResult::interrupt();
     }
-    Type candidate = cast<QueueType>(request.getInput().getType()).getElementType();
+    Type candidate =
+        cast<QueueType>(request.getInput().getType()).getElementType();
     if (!payloadType)
       payloadType = candidate;
     else if (payloadType != candidate) {
-      request.emitOpError("all endpoints of one memory must use one payload type");
+      request.emitOpError(
+          "all endpoints of one memory must use one payload type");
       return WalkResult::interrupt();
     }
     return WalkResult::advance();

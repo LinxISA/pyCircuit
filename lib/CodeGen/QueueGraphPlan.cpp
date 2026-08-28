@@ -550,9 +550,9 @@ private:
         if (!input)
           return input.takeError();
         std::vector<std::string> outputs;
-        if (auto error = addOutputs(
-                memory, memory->getResults(), {int64_t(memory.getDepth())},
-                {1}, scope, outputs))
+        if (auto error =
+                addOutputs(memory, memory->getResults(),
+                           {int64_t(memory.getDepth())}, {1}, scope, outputs))
           return error;
         QueueBlockPlan blockPlan{"memory_request",
                                  outputs.front(),
@@ -709,8 +709,10 @@ llvm::Error verifyQueueGraphPlan(const QueueGraphPlan &plan) {
   llvm::StringSet<> queueNames;
   llvm::StringMap<const MemoryInstancePlan *> memoryInstances;
   for (const MemoryInstancePlan &instance : plan.memoryInstances) {
-    if (instance.name.empty() || !memoryInstances.try_emplace(instance.name, &instance).second)
-      return planError("memory instance identities must be non-empty and unique");
+    if (instance.name.empty() ||
+        !memoryInstances.try_emplace(instance.name, &instance).second)
+      return planError(
+          "memory instance identities must be non-empty and unique");
     if (instance.dataType.empty() || instance.entries == 0 ||
         instance.init != 0 || instance.latency == 0 ||
         instance.stableId.empty() || instance.ownerPath.empty())
@@ -880,19 +882,25 @@ llvm::Expected<std::string> QueueGraphPlan::canonicalJson() const {
   }
   llvm::json::Array memoryInstanceValues;
   for (const MemoryInstancePlan &instance : memoryInstances)
-    memoryInstanceValues.push_back(llvm::json::Object{
-        {"data_type", instance.dataType}, {"entries", instance.entries},
-        {"init", instance.init}, {"latency", instance.latency},
-        {"name", instance.name},
-        {"owner_path", instance.ownerPath}, {"stable_id", instance.stableId}});
+    memoryInstanceValues.push_back(
+        llvm::json::Object{{"data_type", instance.dataType},
+                           {"entries", instance.entries},
+                           {"init", instance.init},
+                           {"latency", instance.latency},
+                           {"name", instance.name},
+                           {"owner_path", instance.ownerPath},
+                           {"stable_id", instance.stableId}});
   llvm::json::Array memoryRequestValues;
   for (const MemoryRequestPlan &request : memoryRequests)
-    memoryRequestValues.push_back(llvm::json::Object{
-        {"depth", request.depth}, {"input", request.input},
-        {"instance", request.instance}, {"name", request.name},
-        {"ordinal", request.ordinal},
-        {"output", request.output}, {"result_field", request.resultField},
-        {"scope", request.scope}});
+    memoryRequestValues.push_back(
+        llvm::json::Object{{"depth", request.depth},
+                           {"input", request.input},
+                           {"instance", request.instance},
+                           {"name", request.name},
+                           {"ordinal", request.ordinal},
+                           {"output", request.output},
+                           {"result_field", request.resultField},
+                           {"scope", request.scope}});
   llvm::json::Object root{{"blocks", std::move(blockValues)},
                           {"contract_epoch", "0.3"},
                           {"memory_instances", std::move(memoryInstanceValues)},

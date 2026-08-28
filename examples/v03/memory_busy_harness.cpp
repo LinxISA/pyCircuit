@@ -65,9 +65,8 @@ int main() {
   record(8, "B response accepted; busy released");
   record(9, "sink received B");
   const auto &responses = model.sink_0_values();
-  if (responses.size() != 2 || responses[0].tag != 1 ||
-      responses[1].tag != 2 || responses[0].data != 0 ||
-      responses[1].data != 0)
+  if (responses.size() != 2 || responses[0].tag != 1 || responses[1].tag != 2 ||
+      responses[0].data != 0 || responses[1].data != 0)
     return 7;
 
   std::cout << "latency_blocked=1 accepted_after_release=1 responses="
