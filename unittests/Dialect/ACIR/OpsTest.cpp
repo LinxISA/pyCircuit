@@ -2338,10 +2338,9 @@ TEST(ACIRResourcesTest,
   EXPECT_FALSE(forward.first);
   EXPECT_FALSE(reverse.first);
   EXPECT_EQ(forward.second, reverse.second);
-  EXPECT_NE(
-      forward.second.find(
-          "general mixed interleave analysis exceeds ACIR limit 256"),
-      std::string::npos);
+  EXPECT_NE(forward.second.find(
+                "general mixed interleave analysis exceeds ACIR limit 256"),
+            std::string::npos);
 }
 
 TEST(ACIRResourcesTest, SingleBankSelectionsDoNotConsumeGeneralMixedBudget) {

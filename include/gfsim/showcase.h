@@ -97,7 +97,7 @@ public:
   static constexpr ObjectKind componentKind = ObjectKind::TraceSource;
 
   ShowcaseTraceSource(std::string name, ObjectId id, SimObject *parent,
-                    uint64_t scenario);
+                      uint64_t scenario);
 
   bool loadDocument(PtoTraceDocument document);
   void doWork(Epoch epoch) override;

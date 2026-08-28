@@ -622,9 +622,8 @@ detail::validatePureProcessCallGraph(ModuleOp model,
       }
       func::CallOp call = calls[frame.nextCall++];
       if (edges == callLimits.maxEdges) {
-        call.emitOpError()
-            << "pure func.call analysis exceeds ACIR edge limit "
-            << callLimits.maxEdges;
+        call.emitOpError() << "pure func.call analysis exceeds ACIR edge limit "
+                           << callLimits.maxEdges;
         return failure();
       }
       ++edges;

@@ -643,7 +643,7 @@ void appendObservationValue(std::ostringstream &output,
 } // namespace
 
 ShowcaseTraceSource::ShowcaseTraceSource(std::string name, ObjectId id,
-                                     SimObject *parent, uint64_t scenario)
+                                         SimObject *parent, uint64_t scenario)
     : SimObject(ObjectKind::TraceSource, std::move(name), id, parent),
       scenario_(scenario) {}
 

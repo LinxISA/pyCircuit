@@ -79,8 +79,7 @@ public:
 private:
   void close(std::size_t sequence, std::uint64_t cycle) {
     if (current_[sequence] != "done" && cycle > begin_[sequence])
-      spans_.push_back(
-          {sequence, current_[sequence], begin_[sequence], cycle});
+      spans_.push_back({sequence, current_[sequence], begin_[sequence], cycle});
   }
 
   std::vector<std::string> current_;
@@ -110,8 +109,7 @@ void observeQueue(const Queue &queue, std::string_view stage,
   }
 }
 
-void printOrder(std::string_view name,
-                const std::vector<std::size_t> &order) {
+void printOrder(std::string_view name, const std::vector<std::size_t> &order) {
   std::cout << name;
   for (std::size_t sequence : order)
     std::cout << ' ' << sequence;
@@ -130,8 +128,7 @@ int main() {
   for (std::uint64_t tick = 0; tick < 4096; ++tick) {
     while (nextInput < davincioo_fixture::kTokens.size() &&
            model.incoming().canProposePush()) {
-      if (!model.incoming().proposePush(
-              davincioo_fixture::kTokens[nextInput]))
+      if (!model.incoming().proposePush(davincioo_fixture::kTokens[nextInput]))
         break;
       ++nextInput;
     }

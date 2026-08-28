@@ -1564,9 +1564,8 @@ void NpuExecutionPipeline::reset() {
   clearRuntimeFailureCode();
 }
 
-NpuTraceSource::NpuTraceSource(std::string name, ObjectId id,
-                                           SimObject *parent,
-                                           ObservationSink *observations)
+NpuTraceSource::NpuTraceSource(std::string name, ObjectId id, SimObject *parent,
+                               ObservationSink *observations)
     : SimObject(ObjectKind::TraceSource, std::move(name), id, parent,
                 observations) {}
 
@@ -1751,8 +1750,7 @@ RuntimeObjectState NpuTraceSource::runtimeState(Epoch) const {
           .traceEof = committed_};
 }
 
-void NpuTraceSource::collectStatistics(
-    std::vector<StatSnapshot> &out) const {
+void NpuTraceSource::collectStatistics(std::vector<StatSnapshot> &out) const {
   if (!committed_)
     return;
   auto append = [&](std::string name, uint64_t value) {

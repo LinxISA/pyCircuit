@@ -748,8 +748,7 @@ LogicalResult preflightModel(ModelOp model) {
     if (operandEdges > limits.maxEdges ||
         edges > limits.maxEdges - operandEdges)
       return frame.operation->emitOpError()
-             << "model edge count exceeds ACSim capability "
-             << limits.maxEdges;
+             << "model edge count exceeds ACSim capability " << limits.maxEdges;
     edges += operandEdges;
     if (auto array = dyn_cast<ArrayOp>(frame.operation)) {
       auto type = dyn_cast<ArrayType>(array.getResult().getType());
@@ -1412,8 +1411,7 @@ LogicalResult expandRuntime(const ModelIndex &index,
       continue;
     if (expansion.runtimeRows.size() >= expansionLimit)
       return owner.placement->emitOpError()
-             << "runtime expansion exceeds ACSim capability "
-             << expansionLimit;
+             << "runtime expansion exceeds ACSim capability " << expansionLimit;
     int64_t id = static_cast<int64_t>(expansion.runtimeRows.size());
     expansion.runtimeRows.push_back(
         {owner.placement, realization, owner.context,
@@ -1601,8 +1599,7 @@ LogicalResult verifyProcess(ProcessOp process, const ModelIndex &index) {
       currentModelVerificationLimits().maxDependencyNodes;
   if (pcs.size() > dependencyLimit)
     return process.emitOpError()
-           << "dependency graph exceeds ACSim capability "
-           << dependencyLimit;
+           << "dependency graph exceeds ACSim capability " << dependencyLimit;
   SmallVector<SmallVector<unsigned>> successors(pcs.size());
   SmallVector<unsigned> indegree(pcs.size(), 0);
   uint64_t dependencyNodes = pcs.size();

@@ -277,7 +277,7 @@ public:
   static constexpr ObjectKind componentKind = ObjectKind::TraceSource;
 
   NpuTraceSource(std::string name, ObjectId id, SimObject *parent,
-                       ObservationSink *observations = nullptr);
+                 ObservationSink *observations = nullptr);
 
   bool loadDocument(PtoTraceDocument document);
   void doWork(Epoch epoch) override;

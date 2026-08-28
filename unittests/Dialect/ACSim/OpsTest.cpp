@@ -1753,13 +1753,11 @@ TEST(ACSimOpsTest, CapabilityPreflightUsesExactPrivateLimits) {
 
   detail::ModelVerificationLimits stringLimits;
   stringLimits.maxAttributeStringBytes = 8;
-  checkLimit(stringLimits,
-             "attribute string bytes exceed ACSim capability");
+  checkLimit(stringLimits, "attribute string bytes exceed ACSim capability");
 
   detail::ModelVerificationLimits dependencyLimits;
   dependencyLimits.maxDependencyNodes = 4;
-  checkLimit(dependencyLimits,
-             "dependency graph exceeds ACSim capability 4");
+  checkLimit(dependencyLimits, "dependency graph exceeds ACSim capability 4");
 }
 
 TEST(ACSimOpsTest, CyclicSsaDependencyFailsExplicitlyWithoutRecursion) {
@@ -1831,9 +1829,8 @@ TEST(ACSimOpsTest, ReusableExpansionCycleAndTotalCapFailExplicitly) {
   limits.maxExpandedObjects = 3;
   detail::ScopedModelVerificationLimits scopedLimits(limits);
   std::string capDiagnostic = expectVerificationFailure(*capFile);
-  EXPECT_TRUE(
-      llvm::StringRef(capDiagnostic)
-          .contains("expanded hierarchy exceeds ACSim capability 3"))
+  EXPECT_TRUE(llvm::StringRef(capDiagnostic)
+                  .contains("expanded hierarchy exceeds ACSim capability 3"))
       << capDiagnostic;
 }
 
