@@ -16,12 +16,12 @@ namespace acir::ac {
 /// channel type.
 bool containsChannelType(mlir::Type type);
 
-/// Returns true when `type` is, or recursively contains, a v0.2 Queue or Var
+/// Returns true when `type` is, or recursively contains, a Queue or Var
 /// runtime-wrapper type. Immutable payload types cannot contain either wrapper.
 bool containsQueueOrVarType(mlir::Type type);
 
 /// Returns true for a closed, immutable payload value that may be carried by a
-/// v0.2 Queue or represented by a Var.
+/// Queue or represented by a Var.
 bool isImmutablePayloadType(mlir::Type type);
 
 /// Returns true for the broader v0.1 transaction-level payload inventory. This

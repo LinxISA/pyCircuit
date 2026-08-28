@@ -1,0 +1,196 @@
+{
+  "candidates": [
+    {
+      "available": true,
+      "profile": "fast",
+      "target": "unknown-unknown",
+      "record": {
+        "activation_sources": [],
+        "availability": "available",
+        "binding": "workspace_Npu_binding",
+        "binding_schema": "acsim-binding-0.1",
+        "component_schema": "workspace.Npu",
+        "component_schema_fingerprint": "sha256:d4db2ec8813016dce7fc4e03edddbeb45057bbf9d58081c265a27ecc4a7f6968",
+        "construction": {"arguments": [], "kind": "constructor"},
+        "contract_epoch": "0.3",
+        "cpp": {
+          "concept": "gfsim::Component",
+          "entry_points": {
+            "pure": "",
+            "reset": "gfsim::workspace_npu_reset",
+            "validate": "gfsim::workspace_npu_validate",
+            "work": "gfsim::workspace_npu_work",
+            "xfer": "gfsim::workspace_npu_xfer"
+          },
+          "header": "gfsim/npu.h",
+          "symbol": "gfsim::NpuTraceSource",
+          "target": "gfsim"
+        },
+        "cpp_type": "workspace_npu_type",
+        "effect": "stateful",
+        "fingerprint": "sha256:29db918e3fc58e1dcf8bfa1281e6c3f424b0025e78b4e3c28e270126d1db080e",
+        "implementation": "gfsim.NpuTraceSource",
+        "ownership": {"kind": "unique", "placement": "member_or_array"},
+        "parameters": [],
+        "ports": [],
+        "provider": "workspace_npu_source",
+        "provider_implementation_fingerprint": "sha256:ca6c3fdd699cec3a02697f3714e1b5f70df101b28929cb6ddb118b8fa30c9180",
+        "resources": [],
+        "results": []
+      }
+    },
+    {
+      "available": true,
+      "profile": "fast",
+      "target": "native",
+      "record": {
+        "activation_sources": [],
+        "availability": "available",
+        "binding": "workspace_Npu_binding",
+        "binding_schema": "acsim-binding-0.1",
+        "component_schema": "workspace.Npu",
+        "component_schema_fingerprint": "sha256:d4db2ec8813016dce7fc4e03edddbeb45057bbf9d58081c265a27ecc4a7f6968",
+        "construction": {"arguments": [], "kind": "constructor"},
+        "contract_epoch": "0.3",
+        "cpp": {
+          "concept": "gfsim::Component",
+          "entry_points": {
+            "pure": "",
+            "reset": "gfsim::workspace_npu_reset",
+            "validate": "gfsim::workspace_npu_validate",
+            "work": "gfsim::workspace_npu_work",
+            "xfer": "gfsim::workspace_npu_xfer"
+          },
+          "header": "gfsim/npu.h",
+          "symbol": "gfsim::NpuTraceSource",
+          "target": "gfsim"
+        },
+        "cpp_type": "workspace_npu_type",
+        "effect": "stateful",
+        "fingerprint": "sha256:29db918e3fc58e1dcf8bfa1281e6c3f424b0025e78b4e3c28e270126d1db080e",
+        "implementation": "gfsim.NpuTraceSource",
+        "ownership": {"kind": "unique", "placement": "member_or_array"},
+        "parameters": [],
+        "ports": [],
+        "provider": "workspace_npu_source",
+        "provider_implementation_fingerprint": "sha256:ca6c3fdd699cec3a02697f3714e1b5f70df101b28929cb6ddb118b8fa30c9180",
+        "resources": [],
+        "results": []
+      }
+    },
+    {
+      "available": true,
+      "profile": "fast",
+      "target": "unknown-unknown",
+      "record": {
+        "activation_sources": [],
+        "availability": "available",
+        "binding": "workspace_NpuNode_binding",
+        "binding_schema": "acsim-binding-0.1",
+        "component_schema": "workspace.NpuNode",
+        "component_schema_fingerprint": "sha256:3b96b9435f28a5fa08f41dc396618678cede4071171fe56628b11f14071205e3",
+        "construction": {"arguments": [], "kind": "constructor"},
+        "contract_epoch": "0.3",
+        "cpp": {
+          "concept": "gfsim::Component",
+          "entry_points": {
+            "pure": "",
+            "reset": "gfsim::workspace_npu_node_reset",
+            "validate": "gfsim::workspace_npu_node_validate",
+            "work": "gfsim::workspace_npu_node_work",
+            "xfer": "gfsim::workspace_npu_node_xfer"
+          },
+          "header": "gfsim/npu.h",
+          "symbol": "gfsim::NpuNode",
+          "target": "gfsim"
+        },
+        "cpp_type": "workspace_npu_node_type",
+        "effect": "stateful",
+        "fingerprint": "sha256:3222d9417a28be5dc2b1b7566f784d780d0bdfeac7a7877beac5cbfa93484d7c",
+        "implementation": "gfsim.NpuNode",
+        "ownership": {"kind": "unique", "placement": "member_or_array"},
+        "parameters": [],
+        "ports": [],
+        "provider": "workspace_npu_node",
+        "provider_implementation_fingerprint": "sha256:ca6c3fdd699cec3a02697f3714e1b5f70df101b28929cb6ddb118b8fa30c9180",
+        "resources": [],
+        "results": []
+      }
+    },
+    {
+      "available": true,
+      "profile": "fast",
+      "target": "native",
+      "record": {
+        "activation_sources": [],
+        "availability": "available",
+        "binding": "workspace_NpuNode_binding",
+        "binding_schema": "acsim-binding-0.1",
+        "component_schema": "workspace.NpuNode",
+        "component_schema_fingerprint": "sha256:3b96b9435f28a5fa08f41dc396618678cede4071171fe56628b11f14071205e3",
+        "construction": {"arguments": [], "kind": "constructor"},
+        "contract_epoch": "0.3",
+        "cpp": {
+          "concept": "gfsim::Component",
+          "entry_points": {
+            "pure": "",
+            "reset": "gfsim::workspace_npu_node_reset",
+            "validate": "gfsim::workspace_npu_node_validate",
+            "work": "gfsim::workspace_npu_node_work",
+            "xfer": "gfsim::workspace_npu_node_xfer"
+          },
+          "header": "gfsim/npu.h",
+          "symbol": "gfsim::NpuNode",
+          "target": "gfsim"
+        },
+        "cpp_type": "workspace_npu_node_type",
+        "effect": "stateful",
+        "fingerprint": "sha256:3222d9417a28be5dc2b1b7566f784d780d0bdfeac7a7877beac5cbfa93484d7c",
+        "implementation": "gfsim.NpuNode",
+        "ownership": {"kind": "unique", "placement": "member_or_array"},
+        "parameters": [],
+        "ports": [],
+        "provider": "workspace_npu_node",
+        "provider_implementation_fingerprint": "sha256:ca6c3fdd699cec3a02697f3714e1b5f70df101b28929cb6ddb118b8fa30c9180",
+        "resources": [],
+        "results": []
+      }
+    }
+  ],
+  "requests": [
+    {
+      "activation_sources": [],
+      "binding": "workspace_Npu_binding",
+      "binding_schema": "acsim-binding-0.1",
+      "component_schema": "workspace.Npu",
+      "component_schema_fingerprint": "sha256:d4db2ec8813016dce7fc4e03edddbeb45057bbf9d58081c265a27ecc4a7f6968",
+      "contract_epoch": "0.3",
+      "effect": "stateful",
+      "function_type": "() -> ()",
+      "parameters": [],
+      "ports": [],
+      "provider": "workspace_npu_source",
+      "provider_implementation_fingerprint": "sha256:ca6c3fdd699cec3a02697f3714e1b5f70df101b28929cb6ddb118b8fa30c9180",
+      "resolution_key": "@Npu",
+      "resources": [],
+      "results": []
+    },
+    {
+      "activation_sources": [],
+      "binding": "workspace_NpuNode_binding",
+      "binding_schema": "acsim-binding-0.1",
+      "component_schema": "workspace.NpuNode",
+      "component_schema_fingerprint": "sha256:3b96b9435f28a5fa08f41dc396618678cede4071171fe56628b11f14071205e3",
+      "contract_epoch": "0.3",
+      "effect": "stateful",
+      "function_type": "() -> ()",
+      "parameters": [],
+      "ports": [],
+      "provider": "workspace_npu_node",
+      "provider_implementation_fingerprint": "sha256:ca6c3fdd699cec3a02697f3714e1b5f70df101b28929cb6ddb118b8fa30c9180",
+      "resolution_key": "@NpuNode",
+      "resources": [],
+      "results": []
+    }
+  ]
+}

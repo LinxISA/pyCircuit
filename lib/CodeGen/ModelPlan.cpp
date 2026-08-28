@@ -92,8 +92,8 @@ const ModulePlan *findModule(const ModelPlan &plan, llvm::StringRef symbol) {
 bool isTraceSourceBinding(const ModelPlan &plan, const BindingPlan &binding) {
   if (binding.cppSymbol == "gfsim::TraceSource" ||
       llvm::StringRef(binding.cppSymbol).starts_with("gfsim::TraceSource<") ||
-      binding.cppSymbol == "gfsim::Phase5TraceSource" ||
-      binding.cppSymbol == "gfsim::Phase5NpuTraceSource")
+      binding.cppSymbol == "gfsim::ShowcaseTraceSource" ||
+      binding.cppSymbol == "gfsim::NpuTraceSource")
     return true;
   auto schema = std::find_if(plan.types.begin(), plan.types.end(),
                              [&](const TypePlan &type) {

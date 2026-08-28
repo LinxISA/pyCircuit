@@ -597,4 +597,4 @@ builtin.module attributes {ac.contract_epoch = "0.3"} {
     "ac.return"() : () -> ()
   }) : () -> ()
 }
-// RELATION-LIMIT: general mixed interleave analysis exceeds ACIR v0.2 limit 256
+// RELATION-LIMIT: general mixed interleave analysis exceeds ACIR limit 256

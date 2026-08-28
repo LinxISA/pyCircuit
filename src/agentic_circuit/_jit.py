@@ -236,7 +236,7 @@ class JitSpecialization:
 
         repo = Path(__file__).resolve().parents[2]
         bundle_tool = repo / "tools" / "ac-queue-pyc-build.py"
-        lock = repo / "toolchains" / "pyc-v0.2.lock.json"
+        lock = repo / "toolchains" / "pyc.lock.json"
         selected_cxx = Path(compiler or shutil.which("c++") or "")
         selected_verilator = Path(verilator or shutil.which("verilator") or "")
         paths = {

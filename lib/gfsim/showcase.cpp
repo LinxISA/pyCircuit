@@ -642,12 +642,12 @@ void appendObservationValue(std::ostringstream &output,
 
 } // namespace
 
-Phase5TraceSource::Phase5TraceSource(std::string name, ObjectId id,
+ShowcaseTraceSource::ShowcaseTraceSource(std::string name, ObjectId id,
                                      SimObject *parent, uint64_t scenario)
     : SimObject(ObjectKind::TraceSource, std::move(name), id, parent),
       scenario_(scenario) {}
 
-bool Phase5TraceSource::loadDocument(PtoTraceDocument document) {
+bool ShowcaseTraceSource::loadDocument(PtoTraceDocument document) {
   if (loaded_ || pending_ || committed_)
     return false;
   document_ = std::move(document);
@@ -655,7 +655,7 @@ bool Phase5TraceSource::loadDocument(PtoTraceDocument document) {
   return true;
 }
 
-void Phase5TraceSource::doWork(Epoch) {
+void ShowcaseTraceSource::doWork(Epoch) {
   if (pending_ || committed_)
     return;
   if (!loaded_) {
@@ -711,7 +711,7 @@ void Phase5TraceSource::doWork(Epoch) {
   pending_ = true;
 }
 
-void Phase5TraceSource::doXfer(Epoch epoch) {
+void ShowcaseTraceSource::doXfer(Epoch epoch) {
   if (!pending_)
     return;
   pending_ = false;
@@ -719,9 +719,9 @@ void Phase5TraceSource::doXfer(Epoch epoch) {
   lastUpdate_ = epoch;
 }
 
-bool Phase5TraceSource::hasPendingCommit() const { return pending_; }
+bool ShowcaseTraceSource::hasPendingCommit() const { return pending_; }
 
-RuntimeObjectState Phase5TraceSource::runtimeState(Epoch) const {
+RuntimeObjectState ShowcaseTraceSource::runtimeState(Epoch) const {
   return {.quiescent = committed_ && !pending_,
           .runnable = loaded_ && !committed_ && !pending_,
           .pendingCommit = pending_,
@@ -735,7 +735,7 @@ RuntimeObjectState Phase5TraceSource::runtimeState(Epoch) const {
           .traceEof = committed_};
 }
 
-void Phase5TraceSource::collectStatistics(
+void ShowcaseTraceSource::collectStatistics(
     std::vector<StatSnapshot> &out) const {
   if (!committed_)
     return;
@@ -753,7 +753,7 @@ void Phase5TraceSource::collectStatistics(
     append("architectural_" + name, value);
 }
 
-void Phase5TraceSource::reset() {
+void ShowcaseTraceSource::reset() {
   document_ = {};
   result_ = {};
   loaded_ = false;
@@ -763,7 +763,7 @@ void Phase5TraceSource::reset() {
   clearRuntimeFailureCode();
 }
 
-bool Phase5TraceSource::validate() const { return scenario_ < 6; }
+bool ShowcaseTraceSource::validate() const { return scenario_ < 6; }
 
 ShowcaseResult runShowcase(const ShowcasePolicy &policy,
                            ShowcaseWorkOrder order, uint64_t permutationSeed) {

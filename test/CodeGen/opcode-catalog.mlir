@@ -1,5 +1,5 @@
 // RUN: %binary_root/bin/acir-opcode-catalog > %t
-// RUN: diff %source_root/schemas/opcodes-v0.2.json %t
+// RUN: diff %source_root/schemas/opcodes.json %t
 // RUN: %FileCheck %s < %t
 // RUN: %not grep -E '"operation":"ac\.(decode|dispatch|rename|retire)"' %t
 

@@ -58,7 +58,7 @@ LogicalResult ArrayType::verify(function_ref<InFlightDiagnostic()> emitError,
     }
     uint64_t unsignedExtent = static_cast<uint64_t>(extent);
     if (volume > kMaxArrayVolume / unsignedExtent)
-      return emitError() << "array volume exceeds ACSim v0.2 capability "
+      return emitError() << "array volume exceeds ACSim capability "
                          << kMaxArrayVolume;
     volume *= unsignedExtent;
   }

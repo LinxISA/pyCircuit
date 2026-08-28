@@ -36,8 +36,8 @@ types:
 """
 
 FIXTURE_FILES = {
-    "contracts/acir-v0.2.yaml": ACIR_MANIFEST,
-    "contracts/acsim-v0.1.yaml": ACSIM_MANIFEST,
+    "contracts/acir.yaml": ACIR_MANIFEST,
+    "contracts/acsim.yaml": ACSIM_MANIFEST,
     "include/acir/Dialect/ACIR/ACIROps.td": (
         'def ACIR_SystemOp : ACIR_Op<"system", [Symbol]> {\n}\n'
     ),
@@ -136,7 +136,7 @@ class IRCoverageTest(unittest.TestCase):
     def test_manifest_missing_operation_is_reported(self):
         temporary_directory, root = initialize_coverage_fixture(
             overrides={
-                "contracts/acir-v0.2.yaml": ACIR_MANIFEST.replace(
+                "contracts/acir.yaml": ACIR_MANIFEST.replace(
                     "operations:\n  - ac.system\n", "operations: []\n"
                 )
             }
@@ -151,7 +151,7 @@ class IRCoverageTest(unittest.TestCase):
     def test_manifest_extra_operation_needs_source_symbol(self):
         temporary_directory, root = initialize_coverage_fixture(
             overrides={
-                "contracts/acir-v0.2.yaml": ACIR_MANIFEST.replace(
+                "contracts/acir.yaml": ACIR_MANIFEST.replace(
                     "  - ac.system\n", "  - ac.system\n  - ac.ghost\n"
                 )
             }
@@ -166,7 +166,7 @@ class IRCoverageTest(unittest.TestCase):
     def test_stale_epoch_is_rejected(self):
         temporary_directory, root = initialize_coverage_fixture(
             overrides={
-                "contracts/acsim-v0.1.yaml": ACSIM_MANIFEST.replace(
+                "contracts/acsim.yaml": ACSIM_MANIFEST.replace(
                     '"0.3"', '"0.0"'
                 )
             }
@@ -245,7 +245,7 @@ class IRCoverageTest(unittest.TestCase):
     def test_stale_ledger_is_rejected(self):
         temporary_directory, root = initialize_coverage_fixture()
         self.addCleanup(temporary_directory.cleanup)
-        ledger = root / "docs/implementation/spec-coverage.md"
+        ledger = root / "docs/spec/50-verification/ir-coverage.md"
         ledger.write_text(ledger.read_text() + "\nstale edit\n")
         errors = self.check_fixture(root)
         self.assertTrue(any("is stale" in error for error in errors), errors)
@@ -253,7 +253,7 @@ class IRCoverageTest(unittest.TestCase):
     def test_missing_ledger_is_reported(self):
         temporary_directory, root = initialize_coverage_fixture()
         self.addCleanup(temporary_directory.cleanup)
-        (root / "docs/implementation/spec-coverage.md").unlink()
+        (root / "docs/spec/50-verification/ir-coverage.md").unlink()
         errors = self.check_fixture(root)
         self.assertTrue(
             any("missing coverage ledger" in error for error in errors), errors

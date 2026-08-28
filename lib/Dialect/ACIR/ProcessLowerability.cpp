@@ -159,13 +159,13 @@ LogicalResult walkStructuredOperationsIterative(
     WorkItem item = worklist.pop_back_val();
     if (item.depth > limits.maxNestedRegionDepth)
       return emitError(root->getLoc())
-             << "whole-model region nesting exceeds ACIR v0.2 capability "
+             << "whole-model region nesting exceeds ACIR capability "
                 "limit "
              << limits.maxNestedRegionDepth;
     if (nodes == limits.maxNodes ||
         item.operation->getNumOperands() > limits.maxEdges - edges)
       return emitError(root->getLoc())
-             << "whole-model indexed analysis exceeds ACIR v0.2 capability "
+             << "whole-model indexed analysis exceeds ACIR capability "
                 "limits (nodes "
              << limits.maxNodes << ", edges " << limits.maxEdges << ')';
     ++nodes;
@@ -200,7 +200,7 @@ FailureOr<StaticForTripCount> analyzeStaticFor(scf::ForOp op) {
         isIntegerConstant(op.getUpperBound()) &&
         isIntegerConstant(op.getStep()))
       op.emitOpError()
-          << "static scf.for trip count exceeds ACIR v0.2 capability limit "
+          << "static scf.for trip count exceeds ACIR capability limit "
           << kMaxStaticForTrips;
     return failure();
   }
@@ -218,7 +218,7 @@ FailureOr<StaticForTripCount> analyzeStaticFor(scf::ForOp op) {
   if (trips > kMaxStaticForTrips ||
       trips > std::numeric_limits<uint64_t>::max()) {
     op.emitOpError()
-        << "static scf.for trip count exceeds ACIR v0.2 capability limit "
+        << "static scf.for trip count exceeds ACIR capability limit "
         << kMaxStaticForTrips;
     return failure();
   }

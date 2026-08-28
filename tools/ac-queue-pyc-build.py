@@ -133,7 +133,7 @@ def main() -> int:
 
     lock = _read_json(arguments.toolchain_lock)
     metadata = _read_json(arguments.toolchain_metadata)
-    catalog_path = Path(__file__).resolve().parents[1] / "schemas/opcodes-v0.2.json"
+    catalog_path = Path(__file__).resolve().parents[1] / "schemas/opcodes.json"
     catalog = _read_json(catalog_path)
     if metadata.get("git_sha") != lock.get("pycircuit_commit"):
         parser.error("pyCircuit commit does not match toolchain lock")

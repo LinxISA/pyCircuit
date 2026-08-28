@@ -1,4 +1,4 @@
-"""v0.3 serial-Python to Queue/Var ACIR construction."""
+"""serial-Python to Queue/Var ACIR construction."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ from ._static_eval import StaticEnvironment, StaticValue, evaluate_static
 
 
 class QueueFrontendError(ValueError):
-    """A stable rejection from the v0.3 queue frontend."""
+    """A stable rejection from the queue frontend."""
 
 
 @dataclass(frozen=True, slots=True)

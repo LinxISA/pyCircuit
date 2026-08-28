@@ -1,0 +1,63 @@
+{
+  "schema": "agentic-circuit-diagnostic-catalog",
+  "version": "0.1",
+  "contract_epoch": "0.3",
+  "entries": [
+    {
+      "code": "ACBUILD-COMPILE-001",
+      "title": "Generated source compilation failed",
+      "rule": "Every generated translation unit must compile with the recorded C++20 toolchain contract.",
+      "causes": ["The selected compiler or standard-library mode differs from the build request."],
+      "examples": ["A libc++ build was invoked with libstdc++-specific flags."],
+      "repairs": ["Use one consistent compiler, standard library, ABI mode, and contract flag set."]
+    },
+    {
+      "code": "ACIR-PROTOCOL-004",
+      "title": "Interface roles are incompatible",
+      "rule": "Connected endpoints must use complementary roles admitted by the selected protocol.",
+      "causes": ["Two initiators or two targets were connected directly."],
+      "examples": ["A request initiator was bound to another request initiator."],
+      "repairs": ["Bind the endpoint to the complementary protocol role or insert an explicit adapter."]
+    },
+    {
+      "code": "ACLOWER-BINDING-MISSING",
+      "title": "No runtime binding is available",
+      "rule": "Every lowered component requires one exact provider binding at the current contract epoch.",
+      "causes": ["The component is declared but unavailable in the installed provider set."],
+      "examples": ["A declared_unavailable standard-library component was instantiated."],
+      "repairs": ["Install a compatible provider or select an available component implementation."]
+    },
+    {
+      "code": "ACPY-CONFIG-001",
+      "title": "Workspace configuration was not found",
+      "rule": "Workspace commands require one agentic-circuit.toml found explicitly or by upward discovery.",
+      "causes": ["The command ran outside a workspace and no --project path was supplied."],
+      "examples": ["agentic-circuit check was invoked from an unrelated directory."],
+      "repairs": ["Run inside the workspace or pass --project with the exact manifest path."]
+    },
+    {
+      "code": "ACPY-SCHEMA-001",
+      "title": "Schema identity is unknown",
+      "rule": "Discovery commands resolve only exact packaged schema names at contract epoch 0.3.",
+      "causes": ["The requested component, protocol, interface, packet, or diagnostic is not cataloged."],
+      "examples": ["schema component Missing requested a name absent from the standard-library catalog."],
+      "repairs": ["List the selected schema kind and use one of the returned exact identities."]
+    },
+    {
+      "code": "ACRUN-DEADLOCK-001",
+      "title": "Simulation deadlock was detected",
+      "rule": "A nonterminal model must make declared progress within its configured deadlock window.",
+      "causes": ["All activations are blocked and no future event can wake the model."],
+      "examples": ["A cyclic protocol dependency left every queue waiting for input."],
+      "repairs": ["Inspect blocked activations and repair the protocol or resource dependency cycle."]
+    },
+    {
+      "code": "ACTRACE-SCHEMA-001",
+      "title": "Trace input does not match pto-trace@0.1",
+      "rule": "Runtime traces must use the closed pto-trace@0.1 schema and exact contract epoch.",
+      "causes": ["The trace contains an unknown field or a different schema version."],
+      "examples": ["A trace produced for another epoch was supplied to the runtime."],
+      "repairs": ["Regenerate or convert the trace to the exact pto-trace@0.1 contract."]
+    }
+  ]
+}

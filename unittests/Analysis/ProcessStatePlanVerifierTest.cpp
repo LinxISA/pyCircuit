@@ -605,7 +605,7 @@ TEST(ProcessStatePlanLowerabilityTest,
       ac::verifyProcessLowerability(loop->getParentOfType<ac::ProcessOp>())));
   ASSERT_EQ(diagnostics.size(), 1u);
   EXPECT_NE(diagnostics.front().find(
-                "whole-model region nesting exceeds ACIR v0.2 capability "
+                "whole-model region nesting exceeds ACIR capability "
                 "limit 512"),
             std::string::npos);
 }
@@ -958,7 +958,7 @@ TEST(ProcessStatePlanNormalizeFactoryTest,
                                                   "fail:normalize-ac-file"}));
   ASSERT_EQ(run.diagnostics.size(), 1u);
   EXPECT_NE(run.diagnostics.front().find(
-                "whole-model region nesting exceeds ACIR v0.2 capability "
+                "whole-model region nesting exceeds ACIR capability "
                 "limit 512"),
             std::string::npos);
 }
@@ -976,7 +976,7 @@ TEST(ProcessStatePlanNormalizeFactoryTest,
                                                   "fail:normalize-ac-file"}));
   ASSERT_EQ(run.diagnostics.size(), 1u);
   EXPECT_NE(run.diagnostics.front().find(
-                "whole-model region nesting exceeds ACIR v0.2 capability "
+                "whole-model region nesting exceeds ACIR capability "
                 "limit 512"),
             std::string::npos);
 }

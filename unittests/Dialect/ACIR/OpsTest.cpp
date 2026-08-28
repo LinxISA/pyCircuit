@@ -92,7 +92,7 @@ TEST(ACIROpsTest, PublicBuildersConstructEveryTaskFourOperation) {
   EXPECT_TRUE(mlir::isMemoryEffectFree(deserialize.getOperation()));
 }
 
-TEST(ACIROpsTest, V02QueueEffectsAreAttachedToExactSSAQueueHandles) {
+TEST(ACIROpsTest, QueueEffectsAreAttachedToExactSSAQueueHandles) {
   mlir::MLIRContext context;
   context.loadDialect<ACIRDialect>();
   auto module = mlir::parseSourceString<mlir::ModuleOp>(R"mlir(
@@ -292,7 +292,7 @@ TEST(ACIROpsTest, PublicBuildersConstructEveryTaskFiveOperation) {
   EXPECT_TRUE(mlir::succeeded(mlir::verify(module)));
 }
 
-TEST(ACIROpsTest, RegistryContainsExactV02QueueVarOperations) {
+TEST(ACIROpsTest, RegistryContainsExactQueueVarOperations) {
   mlir::MLIRContext context;
   context.loadDialect<ACIRDialect>();
   const std::array<llvm::StringLiteral, 8> names = {
@@ -749,7 +749,7 @@ TEST(ACIROpsTest, UnresolvedRuntimeReferencesDoNotInventEffects) {
   EXPECT_TRUE(effects.empty());
 }
 
-TEST(ACIROpsTest, RuntimeAndV02QueueVarRegistryIsExact) {
+TEST(ACIROpsTest, RuntimeAndQueueVarRegistryIsExact) {
   mlir::MLIRContext context;
   context.loadDialect<ACIRDialect>();
   const std::array<llvm::StringLiteral, 20> names = {
@@ -766,7 +766,7 @@ TEST(ACIROpsTest, RuntimeAndV02QueueVarRegistryIsExact) {
         << name.str();
   EXPECT_FALSE(mlir::OperationName("ac.try_issue", &context).isRegistered());
   EXPECT_FALSE(mlir::OperationName("ac.connect", &context).isRegistered());
-  const std::array<llvm::StringLiteral, 40> v02Names = {
+  const std::array<llvm::StringLiteral, 40> queueVarNames = {
       "ac.transform",
       "ac.transform.yield",
       "ac.firing",
@@ -808,7 +808,7 @@ TEST(ACIROpsTest, RuntimeAndV02QueueVarRegistryIsExact) {
       "ac.expect.yield",
       "ac.var.cmp",
   };
-  for (llvm::StringLiteral name : v02Names)
+  for (llvm::StringLiteral name : queueVarNames)
     EXPECT_TRUE(mlir::OperationName(name, &context).isRegistered())
         << name.str();
   EXPECT_EQ(context.getRegisteredOperationsByDialect("ac").size(), 95u);
@@ -2338,7 +2338,7 @@ TEST(ACIRResourcesTest,
   EXPECT_EQ(forward.second, reverse.second);
   EXPECT_NE(
       forward.second.find(
-          "general mixed interleave analysis exceeds ACIR v0.2 limit 256"),
+          "general mixed interleave analysis exceeds ACIR limit 256"),
       std::string::npos);
 }
 

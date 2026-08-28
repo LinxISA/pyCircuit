@@ -34,7 +34,7 @@ def schema_root() -> Path:
 
 
 def diagnostics_catalog_path() -> Path:
-    return resource_directory("resources") / "diagnostics-v0.2.json"
+    return resource_directory("resources") / "diagnostics.json"
 
 
 def load_json(path: Path) -> dict[str, JsonValue]:
@@ -49,11 +49,11 @@ def standard_library_catalog() -> dict[str, JsonValue]:
 
 
 def opcode_catalog() -> dict[str, JsonValue]:
-    return load_json(schema_root() / "opcodes-v0.2.json")
+    return load_json(schema_root() / "opcodes.json")
 
 
 def block_spec() -> dict[str, JsonValue]:
-    return load_json(schema_root() / "blocks-v0.3.json")
+    return load_json(schema_root() / "blocks.json")
 
 
 def diagnostic_catalog() -> dict[str, JsonValue]:

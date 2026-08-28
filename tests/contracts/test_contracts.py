@@ -94,11 +94,23 @@ def assert_exact_ci_cache_commands(test_case, workflow):
 
 
 class RepositoryContractsTest(unittest.TestCase):
-    def test_v03_high_level_block_spec_is_closed_and_provider_complete(self):
+    def test_release_layout_and_ndf_profile_are_closed(self):
+        for script in ("check-release-layout.py", "check-ndf.py"):
+            with self.subTest(script=script):
+                completed = subprocess.run(
+                    [sys.executable, ROOT / "scripts" / script],
+                    cwd=ROOT,
+                    text=True,
+                    capture_output=True,
+                    check=False,
+                )
+                self.assertEqual(0, completed.returncode, completed.stderr)
+
+    def test_high_level_block_spec_is_closed_and_provider_complete(self):
         from jsonschema import Draft202012Validator
 
         schema = json.loads((ROOT / "schemas/block-spec.schema.json").read_text())
-        catalog = json.loads((ROOT / "schemas/blocks-v0.3.json").read_text())
+        catalog = json.loads((ROOT / "schemas/blocks.json").read_text())
         Draft202012Validator(schema).validate(catalog)
         blocks = catalog["blocks"]
         self.assertEqual(
@@ -137,7 +149,7 @@ class RepositoryContractsTest(unittest.TestCase):
         schema = json.loads(
             (ROOT / "schemas/opcode-catalog.schema.json").read_text()
         )
-        catalog = json.loads((ROOT / "schemas/opcodes-v0.2.json").read_text())
+        catalog = json.loads((ROOT / "schemas/opcodes.json").read_text())
         Draft202012Validator(schema).validate(catalog)
         expected = {
             "ac.barrier",
@@ -191,7 +203,7 @@ class RepositoryContractsTest(unittest.TestCase):
         )
 
     def test_diagnostic_explanation_catalog_is_closed_and_versioned(self):
-        path = ROOT / "resources/diagnostics-v0.2.json"
+        path = ROOT / "resources/diagnostics.json"
         self.assertTrue(path.is_file())
         document = json.loads(path.read_text())
         self.assertEqual(
@@ -784,7 +796,7 @@ class RepositoryContractsTest(unittest.TestCase):
     def test_markdown_local_links_resolve(self):
         broken = []
         link_pattern = re.compile(r"(?<!!)\[[^\]]+\]\(([^)]+)\)")
-        markdown_files = [ROOT / "README.md", *sorted((ROOT / "docs/specs").glob("*.md"))]
+        markdown_files = [ROOT / "README.md", *sorted((ROOT / "docs/spec").glob("*.md"))]
         for path in markdown_files:
             for target in link_pattern.findall(path.read_text()):
                 destination = target.split("#", 1)[0]
@@ -886,7 +898,7 @@ class RepositoryContractsTest(unittest.TestCase):
         self.assertEqual([], offenders, f"placeholder content: {offenders}")
 
     def test_davincioo_reference_snapshot_is_provenance_locked(self):
-        reference = ROOT / "examples/reference/davincioo-gfsim"
+        reference = ROOT / "references/davincioo-gfsim"
         source = json.loads((reference / "SOURCE.json").read_text())
         self.assertEqual(
             "agentic-circuit-reference-source@0.1", source.get("schema")

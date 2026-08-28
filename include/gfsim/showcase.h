@@ -89,14 +89,14 @@ ShowcaseResult runShowcase(const Policy &policy, ShowcaseWorkOrder order,
 /// Stable byte representation used by conformance tests and golden fixtures.
 std::string canonicalShowcaseResult(const ShowcaseResult &result);
 
-/// Private provider component used by checked-in Phase 5 workspaces. It is
+/// Private provider component used by checked-in example workspaces. It is
 /// intentionally absent from the public standard-library catalog.
-class Phase5TraceSource final : public SimObject {
+class ShowcaseTraceSource final : public SimObject {
 public:
-  static constexpr std::string_view contractName = "phase5.Showcase";
+  static constexpr std::string_view contractName = "workspace.Showcase";
   static constexpr ObjectKind componentKind = ObjectKind::TraceSource;
 
-  Phase5TraceSource(std::string name, ObjectId id, SimObject *parent,
+  ShowcaseTraceSource(std::string name, ObjectId id, SimObject *parent,
                     uint64_t scenario);
 
   bool loadDocument(PtoTraceDocument document);

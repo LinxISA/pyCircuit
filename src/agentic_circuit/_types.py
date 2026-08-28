@@ -35,7 +35,7 @@ class Static(Generic[T]):
     """Mark an elaboration-time specialization parameter."""
 
 
-# The v0.3 Queue frontend uses the lower-case spelling to make the
+# The Queue frontend uses the lower-case spelling to make the
 # specialization boundary read like a value category rather than a runtime
 # container.  Keep ``Static`` available for the existing component frontend;
 # both annotations have the same runtime origin.
