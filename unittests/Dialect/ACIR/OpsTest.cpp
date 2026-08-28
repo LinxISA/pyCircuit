@@ -366,6 +366,7 @@ TEST(ACIROpsTest, RegistryContainsExactQueueVarOperations) {
       "ac.var.cmp",
       "ac.var.get",
       "ac.var.mul",
+      "ac.var.popcount",
       "ac.var.sub",
       "ac.var.with",
       "ac.require",
@@ -766,7 +767,7 @@ TEST(ACIROpsTest, RuntimeAndQueueVarRegistryIsExact) {
         << name.str();
   EXPECT_FALSE(mlir::OperationName("ac.try_issue", &context).isRegistered());
   EXPECT_FALSE(mlir::OperationName("ac.connect", &context).isRegistered());
-  const std::array<llvm::StringLiteral, 40> queueVarNames = {
+  const std::array<llvm::StringLiteral, 41> queueVarNames = {
       "ac.transform",
       "ac.transform.yield",
       "ac.firing",
@@ -780,6 +781,7 @@ TEST(ACIROpsTest, RuntimeAndQueueVarRegistryIsExact) {
       "ac.var.add",
       "ac.var.sub",
       "ac.var.mul",
+      "ac.var.popcount",
       "ac.var.get",
       "ac.var.with",
       "ac.scope",
@@ -811,7 +813,7 @@ TEST(ACIROpsTest, RuntimeAndQueueVarRegistryIsExact) {
   for (llvm::StringLiteral name : queueVarNames)
     EXPECT_TRUE(mlir::OperationName(name, &context).isRegistered())
         << name.str();
-  EXPECT_EQ(context.getRegisteredOperationsByDialect("ac").size(), 95u);
+  EXPECT_EQ(context.getRegisteredOperationsByDialect("ac").size(), 96u);
 }
 
 TEST(ACIROpsTest, ProcessLinearLivenessDoesNotRescanBlockPerValue) {

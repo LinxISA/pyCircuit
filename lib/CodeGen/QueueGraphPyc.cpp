@@ -153,8 +153,27 @@ emitTransform(const QueueGraphPlan &plan, const QueueBlockPlan &block,
       auto first = value(expression.operands[0]);
       if (!first)
         return first.takeError();
-      if (expression.kind == "add" || expression.kind == "sub" ||
-          expression.kind == "mul") {
+      if (expression.kind == "popcount") {
+        if (expression.operands.size() != 1)
+          return pycError("popcount expression arity mismatch");
+        auto inputType = valueType(expression.operands[0]);
+        if (!inputType)
+          return inputType.takeError();
+        auto sourceType = pycType(plan, *inputType);
+        auto resultType = pycType(plan, expression.type);
+        if (!sourceType)
+          return sourceType.takeError();
+        if (!resultType)
+          return resultType.takeError();
+        result = newValue();
+        body << "    " << result << " = pyc.popcount " << *first
+             << " {primitive_id = \"dataflow.popcount.v1\", "
+                "implementation_id = \"internal.reference.popcount.v1\", "
+                "qualification_report = "
+                "\"INT-11/smoke/comparison_report.json\"} : "
+             << *sourceType << " -> " << *resultType << "\n";
+      } else if (expression.kind == "add" || expression.kind == "sub" ||
+                 expression.kind == "mul") {
         result = newValue();
         if (expression.operands.size() != 2)
           return pycError("binary transform expression arity mismatch");
@@ -533,10 +552,11 @@ llvm::Expected<std::string> generateQueueGraphPyc(const QueueGraphPlan &plan) {
         return pycError("feedback contract is unsupported");
       feedbackByOutput[block.outputs.front()] = &block;
     } else {
-      return pycError("PYC QueueGraph supports "
-                      "source/transform/broadcast/fork/route/select/"
-                      "merge/barrier/credit/memory_request/dependency/reorder/feedback/"
-                      "observe/sink");
+      return pycError(
+          "PYC QueueGraph supports "
+          "source/transform/broadcast/fork/route/select/"
+          "merge/barrier/credit/memory_request/dependency/reorder/feedback/"
+          "observe/sink");
     }
   }
   if (auto error = verifyQueueGraphPlan(plan))
@@ -968,29 +988,36 @@ llvm::Expected<std::string> generateQueueGraphPyc(const QueueGraphPlan &plan) {
           body << "    " << cursor << " = pyc.reg %clk, %rst, " << enableWire
                << ", " << nextWire << ", " << zeroPointer << " : "
                << pointerType << "\n";
-          std::string falseValue = emitConstant(0, "i1");
-          grants.assign(valids.size(), falseValue);
-          for (size_t start = 0; start < valids.size(); ++start) {
-            std::vector<std::string> caseGrants(valids.size(), falseValue);
-            std::string prior;
-            for (size_t offset = 0; offset < valids.size(); ++offset) {
-              const size_t input = (start + offset) % valids.size();
-              if (offset == 0) {
-                caseGrants[input] = valids[input];
-                prior = valids[input];
-              } else {
-                std::string notPrior = emitNot(prior);
-                caseGrants[input] =
-                    emitBinary("and", valids[input], notPrior, "i1");
-                prior = emitBinary("or", prior, valids[input], "i1");
-              }
-            }
-            std::string startValue = emitConstant(start, pointerType);
-            std::string selectedCase =
-                emitBinary("eq", cursor, startValue, pointerType);
-            for (size_t input = 0; input < valids.size(); ++input)
-              grants[input] =
-                  emitMux(selectedCase, caseGrants[input], grants[input], "i1");
+          std::vector<std::string> reqInputs(valids.rbegin(), valids.rend());
+          std::string req = newValue();
+          std::string reqType = "i" + std::to_string(valids.size());
+          body << "    " << req << " = pyc.concat(";
+          for (auto [index, value] : llvm::enumerate(reqInputs)) {
+            if (index)
+              body << ", ";
+            body << value;
+          }
+          body << ") : ";
+          for (auto [index, value] : llvm::enumerate(reqInputs)) {
+            if (index)
+              body << ", ";
+            body << "i1";
+          }
+          body << " -> " << reqType << "\n";
+          std::string grant = newValue();
+          body << "    " << grant << " = pyc.rr_arbiter " << req << ", "
+               << cursor << " {num_inputs = " << valids.size()
+               << ", primitive_id = \"control.rr_arbiter.v1\", "
+                  "implementation_id = \"internal.reference.rr_arbiter.v1\", "
+                  "qualification_report = "
+                  "\"DF-09/smoke_v072/arbiter_candidates\"} : "
+               << reqType << ", " << pointerType << " -> " << reqType << "\n";
+          grants.reserve(valids.size());
+          for (size_t input = 0; input < valids.size(); ++input) {
+            std::string grantBit = newValue();
+            body << "    " << grantBit << " = pyc.extract " << grant
+                 << " {lsb = " << input << "} : " << reqType << " -> i1\n";
+            grants.push_back(std::move(grantBit));
           }
           mergeStates[merge.name] =
               MergeState{nextWire, enableWire, cursor, any, pointerType};
@@ -1520,10 +1547,10 @@ llvm::Expected<std::string> generateQueueGraphPyc(const QueueGraphPlan &plan) {
       if (block.kind == "memory_request" &&
           block.memoryInstance == instance.name)
         endpoints.push_back(&block);
-    llvm::sort(endpoints, [](const QueueBlockPlan *left,
-                             const QueueBlockPlan *right) {
-      return left->endpointOrdinal < right->endpointOrdinal;
-    });
+    llvm::sort(endpoints,
+               [](const QueueBlockPlan *left, const QueueBlockPlan *right) {
+                 return left->endpointOrdinal < right->endpointOrdinal;
+               });
     if (endpoints.empty())
       return pycError("memory instance has no endpoints");
     const QueuePlan *firstInput =
@@ -1556,9 +1583,9 @@ llvm::Expected<std::string> generateQueueGraphPyc(const QueueGraphPlan &plan) {
       endpointValids.push_back(valid->getValue());
       endpointData.push_back(data->getValue());
       for (size_t policy = 0; policy < 3; ++policy) {
-        auto value = emitTransform(plan, *endpoint, {data->getValue()},
-                                   {input->payloadType}, policy, nextValue,
-                                   body);
+        auto value =
+            emitTransform(plan, *endpoint, {data->getValue()},
+                          {input->payloadType}, policy, nextValue, body);
         if (!value)
           return value.takeError();
         auto yielded = yieldedType(*endpoint, endpoint->yields[policy],
@@ -1581,7 +1608,8 @@ llvm::Expected<std::string> generateQueueGraphPyc(const QueueGraphPlan &plan) {
           writes.push_back(std::move(*value));
         } else {
           if (*width != *dataWidth)
-            return pycError("memory data policy must match instance data width");
+            return pycError(
+                "memory data policy must match instance data width");
           writeData.push_back(std::move(*value));
         }
       }
@@ -1616,10 +1644,9 @@ llvm::Expected<std::string> generateQueueGraphPyc(const QueueGraphPlan &plan) {
       std::string ready = emitBinary("and", idle, noHigher, "i1");
       body << "    pyc.assign " << readyWires[endpoints[index]->inputs.front()]
            << ", " << ready << " : i1\n";
-      grants.push_back(
-          emitBinary("and", endpointValids[index], ready, "i1"));
-      noHigher = emitBinary("and", noHigher,
-                            emitNot(endpointValids[index]), "i1");
+      grants.push_back(emitBinary("and", endpointValids[index], ready, "i1"));
+      noHigher =
+          emitBinary("and", noHigher, emitNot(endpointValids[index]), "i1");
     }
     std::string issue = reduceBalanced("or", grants, "i1");
     auto selectedAddress =
@@ -1630,8 +1657,7 @@ llvm::Expected<std::string> generateQueueGraphPyc(const QueueGraphPlan &plan) {
     auto selectedRequest =
         selectBalanced(grants, endpointData, *requestType).second;
     const bool fullAddressRange =
-        addressWidth < 64 &&
-        instance.entries == (uint64_t{1} << addressWidth);
+        addressWidth < 64 && instance.entries == (uint64_t{1} << addressWidth);
     if (!fullAddressRange) {
       std::string addressLimit = emitConstant(instance.entries, addressType);
       std::string addressSafe =
@@ -1656,9 +1682,9 @@ llvm::Expected<std::string> generateQueueGraphPyc(const QueueGraphPlan &plan) {
     body << "    " << ownerNext << " = pyc.wire : " << ownerType << "\n";
     body << "    " << ownerEnable << " = pyc.wire : i1\n";
     std::string owner = newValue();
-    body << "    " << owner << " = pyc.reg %clk, %rst, " << ownerEnable
-         << ", " << ownerNext << ", " << ownerConstants.front() << " : "
-         << ownerType << "\n";
+    body << "    " << owner << " = pyc.reg %clk, %rst, " << ownerEnable << ", "
+         << ownerNext << ", " << ownerConstants.front() << " : " << ownerType
+         << "\n";
     body << "    pyc.assign " << ownerNext << ", " << selectedOwner << " : "
          << ownerType << "\n";
     body << "    pyc.assign " << ownerEnable << ", " << issue << " : i1\n";
@@ -1670,10 +1696,10 @@ llvm::Expected<std::string> generateQueueGraphPyc(const QueueGraphPlan &plan) {
     std::string zeroRequest = emitConstant(0, *requestType);
     std::string pendingRequest = newValue();
     body << "    " << pendingRequest << " = pyc.reg %clk, %rst, "
-         << requestEnable << ", " << requestNext << ", " << zeroRequest
-         << " : " << *requestType << "\n";
-    body << "    pyc.assign " << requestNext << ", " << selectedRequest
-         << " : " << *requestType << "\n";
+         << requestEnable << ", " << requestNext << ", " << zeroRequest << " : "
+         << *requestType << "\n";
+    body << "    pyc.assign " << requestNext << ", " << selectedRequest << " : "
+         << *requestType << "\n";
     body << "    pyc.assign " << requestEnable << ", " << issue << " : i1\n";
 
     std::string writeValid = emitBinary("and", issue, selectedWrite, "i1");
@@ -1685,15 +1711,14 @@ llvm::Expected<std::string> generateQueueGraphPyc(const QueueGraphPlan &plan) {
     body << "    " << readData << " = pyc.sync_mem %clk, %rst, " << issue
          << ", " << selectedAddress << ", " << writeValid << ", "
          << selectedAddress << ", " << selectedWriteData << ", " << strobe
-         << " {depth = " << instance.entries << ", name = \""
-         << instance.name << "\"} : " << addressType << ", " << *dataType
-         << ", " << strobeType << "\n";
+         << " {depth = " << instance.entries << ", name = \"" << instance.name
+         << "\"} : " << addressType << ", " << *dataType << ", " << strobeType
+         << "\n";
 
     std::string responseMature = busy;
     if (instance.latency > 1) {
-      const unsigned latencyWidth =
-          std::max(1u, static_cast<unsigned>(
-                           std::bit_width(instance.latency - 1)));
+      const unsigned latencyWidth = std::max(
+          1u, static_cast<unsigned>(std::bit_width(instance.latency - 1)));
       const std::string latencyType = "i" + std::to_string(latencyWidth);
       std::string zeroLatency = emitConstant(0, latencyType);
       std::string oneLatency = emitConstant(1, latencyType);
@@ -1701,8 +1726,7 @@ llvm::Expected<std::string> generateQueueGraphPyc(const QueueGraphPlan &plan) {
           emitConstant(instance.latency - 1, latencyType);
       std::string latencyNext = newValue();
       std::string latencyEnable = newValue();
-      body << "    " << latencyNext << " = pyc.wire : " << latencyType
-           << "\n";
+      body << "    " << latencyNext << " = pyc.wire : " << latencyType << "\n";
       body << "    " << latencyEnable << " = pyc.wire : i1\n";
       std::string remainingLatency = newValue();
       body << "    " << remainingLatency << " = pyc.reg %clk, %rst, "
@@ -1712,12 +1736,11 @@ llvm::Expected<std::string> generateQueueGraphPyc(const QueueGraphPlan &plan) {
           emitBinary("eq", remainingLatency, zeroLatency, latencyType);
       std::string latencyActive =
           emitBinary("and", busy, emitNot(latencyIsZero), "i1");
-      std::string decremented = emitBinary(
-          "sub", remainingLatency, oneLatency, latencyType);
-      std::string nextLatency = emitMux(
-          issue, initialLatency, decremented, latencyType);
-      std::string updateLatency =
-          emitBinary("or", issue, latencyActive, "i1");
+      std::string decremented =
+          emitBinary("sub", remainingLatency, oneLatency, latencyType);
+      std::string nextLatency =
+          emitMux(issue, initialLatency, decremented, latencyType);
+      std::string updateLatency = emitBinary("or", issue, latencyActive, "i1");
       body << "    pyc.assign " << latencyNext << ", " << nextLatency << " : "
            << latencyType << "\n";
       body << "    pyc.assign " << latencyEnable << ", " << updateLatency
@@ -1741,16 +1764,15 @@ llvm::Expected<std::string> generateQueueGraphPyc(const QueueGraphPlan &plan) {
       body << "    pyc.assign "
            << memoryResponseData[endpoints[index]->outputs.front()] << ", "
            << *response << " : " << *requestType << "\n";
-      accepted.push_back(emitBinary(
-          "and", responseValid,
-          inputReady[endpoints[index]->outputs.front()], "i1"));
+      accepted.push_back(
+          emitBinary("and", responseValid,
+                     inputReady[endpoints[index]->outputs.front()], "i1"));
     }
     std::string responseAccepted = reduceBalanced("or", accepted, "i1");
-    std::string retained = emitBinary("and", busy, emitNot(responseAccepted),
-                                      "i1");
+    std::string retained =
+        emitBinary("and", busy, emitNot(responseAccepted), "i1");
     std::string nextBusy = emitBinary("or", retained, issue, "i1");
-    std::string updateBusy =
-        emitBinary("or", responseAccepted, issue, "i1");
+    std::string updateBusy = emitBinary("or", responseAccepted, issue, "i1");
     body << "    pyc.assign " << busyNext << ", " << nextBusy << " : i1\n";
     body << "    pyc.assign " << busyEnable << ", " << updateBusy << " : i1\n";
   }

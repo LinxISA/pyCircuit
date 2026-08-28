@@ -34,6 +34,8 @@ decisions, historical evidence, and verification:
   to an immutable Git revision.
 - [`VER-LAYOUT-001`](50-verification/repository-layout.md) binds these rules to
   executable repository checks.
+- [`VER-PYC-VERILOG-001`](50-verification/pyc-verilog-backend.md) records the
+  integrated PYC-to-Verilog bridge and its executable fixtures.
 - [IR coverage ledger](50-verification/ir-coverage.md) is generated from the
   current ACIR/ACSim manifests and lit coverage.
 

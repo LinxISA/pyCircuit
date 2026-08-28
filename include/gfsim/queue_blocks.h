@@ -899,9 +899,9 @@ template <typename T, typename Data, size_t N, typename Address, typename Write,
            std::convertible_to<
                std::invoke_result_t<const Write &, size_t, const T &>, bool> &&
            std::invocable<const WriteData &, size_t, const T &> &&
-           std::convertible_to<std::invoke_result_t<const WriteData &, size_t,
-                                                    const T &>,
-                               Data> &&
+           std::convertible_to<
+               std::invoke_result_t<const WriteData &, size_t, const T &>,
+               Data> &&
            std::invocable<const Response &, size_t, const T &, const Data &> &&
            std::convertible_to<std::invoke_result_t<const Response &, size_t,
                                                     const T &, const Data &>,
@@ -915,14 +915,14 @@ public:
                      std::array<SimQueue<T> *, N> inputs,
                      std::array<SimQueue<T> *, N> outputs, size_t entries,
                      Data init = {}, size_t latency = 1, Address address = {},
-                     Write write = {},
-                     WriteData writeData = {}, Response response = {},
+                     Write write = {}, WriteData writeData = {},
+                     Response response = {},
                      ObservationSink *observations = nullptr)
       : SimObject(componentKind, std::move(name), id, parent, observations),
-        inputs_(inputs), outputs_(outputs), init_(init), storage_(entries, init),
-        latency_(latency), address_(std::move(address)),
-        write_(std::move(write)), writeData_(std::move(writeData)),
-        response_(std::move(response)) {
+        inputs_(inputs), outputs_(outputs), init_(init),
+        storage_(entries, init), latency_(latency),
+        address_(std::move(address)), write_(std::move(write)),
+        writeData_(std::move(writeData)), response_(std::move(response)) {
     if (latency_ == 0)
       throw std::invalid_argument("memory latency must be positive");
   }
@@ -973,8 +973,8 @@ public:
         setRuntimeFailureCode("memory_latency_overflow");
         return;
       }
-      pendingResponse_ = std::invoke(std::as_const(response_), endpoint, *head,
-                                     oldData);
+      pendingResponse_ =
+          std::invoke(std::as_const(response_), endpoint, *head, oldData);
       responseReady_ = Epoch{epoch.time + latency_, 0};
       if (!inputs_[endpoint]->proposePop()) {
         pendingResponse_.reset();
@@ -985,8 +985,8 @@ public:
               std::invoke(std::as_const(write_), endpoint, *head)))
         pendingWrite_ = std::pair<size_t, Data>{
             static_cast<size_t>(address),
-            static_cast<Data>(std::invoke(std::as_const(writeData_), endpoint,
-                                          *head))};
+            static_cast<Data>(
+                std::invoke(std::as_const(writeData_), endpoint, *head))};
       selected_ = endpoint;
       accepting_ = true;
       fired_ = true;
@@ -1027,10 +1027,9 @@ public:
     }
     if (completedEpoch_ && *completedEpoch_ == epoch)
       return false;
-    return std::any_of(inputs_.begin(), inputs_.end(),
-                       [](const SimQueue<T> *queue) {
-                         return queue->canProposePop();
-                       });
+    return std::any_of(
+        inputs_.begin(), inputs_.end(),
+        [](const SimQueue<T> *queue) { return queue->canProposePop(); });
   }
   bool busy() const { return busy_; }
   size_t latency() const { return latency_; }

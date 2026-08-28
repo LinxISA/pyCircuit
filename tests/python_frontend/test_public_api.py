@@ -30,6 +30,7 @@ PUBLIC = {
     "Flow",
     "Endpoint",
     "source",
+    "popcount",
     "memory",
     "sink",
     "observe",
@@ -134,6 +135,7 @@ class PublicApiTest(unittest.TestCase):
             lambda: api.instances(1, 2),
             lambda: api.view(object(), "field"),
             lambda: api.source(int),
+            lambda: api.popcount(object()),
             lambda: api.sink(object()),
             lambda: api.observe(object()),
             lambda: api.expect(

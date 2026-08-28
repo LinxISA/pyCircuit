@@ -44,9 +44,8 @@ int main() {
       return 3;
     oldDataByTag[response.tag] = response.data;
   }
-  if (oldDataByTag[1] != 0 || oldDataByTag[2] != 0 ||
-      oldDataByTag[3] != 41 || oldDataByTag[4] != 91 ||
-      oldDataByTag[5] != 0)
+  if (oldDataByTag[1] != 0 || oldDataByTag[2] != 0 || oldDataByTag[3] != 41 ||
+      oldDataByTag[4] != 91 || oldDataByTag[5] != 0)
     return 4;
 
   std::cout << "cycles=" << cycles << " bank0=" << oldDataByTag[3]

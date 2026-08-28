@@ -145,6 +145,7 @@ install(
 install(FILES cmake/modules/AddACIR.cmake DESTINATION lib/cmake/AgenticCircuit/modules)
 install(DIRECTORY include/acir DESTINATION include)
 install(DIRECTORY include/gfsim DESTINATION include)
+install(DIRECTORY resources/pyc_runtime DESTINATION share/AgenticCircuit)
 install(
   DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/include/acir"
   DESTINATION include
@@ -192,5 +193,15 @@ if(BUILD_TESTING)
     WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
     TIMEOUT 60
     LABELS "e2e;davincioo"
+  )
+  add_test(
+    NAME PycVerilogBackendTests
+    COMMAND "${Python3_EXECUTABLE}" -m unittest
+      tests.tools.test_pyc_verilog_backend -v
+  )
+  set_tests_properties(PycVerilogBackendTests PROPERTIES
+    WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+    TIMEOUT 30
+    LABELS "pyc;verilog"
   )
 endif()

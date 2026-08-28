@@ -11,3 +11,11 @@ add_subdirectory(acir-queue-cxxgen)
 add_subdirectory(acir-queue-plan)
 add_subdirectory(acir-queue-pycgen)
 add_subdirectory(acir-opt)
+
+# The PYC-compatible Verilog bridge is intentionally a Python entrypoint: it
+# invokes the in-tree ACIR→PYC generator and lowers the canonical textual PYC
+# contract to a self-contained RTL artifact.
+install(PROGRAMS
+  "${CMAKE_CURRENT_SOURCE_DIR}/acir-queue-veriloggen.py"
+  DESTINATION bin
+)
