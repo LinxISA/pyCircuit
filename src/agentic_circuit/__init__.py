@@ -65,6 +65,7 @@ __all__ = (
     "Flow",
     "Endpoint",
     "source",
+    "popcount",
     "memory",
     "sink",
     "observe",
@@ -116,6 +117,10 @@ def view(value: object, *selectors: object) -> Never:
 
 def source(payload: object, *, depth: int = 1, latency: int = 1) -> Never:
     return _not_implemented("source")
+
+
+def popcount(value: object) -> Never:
+    return _not_implemented("popcount")
 
 
 def memory(

@@ -363,14 +363,11 @@ TEST(QueueGraphPlanTest, EmitsOldDataMemoryForBothBackends) {
                  {"input1", requestType.str(), "/", 4, 1},
                  {"output0", requestType.str(), "/", 4, 1},
                  {"output1", requestType.str(), "/", 4, 1}};
-  plan.blocks.push_back(
-      {"source", "input0", "/", {}, {"input0"}, {4}, {1}});
-  plan.blocks.push_back(
-      {"source", "input1", "/", {}, {"input1"}, {4}, {1}});
-  plan.memoryInstances.push_back(
-      {"sram", "i16", 15, 0, 3, "memory/sram", "/"});
+  plan.blocks.push_back({"source", "input0", "/", {}, {"input0"}, {4}, {1}});
+  plan.blocks.push_back({"source", "input1", "/", {}, {"input1"}, {4}, {1}});
+  plan.memoryInstances.push_back({"sram", "i16", 15, 0, 3, "memory/sram", "/"});
   QueueBlockPlan memory{"memory_request", "output0", "/", {"input0"},
-                        {"output0"}, {4},      {1}};
+                        {"output0"},      {4},       {1}};
   memory.expressions = {
       {"v0", "get", "i4", {"item"}, "address", "", ""},
       {"v1", "get", "i1", {"item"}, "write", "", ""},
@@ -398,7 +395,8 @@ TEST(QueueGraphPlanTest, EmitsOldDataMemoryForBothBackends) {
   EXPECT_NE(cpp->find("gfsim::QueueMemoryArbiter<MemoryRequest, std::uint16_t"),
             std::string::npos);
   EXPECT_NE(cpp->find("result.data = old_data"), std::string::npos);
-  EXPECT_NE(cpp->find("std::array<gfsim::SimQueue<MemoryRequest> *, 2>{&input0_, &input1_}"),
+  EXPECT_NE(cpp->find("std::array<gfsim::SimQueue<MemoryRequest> *, "
+                      "2>{&input0_, &input1_}"),
             std::string::npos);
 
   auto pyc = generateQueueGraphPyc(plan);
@@ -440,12 +438,15 @@ TEST(QueueGraphPlanTest, EmitsQueuePredicateAsPycComparison) {
     auto pyc = generateQueueGraphPyc(*plan);
     ASSERT_TRUE(bool(pyc)) << llvm::toString(pyc.takeError());
     EXPECT_NE(pyc->find(testCase.opcode.str()), std::string::npos);
+    EXPECT_NE(pyc->find("pyc.rr_arbiter"), std::string::npos);
     size_t notCount = 0;
     for (size_t offset = 0;
          (offset = pyc->find("pyc.not", offset)) != std::string::npos;
          offset += 7)
       ++notCount;
-    EXPECT_EQ(notCount, testCase.negated ? 3u : 2u);
+    // Round-robin selection is now delegated to the qualified PYC arbiter
+    // primitive rather than expanded into per-cursor pyc.not/pyc.mux logic.
+    EXPECT_EQ(notCount, testCase.negated ? 1u : 0u);
   }
 }
 

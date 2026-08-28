@@ -366,6 +366,7 @@ TEST(ACIROpsTest, RegistryContainsExactV02QueueVarOperations) {
       "ac.var.cmp",
       "ac.var.get",
       "ac.var.mul",
+      "ac.var.popcount",
       "ac.var.sub",
       "ac.var.with",
       "ac.require",
@@ -749,7 +750,7 @@ TEST(ACIROpsTest, UnresolvedRuntimeReferencesDoNotInventEffects) {
   EXPECT_TRUE(effects.empty());
 }
 
-TEST(ACIROpsTest, RuntimeAndV02QueueVarRegistryIsExact) {
+TEST(ACIROpsTest, RuntimeAndV03QueueVarRegistryIsExact) {
   mlir::MLIRContext context;
   context.loadDialect<ACIRDialect>();
   const std::array<llvm::StringLiteral, 20> names = {
@@ -766,7 +767,7 @@ TEST(ACIROpsTest, RuntimeAndV02QueueVarRegistryIsExact) {
         << name.str();
   EXPECT_FALSE(mlir::OperationName("ac.try_issue", &context).isRegistered());
   EXPECT_FALSE(mlir::OperationName("ac.connect", &context).isRegistered());
-  const std::array<llvm::StringLiteral, 40> v02Names = {
+  const std::array<llvm::StringLiteral, 41> v03Names = {
       "ac.transform",
       "ac.transform.yield",
       "ac.firing",
@@ -780,6 +781,7 @@ TEST(ACIROpsTest, RuntimeAndV02QueueVarRegistryIsExact) {
       "ac.var.add",
       "ac.var.sub",
       "ac.var.mul",
+      "ac.var.popcount",
       "ac.var.get",
       "ac.var.with",
       "ac.scope",
@@ -808,10 +810,10 @@ TEST(ACIROpsTest, RuntimeAndV02QueueVarRegistryIsExact) {
       "ac.expect.yield",
       "ac.var.cmp",
   };
-  for (llvm::StringLiteral name : v02Names)
+  for (llvm::StringLiteral name : v03Names)
     EXPECT_TRUE(mlir::OperationName(name, &context).isRegistered())
         << name.str();
-  EXPECT_EQ(context.getRegisteredOperationsByDialect("ac").size(), 95u);
+  EXPECT_EQ(context.getRegisteredOperationsByDialect("ac").size(), 96u);
 }
 
 TEST(ACIROpsTest, ProcessLinearLivenessDoesNotRescanBlockPerValue) {

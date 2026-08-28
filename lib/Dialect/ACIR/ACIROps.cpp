@@ -1107,6 +1107,25 @@ LogicalResult VarMulOp::verify() {
   return verifyVarBinary(*this, getLhs(), getRhs(), getResult());
 }
 
+LogicalResult VarPopcountOp::verify() {
+  auto input = cast<VarType>(getIn().getType());
+  auto result = cast<VarType>(getResult().getType());
+  auto inputInt = dyn_cast<IntegerType>(input.getElementType());
+  auto resultInt = dyn_cast<IntegerType>(result.getElementType());
+  if (!inputInt || !resultInt)
+    return emitOpError("input and result payloads must be integer types");
+  if (inputInt.getWidth() == 0 || inputInt.getWidth() > 64)
+    return emitOpError("input width must be in [1, 64]");
+
+  unsigned required = 0;
+  for (unsigned width = inputInt.getWidth(); width != 0; width >>= 1)
+    ++required;
+  if (resultInt.getWidth() != required)
+    return emitOpError()
+           << "result width must be ceil(log2(input_width + 1)) = " << required;
+  return success();
+}
+
 LogicalResult VarCmpOp::verify() {
   if (getLhs().getType() != getRhs().getType())
     return emitOpError("operands must have the same Var type");
@@ -1204,7 +1223,8 @@ LogicalResult MemoryInstanceOp::verify() {
       ownerExists |= path == getOwner();
     }
     if (auto other = dyn_cast<MemoryInstanceOp>(operation))
-      duplicateStableId |= other != *this && other.getStableId() == getStableId();
+      duplicateStableId |=
+          other != *this && other.getStableId() == getStableId();
   });
   if (!ownerExists)
     return emitOpError("owner does not name a declared scope path");
@@ -1212,8 +1232,9 @@ LogicalResult MemoryInstanceOp::verify() {
     return emitOpError("stable_id must be unique");
   unsigned requests = 0;
   root->walk([&](MemoryRequestOp request) {
-    auto resolved = dyn_cast_or_null<MemoryInstanceOp>(
-        SymbolTable::lookupNearestSymbolFrom(request, request.getInstanceAttr()));
+    auto resolved =
+        dyn_cast_or_null<MemoryInstanceOp>(SymbolTable::lookupNearestSymbolFrom(
+            request, request.getInstanceAttr()));
     if (resolved == *this)
       ++requests;
   });
@@ -1262,7 +1283,8 @@ LogicalResult MemoryRequestOp::verify() {
     return emitOpError() << "unknown result_field '" << getResultField() << "'";
   Type dataType = fieldType(declaration, *fieldIndex);
   if (dataType != instance.getDataType())
-    return emitOpError("result_field type must match memory instance data type");
+    return emitOpError(
+        "result_field type must match memory instance data type");
   auto dataInteger = dyn_cast<IntegerType>(dataType);
   if (!dataInteger || dataInteger.getWidth() > 64)
     return emitOpError(
@@ -1317,8 +1339,9 @@ LogicalResult MemoryRequestOp::verify() {
   uint64_t maximumOrdinal = 0;
   unsigned endpointCount = 0;
   WalkResult endpointResult = root->walk([&](MemoryRequestOp request) {
-    auto resolved = dyn_cast_or_null<MemoryInstanceOp>(
-        SymbolTable::lookupNearestSymbolFrom(request, request.getInstanceAttr()));
+    auto resolved =
+        dyn_cast_or_null<MemoryInstanceOp>(SymbolTable::lookupNearestSymbolFrom(
+            request, request.getInstanceAttr()));
     if (resolved != instance)
       return WalkResult::advance();
     ++endpointCount;
@@ -1329,14 +1352,17 @@ LogicalResult MemoryRequestOp::verify() {
     }
     auto path = request->getAttrOfType<StringAttr>("ac.endpoint_path");
     if (!path || !endpointPaths.insert(path.getValue()).second) {
-      request.emitOpError("duplicate or missing endpoint path for memory instance");
+      request.emitOpError(
+          "duplicate or missing endpoint path for memory instance");
       return WalkResult::interrupt();
     }
-    Type candidate = cast<QueueType>(request.getInput().getType()).getElementType();
+    Type candidate =
+        cast<QueueType>(request.getInput().getType()).getElementType();
     if (!payloadType)
       payloadType = candidate;
     else if (payloadType != candidate) {
-      request.emitOpError("all endpoints of one memory must use one payload type");
+      request.emitOpError(
+          "all endpoints of one memory must use one payload type");
       return WalkResult::interrupt();
     }
     return WalkResult::advance();

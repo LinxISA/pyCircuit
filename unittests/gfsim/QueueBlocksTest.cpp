@@ -536,7 +536,8 @@ TEST(QueueBlocksTest, SharedMemoryUsesPriorityAndBlocksUntilResponseAccepted) {
   EXPECT_EQ(input1.committedSize(), 0u);
 }
 
-TEST(QueueBlocksTest, SharedMemoryLatencyDelaysResponseAndBackpressuresRequests) {
+TEST(QueueBlocksTest,
+     SharedMemoryLatencyDelaysResponseAndBackpressuresRequests) {
   SimQueue<MemoryRequest> input("input", 1, nullptr, 2);
   SimQueue<MemoryRequest> output("output", 2, nullptr, 1);
   QueueMemoryArbiter<MemoryRequest, uint16_t, 1, SharedMemoryAddress,
@@ -583,8 +584,8 @@ TEST(QueueBlocksTest, SharedMemoryRejectsZeroLatency) {
   SimQueue<MemoryRequest> input("input", 1, nullptr, 1);
   SimQueue<MemoryRequest> output("output", 2, nullptr, 1);
   EXPECT_THROW((QueueMemoryArbiter<MemoryRequest, uint16_t, 1,
-                                  SharedMemoryAddress, SharedMemoryWrite,
-                                  SharedMemoryWriteData, SharedMemoryResponse>(
+                                   SharedMemoryAddress, SharedMemoryWrite,
+                                   SharedMemoryWriteData, SharedMemoryResponse>(
                    "memory", 3, nullptr, {&input}, {&output}, 16, 0, 0)),
                std::invalid_argument);
 }

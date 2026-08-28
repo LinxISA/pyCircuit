@@ -17,14 +17,14 @@ EXPECTED_COMPILE_TREE = (
     "include/generated/dispatch.h",
     "include/generated/model.h",
     "include/generated/modules/top_s289ddf7a6fa5af5e.h",
-    "include/generated/processes/workload_sa40b3db3a80b0861.h",
+    "include/generated/processes/workload_se1632550834a7396.h",
     "input/model.ac.mlir",
     "input/model.acpy.json",
     "model.acsim.mlir",
     "src/generated/main.cpp",
     "src/generated/model.cpp",
     "src/generated/modules/top_s289ddf7a6fa5af5e.cpp",
-    "src/generated/processes/workload_sa40b3db3a80b0861.cpp",
+    "src/generated/processes/workload_se1632550834a7396.cpp",
 )
 
 
