@@ -6,4 +6,4 @@
 *.jpeg binary
 *.gif binary
 *.pdf binary
-examples/reference/davincioo-gfsim/upstream/** whitespace=-trailing-space
+references/davincioo-gfsim/upstream/** whitespace=-trailing-space
