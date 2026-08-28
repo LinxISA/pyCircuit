@@ -137,6 +137,7 @@ def build_parser() -> argparse.ArgumentParser:
     schema.add_argument(
         "kind",
         choices=(
+            "block",
             "component",
             "opcode",
             "protocol",
@@ -151,9 +152,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     check = commands.add_parser("check", allow_abbrev=False)
     check.add_argument("architecture", nargs="?")
-    check.add_argument(
-        "--stop-after", choices=("acpy-verify",), action=_OnceValue
-    )
+    check.add_argument("--stop-after", choices=("acpy-verify",), action=_OnceValue)
     _add_workspace_options(check, jobs=True)
     _add_output_options(check)
 
@@ -226,9 +225,7 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     inspect.add_argument("--path", action=_OnceValue)
-    inspect.add_argument(
-        "--format", choices=("json", "dot", "text"), action=_OnceValue
-    )
+    inspect.add_argument("--format", choices=("json", "dot", "text"), action=_OnceValue)
     _add_workspace_options(inspect)
     _add_output_options(inspect)
 

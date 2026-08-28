@@ -19,6 +19,7 @@ EXACT_CONTRACT_IDENTITIES: dict[str, str] = {
     "cli": "agentic-circuit-cli@0.1",
     "component_schema": "agentic-circuit-component@0.1",
     "opcode_catalog": "agentic-circuit-opcode-catalog@0.2",
+    "block_spec": "agentic-circuit-block-spec@0.3",
     "cxx_source_contract": "gfsim-cxx20@0.1",
     "pto_trace": "pto-trace@0.1",
     "diagnostic": "agentic-circuit-diagnostic@0.1",
@@ -33,7 +34,7 @@ def schema_root() -> Path:
 
 
 def diagnostics_catalog_path() -> Path:
-    return resource_directory("resources") / "diagnostics-v0.2.json"
+    return resource_directory("resources") / "diagnostics.json"
 
 
 def load_json(path: Path) -> dict[str, JsonValue]:
@@ -48,7 +49,11 @@ def standard_library_catalog() -> dict[str, JsonValue]:
 
 
 def opcode_catalog() -> dict[str, JsonValue]:
-    return load_json(schema_root() / "opcodes-v0.2.json")
+    return load_json(schema_root() / "opcodes.json")
+
+
+def block_spec() -> dict[str, JsonValue]:
+    return load_json(schema_root() / "blocks.json")
 
 
 def diagnostic_catalog() -> dict[str, JsonValue]:
@@ -79,7 +84,9 @@ def _synthetic_fingerprint(kind: str, name: str) -> str:
 
 
 def _base_items(
-    catalog: dict[str, JsonValue], opcodes: dict[str, JsonValue]
+    catalog: dict[str, JsonValue],
+    opcodes: dict[str, JsonValue],
+    blocks: dict[str, JsonValue],
 ) -> list[dict[str, JsonValue]]:
     entries = catalog.get("entries")
     if type(entries) is not list:
@@ -130,6 +137,21 @@ def _base_items(
                 "implementation_fingerprint": None,
             }
         )
+    block_entries = blocks.get("blocks")
+    if type(block_entries) is not list:
+        raise ValueError("high-level BlockSpec entries are invalid")
+    for entry in block_entries:
+        if type(entry) is not dict or type(entry.get("operation")) is not str:
+            raise ValueError("high-level BlockSpec entry is invalid")
+        items.append(
+            {
+                "kind": "block",
+                "name": entry["operation"],
+                "availability": "available",
+                "schema_fingerprint": sha256_bytes(canonical_json_bytes(entry)),
+                "implementation_fingerprint": None,
+            }
+        )
     for profile in ("custom", "fast", "validated"):
         items.append(
             {
@@ -145,9 +167,7 @@ def _base_items(
             "kind": "interface",
             "name": "ac.Stream",
             "availability": "available",
-            "schema_fingerprint": _synthetic_fingerprint(
-                "interface", "ac.Stream"
-            ),
+            "schema_fingerprint": _synthetic_fingerprint("interface", "ac.Stream"),
             "implementation_fingerprint": None,
         }
     )
@@ -171,11 +191,10 @@ def capability_document(
 ) -> CapabilityDocument:
     catalog = standard_library_catalog()
     opcodes = opcode_catalog()
+    blocks = block_spec()
     native = native or native_capabilities()
-    items = _base_items(catalog, opcodes)
-    native_items = {
-        (item.get("kind"), item.get("name")): item for item in native.items
-    }
+    items = _base_items(catalog, opcodes, blocks)
+    native_items = {(item.get("kind"), item.get("name")): item for item in native.items}
     for item in items:
         override = native_items.get((item["kind"], item["name"]))
         if override is not None:

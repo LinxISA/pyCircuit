@@ -1,7 +1,7 @@
 """Strict DavinciOO JSONL to canonical PTO trace conversion.
 
 This module is repository tooling, not part of the installed public package.
-The accepted source shape is pinned by the Phase 5 design document.
+The accepted source shape is pinned by the workspace design document.
 """
 
 from __future__ import annotations

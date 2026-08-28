@@ -338,8 +338,10 @@ llvm::Expected<std::string> generateQueueGraphCpp(const QueueGraphPlan &plan) {
     memoryIds[instance.name] = nextId++;
 
   std::ostringstream output;
-  output << "// Generated from frozen ACIR QueueGraph plan; do not edit.\n"
-            "#include \"gfsim/dispatch.h\"\n"
+  output << "// Generated from frozen ACIR QueueGraph plan; do not edit.\n";
+  if (!plan.specializationFingerprint.empty())
+    output << "// Specialization: " << plan.specializationFingerprint << "\n";
+  output << "#include \"gfsim/dispatch.h\"\n"
             "#include \"gfsim/object.h\"\n"
             "#include \"gfsim/queue.h\"\n"
             "#include \"gfsim/queue_blocks.h\"\n\n"
@@ -581,10 +583,11 @@ llvm::Expected<std::string> generateQueueGraphCpp(const QueueGraphPlan &plan) {
       return type.takeError();
     if (!parent)
       return parent.takeError();
-    appendInitializer(
-        initializers, queueMembers[queue.name], "(\"", queue.name, "\", ",
-        queueIds[queue.name], ", ", *parent, ", ", queue.depth,
-        ", std::numeric_limits<size_t>::max(), nullptr, ", queue.latency, ")");
+    appendInitializer(initializers, queueMembers[queue.name], "(\"", queue.name,
+                      "\", ", queueIds[queue.name], ", ", *parent, ", ",
+                      queue.depth,
+                      ", std::numeric_limits<size_t>::max(), nullptr, ",
+                      queue.latency, ", ", queue.rate, ")");
   }
   for (auto [index, block] : llvm::enumerate(runtimeBlocks)) {
     auto state = feedbackStateIds.find(index);
@@ -928,8 +931,8 @@ llvm::Expected<std::string> generateQueueGraphCpp(const QueueGraphPlan &plan) {
         if (!resultType)
           return resultType.takeError();
         output << "  gfsim::QueueTransform<" << *inputType << ", "
-               << *resultType << ", block_" << index << "_policy> block_"
-               << index << "_;\n";
+               << *resultType << ", block_" << index << "_policy, "
+               << result->rate << "> block_" << index << "_;\n";
       } else {
         output << "  gfsim::QueueAtomicTransform<block_" << index
                << "_policy, std::tuple<";

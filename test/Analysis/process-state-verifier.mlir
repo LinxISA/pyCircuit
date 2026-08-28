@@ -83,7 +83,7 @@ builtin.module attributes {ac.contract_epoch = "0.3"} {
     ac.return
   }
 }
-// TRIP: static scf.for trip count exceeds ACIR v0.2 capability limit 1048576
+// TRIP: static scf.for trip count exceeds ACIR capability limit 1048576
 
 //--- cyclic-cf.mlir
 builtin.module attributes {ac.contract_epoch = "0.3"} {

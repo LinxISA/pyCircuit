@@ -1564,13 +1564,12 @@ void NpuExecutionPipeline::reset() {
   clearRuntimeFailureCode();
 }
 
-Phase5NpuTraceSource::Phase5NpuTraceSource(std::string name, ObjectId id,
-                                           SimObject *parent,
-                                           ObservationSink *observations)
+NpuTraceSource::NpuTraceSource(std::string name, ObjectId id, SimObject *parent,
+                               ObservationSink *observations)
     : SimObject(ObjectKind::TraceSource, std::move(name), id, parent,
                 observations) {}
 
-bool Phase5NpuTraceSource::loadDocument(PtoTraceDocument document) {
+bool NpuTraceSource::loadDocument(PtoTraceDocument document) {
   if (loaded_ || pending_ || committed_)
     return false;
   document_ = std::move(document);
@@ -1578,7 +1577,7 @@ bool Phase5NpuTraceSource::loadDocument(PtoTraceDocument document) {
   return true;
 }
 
-void Phase5NpuTraceSource::doWork(Epoch) {
+void NpuTraceSource::doWork(Epoch) {
   if (pending_ || committed_)
     return;
   if (!loaded_) {
@@ -1727,7 +1726,7 @@ void Phase5NpuTraceSource::doWork(Epoch) {
   pending_ = true;
 }
 
-void Phase5NpuTraceSource::doXfer(Epoch epoch) {
+void NpuTraceSource::doXfer(Epoch epoch) {
   if (!pending_)
     return;
   pending_ = false;
@@ -1735,9 +1734,9 @@ void Phase5NpuTraceSource::doXfer(Epoch epoch) {
   lastUpdate_ = epoch;
 }
 
-bool Phase5NpuTraceSource::hasPendingCommit() const { return pending_; }
+bool NpuTraceSource::hasPendingCommit() const { return pending_; }
 
-RuntimeObjectState Phase5NpuTraceSource::runtimeState(Epoch) const {
+RuntimeObjectState NpuTraceSource::runtimeState(Epoch) const {
   return {.quiescent = committed_ && !pending_,
           .runnable = loaded_ && !committed_ && !pending_,
           .pendingCommit = pending_,
@@ -1751,8 +1750,7 @@ RuntimeObjectState Phase5NpuTraceSource::runtimeState(Epoch) const {
           .traceEof = committed_};
 }
 
-void Phase5NpuTraceSource::collectStatistics(
-    std::vector<StatSnapshot> &out) const {
+void NpuTraceSource::collectStatistics(std::vector<StatSnapshot> &out) const {
   if (!committed_)
     return;
   auto append = [&](std::string name, uint64_t value) {
@@ -1768,7 +1766,7 @@ void Phase5NpuTraceSource::collectStatistics(
   append("architectural_digest", result_.digest);
 }
 
-void Phase5NpuTraceSource::reset() {
+void NpuTraceSource::reset() {
   document_ = {};
   result_ = {};
   eventCount_ = 0;
@@ -1779,6 +1777,6 @@ void Phase5NpuTraceSource::reset() {
   clearRuntimeFailureCode();
 }
 
-bool Phase5NpuTraceSource::validate() const { return true; }
+bool NpuTraceSource::validate() const { return true; }
 
 } // namespace gfsim

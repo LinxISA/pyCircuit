@@ -536,7 +536,7 @@ detail::validatePureProcessCallGraph(ModuleOp model,
     }
   }
   if (symbols.size() > callLimits.maxFunctions) {
-    model.emitError() << "pure func.call analysis exceeds ACIR v0.2 function "
+    model.emitError() << "pure func.call analysis exceeds ACIR function "
                          "limit "
                       << callLimits.maxFunctions;
     return failure();
@@ -598,7 +598,7 @@ detail::validatePureProcessCallGraph(ModuleOp model,
         }
         if (stack.size() > callLimits.maxDepth) {
           frame.origin->emitOpError()
-              << "pure func.call analysis exceeds ACIR v0.2 depth limit "
+              << "pure func.call analysis exceeds ACIR depth limit "
               << callLimits.maxDepth;
           return failure();
         }
@@ -622,9 +622,8 @@ detail::validatePureProcessCallGraph(ModuleOp model,
       }
       func::CallOp call = calls[frame.nextCall++];
       if (edges == callLimits.maxEdges) {
-        call.emitOpError()
-            << "pure func.call analysis exceeds ACIR v0.2 edge limit "
-            << callLimits.maxEdges;
+        call.emitOpError() << "pure func.call analysis exceeds ACIR edge limit "
+                           << callLimits.maxEdges;
         return failure();
       }
       ++edges;
@@ -788,7 +787,7 @@ LogicalResult ModelAnalysis::verifyZeroDelayDependencies() {
     }
     if (nodes.size() > kMaxModelAnalysisNodes)
       return module.emitOpError()
-             << "zero-delay analysis exceeds ACIR v0.2 node limit "
+             << "zero-delay analysis exceeds ACIR node limit "
              << kMaxModelAnalysisNodes;
     llvm::sort(nodes, [](const Node &left, const Node &right) {
       return left.label < right.label;
@@ -807,7 +806,7 @@ LogicalResult ModelAnalysis::verifyZeroDelayDependencies() {
         edges[found->second].push_back(ordinal);
         if (++edgeCount > kMaxModelAnalysisEdges)
           return module.emitOpError()
-                 << "zero-delay analysis exceeds ACIR v0.2 edge limit "
+                 << "zero-delay analysis exceeds ACIR edge limit "
                  << kMaxModelAnalysisEdges;
       }
     }

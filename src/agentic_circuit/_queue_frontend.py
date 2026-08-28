@@ -1,15 +1,18 @@
-"""v0.3 serial-Python to Queue/Var ACIR construction."""
+"""serial-Python to Queue/Var ACIR construction."""
 
 from __future__ import annotations
 
 import ast
 import copy
 import json
+from collections.abc import Mapping
 from dataclasses import dataclass
+
+from ._static_eval import StaticEnvironment, StaticValue, evaluate_static
 
 
 class QueueFrontendError(ValueError):
-    """A stable rejection from the v0.3 queue frontend."""
+    """A stable rejection from the queue frontend."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -44,6 +47,8 @@ class QueueBinding:
     select_output: bool = False
     firing_effect: bool = False
     atomic_group: int | None = None
+    provider: str = "transform"
+    rate: int = 1
 
 
 @dataclass(frozen=True, slots=True)
@@ -156,6 +161,7 @@ class DependencyBinding:
     latency: int
     scope: tuple[str, ...]
     order: int
+    provider: str = "dependency"
 
 
 @dataclass(frozen=True, slots=True)
@@ -169,6 +175,7 @@ class CreditBinding:
     latency: int
     scope: tuple[str, ...]
     order: int
+    provider: str = "credit"
 
 
 @dataclass(frozen=True, slots=True)
@@ -221,6 +228,24 @@ class MemoryRequestBinding:
 
 
 @dataclass(frozen=True, slots=True)
+class MemoryBinding:
+    input_name: str
+    output_name: str
+    argument: str
+    address: ast.expr
+    write: ast.expr
+    data: ast.expr
+    data_type: str
+    entries: int
+    init: int
+    result_field: str
+    depth: int
+    latency: int
+    scope: tuple[str, ...]
+    order: int
+
+
+@dataclass(frozen=True, slots=True)
 class StaticMemoryArrayBinding:
     name: str
     members: tuple[str, ...]
@@ -244,6 +269,7 @@ class SelectedMemoryBinding:
     latency: int
     scope: tuple[str, ...]
     order: int
+    provider: str = "memory"
 
 
 @dataclass(frozen=True, slots=True)
@@ -293,11 +319,13 @@ class QueueProgram:
     selects: tuple[SelectBinding, ...]
     memory_instances: tuple[MemoryInstanceBinding, ...]
     memory_requests: tuple[MemoryRequestBinding, ...]
+    memories: tuple[MemoryBinding, ...]
     atomics: tuple[AtomicBinding, ...]
     collections: tuple[CollectionBinding, ...]
     observations: tuple[ObservationBinding, ...]
     expectations: tuple[ExpectBinding, ...]
     sinks: tuple[SinkBinding, ...]
+    specialization_fingerprint: str | None = None
 
 
 def _decorator_name(node: ast.expr) -> str:
@@ -360,43 +388,26 @@ def _payloads(tree: ast.Module) -> tuple[Payload, ...]:
     return tuple(result)
 
 
-def _static_int(node: ast.expr, values: dict[str, int]) -> int | None:
-    if isinstance(node, ast.Constant) and type(node.value) is int:
-        return node.value
-    if isinstance(node, ast.Name):
-        return values.get(node.id)
-    if isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.UAdd, ast.USub)):
-        operand = _static_int(node.operand, values)
-        if operand is None:
-            return None
-        return operand if isinstance(node.op, ast.UAdd) else -operand
-    if isinstance(node, ast.BinOp) and isinstance(
-        node.op, (ast.Add, ast.Sub, ast.Mult)
-    ):
-        left = _static_int(node.left, values)
-        right = _static_int(node.right, values)
-        if left is None or right is None:
-            return None
-        if isinstance(node.op, ast.Add):
-            return left + right
-        if isinstance(node.op, ast.Sub):
-            return left - right
-        return left * right
-    return None
+def _static_int_value(node: ast.expr, values: Mapping[str, StaticValue]) -> int | None:
+    try:
+        value = evaluate_static(node, StaticEnvironment(values))
+    except ValueError:
+        return None
+    return value if type(value) is int else None
 
 
-def _positive_int(
+def _positive_int_value(
     call: ast.Call,
     name: str,
     default: int,
-    static_values: dict[str, int] | None = None,
+    static_values: Mapping[str, StaticValue] | None = None,
 ) -> int:
     matches = [keyword for keyword in call.keywords if keyword.arg == name]
     if len(matches) > 1:
         raise QueueFrontendError(f"ACPY-QUEUE-001: repeated {name!r}")
     if not matches:
         return default
-    value = _static_int(matches[0].value, static_values or {})
+    value = _static_int_value(matches[0].value, static_values or {})
     if value is None:
         raise QueueFrontendError(
             f"ACPY-QUEUE-001: {name} must be a compile-time integer"
@@ -406,18 +417,18 @@ def _positive_int(
     return value
 
 
-def _nonnegative_int(
+def _nonnegative_int_value(
     call: ast.Call,
     name: str,
     default: int,
-    static_values: dict[str, int] | None = None,
+    static_values: Mapping[str, StaticValue] | None = None,
 ) -> int:
     matches = [keyword for keyword in call.keywords if keyword.arg == name]
     if len(matches) > 1:
         raise QueueFrontendError(f"ACPY-QUEUE-001: repeated {name!r}")
     if not matches:
         return default
-    value = _static_int(matches[0].value, static_values or {})
+    value = _static_int_value(matches[0].value, static_values or {})
     if value is None:
         raise QueueFrontendError(
             f"ACPY-QUEUE-001: {name} must be a compile-time integer"
@@ -439,10 +450,38 @@ def _payload(node: ast.expr, payloads: dict[str, Payload]) -> str:
     )
 
 
-def _lambda(node: ast.expr) -> tuple[str, ast.expr]:
+def _lambda_value(node: ast.expr) -> tuple[str, ast.expr]:
     if not isinstance(node, ast.Lambda) or len(node.args.args) != 1:
         raise QueueFrontendError("ACPY-QUEUE-003: apply requires a one-argument lambda")
     return node.args.args[0].arg, node.body
+
+
+def _constantize_expression(
+    node: ast.expr,
+    argument: str,
+    values: Mapping[str, StaticValue],
+) -> ast.expr:
+    class Constantizer(ast.NodeTransformer):
+        def _constant(self, candidate: ast.expr) -> ast.expr | None:
+            try:
+                value = evaluate_static(candidate, StaticEnvironment(values))
+            except ValueError:
+                return None
+            if value is None or type(value) in {bool, int, float, str}:
+                return ast.copy_location(ast.Constant(value=value), candidate)
+            return None
+
+        def visit_Name(self, candidate: ast.Name) -> ast.expr:
+            if candidate.id == argument:
+                return candidate
+            return self._constant(candidate) or candidate
+
+        def visit_Attribute(self, candidate: ast.Attribute) -> ast.expr:
+            return self._constant(candidate) or self.generic_visit(candidate)
+
+    result = Constantizer().visit(copy.deepcopy(node))
+    assert isinstance(result, ast.expr)
+    return ast.fix_missing_locations(result)
 
 
 def _validate_firing_expression(node: ast.expr, argument: str) -> None:
@@ -455,17 +494,16 @@ def _validate_firing_expression(node: ast.expr, argument: str) -> None:
         or len(node.args) != 1
         or node.keywords
     ):
-        raise QueueFrontendError(
-            "ACPY-QUEUE-019: firing must return queue.push(value)"
-        )
+        raise QueueFrontendError("ACPY-QUEUE-019: firing must return queue.push(value)")
     pops = 0
     pushes = 0
     for child in ast.walk(node):
-        if not isinstance(child, ast.Call) or not isinstance(
-            child.func, ast.Attribute
-        ):
+        if not isinstance(child, ast.Call) or not isinstance(child.func, ast.Attribute):
             continue
-        if not isinstance(child.func.value, ast.Name) or child.func.value.id != argument:
+        if (
+            not isinstance(child.func.value, ast.Name)
+            or child.func.value.id != argument
+        ):
             continue
         if child.func.attr in {"peek", "pop"}:
             if child.args or child.keywords:
@@ -480,16 +518,19 @@ def _validate_firing_expression(node: ast.expr, argument: str) -> None:
                 )
             pushes += 1
         else:
-            raise QueueFrontendError(
-                "ACPY-QUEUE-019: unsupported queue effect method"
-            )
+            raise QueueFrontendError("ACPY-QUEUE-019: unsupported queue effect method")
     if pops != 1 or pushes != 1:
         raise QueueFrontendError(
             "ACPY-QUEUE-019: firing requires exactly one pop and one push"
         )
 
 
-def parse_queue_program(text: str, system: str) -> QueueProgram:
+def parse_queue_program(
+    text: str,
+    system: str,
+    static_arguments: Mapping[str, StaticValue] | None = None,
+    specialization_fingerprint: str | None = None,
+) -> QueueProgram:
     tree = ast.parse(text, filename="<queue-model>", type_comments=True)
     for node in tree.body:
         decorators = getattr(node, "decorator_list", ())
@@ -518,10 +559,121 @@ def parse_queue_program(text: str, system: str) -> QueueProgram:
             f"ACPY-QUEUE-001: system {system!r} is missing or ambiguous"
         )
     function = candidates[0]
-    if function.args.args or function.args.posonlyargs or function.args.kwonlyargs:
+    if specialization_fingerprint is not None:
+        prefix = "sha256:"
+        digest = specialization_fingerprint.removeprefix(prefix)
+        if (
+            not specialization_fingerprint.startswith(prefix)
+            or len(digest) != 64
+            or any(character not in "0123456789abcdef" for character in digest)
+        ):
+            raise QueueFrontendError(
+                "ACPY-QUEUE-022: specialization fingerprint is invalid"
+            )
+    if function.args.vararg is not None or function.args.kwarg is not None:
         raise QueueFrontendError(
-            "ACPY-QUEUE-001: a queue system infers boundaries and takes no parameters"
+            "ACPY-QUEUE-001: a queue system cannot use variadic parameters"
         )
+    parameters = [
+        *function.args.posonlyargs,
+        *function.args.args,
+        *function.args.kwonlyargs,
+    ]
+    supplied = dict(static_arguments or {})
+    parameter_names = {parameter.arg for parameter in parameters}
+    extras = sorted(set(supplied) - parameter_names)
+    if extras:
+        raise QueueFrontendError(
+            f"ACPY-QUEUE-001: unknown static argument {extras[0]!r}"
+        )
+
+    positional_defaults: dict[str, ast.expr] = {}
+    positional = [*function.args.posonlyargs, *function.args.args]
+    if function.args.defaults:
+        for parameter, default in zip(
+            positional[-len(function.args.defaults) :],
+            function.args.defaults,
+            strict=True,
+        ):
+            positional_defaults[parameter.arg] = default
+    keyword_defaults = {
+        parameter.arg: default
+        for parameter, default in zip(
+            function.args.kwonlyargs,
+            function.args.kw_defaults,
+            strict=True,
+        )
+        if default is not None
+    }
+    for parameter in parameters:
+        annotation_name = (
+            _decorator_name(parameter.annotation.value).rsplit(".", 1)[-1]
+            if isinstance(parameter.annotation, ast.Subscript)
+            else ""
+        )
+        if annotation_name != "const":
+            raise QueueFrontendError(
+                f"ACPY-QUEUE-022: system parameter {parameter.arg!r} must use ac.const"
+            )
+        if parameter.arg in supplied:
+            continue
+        default = positional_defaults.get(parameter.arg) or keyword_defaults.get(
+            parameter.arg
+        )
+        if default is None:
+            raise QueueFrontendError(
+                f"ACPY-QUEUE-022: system requires static argument {parameter.arg!r}"
+            )
+        try:
+            supplied[parameter.arg] = evaluate_static(
+                default, StaticEnvironment(supplied)
+            )
+        except ValueError as error:
+            raise QueueFrontendError(
+                f"ACPY-QUEUE-022: default for {parameter.arg!r} is not static"
+            ) from error
+    system_static_values: Mapping[str, StaticValue] = supplied
+
+    def _static_int(
+        node: ast.expr,
+        values: Mapping[str, StaticValue] | None = None,
+    ) -> int | None:
+        return _static_int_value(
+            node, system_static_values if values is None else values
+        )
+
+    def _positive_int(
+        call: ast.Call,
+        name: str,
+        default: int,
+        values: Mapping[str, StaticValue] | None = None,
+    ) -> int:
+        return _positive_int_value(
+            call,
+            name,
+            default,
+            system_static_values if values is None else values,
+        )
+
+    def _nonnegative_int(
+        call: ast.Call,
+        name: str,
+        default: int,
+        values: Mapping[str, StaticValue] | None = None,
+    ) -> int:
+        return _nonnegative_int_value(
+            call,
+            name,
+            default,
+            system_static_values if values is None else values,
+        )
+
+    def _lambda(node: ast.expr) -> tuple[str, ast.expr]:
+        argument, expression = _lambda_value(node)
+        return argument, _constantize_expression(
+            expression, argument, system_static_values
+        )
+
     recursive_helpers: dict[str, RecursiveQueueHelper] = {}
     for helper in tree.body:
         if (
@@ -602,6 +754,7 @@ def parse_queue_program(text: str, system: str) -> QueueProgram:
     selects: list[SelectBinding] = []
     memory_instances: list[MemoryInstanceBinding] = []
     memory_requests: list[MemoryRequestBinding] = []
+    memories: list[MemoryBinding] = []
     memory_by_name: dict[str, MemoryInstanceBinding] = {}
     memory_arrays: dict[str, StaticMemoryArrayBinding] = {}
     selected_memories: dict[str, SelectedMemoryBinding] = {}
@@ -617,6 +770,62 @@ def parse_queue_program(text: str, system: str) -> QueueProgram:
 
     def call_name(call: ast.Call) -> str:
         return _decorator_name(call.func).rsplit(".", 1)[-1]
+
+    def keyword_value(call: ast.Call, name: str) -> ast.expr:
+        matches = [keyword.value for keyword in call.keywords if keyword.arg == name]
+        if len(matches) != 1:
+            raise QueueFrontendError(
+                f"ACPY-QUEUE-024: high-level block requires one {name!r} parameter"
+            )
+        return matches[0]
+
+    def field_expression(
+        node: ast.expr,
+        queue: QueueBinding,
+        argument: str = "item",
+    ) -> ast.expr:
+        if not isinstance(node, ast.Attribute) or not isinstance(node.value, ast.Name):
+            raise QueueFrontendError(
+                "ACPY-QUEUE-024: high-level block requires a typed field descriptor"
+            )
+        payload = next(
+            (item for item in payloads if item.acir_type == queue.payload), None
+        )
+        if payload is None or node.value.id != payload.name:
+            raise QueueFrontendError(
+                "ACPY-QUEUE-024: field descriptor payload does not match Queue"
+            )
+        if node.attr not in {name for name, _ in payload.fields}:
+            raise QueueFrontendError(
+                f"ACPY-QUEUE-024: payload has no field {node.attr!r}"
+            )
+        return ast.copy_location(
+            ast.Attribute(
+                value=ast.Name(id=argument, ctx=ast.Load()),
+                attr=node.attr,
+                ctx=ast.Load(),
+            ),
+            node,
+        )
+
+    def policy_value(call: ast.Call) -> str:
+        matches = [
+            keyword.value for keyword in call.keywords if keyword.arg == "policy"
+        ]
+        if not matches:
+            return "priority"
+        if len(matches) != 1:
+            raise QueueFrontendError("ACPY-QUEUE-024: repeated merge policy")
+        node = matches[0]
+        if isinstance(node, ast.Constant) and type(node.value) is str:
+            policy = node.value
+        else:
+            policy = _decorator_name(node).rsplit(".", 1)[-1]
+        if policy not in {"priority", "round_robin"}:
+            raise QueueFrontendError(
+                "ACPY-QUEUE-024: merge policy must be priority or round_robin"
+            )
+        return policy
 
     def static_reference(
         node: ast.expr,
@@ -687,20 +896,27 @@ def parse_queue_program(text: str, system: str) -> QueueProgram:
         call: ast.Call,
         scope_path: tuple[str, ...],
         current_order: int,
-        static_values: dict[str, int] | None = None,
+        static_values: Mapping[str, StaticValue] | None = None,
     ) -> QueueBinding:
         if call_name(call) != "source" or len(call.args) != 1:
             raise QueueFrontendError(
                 "ACPY-QUEUE-005: collection elements must be Queue sources"
             )
+        depth = _positive_int(call, "depth", 1, static_values)
+        rate = _positive_int(call, "rate", 1, static_values)
+        if rate > depth:
+            raise QueueFrontendError(
+                "ACPY-QUEUE-025: Queue rate must not exceed depth"
+            )
         return QueueBinding(
             name,
             _payload(call.args[0], payload_map),
-            _positive_int(call, "depth", 1, static_values),
+            depth,
             _positive_int(call, "latency", 1, static_values),
             None,
             scope=scope_path,
             order=current_order,
+            rate=rate,
         )
 
     def memory_instance_binding(
@@ -820,9 +1036,9 @@ def parse_queue_program(text: str, system: str) -> QueueProgram:
         scope_path: tuple[str, ...],
         current_order: int,
         aliases: dict[str, str | StaticQueueCollection],
-        static_values: dict[str, int] | None = None,
+        static_values: Mapping[str, StaticValue] | None = None,
     ) -> StaticQueueCollection | None:
-        static_values = {} if static_values is None else static_values
+        static_values = system_static_values if static_values is None else static_values
         kind = call_name(call)
         if kind == "array":
             extent = (
@@ -1437,7 +1653,7 @@ def parse_queue_program(text: str, system: str) -> QueueProgram:
                 and not statement.iter.keywords
                 and not statement.orelse
             ):
-                extent = _static_int(statement.iter.args[0], {})
+                extent = _static_int(statement.iter.args[0])
                 if extent is None or extent < 0:
                     raise QueueFrontendError(
                         "ACPY-QUEUE-005: range extent must be a non-negative "
@@ -1532,9 +1748,7 @@ def parse_queue_program(text: str, system: str) -> QueueProgram:
                 condition = QueueCondition().visit(copy.deepcopy(statement.test))
                 assert isinstance(condition, ast.expr)
                 if break_test is not None:
-                    rewritten_break = QueueCondition().visit(
-                        copy.deepcopy(break_test)
-                    )
+                    rewritten_break = QueueCondition().visit(copy.deepcopy(break_test))
                     assert isinstance(rewritten_break, ast.expr)
                     condition = ast.BoolOp(
                         op=ast.And(),
@@ -1603,6 +1817,7 @@ def parse_queue_program(text: str, system: str) -> QueueProgram:
                 and isinstance(statement.value.func, ast.Attribute)
                 and statement.value.func.attr == "merge"
                 and isinstance(statement.value.func.value, ast.Name)
+                and statement.value.func.value.id in by_name
             ):
                 name = statement.targets[0].id
                 if name in by_name or name in collections:
@@ -2206,7 +2421,10 @@ def parse_queue_program(text: str, system: str) -> QueueProgram:
                 and isinstance(statement.value, ast.Call)
             ):
                 name, call = statement.targets[0].id, statement.value
-                if isinstance(call.func, ast.Name) and call.func.id in recursive_helpers:
+                if (
+                    isinstance(call.func, ast.Name)
+                    and call.func.id in recursive_helpers
+                ):
                     if (
                         name in by_name
                         or name in collections
@@ -2217,7 +2435,7 @@ def parse_queue_program(text: str, system: str) -> QueueProgram:
                             "ACPY-QUEUE-020: recursive helper call is malformed"
                         )
                     input_name = queue_reference(call.args[0], aliases)
-                    extent = _static_int(call.args[1], {})
+                    extent = _static_int(call.args[1])
                     if extent is None or extent < 0 or extent > 1024:
                         raise QueueFrontendError(
                             "ACPY-QUEUE-020: recursion depth must be a compile-time "
@@ -2255,6 +2473,369 @@ def parse_queue_program(text: str, system: str) -> QueueProgram:
                     )
                 if call_name(call) == "source" and len(call.args) == 1:
                     binding = source_binding(name, call, scope_path, current_order)
+                elif call_name(call) == "compute" and len(call.args) == 2:
+                    if any(
+                        keyword.arg is None
+                        or keyword.arg not in {"depth", "latency", "rate"}
+                        for keyword in call.keywords
+                    ):
+                        raise QueueFrontendError(
+                            "ACPY-QUEUE-023: compute has an unsupported keyword"
+                        )
+                    input_name = queue_reference(call.args[0], aliases)
+                    incoming = by_name[input_name]
+                    argument, expression = _lambda(call.args[1])
+                    depth = _positive_int(call, "depth", 1)
+                    rate = _positive_int(call, "rate", incoming.rate)
+                    if rate > depth:
+                        raise QueueFrontendError(
+                            "ACPY-QUEUE-025: Queue rate must not exceed depth"
+                        )
+                    binding = QueueBinding(
+                        name,
+                        incoming.payload,
+                        depth,
+                        _positive_int(call, "latency", 1),
+                        incoming.name,
+                        argument,
+                        expression,
+                        scope_path,
+                        current_order,
+                        atomic_group=atomic_group,
+                        provider="compute",
+                        rate=rate,
+                    )
+                elif call_name(call) == "pipeline" and len(call.args) == 1:
+                    if any(
+                        keyword.arg is None
+                        or keyword.arg not in {"stages", "depth", "rate"}
+                        for keyword in call.keywords
+                    ):
+                        raise QueueFrontendError(
+                            "ACPY-QUEUE-024: pipeline parameters are invalid"
+                        )
+                    input_name = queue_reference(call.args[0], aliases)
+                    incoming = by_name[input_name]
+                    stages = _positive_int(call, "stages", 1)
+                    depth = _positive_int(call, "depth", 1)
+                    rate = _positive_int(call, "rate", incoming.rate)
+                    if rate > depth:
+                        raise QueueFrontendError(
+                            "ACPY-QUEUE-025: Queue rate must not exceed depth"
+                        )
+                    binding = QueueBinding(
+                        name,
+                        incoming.payload,
+                        depth,
+                        stages,
+                        incoming.name,
+                        "item",
+                        ast.Name(id="item", ctx=ast.Load()),
+                        scope_path,
+                        current_order,
+                        atomic_group=atomic_group,
+                        provider="pipeline",
+                        rate=rate,
+                    )
+                elif call_name(call) == "merge":
+                    if len(call.args) < 2 or any(
+                        keyword.arg is None
+                        or keyword.arg not in {"policy", "depth", "latency"}
+                        for keyword in call.keywords
+                    ):
+                        raise QueueFrontendError(
+                            "ACPY-QUEUE-024: merge requires two or more Queues and "
+                            "static policy/depth/latency"
+                        )
+                    input_names = tuple(
+                        queue_reference(argument, aliases) for argument in call.args
+                    )
+                    if len(set(input_names)) != len(input_names):
+                        raise QueueFrontendError(
+                            "ACPY-QUEUE-024: merge inputs must be unique Queues"
+                        )
+                    payloads_used = {by_name[item].payload for item in input_names}
+                    if len(payloads_used) != 1:
+                        raise QueueFrontendError(
+                            "ACPY-QUEUE-024: merge inputs require one payload type"
+                        )
+                    depth = _positive_int(call, "depth", 1)
+                    latency = _positive_int(call, "latency", 1)
+                    policy = policy_value(call)
+                    binding = QueueBinding(
+                        name,
+                        by_name[input_names[0]].payload,
+                        depth,
+                        latency,
+                        None,
+                        scope=scope_path,
+                        order=current_order,
+                        merge_output=True,
+                    )
+                    merges.append(
+                        MergeBinding(
+                            input_names,
+                            name,
+                            policy,
+                            depth,
+                            latency,
+                            scope_path,
+                            current_order,
+                        )
+                    )
+                elif call_name(call) == "schedule":
+                    if len(call.args) != 1 or any(
+                        keyword.arg is None
+                        or keyword.arg
+                        not in {
+                            "by",
+                            "waits_for",
+                            "resource",
+                            "cost",
+                            "entries",
+                            "resources",
+                            "no_dependency",
+                            "depth",
+                            "latency",
+                        }
+                        for keyword in call.keywords
+                    ):
+                        raise QueueFrontendError(
+                            "ACPY-QUEUE-024: schedule parameters are invalid"
+                        )
+                    input_name = queue_reference(call.args[0], aliases)
+                    incoming = by_name[input_name]
+                    argument = "item"
+                    key = field_expression(keyword_value(call, "by"), incoming)
+                    waits_for = field_expression(
+                        keyword_value(call, "waits_for"), incoming
+                    )
+                    resource = field_expression(
+                        keyword_value(call, "resource"), incoming
+                    )
+                    cost = field_expression(keyword_value(call, "cost"), incoming)
+                    capacity = _positive_int(call, "entries", 16)
+                    resources = _positive_int(call, "resources", 1)
+                    no_dependency = _nonnegative_int(call, "no_dependency", 0)
+                    depth = _positive_int(call, "depth", 1)
+                    latency = _positive_int(call, "latency", 1)
+                    binding = QueueBinding(
+                        name,
+                        incoming.payload,
+                        depth,
+                        latency,
+                        None,
+                        scope=scope_path,
+                        order=current_order,
+                        dependency_output=True,
+                    )
+                    dependencies.append(
+                        DependencyBinding(
+                            input_name,
+                            name,
+                            argument,
+                            key,
+                            waits_for,
+                            resource,
+                            cost,
+                            capacity,
+                            resources,
+                            no_dependency,
+                            depth,
+                            latency,
+                            scope_path,
+                            current_order,
+                            provider="schedule",
+                        )
+                    )
+                elif call_name(call) == "engine":
+                    if len(call.args) != 1 or any(
+                        keyword.arg is None
+                        or keyword.arg not in {"cost", "lanes", "depth", "latency"}
+                        for keyword in call.keywords
+                    ):
+                        raise QueueFrontendError(
+                            "ACPY-QUEUE-024: engine parameters are invalid"
+                        )
+                    input_name = queue_reference(call.args[0], aliases)
+                    incoming = by_name[input_name]
+                    argument = "item"
+                    cost = field_expression(keyword_value(call, "cost"), incoming)
+                    lane_count = _positive_int(call, "lanes", 1)
+                    depth = _positive_int(call, "depth", 1)
+                    latency = _positive_int(call, "latency", 1)
+                    binding = QueueBinding(
+                        name,
+                        incoming.payload,
+                        depth,
+                        latency,
+                        None,
+                        scope=scope_path,
+                        order=current_order,
+                        credit_output=True,
+                    )
+                    credits_binding = CreditBinding(
+                        input_name,
+                        name,
+                        argument,
+                        cost,
+                        lane_count,
+                        depth,
+                        latency,
+                        scope_path,
+                        current_order,
+                        provider="engine",
+                    )
+                    credits.append(credits_binding)
+                elif call_name(call) == "reorder":
+                    if len(call.args) != 1 or any(
+                        keyword.arg is None
+                        or keyword.arg
+                        not in {"by", "entries", "start", "depth", "latency"}
+                        for keyword in call.keywords
+                    ):
+                        raise QueueFrontendError(
+                            "ACPY-QUEUE-024: reorder parameters are invalid"
+                        )
+                    input_name = queue_reference(call.args[0], aliases)
+                    incoming = by_name[input_name]
+                    argument = "item"
+                    key = field_expression(keyword_value(call, "by"), incoming)
+                    capacity = _positive_int(call, "entries", 16)
+                    start = _nonnegative_int(call, "start", 0)
+                    depth = _positive_int(call, "depth", 1)
+                    latency = _positive_int(call, "latency", 1)
+                    binding = QueueBinding(
+                        name,
+                        incoming.payload,
+                        depth,
+                        latency,
+                        None,
+                        scope=scope_path,
+                        order=current_order,
+                        reorder_output=True,
+                    )
+                    reorders.append(
+                        ReorderBinding(
+                            input_name,
+                            name,
+                            argument,
+                            key,
+                            capacity,
+                            start,
+                            depth,
+                            latency,
+                            scope_path,
+                            current_order,
+                        )
+                    )
+                elif call_name(call) == "table":
+                    if len(call.args) != 1 or any(
+                        keyword.arg is None
+                        or keyword.arg
+                        not in {
+                            "address",
+                            "write",
+                            "data",
+                            "result",
+                            "entries",
+                            "init",
+                            "depth",
+                            "latency",
+                        }
+                        for keyword in call.keywords
+                    ):
+                        raise QueueFrontendError(
+                            "ACPY-QUEUE-024: table parameters are invalid"
+                        )
+                    input_name = queue_reference(call.args[0], aliases)
+                    incoming = by_name[input_name]
+                    argument = "item"
+                    address = field_expression(keyword_value(call, "address"), incoming)
+                    write = field_expression(keyword_value(call, "write"), incoming)
+                    data_node = keyword_value(call, "data")
+                    data = field_expression(data_node, incoming)
+                    result_node = keyword_value(call, "result")
+                    field_expression(result_node, incoming)
+                    assert isinstance(data_node, ast.Attribute)
+                    assert isinstance(result_node, ast.Attribute)
+                    payload = next(
+                        item for item in payloads if item.acir_type == incoming.payload
+                    )
+                    data_type = dict(payload.fields)[data_node.attr]
+                    result_type = dict(payload.fields)[result_node.attr]
+                    if data_type != result_type:
+                        raise QueueFrontendError(
+                            "ACPY-QUEUE-024: table data and result fields must match"
+                        )
+                    entries = _positive_int(call, "entries", 16)
+                    init = _nonnegative_int(call, "init", 0)
+                    if init != 0:
+                        raise QueueFrontendError(
+                            "ACPY-QUEUE-024: table init must be zero"
+                        )
+                    depth = _positive_int(call, "depth", 1)
+                    latency = _positive_int(call, "latency", 1)
+                    instance_name = f"{name}__table"
+                    if instance_name in memory_by_name:
+                        raise QueueFrontendError(
+                            "ACPY-QUEUE-024: table storage identity collides with "
+                            "an existing memory"
+                        )
+                    instance = MemoryInstanceBinding(
+                        instance_name,
+                        data_type,
+                        entries,
+                        init,
+                        latency,
+                        scope_path,
+                        current_order,
+                    )
+                    memory_instances.append(instance)
+                    memory_by_name[instance_name] = instance
+                    memory_requests.append(
+                        MemoryRequestBinding(
+                            instance_name,
+                            input_name,
+                            name,
+                            argument,
+                            address,
+                            write,
+                            data,
+                            result_node.attr,
+                            depth,
+                            scope_path,
+                            current_order,
+                        )
+                    )
+                    binding = QueueBinding(
+                        name,
+                        incoming.payload,
+                        depth,
+                        1,
+                        None,
+                        scope=scope_path,
+                        order=current_order,
+                        memory_output=True,
+                    )
+                    memories.append(
+                        MemoryBinding(
+                            input_name,
+                            name,
+                            argument,
+                            address,
+                            write,
+                            data,
+                            data_type,
+                            entries,
+                            init,
+                            result_node.attr,
+                            depth,
+                            latency,
+                            scope_path,
+                            current_order,
+                        )
+                    )
                 elif (
                     isinstance(call.func, ast.Attribute)
                     and call.func.attr in {"apply", "firing"}
@@ -2299,22 +2880,26 @@ def parse_queue_program(text: str, system: str) -> QueueProgram:
                     isinstance(item, ast.Name) for item in statement.targets[0].elts
                 )
                 and isinstance(statement.value, ast.Call)
-                and isinstance(statement.value.func, ast.Attribute)
-                and statement.value.func.attr == "barrier"
-                and isinstance(statement.value.func.value, ast.Name)
+                and call_name(statement.value) == "barrier"
             ):
                 call = statement.value
                 if any(
-                    keyword.arg is None
-                    or keyword.arg not in {"depth", "latency"}
+                    keyword.arg is None or keyword.arg not in {"depth", "latency"}
                     for keyword in call.keywords
                 ):
                     raise QueueFrontendError(
                         "ACPY-QUEUE-017: barrier has an unsupported keyword"
                     )
+                method_style = (
+                    isinstance(call.func, ast.Attribute)
+                    and isinstance(call.func.value, ast.Name)
+                    and call.func.value.id in by_name
+                )
+                operands = (
+                    [call.func.value, *call.args] if method_style else list(call.args)
+                )
                 inputs = tuple(
-                    queue_reference(operand, aliases)
-                    for operand in [call.func.value, *call.args]
+                    queue_reference(operand, aliases) for operand in operands
                 )
                 outputs = tuple(item.id for item in statement.targets[0].elts)
                 if len(inputs) < 2 or len(outputs) != len(inputs):
@@ -2365,12 +2950,28 @@ def parse_queue_program(text: str, system: str) -> QueueProgram:
                     isinstance(item, ast.Name) for item in statement.targets[0].elts
                 )
                 and isinstance(statement.value, ast.Call)
-                and isinstance(statement.value.func, ast.Attribute)
-                and statement.value.func.attr == "route"
-                and isinstance(statement.value.func.value, ast.Name)
+                and call_name(statement.value) == "route"
             ):
                 call = statement.value
-                input_name = call.func.value.id
+                method_style = (
+                    isinstance(call.func, ast.Attribute)
+                    and isinstance(call.func.value, ast.Name)
+                    and call.func.value.id in by_name
+                )
+                if method_style:
+                    assert isinstance(call.func, ast.Attribute)
+                    assert isinstance(call.func.value, ast.Name)
+                    input_name = call.func.value.id
+                    if call.args:
+                        raise QueueFrontendError(
+                            "ACPY-QUEUE-006: method route takes no positional arguments"
+                        )
+                else:
+                    if len(call.args) != 1:
+                        raise QueueFrontendError(
+                            "ACPY-QUEUE-024: route requires one input Queue"
+                        )
+                    input_name = queue_reference(call.args[0], aliases)
                 incoming = by_name.get(input_name)
                 if incoming is None:
                     raise QueueFrontendError(
@@ -2382,14 +2983,22 @@ def parse_queue_program(text: str, system: str) -> QueueProgram:
                     raise QueueFrontendError(
                         "ACPY-QUEUE-006: route outputs must match fresh tuple names"
                     )
-                key = [
-                    keyword.value for keyword in call.keywords if keyword.arg == "key"
-                ]
-                if len(key) != 1:
-                    raise QueueFrontendError(
-                        "ACPY-QUEUE-006: route requires one key lambda"
+                if method_style:
+                    key = [
+                        keyword.value
+                        for keyword in call.keywords
+                        if keyword.arg == "key"
+                    ]
+                    if len(key) != 1:
+                        raise QueueFrontendError(
+                            "ACPY-QUEUE-006: route requires one key lambda"
+                        )
+                    argument, selector = _lambda(key[0])
+                else:
+                    argument = "item"
+                    selector = field_expression(
+                        keyword_value(call, "by"), incoming, argument
                     )
-                argument, selector = _lambda(key[0])
                 depth = _positive_int(call, "depth", 1)
                 latency = _positive_int(call, "latency", 1)
                 for name in names:
@@ -2430,13 +3039,29 @@ def parse_queue_program(text: str, system: str) -> QueueProgram:
                     isinstance(item, ast.Name) for item in statement.targets[0].elts
                 )
                 and isinstance(statement.value, ast.Call)
-                and isinstance(statement.value.func, ast.Attribute)
-                and statement.value.func.attr == "fork"
-                and isinstance(statement.value.func.value, ast.Name)
-                and not statement.value.args
+                and call_name(statement.value) == "fork"
             ):
                 call = statement.value
-                incoming = by_name.get(call.func.value.id)
+                method_style = (
+                    isinstance(call.func, ast.Attribute)
+                    and isinstance(call.func.value, ast.Name)
+                    and call.func.value.id in by_name
+                )
+                if method_style:
+                    assert isinstance(call.func, ast.Attribute)
+                    assert isinstance(call.func.value, ast.Name)
+                    if call.args:
+                        raise QueueFrontendError(
+                            "ACPY-QUEUE-012: method fork takes no positional arguments"
+                        )
+                    input_name = call.func.value.id
+                else:
+                    if len(call.args) != 1:
+                        raise QueueFrontendError(
+                            "ACPY-QUEUE-024: fork requires one input Queue"
+                        )
+                    input_name = queue_reference(call.args[0], aliases)
+                incoming = by_name.get(input_name)
                 if incoming is None:
                     raise QueueFrontendError("ACPY-QUEUE-012: fork input is unbound")
                 output_count = _positive_int(call, "outputs", 0)
@@ -2483,8 +3108,7 @@ def parse_queue_program(text: str, system: str) -> QueueProgram:
             ):
                 call = statement.value
                 if any(
-                    keyword.arg is None
-                    or keyword.arg not in {"predicate", "message"}
+                    keyword.arg is None or keyword.arg not in {"predicate", "message"}
                     for keyword in call.keywords
                 ):
                     raise QueueFrontendError(
@@ -2593,11 +3217,13 @@ def parse_queue_program(text: str, system: str) -> QueueProgram:
         tuple(selects),
         tuple(memory_instances),
         tuple(memory_requests),
+        tuple(memories),
         tuple(atomics),
         tuple(collection_bindings),
         tuple(observations),
         tuple(expectations),
         tuple(sinks),
+        specialization_fingerprint,
     )
 
 
@@ -2702,9 +3328,7 @@ class _ExpressionEmitter:
                 )
             current, current_type = self.emit(node.values[0], "i1")
             if current_type != "i1":
-                raise QueueFrontendError(
-                    "ACPY-QUEUE-003: boolean operands must be i1"
-                )
+                raise QueueFrontendError("ACPY-QUEUE-003: boolean operands must be i1")
             for operand in node.values[1:]:
                 value, value_type = self.emit(operand, "i1")
                 if value_type != "i1":
@@ -2720,9 +3344,7 @@ class _ExpressionEmitter:
         if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not):
             value, value_type = self.emit(node.operand, "i1")
             if value_type != "i1":
-                raise QueueFrontendError(
-                    "ACPY-QUEUE-003: boolean not requires i1"
-                )
+                raise QueueFrontendError("ACPY-QUEUE-003: boolean not requires i1")
             false_value = self._new()
             self.lines.append(
                 f"    %{false_value} = ac.var.constant false as !ac.var<i1>"
@@ -2823,9 +3445,14 @@ class _ExpressionEmitter:
 
 
 def lower_queue_program(program: QueueProgram) -> str:
+    specialization = (
+        ""
+        if program.specialization_fingerprint is None
+        else f', ac.specialization = "{program.specialization_fingerprint}"'
+    )
     lines = [
         f'module attributes {{ac.contract_epoch = "0.3", '
-        f'ac.system = "{program.system}"}} {{'
+        f'ac.system = "{program.system}"{specialization}}} {{'
     ]
     payloads = {item.name: item for item in program.payloads}
     if program.payloads:
@@ -2969,6 +3596,16 @@ def lower_queue_program(program: QueueProgram) -> str:
         ]
         return inputs, outputs
 
+    def queue_attributes(name: str, rates: tuple[int, ...]) -> str:
+        attributes = [f'ac.name = "{name}"']
+        if any(rate != 1 for rate in rates):
+            attributes.append(
+                "ac.output_rates = array<i64: "
+                + ", ".join(str(rate) for rate in rates)
+                + ">"
+            )
+        return "{" + ", ".join(attributes) + "}"
+
     def emit_queue(
         queue: QueueBinding,
         output_ssa: str,
@@ -2978,7 +3615,8 @@ def lower_queue_program(program: QueueProgram) -> str:
         if queue.input_name is None:
             lines.append(
                 f"{indent}%{output_ssa} = ac.source depth {queue.depth} "
-                f'latency {queue.latency} {{ac.name = "{queue.name}"}} : '
+                f"latency {queue.latency} "
+                f"{queue_attributes(queue.name, (queue.rate,))} : "
                 f"!ac.queue<{queue.payload}>"
             )
             mapping[queue.name] = output_ssa
@@ -3007,7 +3645,7 @@ def lower_queue_program(program: QueueProgram) -> str:
             f"{indent}  ac.transform.yield %{result} : !ac.var<{queue.payload}>"
         )
         lines.append(
-            f'{indent}}} {{ac.name = "{queue.name}"}} : '
+            f"{indent}}} {queue_attributes(queue.name, (queue.rate,))} : "
             f"(!ac.queue<{queue.payload}>) -> "
             f"!ac.queue<{queue.payload}>"
         )
@@ -3154,17 +3792,14 @@ def lower_queue_program(program: QueueProgram) -> str:
                 barrier = item
                 assert isinstance(barrier, BarrierBinding)
                 output_names = [
-                    name if not path else f"{name}__local"
-                    for name in barrier.outputs
+                    name if not path else f"{name}__local" for name in barrier.outputs
                 ]
                 lhs = ", ".join(f"%{name}" for name in output_names)
                 operands = ", ".join(
                     f"%{mapping[input_name]}" for input_name in barrier.inputs
                 )
                 depths = ", ".join(str(barrier.depth) for _ in output_names)
-                latencies = ", ".join(
-                    str(barrier.latency) for _ in output_names
-                )
+                latencies = ", ".join(str(barrier.latency) for _ in output_names)
                 input_types = ", ".join(
                     f"!ac.queue<{by_name[input_name].payload}>"
                     for input_name in barrier.inputs
@@ -3179,25 +3814,19 @@ def lower_queue_program(program: QueueProgram) -> str:
                     f"{{ac.output_names = {name_array(barrier.outputs)}}} : "
                     f"({input_types}) -> ({output_types})"
                 )
-                for name, output in zip(
-                    barrier.outputs, output_names, strict=True
-                ):
+                for name, output in zip(barrier.outputs, output_names, strict=True):
                     mapping[name] = output
             elif kind == "select":
                 select = item
                 assert isinstance(select, SelectBinding)
                 control = by_name[select.control]
-                emitter = _ExpressionEmitter(
-                    payloads, select.argument, control.payload
-                )
+                emitter = _ExpressionEmitter(payloads, select.argument, control.payload)
                 selector, selector_type = emitter.emit(select.selector)
                 if not selector_type.startswith("i"):
                     raise QueueFrontendError(
                         "ACPY-QUEUE-018: select key must lower to an integer"
                     )
-                output = (
-                    select.output if not path else f"{select.output}__local"
-                )
+                output = select.output if not path else f"{select.output}__local"
                 operands = ", ".join(
                     f"%{mapping[name]}" for name in (select.control, *select.inputs)
                 )
@@ -3209,13 +3838,10 @@ def lower_queue_program(program: QueueProgram) -> str:
                     f"{indent}%{output} = ac.select {operands} "
                     f"depth {select.depth} latency {select.latency} key {{"
                 )
-                lines.append(
-                    f"{indent}^key(%item: !ac.var<{control.payload}>):"
-                )
+                lines.append(f"{indent}^key(%item: !ac.var<{control.payload}>):")
                 lines.extend(indent + line[2:] for line in emitter.lines)
                 lines.append(
-                    f"{indent}  ac.select.yield %{selector} : "
-                    f"!ac.var<{selector_type}>"
+                    f"{indent}  ac.select.yield %{selector} : !ac.var<{selector_type}>"
                 )
                 lines.append(
                     f'{indent}}} {{ac.name = "{select.output}"}} : '
@@ -3419,18 +4045,14 @@ def lower_queue_program(program: QueueProgram) -> str:
                         "ACPY-QUEUE-016: credit cost must lower to an integer"
                     )
                 output = (
-                    credit.output_name
-                    if not path
-                    else f"{credit.output_name}__local"
+                    credit.output_name if not path else f"{credit.output_name}__local"
                 )
                 lines.append(
                     f"{indent}%{output} = ac.credit "
                     f"%{mapping[credit.input_name]} credits {credit.credits} "
                     f"depth {credit.depth} latency {credit.latency} cost {{"
                 )
-                lines.append(
-                    f"{indent}^cost(%item: !ac.var<{incoming.payload}>):"
-                )
+                lines.append(f"{indent}^cost(%item: !ac.var<{incoming.payload}>):")
                 lines.extend(indent + line[2:] for line in emitter.lines)
                 lines.append(
                     f"{indent}  ac.credit.yield %{cost} : !ac.var<{cost_type}>"
@@ -3602,13 +4224,9 @@ def lower_queue_program(program: QueueProgram) -> str:
                     f"{indent}ac.expect %{mapping[expectation.queue]} message "
                     f"{json.dumps(expectation.message)} {{"
                 )
-                lines.append(
-                    f"{indent}^predicate(%item: !ac.var<{queue.payload}>):"
-                )
+                lines.append(f"{indent}^predicate(%item: !ac.var<{queue.payload}>):")
                 lines.extend(indent + line[2:] for line in emitter.lines)
-                lines.append(
-                    f"{indent}  ac.expect.yield %{condition} : !ac.var<i1>"
-                )
+                lines.append(f"{indent}  ac.expect.yield %{condition} : !ac.var<i1>")
                 lines.append(
                     f'{indent}}} {{ac.name = "expect_{expectation.order}"}} : '
                     f"!ac.queue<{queue.payload}>"
@@ -3680,5 +4298,17 @@ def lower_queue_program(program: QueueProgram) -> str:
     return "\n".join(lines) + "\n"
 
 
-def lower_queue_source(text: str, system: str) -> str:
-    return lower_queue_program(parse_queue_program(text, system))
+def lower_queue_source(
+    text: str,
+    system: str,
+    static_arguments: Mapping[str, StaticValue] | None = None,
+    specialization_fingerprint: str | None = None,
+) -> str:
+    return lower_queue_program(
+        parse_queue_program(
+            text,
+            system,
+            static_arguments=static_arguments,
+            specialization_fingerprint=specialization_fingerprint,
+        )
+    )

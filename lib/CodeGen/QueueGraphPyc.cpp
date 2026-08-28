@@ -568,6 +568,9 @@ llvm::Expected<std::string> generateQueueGraphPyc(const QueueGraphPlan &plan) {
       return width.takeError();
     if (queue.latency == 0)
       return pycError("PYC Queue latency must be positive");
+    if (queue.rate != 1)
+      return pycError(
+          "PYC Queue rate greater than one requires explicit lane lowering");
   }
   llvm::StringMap<size_t> sourceBoundary;
   std::vector<std::string> inputPortTypes;

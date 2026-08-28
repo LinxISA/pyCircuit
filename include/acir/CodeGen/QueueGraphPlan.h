@@ -36,6 +36,7 @@ struct QueuePlan {
   std::string scope;
   uint64_t depth = 1;
   uint64_t latency = 1;
+  uint64_t rate = 1;
 };
 
 struct QueueBlockPlan {
@@ -87,6 +88,7 @@ struct MemoryRequestPlan {
 
 struct QueueGraphPlan {
   std::string system;
+  std::string specializationFingerprint;
   std::vector<QueuePayloadPlan> payloads;
   std::vector<std::string> scopes;
   std::vector<QueuePlan> queues;

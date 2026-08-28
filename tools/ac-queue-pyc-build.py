@@ -85,12 +85,16 @@ def _normalize_cpp_manifest(path: Path) -> None:
         runtime["lib_dirs"] = ["${PYC_TOOLCHAIN_ROOT}/lib"]
         runtime["library_files"] = ["${PYC_TOOLCHAIN_ROOT}/lib/libpyc4_runtime.a"]
         runtime["toolchain_root_hint"] = "${PYC_TOOLCHAIN_ROOT}"
-    path.write_text(json.dumps(manifest, sort_keys=True, indent=2) + "\n", encoding="utf-8")
+    path.write_text(
+        json.dumps(manifest, sort_keys=True, indent=2) + "\n", encoding="utf-8"
+    )
 
 
 def _artifacts(root: Path, backend: str) -> list[dict[str, object]]:
     result: list[dict[str, object]] = []
-    for path in sorted(candidate for candidate in root.rglob("*") if candidate.is_file()):
+    for path in sorted(
+        candidate for candidate in root.rglob("*") if candidate.is_file()
+    ):
         data = path.read_bytes()
         result.append(
             {
@@ -129,7 +133,7 @@ def main() -> int:
 
     lock = _read_json(arguments.toolchain_lock)
     metadata = _read_json(arguments.toolchain_metadata)
-    catalog_path = Path(__file__).resolve().parents[1] / "schemas/opcodes-v0.2.json"
+    catalog_path = Path(__file__).resolve().parents[1] / "schemas/opcodes.json"
     catalog = _read_json(catalog_path)
     if metadata.get("git_sha") != lock.get("pycircuit_commit"):
         parser.error("pyCircuit commit does not match toolchain lock")
@@ -152,6 +156,10 @@ def main() -> int:
                 str(pyc),
                 "--emit=cpp",
                 f"--out-dir={cpp}",
+                "--cpp-split=module",
+                "--cpp-shard-max-ast-nodes=512",
+                "--cpp-shard-threshold-lines=1000",
+                "--cpp-shard-threshold-bytes=65536",
                 "--hierarchy-policy=strict",
                 "--inline-policy=off",
                 "--build-profile=dev-fast",
@@ -171,13 +179,13 @@ def main() -> int:
             ),
             stage="pycc Verilog",
         )
-        _normalize_cpp_manifest(cpp / "cpp_compile_manifest.json")
-
         cpp_manifest = _read_json(cpp / "cpp_compile_manifest.json")
         sources = cpp_manifest.get("sources")
         if not isinstance(sources, list) or not sources:
             raise RuntimeError("pycc C++ manifest contains no sources")
-        source_paths = [cpp / str(source["path"]) for source in sources if isinstance(source, dict)]
+        source_paths = [
+            cpp / str(source["path"]) for source in sources if isinstance(source, dict)
+        ]
         include_root = arguments.toolchain_metadata.parents[2] / "include"
         _run(
             (
@@ -211,6 +219,10 @@ def main() -> int:
             ),
             stage="Verilator lint",
         )
+
+        # Compile with pycc's real toolchain paths, then remove host-specific
+        # paths only from the manifest that is published and fingerprinted.
+        _normalize_cpp_manifest(cpp / "cpp_compile_manifest.json")
 
         pyc_bytes = pyc.read_bytes()
         frozen_acir_bytes = arguments.frozen_acir.read_bytes()

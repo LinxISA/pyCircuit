@@ -36,7 +36,7 @@ struct ACIRToACSimPassOptions {
 /// is diagnosed with an ACLOWER-* code before any mutation, so a failed
 /// lowering never publishes a partial acsim.model.
 ///
-/// The v0.2 lowering covers generated ownership, homogeneous arrays, exact
+/// The lowering covers generated ownership, homogeneous arrays, exact
 /// pure/stateful bindings, typed endpoint graph edges and exports, and the
 /// complete public ProcessStatePlan state machine. Unsupported topology kinds
 /// and heterogeneous specializations fail with an explicit diagnostic and are

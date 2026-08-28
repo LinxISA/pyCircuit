@@ -741,7 +741,7 @@ TEST(NpuExecutionPipelineTest, CompletionNeedsTraceExhaustionAndQuiescence) {
   EXPECT_TRUE(pipeline.complete());
 }
 
-TEST(Phase5NpuTraceSourceTest,
+TEST(NpuTraceSourceTest,
      ExecutesFourEnginesWithDependenciesAndCommitsArchitecturalState) {
   PtoTraceDocument document;
   document.records.push_back(record(
@@ -770,7 +770,7 @@ TEST(Phase5NpuTraceSourceTest,
       {tileOperand("block/0/tile/0x40"), tileOperand("block/0/tile/0x200")}));
 
   RecorderSink sink;
-  Phase5NpuTraceSource provider("trace_source", 7, nullptr, &sink);
+  NpuTraceSource provider("trace_source", 7, nullptr, &sink);
   ASSERT_TRUE(provider.loadDocument(std::move(document)));
   provider.doWork({0, 0});
   ASSERT_TRUE(provider.runtimeFailureCode().empty())
@@ -796,10 +796,10 @@ TEST(Phase5NpuTraceSourceTest,
   EXPECT_GT(sink.recorder.events().size(), 24u);
 }
 
-TEST(Phase5NpuTraceSourceTest, RejectsUnsupportedOpcodeWithoutCommit) {
+TEST(NpuTraceSourceTest, RejectsUnsupportedOpcodeWithoutCommit) {
   PtoTraceDocument document;
   document.records.push_back(representative("TUNSUPPORTED"));
-  Phase5NpuTraceSource provider("trace_source", 7, nullptr);
+  NpuTraceSource provider("trace_source", 7, nullptr);
   ASSERT_TRUE(provider.loadDocument(std::move(document)));
   provider.doWork({0, 0});
   EXPECT_EQ(provider.runtimeFailureCode(), "npu_decode_failed");
@@ -807,11 +807,11 @@ TEST(Phase5NpuTraceSourceTest, RejectsUnsupportedOpcodeWithoutCommit) {
   EXPECT_FALSE(provider.runtimeState({0, 0}).traceEof);
 }
 
-TEST(Phase5NpuTraceSourceTest, RunsAsTheSingleSystemTraceOwner) {
+TEST(NpuTraceSourceTest, RunsAsTheSingleSystemTraceOwner) {
   PtoTraceDocument document;
   document.records.push_back(representative("TASSIGN"));
   SimSystem system;
-  Phase5NpuTraceSource provider("trace_source", 7, &system.root());
+  NpuTraceSource provider("trace_source", 7, &system.root());
   provider.setObservationSink(&system);
   system.registerObject(&provider);
   ASSERT_TRUE(provider.loadDocument(std::move(document)));
@@ -823,9 +823,9 @@ TEST(Phase5NpuTraceSourceTest, RunsAsTheSingleSystemTraceOwner) {
   EXPECT_FALSE(system.observations().empty());
 }
 
-TEST(Phase5NpuTraceSourceTest, DecodesTheCheckedInDavinciOOFixture) {
+TEST(NpuTraceSourceTest, DecodesTheCheckedInDavinciOOFixture) {
   std::ifstream input(std::string(ACIR_TEST_SOURCE_DIR) +
-                          "/examples/phase5/npu/traces/pto-trace.json",
+                          "/examples/workspaces/npu/traces/pto-trace.json",
                       std::ios::binary);
   ASSERT_TRUE(input);
   std::string bytes((std::istreambuf_iterator<char>(input)),

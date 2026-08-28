@@ -2,8 +2,12 @@
 
 Agentic Circuit is a Python and MLIR-based architecture construction system
 that generates a structured, pure C++ graph-flow simulator named `gfsim`.
-The explicit-memory upgrade uses exact global contract epoch `0.3` and rejects
-legacy epoch `0.1` artifacts.
+It also emits canonical PYC IR for downstream C++ and Verilog generation.
+
+The source tree is intentionally release-neutral: product versions belong to
+Git tags and GitHub Releases, not directory names, filenames, symbols, or test
+names. Serialized artifacts still carry an exact contract epoch because that
+field is part of their wire-format compatibility contract.
 
 ## Development baseline
 
@@ -24,24 +28,14 @@ Use `release-llvm22` for a release configuration. The exact upstream release,
 commit, archive digest, supported host triples, and version policy are recorded
 in `toolchains/llvm.lock.json`.
 
-Historical v0.1 specifications:
+## Documentation
 
-- [Specification index](docs/specs/README.md)
-- [Interface Evolution v0.1](docs/specs/interface-evolution-v0.1.md)
-- [ACIR Core v0.1](docs/specs/acir-core-v0.1.md)
-- [Python-to-ACIR Lowering v0.1](docs/specs/python-to-acir-lowering-v0.1.md)
-- [Agentic Python and CLI v0.1](docs/specs/agentic-python-cli-v0.1.md)
-- [ACIR Standard Library v0.1](docs/specs/acir-stdlib-v0.1.md)
-- [ACSim and gfsim Lowering v0.1](docs/specs/acsim-gfsim-lowering-v0.1.md)
-- [gfsim Model Library Contract v0.1](docs/specs/gfsim-runtime-abi-v0.1.md)
-- [PTO Trace Schema v0.1](docs/specs/pto-trace-schema-v0.1.md)
-- [ACIR Process-State Plan v0.1](docs/specs/acir-process-state-plan-v0.1.md)
-
-Queue/Var v0.2 candidate contract:
-
-- [Agentic Circuit Queue/Var v0.2 Specification Manual](docs/specs/agentic-circuit-v0.2.md)
-- [Agentic Circuit v0.2 团队 Specification 手册](docs/specs/agentic-circuit-v0.2-team-manual.zh-CN.md)
-- [Agentic Circuit Queue/Var Architecture v0.2 Proposal Manual](docs/specs/agentic-circuit-queue-var-v0.2-proposal.md)
+- [Specification index](docs/spec/README.md)
+- [Agentic Circuit specification manual](docs/spec/agentic-circuit.md)
+- [Agentic Circuit 团队 Specification 手册](docs/spec/agentic-circuit.zh-CN.md)
+- [NDF release-layout decision](docs/spec/decisions/D-RELEASE-LAYOUT-001.md)
+- [Historical specification reference](docs/spec/refs/history.md)
+- [Examples by semantic role](examples/README.md)
 
 Canonical machine-readable schemas:
 
@@ -49,7 +43,7 @@ Canonical machine-readable schemas:
 - [Capabilities](schemas/capabilities.schema.json)
 - [ComponentSchema](schemas/component.schema.json)
 - [Official opcode catalog schema](schemas/opcode-catalog.schema.json)
-- [Official Queue building-block catalog](schemas/opcodes-v0.2.json)
+- [Official Queue building-block catalog](schemas/opcodes.json)
 - [PTO trace](schemas/pto-trace.schema.json)
 - [Build manifest](schemas/build-manifest.schema.json)
 - [Run manifest](schemas/run-manifest.schema.json)
@@ -57,6 +51,11 @@ Canonical machine-readable schemas:
 - [Diagnostic](schemas/diagnostic.schema.json)
 - [ACSim binding](schemas/acsim-binding.schema.json)
 - [ACIR process-state plan](schemas/acir-process-state-plan.schema.json)
+
+The repository uses a hard-break layout. Removed implementation-phase and
+product-version paths have no aliases or compatibility symlinks. Historical
+documents remain recoverable from the Git revision recorded by the NDF
+historical reference.
 
 ## Project policies
 

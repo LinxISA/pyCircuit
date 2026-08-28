@@ -220,7 +220,7 @@ detail::PlanSetBuilder::buildProduction(mlir::ModuleOp module,
                                         const ProcessStateLimits &limits) {
   auto frozenEpoch = module->getAttrOfType<mlir::StringAttr>("ac.freeze_epoch");
   if (!frozenEpoch || frozenEpoch.getValue() != "0.3") {
-    module.emitError("process-state planning requires a frozen v0.3 model");
+    module.emitError("process-state planning requires a frozen model");
     return mlir::failure();
   }
 
@@ -572,9 +572,9 @@ detail::PlanSetBuilder::buildFrozenFixture(mlir::ModuleOp module,
   if (!frozenEpoch || frozenEpoch.getValue() != "0.3") {
     module.emitError(requireYieldOnly
                          ? "yield-only process-state fixture requires a frozen "
-                           "v0.2 model"
+                           "model"
                          : "loop-action process-state fixture requires a "
-                           "frozen v0.3 model");
+                           "frozen model");
     return mlir::failure();
   }
 

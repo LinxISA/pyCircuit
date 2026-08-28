@@ -100,6 +100,67 @@ TEST(QueueGraphPlanTest, CanonicalJsonIsByteIdenticalAndClosed) {
   EXPECT_NE(first->find("\"name\":\"merged\""), std::string::npos);
 }
 
+TEST(QueueGraphPlanTest, PreservesJitSpecializationIdentity) {
+  mlir::MLIRContext context;
+  context.loadDialect<ac::ACIRDialect, mlir::DLTIDialect>();
+  constexpr llvm::StringLiteral fingerprint =
+      "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+  std::string specialized = kQueueGraph.str();
+  size_t system = specialized.find("ac.system = \"pipeline\"");
+  ASSERT_NE(system, std::string::npos);
+  specialized.insert(system,
+                     ("ac.specialization = \"" + fingerprint + "\", ").str());
+  auto module = mlir::parseSourceString<mlir::ModuleOp>(specialized, &context);
+  ASSERT_TRUE(module);
+  auto plan = buildQueueGraphPlan(*module);
+  ASSERT_TRUE(bool(plan)) << llvm::toString(plan.takeError());
+  EXPECT_EQ(plan->specializationFingerprint, fingerprint);
+  auto json = plan->canonicalJson();
+  ASSERT_TRUE(bool(json)) << llvm::toString(json.takeError());
+  EXPECT_NE(json->find(fingerprint), std::string::npos);
+  auto cpp = generateQueueGraphCpp(*plan);
+  ASSERT_TRUE(bool(cpp)) << llvm::toString(cpp.takeError());
+  EXPECT_NE(cpp->find(("// Specialization: " + fingerprint).str()),
+            std::string::npos);
+
+  specialized.replace(specialized.find(fingerprint), fingerprint.size(),
+                      "sha256:bad");
+  module = mlir::parseSourceString<mlir::ModuleOp>(specialized, &context);
+  ASSERT_TRUE(module);
+  plan = buildQueueGraphPlan(*module);
+  ASSERT_FALSE(bool(plan));
+  EXPECT_NE(llvm::toString(plan.takeError()).find("fingerprint is invalid"),
+            std::string::npos);
+}
+
+TEST(QueueGraphPlanTest, PreservesQueueRateAndRejectsUnspecializedPycLanes) {
+  mlir::MLIRContext context;
+  context.loadDialect<ac::ACIRDialect, mlir::DLTIDialect>();
+  std::string rated = kQueueGraph.str();
+  size_t attributes = rated.find("{ac.name = \"input\"}");
+  ASSERT_NE(attributes, std::string::npos);
+  rated.replace(attributes, std::string("{ac.name = \"input\"}").size(),
+                "{ac.name = \"input\", "
+                "ac.output_rates = array<i64: 2>}");
+  auto module = mlir::parseSourceString<mlir::ModuleOp>(rated, &context);
+  ASSERT_TRUE(module);
+  auto plan = buildQueueGraphPlan(*module);
+  ASSERT_TRUE(bool(plan)) << llvm::toString(plan.takeError());
+  ASSERT_FALSE(plan->queues.empty());
+  EXPECT_EQ(plan->queues.front().rate, 2u);
+  auto json = plan->canonicalJson();
+  ASSERT_TRUE(bool(json)) << llvm::toString(json.takeError());
+  EXPECT_NE(json->find("\"rate\":2"), std::string::npos);
+  auto cpp = generateQueueGraphCpp(*plan);
+  ASSERT_TRUE(bool(cpp)) << llvm::toString(cpp.takeError());
+  EXPECT_NE(cpp->find(", nullptr, 1, 2)"), std::string::npos);
+  auto pyc = generateQueueGraphPyc(*plan);
+  ASSERT_FALSE(bool(pyc));
+  EXPECT_NE(llvm::toString(pyc.takeError())
+                .find("rate greater than one requires explicit lane lowering"),
+            std::string::npos);
+}
+
 TEST(QueueGraphPlanTest, RejectsLegacyContractEpochBeforePlanning) {
   mlir::MLIRContext context;
   context.loadDialect<ac::ACIRDialect, mlir::DLTIDialect>();

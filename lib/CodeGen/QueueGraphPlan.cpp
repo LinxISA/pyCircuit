@@ -1,6 +1,7 @@
 #include "acir/CodeGen/QueueGraphPlan.h"
 
 #include "acir/Bindings/Binding.h"
+#include "acir/CodeGen/Manifest.h"
 #include "acir/Dialect/ACIR/ACIROps.h"
 #include "acir/Dialect/ACIR/ACIRTypes.h"
 
@@ -218,6 +219,12 @@ public:
     if (!system || system.getValue().empty())
       return planError("module requires non-empty ac.system");
     plan.system = system.getValue().str();
+    if (auto specialization =
+            module->getAttrOfType<mlir::StringAttr>("ac.specialization")) {
+      if (!isValidFingerprint(specialization.getValue()))
+        return planError("module ac.specialization fingerprint is invalid");
+      plan.specializationFingerprint = specialization.getValue().str();
+    }
     if (auto error = extractBlock(*module.getBody(), {}))
       return std::move(error);
     if (auto error = validateGraph())
@@ -229,15 +236,17 @@ private:
   llvm::Error validateGraph() { return verifyQueueGraphPlan(plan); }
 
   llvm::Error addQueue(mlir::Value value, llvm::StringRef name, uint64_t depth,
-                       uint64_t latency, llvm::ArrayRef<std::string> scope) {
+                       uint64_t latency, uint64_t rate,
+                       llvm::ArrayRef<std::string> scope) {
     if (name.empty() || !queueIdentities.insert(name).second)
       return planError("Queue logical identities must be non-empty and unique");
     auto queue = mlir::dyn_cast<ac::QueueType>(value.getType());
-    if (!queue || depth == 0 || latency == 0)
-      return planError("Queue plan requires typed positive depth and latency");
+    if (!queue || depth == 0 || latency == 0 || rate == 0 || rate > depth)
+      return planError(
+          "Queue plan requires typed positive depth/latency and rate <= depth");
     names[value] = name.str();
     plan.queues.push_back({name.str(), printType(queue.getElementType()),
-                           scopePath(scope), depth, latency});
+                           scopePath(scope), depth, latency, rate});
     return llvm::Error::success();
   }
 
@@ -251,11 +260,20 @@ private:
       return frozen.takeError();
     if (depths.size() != outputs.size() || latencies.size() != outputs.size())
       return planError("Queue output metadata count mismatch");
+    llvm::SmallVector<int64_t> defaultRates(outputs.size(), 1);
+    llvm::ArrayRef<int64_t> rates = defaultRates;
+    if (auto attribute =
+            op->getAttrOfType<mlir::DenseI64ArrayAttr>("ac.output_rates"))
+      rates = attribute.asArrayRef();
+    if (rates.size() != outputs.size())
+      return planError("Queue output rate count must match result count");
     for (size_t index = 0; index < outputs.size(); ++index) {
-      if (depths[index] <= 0 || latencies[index] <= 0)
-        return planError("Queue depth and latency must be positive");
+      if (depths[index] <= 0 || latencies[index] <= 0 || rates[index] <= 0 ||
+          rates[index] > depths[index])
+        return planError("Queue depth/latency must be positive and rate must "
+                         "not exceed depth");
       auto error = addQueue(outputs[index], (*frozen)[index], depths[index],
-                            latencies[index], scope);
+                            latencies[index], rates[index], scope);
       if (error)
         return error;
     }
@@ -705,6 +723,9 @@ llvm::Expected<QueueGraphPlan> buildQueueGraphPlan(mlir::ModuleOp module) {
 llvm::Error verifyQueueGraphPlan(const QueueGraphPlan &plan) {
   if (plan.system.empty() || plan.queues.empty() || plan.blocks.empty())
     return planError("QueueGraph plan is incomplete");
+  if (!plan.specializationFingerprint.empty() &&
+      !isValidFingerprint(plan.specializationFingerprint))
+    return planError("QueueGraph specialization fingerprint is invalid");
 
   llvm::StringSet<> queueNames;
   llvm::StringMap<const MemoryInstancePlan *> memoryInstances;
@@ -742,8 +763,10 @@ llvm::Error verifyQueueGraphPlan(const QueueGraphPlan &plan) {
   for (const QueuePlan &queue : plan.queues) {
     if (queue.name.empty() || !queueNames.insert(queue.name).second)
       return planError("Queue logical identities must be non-empty and unique");
-    if (queue.payloadType.empty() || queue.depth == 0 || queue.latency == 0)
-      return planError("Queue plan requires typed positive depth and latency");
+    if (queue.payloadType.empty() || queue.depth == 0 || queue.latency == 0 ||
+        queue.rate == 0 || queue.rate > queue.depth)
+      return planError(
+          "Queue plan requires typed positive depth/latency and rate <= depth");
     indegree[queue.name] = 0;
   }
 
@@ -823,6 +846,7 @@ llvm::Expected<std::string> QueueGraphPlan::canonicalJson() const {
                            {"latency", queue.latency},
                            {"name", queue.name},
                            {"payload_type", queue.payloadType},
+                           {"rate", queue.rate},
                            {"scope", queue.scope}});
   llvm::json::Array blockValues;
   for (const QueueBlockPlan &block : blocks) {
@@ -901,16 +925,20 @@ llvm::Expected<std::string> QueueGraphPlan::canonicalJson() const {
                            {"output", request.output},
                            {"result_field", request.resultField},
                            {"scope", request.scope}});
-  llvm::json::Object root{{"blocks", std::move(blockValues)},
-                          {"contract_epoch", "0.3"},
-                          {"memory_instances", std::move(memoryInstanceValues)},
-                          {"memory_requests", std::move(memoryRequestValues)},
-                          {"payloads", std::move(payloadValues)},
-                          {"queues", std::move(queueValues)},
-                          {"schema", "agentic-circuit-queue-graph-plan"},
-                          {"scopes", std::move(scopeValues)},
-                          {"system", system},
-                          {"version", "0.3"}};
+  llvm::json::Object root{
+      {"blocks", std::move(blockValues)},
+      {"contract_epoch", "0.3"},
+      {"memory_instances", std::move(memoryInstanceValues)},
+      {"memory_requests", std::move(memoryRequestValues)},
+      {"payloads", std::move(payloadValues)},
+      {"queues", std::move(queueValues)},
+      {"schema", "agentic-circuit-queue-graph-plan"},
+      {"scopes", std::move(scopeValues)},
+      {"specialization", specializationFingerprint.empty()
+                             ? llvm::json::Value(nullptr)
+                             : llvm::json::Value(specializationFingerprint)},
+      {"system", system},
+      {"version", "0.3"}};
   return bindings::canonicalizeJson(llvm::json::Value(std::move(root)));
 }
 

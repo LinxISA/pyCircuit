@@ -169,20 +169,30 @@ add_subdirectory(lib)
 add_subdirectory(python)
 add_subdirectory(tools)
 if(ACIR_BUILD_REFERENCE_MODELS)
-  add_subdirectory(examples/reference/davincioo-gfsim)
+  add_subdirectory(references/davincioo-gfsim)
 endif()
 if(BUILD_TESTING)
   add_subdirectory(test)
   add_subdirectory(unittests)
   add_test(
-    NAME Phase5E2ETests
-    COMMAND "${Python3_EXECUTABLE}" -m unittest tests.e2e.test_phase5_examples -v
+    NAME WorkspaceE2ETests
+    COMMAND "${Python3_EXECUTABLE}" -m unittest tests.e2e.test_workspace_examples -v
   )
-  set_tests_properties(Phase5E2ETests PROPERTIES
+  set_tests_properties(WorkspaceE2ETests PROPERTIES
     WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
     TIMEOUT 300
-    LABELS "e2e;phase5"
+    LABELS "e2e;workspace"
     ENVIRONMENT "AGENTIC_CIRCUIT_TEST_BUILD_DIR=${CMAKE_BINARY_DIR}"
+  )
+  add_test(
+    NAME DavinciOOTraceTests
+    COMMAND "${Python3_EXECUTABLE}" -m unittest
+      tests.e2e.test_davincioo_trace -v
+  )
+  set_tests_properties(DavinciOOTraceTests PROPERTIES
+    WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+    TIMEOUT 60
+    LABELS "e2e;davincioo"
   )
   add_test(
     NAME PycVerilogBackendTests

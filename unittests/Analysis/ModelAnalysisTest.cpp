@@ -929,7 +929,7 @@ TEST(ModelAnalysisTest,
   MLIRContext context(registry);
   constexpr uint64_t scfDepthOverLimit = 510;
   constexpr StringLiteral expected =
-      "whole-model region nesting exceeds ACIR v0.2 capability limit 512";
+      "whole-model region nesting exceeds ACIR capability limit 512";
   std::string firstDiagnostic;
   for (ModelEntryPath path :
        {ModelEntryPath::Verify, ModelEntryPath::Canonicalize,
@@ -952,7 +952,7 @@ TEST(ModelAnalysisTest,
   registerAllDialects(registry);
   MLIRContext context(registry);
   constexpr StringLiteral expected =
-      "whole-model region nesting exceeds ACIR v0.2 capability limit 512";
+      "whole-model region nesting exceeds ACIR capability limit 512";
   std::string firstDiagnostic;
   for (ModelEntryPath path :
        {ModelEntryPath::Verify, ModelEntryPath::Canonicalize,

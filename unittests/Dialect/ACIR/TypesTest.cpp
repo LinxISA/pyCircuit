@@ -52,7 +52,7 @@ TEST(ACIRTypesTest, PublicTypeInventoryRoundTrips) {
   }
 }
 
-TEST(ACIRTypesTest, V02QueueVarTypesRoundTripWithImmutablePayloads) {
+TEST(ACIRTypesTest, QueueVarTypesRoundTripWithImmutablePayloads) {
   mlir::MLIRContext context;
   context.loadDialect<ACIRDialect>();
 
@@ -77,7 +77,7 @@ TEST(ACIRTypesTest, V02QueueVarTypesRoundTripWithImmutablePayloads) {
   }
 }
 
-TEST(ACIRTypesTest, V02StaticQueueVarCollectionsRoundTrip) {
+TEST(ACIRTypesTest, StaticQueueVarCollectionsRoundTrip) {
   mlir::MLIRContext context;
   context.loadDialect<ACIRDialect>();
 

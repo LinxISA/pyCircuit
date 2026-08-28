@@ -271,13 +271,13 @@ private:
 };
 
 /// Trace-owning provider component for the checked-in hierarchical NPU model.
-class Phase5NpuTraceSource final : public SimObject {
+class NpuTraceSource final : public SimObject {
 public:
-  static constexpr std::string_view contractName = "phase5.Npu";
+  static constexpr std::string_view contractName = "workspace.Npu";
   static constexpr ObjectKind componentKind = ObjectKind::TraceSource;
 
-  Phase5NpuTraceSource(std::string name, ObjectId id, SimObject *parent,
-                       ObservationSink *observations = nullptr);
+  NpuTraceSource(std::string name, ObjectId id, SimObject *parent,
+                 ObservationSink *observations = nullptr);
 
   bool loadDocument(PtoTraceDocument document);
   void doWork(Epoch epoch) override;
@@ -299,12 +299,12 @@ private:
 };
 
 /// Quiescent structural marker used to preserve the generated NPU hierarchy.
-class Phase5NpuNode final : public SimObject {
+class NpuNode final : public SimObject {
 public:
-  static constexpr std::string_view contractName = "phase5.NpuNode";
+  static constexpr std::string_view contractName = "workspace.NpuNode";
   static constexpr ObjectKind componentKind = ObjectKind::Compute;
 
-  Phase5NpuNode(std::string name, ObjectId id, SimObject *parent)
+  NpuNode(std::string name, ObjectId id, SimObject *parent)
       : SimObject(ObjectKind::Compute, std::move(name), id, parent) {}
 
   RuntimeObjectState runtimeState(Epoch) const override {

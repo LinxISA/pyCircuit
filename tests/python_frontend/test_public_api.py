@@ -36,6 +36,21 @@ PUBLIC = {
     "observe",
     "expect",
     "atomic",
+    "compute",
+    "pipeline",
+    "config",
+    "const",
+    "jit",
+    "route",
+    "merge",
+    "schedule",
+    "engine",
+    "reorder",
+    "round_robin",
+    "priority",
+    "fork",
+    "barrier",
+    "table",
     "u1",
     "u2",
     "u4",
@@ -107,9 +122,7 @@ class PublicApiTest(unittest.TestCase):
         def generated() -> None:
             pass
 
-        self.assertEqual(
-            (("alpha", 1), ("zeta", 2)), generated.explicit_options
-        )
+        self.assertEqual((("alpha", 1), ("zeta", 2)), generated.explicit_options)
 
     def test_ast_only_markers_reject_runtime_execution(self) -> None:
         api = importlib.import_module("agentic_circuit")
@@ -129,6 +142,28 @@ class PublicApiTest(unittest.TestCase):
                 object(), predicate=lambda value: True, message="expected"
             ),
             lambda: api.atomic(),
+            lambda: api.compute(object(), lambda value: value),
+            lambda: api.pipeline(object(), stages=2),
+            lambda: api.route(object(), by=object(), outputs=2),
+            lambda: api.merge(object(), object()),
+            lambda: api.schedule(
+                object(),
+                by=object(),
+                waits_for=object(),
+                resource=object(),
+                cost=object(),
+            ),
+            lambda: api.engine(object(), cost=object()),
+            lambda: api.reorder(object(), by=object()),
+            lambda: api.fork(object(), outputs=2),
+            lambda: api.barrier(object(), object()),
+            lambda: api.table(
+                object(),
+                address=object(),
+                write=object(),
+                data=object(),
+                result=object(),
+            ),
         )
         for operation in operations:
             with self.subTest(operation=operation):

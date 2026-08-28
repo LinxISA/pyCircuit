@@ -97,8 +97,8 @@ def check_governance(errors):
 
 def check_epochs(errors):
     schemas = sorted((ROOT / "schemas").glob("*.schema.json"))
-    if len(schemas) != 11:
-        errors.append(f"expected 11 JSON schemas, found {len(schemas)}")
+    if len(schemas) != 12:
+        errors.append(f"expected 12 JSON schemas, found {len(schemas)}")
     for path in schemas:
         document = json.loads(path.read_text())
         actual = document.get("properties", {}).get("contract_epoch", {}).get("const")
@@ -372,6 +372,19 @@ def check_llvm_lock(errors):
         errors.append("LLVM lock does not match the approved 22.1.8 toolchain")
 
 
+def check_release_layout(errors):
+    for script in ("check-release-layout.py", "check-ndf.py"):
+        completed = subprocess.run(
+            [sys.executable, ROOT / "scripts" / script],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        if completed.returncode:
+            errors.append(completed.stderr.strip() or f"{script} failed")
+
+
 def main():
     errors = []
     check_governance(errors)
@@ -381,13 +394,14 @@ def main():
     check_links(errors)
     check_placeholders(errors)
     check_llvm_lock(errors)
+    check_release_layout(errors)
     if errors:
         for error in errors:
             print(f"error: {error}", file=sys.stderr)
         return 1
     print(
         "repository contracts: OK "
-        "(11 public schemas, 36 stdlib components, epoch 0.3, LLVM 22.1.8)"
+        "(12 public schemas, 36 stdlib components, epoch 0.3, LLVM 22.1.8)"
     )
     return 0
 

@@ -24,13 +24,15 @@ template <typename T> class SimQueue : public SimObject {
 public:
   SimQueue(std::string name, ObjectId id, SimObject *parent,
            size_t entryCapacity, size_t byteCapacity = SIZE_MAX,
-           ObservationSink *observations = nullptr, size_t latency = 1)
+           ObservationSink *observations = nullptr, size_t latency = 1,
+           size_t rate = SIZE_MAX)
       : SimObject(ObjectKind::Queue, std::move(name), id, parent, observations),
         entryCapacity_(entryCapacity), byteCapacity_(byteCapacity),
-        latency_(latency) {
-    if (entryCapacity_ == 0 || latency_ == 0)
+        latency_(latency), rate_(rate == SIZE_MAX ? entryCapacity : rate) {
+    if (entryCapacity_ == 0 || latency_ == 0 || rate_ == 0 ||
+        rate_ > entryCapacity_)
       throw std::invalid_argument(
-          "SimQueue capacity and latency must be positive");
+          "SimQueue capacity, latency, and rate are inconsistent");
   }
 
   // ── Capacity ────────────────────────────────────────────────────────
@@ -38,8 +40,10 @@ public:
   size_t entryCapacity() const { return entryCapacity_; }
   size_t byteCapacity() const { return byteCapacity_; }
   size_t latency() const { return latency_; }
+  size_t rate() const { return rate_; }
 
   size_t committedSize() const { return committed_.size(); }
+  const std::vector<T> &committedValues() const { return committed_; }
   size_t committedBytes() const {
     if constexpr (PacketTraits<T>::serializedSize == 0)
       return 0;
@@ -53,11 +57,19 @@ public:
   bool canProposePushAfterPop(size_t count = 1) const {
     return canProposePop() && canProposePushWithAdditionalPops(count, 1);
   }
-  bool canProposePop() const { return popProposalCount_ < committed_.size(); }
+  bool canProposePop() const {
+    return popProposalCount_ < rate_ && popProposalCount_ < committed_.size();
+  }
+
+  const T *peekProposable() const {
+    return canProposePop() ? &committed_[popProposalCount_] : nullptr;
+  }
 
 private:
   bool canProposePushWithAdditionalPops(size_t count,
                                         size_t additionalPops) const {
+    if (count > rate_ - std::min(rate_, pushProposals_.size()))
+      return false;
     const size_t pops =
         std::min(committed_.size(), popProposalCount_ + additionalPops);
     const size_t occupied =
@@ -97,7 +109,7 @@ public:
     // Deterministic local arbitration: FIFO order.
     // Push proposals are appended in order.
     // Pop proposals are served from the front.
-    // In v0.2, arbitration is simple FIFO.
+    // Arbitration is simple FIFO.
     for (size_t index = 0; index < pushProposals_.size(); ++index)
       emitObservation({.category = "transaction",
                        .name = "accepted",
@@ -210,6 +222,7 @@ private:
   size_t entryCapacity_;
   size_t byteCapacity_;
   size_t latency_;
+  size_t rate_;
   std::vector<T> committed_;
   std::vector<std::pair<uint64_t, T>> delayed_;
   std::vector<T> pushProposals_;

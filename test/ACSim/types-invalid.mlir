@@ -9,7 +9,7 @@
 
 // NEGATIVE: error: array extents must be non-negative
 // RANK-ZERO: error: array shape must have at least one extent
-// EXCESSIVE: error: array volume exceeds ACSim v0.2 capability 1048576
+// EXCESSIVE: error: array volume exceeds ACSim capability 1048576
 // PORT: error: expected ','
 // PC: error: invalid kind of attribute specified
 

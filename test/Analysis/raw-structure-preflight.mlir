@@ -41,7 +41,7 @@ builtin.module attributes {ac.contract_epoch = "0.3"} {}
 enter:acir-test-materialize-raw-depth
 complete:acir-test-materialize-raw-depth
 enter:normalize-ac-file
-LOC: error: whole-model region nesting exceeds ACIR v0.2 capability limit 512
+LOC: error: whole-model region nesting exceeds ACIR capability limit 512
 builtin.module attributes {ac.contract_epoch = "0.3"} {}
 ^
 fail:normalize-ac-file

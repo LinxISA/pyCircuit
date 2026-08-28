@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include <limits>
+#include <type_traits>
 
 namespace gfsim {
 namespace {
@@ -133,6 +134,54 @@ struct MemoryResponse {
   }
 };
 
+TEST(QueueBlocksTest, HighLevelProvidersFreezeStructuralTemplateParameters) {
+  using Schedule4 =
+      Schedule<DependencyValue, 16, 4, 255, DependencyKey,
+               DependencyPredecessor, DependencyResource, DependencyCost>;
+  using Schedule2 =
+      Schedule<DependencyValue, 8, 2, 255, DependencyKey, DependencyPredecessor,
+               DependencyResource, DependencyCost>;
+  using Engine4 = Engine<DependencyValue, 4, DependencyCost>;
+  using ComputeInt = Compute<int, int, 1, Increment>;
+  using Pipeline2 = Pipeline<int, 2, 1>;
+  using Ordered64 = Reorder<SequencedValue, 64, 0, SequenceKey>;
+  using Table32 = Table<MemoryRequest, uint16_t, 32, 0, MemoryAddress,
+                        MemoryWrite, MemoryWriteData, MemoryResponse>;
+
+  static_assert(!std::is_same_v<Schedule4, Schedule2>);
+  EXPECT_EQ(Schedule4::contractName, "ac.schedule");
+  EXPECT_EQ(Engine4::contractName, "ac.engine");
+  EXPECT_EQ(ComputeInt::contractName, "ac.compute");
+  EXPECT_EQ(Pipeline2::contractName, "ac.pipeline");
+  EXPECT_EQ(Ordered64::contractName, "ac.reorder");
+  EXPECT_EQ(Table32::contractName, "ac.table");
+
+  SimQueue<DependencyValue> dependencyInput("dependency_input", 1, nullptr, 2);
+  SimQueue<DependencyValue> dependencyOutput("dependency_output", 2, nullptr,
+                                             2);
+  Schedule4 schedule("schedule", 3, nullptr, dependencyInput, dependencyOutput);
+  Engine4 engine("engine", 4, nullptr, dependencyInput, dependencyOutput);
+  SimQueue<SequencedValue> orderedInput("ordered_input", 5, nullptr, 2);
+  SimQueue<SequencedValue> orderedOutput("ordered_output", 6, nullptr, 2);
+  Ordered64 reorder("reorder", 7, nullptr, orderedInput, orderedOutput);
+  SimQueue<MemoryRequest> memoryInput("memory_input", 8, nullptr, 2);
+  SimQueue<MemoryRequest> memoryOutput("memory_output", 9, nullptr, 2);
+  Table32 table("table", 10, nullptr, memoryInput, memoryOutput);
+  SimQueue<int> computeInput("compute_input", 11, nullptr, 2);
+  SimQueue<int> computeOutput("compute_output", 12, nullptr, 2);
+  ComputeInt compute("compute", 13, nullptr, computeInput, computeOutput);
+  SimQueue<int> pipelineOutput("pipeline_output", 14, nullptr, 2,
+                               std::numeric_limits<size_t>::max(), nullptr, 2);
+  Pipeline2 pipeline("pipeline", 15, nullptr, computeOutput, pipelineOutput);
+
+  EXPECT_EQ(schedule.active(), 0u);
+  EXPECT_EQ(engine.active(), 0u);
+  EXPECT_EQ(reorder.active(), 0u);
+  EXPECT_EQ(table.at(0), 0u);
+  EXPECT_FALSE(compute.hasPendingCommit());
+  EXPECT_FALSE(pipeline.hasPendingCommit());
+}
+
 struct SharedMemoryAddress {
   uint8_t operator()(size_t, const MemoryRequest &request) const {
     return request.address;
@@ -177,6 +226,57 @@ TEST(QueueBlocksTest, TransformCommitsOnlyAcrossTheQueueBarrier) {
   EXPECT_TRUE(input.isEmpty());
   ASSERT_NE(output.peek(), nullptr);
   EXPECT_EQ(*output.peek(), 42);
+}
+
+TEST(QueueBlocksTest, SimQueueRateBoundsOneEpochProposals) {
+  SimQueue<int> queue("rate_two", 1, nullptr, 4,
+                      std::numeric_limits<size_t>::max(), nullptr, 1, 2);
+  EXPECT_EQ(queue.rate(), 2u);
+  EXPECT_TRUE(queue.proposePush(10));
+  EXPECT_TRUE(queue.proposePush(20));
+  EXPECT_FALSE(queue.proposePush(30));
+  queue.doXfer({0, 0});
+
+  ASSERT_NE(queue.peekProposable(), nullptr);
+  EXPECT_EQ(*queue.peekProposable(), 10);
+  EXPECT_EQ(queue.proposePop(), 10);
+  ASSERT_NE(queue.peekProposable(), nullptr);
+  EXPECT_EQ(*queue.peekProposable(), 20);
+  EXPECT_EQ(queue.proposePop(), 20);
+  EXPECT_EQ(queue.peekProposable(), nullptr);
+  EXPECT_EQ(queue.proposePop(), std::nullopt);
+  queue.doXfer({1, 0});
+  EXPECT_TRUE(queue.isEmpty());
+
+  EXPECT_THROW(
+      (SimQueue<int>("invalid", 2, nullptr, 1,
+                     std::numeric_limits<size_t>::max(), nullptr, 1, 0)),
+      std::invalid_argument);
+  EXPECT_THROW(
+      (SimQueue<int>("too_wide", 3, nullptr, 1,
+                     std::numeric_limits<size_t>::max(), nullptr, 1, 2)),
+      std::invalid_argument);
+}
+
+TEST(QueueBlocksTest, ComputeConsumesAndProducesItsStaticRate) {
+  SimQueue<int> input("input", 1, nullptr, 4,
+                      std::numeric_limits<size_t>::max(), nullptr, 1, 2);
+  SimQueue<int> output("output", 2, nullptr, 4,
+                       std::numeric_limits<size_t>::max(), nullptr, 1, 2);
+  Compute<int, int, 2, Increment> compute("compute", 3, nullptr, input, output);
+  ASSERT_TRUE(input.proposePush(10));
+  ASSERT_TRUE(input.proposePush(20));
+  input.doXfer({0, 0});
+
+  compute.doWork({1, 0});
+  input.doXfer({1, 0});
+  output.doXfer({1, 0});
+  compute.doXfer({1, 0});
+
+  EXPECT_TRUE(input.isEmpty());
+  ASSERT_EQ(output.committedSize(), 2u);
+  EXPECT_EQ(output.proposePop(), 11);
+  EXPECT_EQ(output.proposePop(), 21);
 }
 
 TEST(QueueBlocksTest, TransformDoesNotConsumeWhenOutputIsBackpressured) {

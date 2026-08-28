@@ -76,17 +76,15 @@ class DiscoveryCommandTest(unittest.TestCase):
     def test_component_protocol_and_list_queries_are_exact(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            component = run_cli(
-                "schema", "component", "ac.Queue", "--json", cwd=root
-            )
+            component = run_cli("schema", "component", "ac.Queue", "--json", cwd=root)
             protocol = run_cli(
                 "schema", "protocol", "ac.ready_valid", "--json", cwd=root
             )
             listing = run_cli("schema", "component", "--json", cwd=root)
-            opcode = run_cli(
-                "schema", "opcode", "ac.reorder", "--json", cwd=root
-            )
+            opcode = run_cli("schema", "opcode", "ac.reorder", "--json", cwd=root)
             opcode_listing = run_cli("schema", "opcode", "--json", cwd=root)
+            block = run_cli("schema", "block", "ac.schedule", "--json", cwd=root)
+            block_listing = run_cli("schema", "block", "--json", cwd=root)
 
         self.assertEqual("ac.Queue", json.loads(component.stdout)["canonical_name"])
         self.assertEqual(
@@ -104,6 +102,13 @@ class DiscoveryCommandTest(unittest.TestCase):
         self.assertIn("ac.dependency", opcode_names)
         self.assertIn("ac.reorder", opcode_names)
         self.assertIn("ac.transform", opcode_names)
+        schedule = json.loads(block.stdout)
+        self.assertEqual("ac.schedule", schedule["operation"])
+        self.assertEqual("ac.dependency", schedule["lowers_to"])
+        block_names = json.loads(block_listing.stdout)["items"]
+        self.assertEqual(sorted(block_names), block_names)
+        self.assertIn("ac.compute", block_names)
+        self.assertIn("ac.engine", block_names)
 
     def test_unknown_schema_name_is_a_structured_user_error(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -120,9 +125,7 @@ class DiscoveryCommandTest(unittest.TestCase):
             workspace.joinpath("sentinel.txt").write_text("unchanged\n")
             before = snapshot_tree(workspace)
 
-            explained = run_cli(
-                "explain", "ACIR-PROTOCOL-004", "--json", cwd=workspace
-            )
+            explained = run_cli("explain", "ACIR-PROTOCOL-004", "--json", cwd=workspace)
             doctor = run_cli("doctor", "--json", cwd=workspace)
 
             self.assertEqual(before, snapshot_tree(workspace))
@@ -131,9 +134,7 @@ class DiscoveryCommandTest(unittest.TestCase):
         self.assertEqual("ACIR-PROTOCOL-004", json.loads(explained.stdout)["code"])
         self.assertEqual(0, doctor.returncode, doctor.stderr)
         checks = json.loads(doctor.stdout)["checks"]
-        self.assertTrue(
-            all(check["status"] == "passed" for check in checks)
-        )
+        self.assertTrue(all(check["status"] == "passed" for check in checks))
 
 
 if __name__ == "__main__":

@@ -671,23 +671,23 @@ LogicalResult preflightModel(ModelOp model) {
     if (modelVerificationWorkCollector)
       ++modelVerificationWorkCollector->preflightOperationVisits;
     if (++nodes > limits.maxNodes)
-      return model.emitOpError() << "model node count exceeds ACSim v0.2 "
+      return model.emitOpError() << "model node count exceeds ACSim "
                                     "capability "
                                  << limits.maxNodes;
     if (frame.depth > limits.maxRegionDepth)
       return frame.operation->emitOpError()
-             << "region nesting exceeds ACSim v0.2 capability "
+             << "region nesting exceeds ACSim capability "
              << limits.maxRegionDepth;
     SmallVector<Attribute> attributeStack;
     if (frame.operation->getAttrs().size() >
         limits.maxAttributeElements - attributeElements)
       return frame.operation->emitOpError(
-          "attribute element count exceeds ACSim v0.2 capability");
+          "attribute element count exceeds ACSim capability");
     for (NamedAttribute named : frame.operation->getAttrs()) {
       if (named.getName().size() >
           limits.maxAttributeStringBytes - attributeStringBytes)
         return frame.operation->emitOpError(
-            "attribute string bytes exceed ACSim v0.2 capability");
+            "attribute string bytes exceed ACSim capability");
       attributeStringBytes += named.getName().size();
       attributeStack.push_back(named.getValue());
     }
@@ -695,12 +695,12 @@ LogicalResult preflightModel(ModelOp model) {
       Attribute attribute = attributeStack.pop_back_val();
       if (++attributeElements > limits.maxAttributeElements)
         return frame.operation->emitOpError(
-            "attribute element count exceeds ACSim v0.2 capability");
+            "attribute element count exceeds ACSim capability");
       auto addString = [&](StringRef value) -> LogicalResult {
         if (value.size() >
             limits.maxAttributeStringBytes - attributeStringBytes)
           return frame.operation->emitOpError(
-              "attribute string bytes exceed ACSim v0.2 capability");
+              "attribute string bytes exceed ACSim capability");
         attributeStringBytes += value.size();
         return success();
       };
@@ -716,7 +716,7 @@ LogicalResult preflightModel(ModelOp model) {
             array.size() > limits.maxAttributeElements - attributeElements -
                                attributeStack.size())
           return frame.operation->emitOpError(
-              "attribute element count exceeds ACSim v0.2 capability");
+              "attribute element count exceeds ACSim capability");
         attributeStack.append(array.begin(), array.end());
       } else if (auto dictionary = dyn_cast<DictionaryAttr>(attribute)) {
         for (NamedAttribute named : dictionary) {
@@ -725,20 +725,20 @@ LogicalResult preflightModel(ModelOp model) {
           if (attributeStack.size() >=
               limits.maxAttributeElements - attributeElements)
             return frame.operation->emitOpError(
-                "attribute element count exceeds ACSim v0.2 capability");
+                "attribute element count exceeds ACSim capability");
           attributeStack.push_back(named.getValue());
         }
       } else if (auto dense = dyn_cast<DenseArrayAttr>(attribute)) {
         uint64_t count = dense.size();
         if (count > limits.maxAttributeElements - attributeElements)
           return frame.operation->emitOpError(
-              "attribute element count exceeds ACSim v0.2 capability");
+              "attribute element count exceeds ACSim capability");
         attributeElements += count;
       } else if (auto dense = dyn_cast<DenseElementsAttr>(attribute)) {
         uint64_t count = dense.getNumElements();
         if (count > limits.maxAttributeElements - attributeElements)
           return frame.operation->emitOpError(
-              "attribute element count exceeds ACSim v0.2 capability");
+              "attribute element count exceeds ACSim capability");
         attributeElements += count;
       }
     }
@@ -748,8 +748,7 @@ LogicalResult preflightModel(ModelOp model) {
     if (operandEdges > limits.maxEdges ||
         edges > limits.maxEdges - operandEdges)
       return frame.operation->emitOpError()
-             << "model edge count exceeds ACSim v0.2 capability "
-             << limits.maxEdges;
+             << "model edge count exceeds ACSim capability " << limits.maxEdges;
     edges += operandEdges;
     if (auto array = dyn_cast<ArrayOp>(frame.operation)) {
       auto type = dyn_cast<ArrayType>(array.getResult().getType());
@@ -760,14 +759,14 @@ LogicalResult preflightModel(ModelOp model) {
               (extent != 0 && volume > limits.maxExpandedObjects /
                                            static_cast<uint64_t>(extent)))
             return array.emitOpError()
-                   << "expanded array volume exceeds ACSim v0.2 capability "
+                   << "expanded array volume exceeds ACSim capability "
                    << limits.maxExpandedObjects;
           volume *= static_cast<uint64_t>(extent);
         }
         if (volume > limits.maxExpandedObjects ||
             totalArrayVolume > limits.maxExpandedObjects - volume)
           return array.emitOpError()
-                 << "expanded array volume exceeds ACSim v0.2 capability "
+                 << "expanded array volume exceeds ACSim capability "
                  << limits.maxExpandedObjects;
         totalArrayVolume += volume;
       }
@@ -781,14 +780,14 @@ LogicalResult preflightModel(ModelOp model) {
           if (successors > limits.maxEdges ||
               edges > limits.maxEdges - successors)
             return terminator->emitOpError()
-                   << "model edge count exceeds ACSim v0.2 capability "
+                   << "model edge count exceeds ACSim capability "
                    << limits.maxEdges;
           edges += successors;
         }
         for (Operation &child : llvm::reverse(block)) {
           if (stack.size() >= limits.maxNodes - nodes)
             return frame.operation->emitOpError()
-                   << "model node count exceeds ACSim v0.2 capability "
+                   << "model node count exceeds ACSim capability "
                    << limits.maxNodes;
           stack.push_back({&child, frame.depth + 1});
         }
@@ -1308,7 +1307,7 @@ LogicalResult expandSelectedRootOwners(ModelOp model, const ModelIndex &index,
     if (action.kind == ActionKind::Row) {
       if (expansion.ownerRows.size() >= expansionLimit)
         return action.placement->emitOpError()
-               << "expanded hierarchy exceeds ACSim v0.2 capability "
+               << "expanded hierarchy exceeds ACSim capability "
                << expansionLimit;
       if (expansion.ownerByPath.contains(action.path))
         return action.placement->emitOpError()
@@ -1412,8 +1411,7 @@ LogicalResult expandRuntime(const ModelIndex &index,
       continue;
     if (expansion.runtimeRows.size() >= expansionLimit)
       return owner.placement->emitOpError()
-             << "runtime expansion exceeds ACSim v0.2 capability "
-             << expansionLimit;
+             << "runtime expansion exceeds ACSim capability " << expansionLimit;
     int64_t id = static_cast<int64_t>(expansion.runtimeRows.size());
     expansion.runtimeRows.push_back(
         {owner.placement, realization, owner.context,
@@ -1601,8 +1599,7 @@ LogicalResult verifyProcess(ProcessOp process, const ModelIndex &index) {
       currentModelVerificationLimits().maxDependencyNodes;
   if (pcs.size() > dependencyLimit)
     return process.emitOpError()
-           << "dependency graph exceeds ACSim v0.2 capability "
-           << dependencyLimit;
+           << "dependency graph exceeds ACSim capability " << dependencyLimit;
   SmallVector<SmallVector<unsigned>> successors(pcs.size());
   SmallVector<unsigned> indegree(pcs.size(), 0);
   uint64_t dependencyNodes = pcs.size();
@@ -1618,7 +1615,7 @@ LogicalResult verifyProcess(ProcessOp process, const ModelIndex &index) {
       if (unique.insert(found->second).second) {
         if (++dependencyNodes > dependencyLimit)
           return process.emitOpError()
-                 << "dependency graph exceeds ACSim v0.2 capability "
+                 << "dependency graph exceeds ACSim capability "
                  << dependencyLimit;
         successors[ordinal].push_back(found->second);
         ++indegree[found->second];
@@ -1802,7 +1799,7 @@ FailureOr<Operation *> capturedPlacement(Value value, Operation *reporter) {
   while (value) {
     if (++nodes > limit)
       return reporter->emitOpError()
-             << "dependency graph exceeds ACSim v0.2 capability " << limit;
+             << "dependency graph exceeds ACSim capability " << limit;
     void *key = value.getAsOpaquePointer();
     if (!visited.insert(key).second)
       return reporter->emitOpError(
@@ -2466,7 +2463,7 @@ LogicalResult verifyDispatchAndActivation(ModelOp model,
               "typed SSA dependency graph contains a cycle");
         if (++dependencyNodes > limit)
           return reporter->emitOpError()
-                 << "dependency graph exceeds ACSim v0.2 capability " << limit;
+                 << "dependency graph exceeds ACSim capability " << limit;
         frame.initialized = true;
         if (auto argument = dyn_cast<BlockArgument>(frame.value)) {
           if (auto process =
