@@ -17,7 +17,7 @@ Start with these repo-native references:
 Prerequisites:
 
 - Python 3.10+
-- LLVM/MLIR 19
+- LLVM/MLIR 22
 - CMake 3.20+
 - Ninja
 - Verilator and Icarus Verilog for simulation lanes

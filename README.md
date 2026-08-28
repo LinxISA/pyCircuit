@@ -3,7 +3,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License">
   <img src="https://img.shields.io/badge/Python-3.10%2B-green.svg" alt="Python">
-  <img src="https://img.shields.io/badge/MLIR-19-orange.svg" alt="MLIR">
+  <img src="https://img.shields.io/badge/MLIR-22-orange.svg" alt="MLIR">
   <a href="https://github.com/LinxISA/pyCircuit/actions"><img src="https://github.com/LinxISA/pyCircuit/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="https://github.com/LinxISA/pyCircuit/actions/workflows/release.yml"><img src="https://github.com/LinxISA/pyCircuit/actions/workflows/release.yml/badge.svg" alt="Release"></a>
   <a href="https://github.com/LinxISA/pyCircuit/releases"><img src="https://img.shields.io/github/v/release/LinxISA/pyCircuit?display_name=tag" alt="Latest Release"></a>

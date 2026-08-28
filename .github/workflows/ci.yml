@@ -10,7 +10,7 @@ permissions:
   contents: read
 
 env:
-  LLVM_VERSION: "19"
+  LLVM_VERSION: "22"
   CMAKE_BUILD_TYPE: Release
 
 jobs:
@@ -136,7 +136,7 @@ jobs:
       - name: Install Python deps
         run: python -m pip install -e ".[dev]"
 
-      - name: Install LLVM 19 + simulation deps
+      - name: Install LLVM 22 + simulation deps
         run: |
           set -euxo pipefail
           sudo apt-get update
@@ -186,7 +186,7 @@ jobs:
       - name: Install wheel build deps
         run: python -m pip install setuptools wheel
 
-      - name: Install LLVM 19 + build deps
+      - name: Install LLVM 22 + build deps
         run: |
           set -euxo pipefail
           sudo apt-get update
@@ -292,13 +292,13 @@ jobs:
       - name: Install Homebrew packages
         run: |
           brew update
-          brew install ninja cmake llvm@19 python@3
-          echo "$(brew --prefix llvm@19)/bin" >> "$GITHUB_PATH"
+          brew install ninja cmake "llvm@${LLVM_VERSION}" python@3
+          echo "$(brew --prefix "llvm@${LLVM_VERSION}")/bin" >> "$GITHUB_PATH"
 
       - name: Build staged toolchain
         run: |
           bash flows/scripts/pyc build \
-            --llvm-config "$(brew --prefix llvm@19)/bin/llvm-config" \
+            --llvm-config "$(brew --prefix "llvm@${LLVM_VERSION}")/bin/llvm-config" \
             --build-dir "$PWD/.pycircuit_out/toolchain/build" \
             --install-prefix "$PWD/.pycircuit_out/toolchain/install"
 
