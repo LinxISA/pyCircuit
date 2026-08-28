@@ -1,223 +1,223 @@
 {
   "catalog": "ac",
   "version": "0.1",
-  "contract_epoch": "0.2",
+  "contract_epoch": "0.3",
   "entries": [
     {
       "canonical_name": "ac.AddressTranslator",
       "availability": "declared_unavailable",
       "schema_path": "schemas/stdlib/AddressTranslator.json",
-      "schema_fingerprint": "sha256:c0176e22a330c973c42f1b1d6c981477ea3c5fbf4f42100b38a573b08e3f7834"
+      "schema_fingerprint": "sha256:9b600a098eb40576afba407026f3ccd205563339da4b93eb644926d8999c537c"
     },
     {
       "canonical_name": "ac.Arbiter",
       "availability": "declared_unavailable",
       "schema_path": "schemas/stdlib/Arbiter.json",
-      "schema_fingerprint": "sha256:4c43b5f2b10a6632f9738d0769817c76e4281cf33b770917e833cfd0345d71a6"
+      "schema_fingerprint": "sha256:700f89d9d9df1facc03b30065b0654ad42fb1171ed52ebbb6320b3100298e8d7"
     },
     {
       "canonical_name": "ac.Barrier",
       "availability": "declared_unavailable",
       "schema_path": "schemas/stdlib/Barrier.json",
-      "schema_fingerprint": "sha256:9049a29ffdb6fb456a1546df3b008c58616482e01d8e2af5cfc2e3c30d272ec5"
+      "schema_fingerprint": "sha256:a8b0478453025d638045b7a889416aab17a82d32b352019ce60dd5816e2d5ca6"
     },
     {
       "canonical_name": "ac.Broadcast",
       "availability": "declared_unavailable",
       "schema_path": "schemas/stdlib/Broadcast.json",
-      "schema_fingerprint": "sha256:e8374abbc24b327d019bd38c6825b6161d2a3e5d3c13ff7256cd09ba071ca9a2"
+      "schema_fingerprint": "sha256:f06690f86032ba4be16aad63759b060b2f74d69a5a4c52d2e5715f796759e760"
     },
     {
       "canonical_name": "ac.Bus",
       "availability": "declared_unavailable",
       "schema_path": "schemas/stdlib/Bus.json",
-      "schema_fingerprint": "sha256:246580c627a0c897874d3d1cb2aa31606700c6e916db82a3ab21158ee9f4e150"
+      "schema_fingerprint": "sha256:52650a3dce32c6870da36e35d159e17bf1050cb4ba28fa77082b6065037e09b2"
     },
     {
       "canonical_name": "ac.Cache",
       "availability": "declared_unavailable",
       "schema_path": "schemas/stdlib/Cache.json",
-      "schema_fingerprint": "sha256:9e49f5295abdb3fc1badff2bbbfa15030b1558bd5129adef63a7d12a0a4dae60"
+      "schema_fingerprint": "sha256:9f58fa33c9beda1118ba7c226339b37fcfc9d1ec5575c2c75416691ee06d686b"
     },
     {
       "canonical_name": "ac.Compute",
       "availability": "available",
       "schema_path": "schemas/stdlib/Compute.json",
-      "schema_fingerprint": "sha256:8b6d278dcc3951d8cf14005dfa375c81b41755ba43d23137474787440ad492e1"
+      "schema_fingerprint": "sha256:5871dd46fa5dc7f79661655acabee3bd7579a80af87f243653a01ca572574faa"
     },
     {
       "canonical_name": "ac.Crossbar",
       "availability": "declared_unavailable",
       "schema_path": "schemas/stdlib/Crossbar.json",
-      "schema_fingerprint": "sha256:aa7fdf02c80230d33a52ef51f6745a61a6f66b39a4da0e793a06aeefe01e3ed3"
+      "schema_fingerprint": "sha256:c91f38bec2800f7af8d146f20f1115842e677acf46cb7a31880552fd60920991"
     },
     {
       "canonical_name": "ac.DependencyTracker",
       "availability": "declared_unavailable",
       "schema_path": "schemas/stdlib/DependencyTracker.json",
-      "schema_fingerprint": "sha256:12e224a4a5a998d960eb6e5da8620e9a69452f1a5f4fc349e2469763a6fa07fd"
+      "schema_fingerprint": "sha256:3b7d380f363ff2a96db3860b36dfab088b093c0a9c53fcf9a8439bc1cd79d537"
     },
     {
       "canonical_name": "ac.Dispatcher",
       "availability": "declared_unavailable",
       "schema_path": "schemas/stdlib/Dispatcher.json",
-      "schema_fingerprint": "sha256:1ae82b2114e8fcb55bac66616a818d86060ea7a60e6b03e5ee310d14038e7f3a"
+      "schema_fingerprint": "sha256:a0467931c4d93f5dd93b7ef5e0867626c3130049fa71273a41b37ea128db7a0d"
     },
     {
       "canonical_name": "ac.Dma",
       "availability": "declared_unavailable",
       "schema_path": "schemas/stdlib/Dma.json",
-      "schema_fingerprint": "sha256:f89b68b2dffab771be6ae6a971120bb74af36d347bbd878a7f981772ef42dbe4"
+      "schema_fingerprint": "sha256:9a4c600c2f4fe074dfe3c13b3c4d83d9f8449fdb6f7a1136951e642d8287f77e"
     },
     {
       "canonical_name": "ac.Fork",
       "availability": "declared_unavailable",
       "schema_path": "schemas/stdlib/Fork.json",
-      "schema_fingerprint": "sha256:0cd5256eac6c0f299eb97667ee8d61cc892ab450cb32ef40b4b1262c2971a86f"
+      "schema_fingerprint": "sha256:7a5ab27f3d82b1eb5a4177b3c2761cb05a371c28f4550ef102187b5cc96ed3f1"
     },
     {
       "canonical_name": "ac.Join",
       "availability": "declared_unavailable",
       "schema_path": "schemas/stdlib/Join.json",
-      "schema_fingerprint": "sha256:317045e62a94b4d8942a37a0394c688a8539e9735cd868af9f080ccf4dc9ee5d"
+      "schema_fingerprint": "sha256:5ae5c46325a4d1dc628c0da87845f1758991ed63fa7e4c1c9c9ba7650c85873a"
     },
     {
       "canonical_name": "ac.Link",
       "availability": "available",
       "schema_path": "schemas/stdlib/Link.json",
-      "schema_fingerprint": "sha256:6983c79ba87efba6dcada2b8d3eb426156e21bd6db66200bc44a98f9709505f9"
+      "schema_fingerprint": "sha256:ff1cab1105429617bbded07d22a3c013a03970e17657b97f9d8f89ee6adb3727"
     },
     {
       "canonical_name": "ac.LoadStore",
       "availability": "declared_unavailable",
       "schema_path": "schemas/stdlib/LoadStore.json",
-      "schema_fingerprint": "sha256:5088041b9e50df70db34f8f7120de0d5c4ebe6617f7c5a9875892a24b76db82f"
+      "schema_fingerprint": "sha256:e213f2629732f381e679e3aa3176ff897308738d0e718fa4a56224ed5a8e0514"
     },
     {
       "canonical_name": "ac.Memory",
       "availability": "available",
       "schema_path": "schemas/stdlib/Memory.json",
-      "schema_fingerprint": "sha256:c1e0e06138871ea846dc723360536189311308e3a88cd5b8504da62739958295"
+      "schema_fingerprint": "sha256:8533abc8fb5ca68c714177debb25ccf5e2320d9552a1d8a662fc7f2e78046a60"
     },
     {
       "canonical_name": "ac.MemoryController",
       "availability": "declared_unavailable",
       "schema_path": "schemas/stdlib/MemoryController.json",
-      "schema_fingerprint": "sha256:8233c8c9619a9dfb806ed408249c40fcfad2dea9c92a2e77669aefb7f09a8ee5"
+      "schema_fingerprint": "sha256:f3799084548341d23721abc3bf5910eb8cdf95af7f30b9becb081b1003a0aa51"
     },
     {
       "canonical_name": "ac.MemoryManagement",
       "availability": "declared_unavailable",
       "schema_path": "schemas/stdlib/MemoryManagement.json",
-      "schema_fingerprint": "sha256:7d347021b6babb2fddf4866c57e17405d7342f121940b12a18ab338f10b70c64"
+      "schema_fingerprint": "sha256:4bcf3d516863d99b8067a034444fbce664450f16f1dc14d7e5542015aa9d6d31"
     },
     {
       "canonical_name": "ac.Packetizer",
       "availability": "declared_unavailable",
       "schema_path": "schemas/stdlib/Packetizer.json",
-      "schema_fingerprint": "sha256:f6f7219a6d950ae5b3d95aa808c23735a8b9a08198d4972397024710941a4c87"
+      "schema_fingerprint": "sha256:7d3166e0adac88facf31f4e383eec92c4e15d0a741a9444f5e5a7e7d5f8bd705"
     },
     {
       "canonical_name": "ac.ProtocolAdapter",
       "availability": "declared_unavailable",
       "schema_path": "schemas/stdlib/ProtocolAdapter.json",
-      "schema_fingerprint": "sha256:5acefd82911d8f276232dd7dfdf93afa3c038e1ba671e690d6e3db57386bbe5e"
+      "schema_fingerprint": "sha256:425e78494c5931c71f6808a3b3508bff753c56d7c39c0f62562a1aef17be7267"
     },
     {
       "canonical_name": "ac.Queue",
       "availability": "available",
       "schema_path": "schemas/stdlib/Queue.json",
-      "schema_fingerprint": "sha256:9955fedd08d5c72852fbfd9e514eaa8b34598ba6eb6d4baab797d1819a711caa"
+      "schema_fingerprint": "sha256:6ca4b73e0292a3ab122a059ffe927080fd039f7e3d390c63ac17fdebc67d64ef"
     },
     {
       "canonical_name": "ac.Reassembler",
       "availability": "declared_unavailable",
       "schema_path": "schemas/stdlib/Reassembler.json",
-      "schema_fingerprint": "sha256:4cf037d2877b74afbb093aeb54c274021e647633468e462a1a7f4854757ed921"
+      "schema_fingerprint": "sha256:c660b63d8533f91eca4862e789e68e0451dac8bb8b4235fc1677513057cc3a16"
     },
     {
       "canonical_name": "ac.RegisterFile",
       "availability": "declared_unavailable",
       "schema_path": "schemas/stdlib/RegisterFile.json",
-      "schema_fingerprint": "sha256:ca73624956c7e62aedb1e673667abd8b0802d4b081201902e1a70f1e18181ae4"
+      "schema_fingerprint": "sha256:af20286039fb652d9d166c903d022c114c3a14daeb876c4b6e81d45c6f9aafa8"
     },
     {
       "canonical_name": "ac.Router",
       "availability": "declared_unavailable",
       "schema_path": "schemas/stdlib/Router.json",
-      "schema_fingerprint": "sha256:9b9a4d48b4c301a8036f659f89012dff842934bc35f7d412be078e76a20e376e"
+      "schema_fingerprint": "sha256:dfbb97591c0aa3050a5829286017dc263ce224b8af155ff6cbb794989c0af72f"
     },
     {
       "canonical_name": "ac.Scheduler",
       "availability": "available",
       "schema_path": "schemas/stdlib/Scheduler.json",
-      "schema_fingerprint": "sha256:800da587c84140429e9ee02b7dc171c1e4d3a47bb03e6e3007d4d9910ae0692d"
+      "schema_fingerprint": "sha256:e8cb1f1d2c1765c0ac8efe14cdd88a5b78d44ca019a9145d5f10c1df63581de0"
     },
     {
       "canonical_name": "ac.Scoreboard",
       "availability": "declared_unavailable",
       "schema_path": "schemas/stdlib/Scoreboard.json",
-      "schema_fingerprint": "sha256:bd125a8a16e51c090b5ceb89771b7143edfdc6e16eb4e0030d40e4ea280795ab"
+      "schema_fingerprint": "sha256:2204843d83c1385cd52e0aca40542bfb768a834f8237520ebf82b8ec222269e3"
     },
     {
       "canonical_name": "ac.Scratchpad",
       "availability": "declared_unavailable",
       "schema_path": "schemas/stdlib/Scratchpad.json",
-      "schema_fingerprint": "sha256:dbf22a802535a6cca1d22af2fa4f477ade8af9f086068c04648547cd23c5976e"
+      "schema_fingerprint": "sha256:bd5459cc59ca0ddd058786951624ebedac89113bc6d718d3d979c2af96fe5bf1"
     },
     {
       "canonical_name": "ac.Sink",
       "availability": "available",
       "schema_path": "schemas/stdlib/Sink.json",
-      "schema_fingerprint": "sha256:c61afbff6e1afc953e467a3d7a59b900fa5fcd87be0b740125244b47c8b0d21e"
+      "schema_fingerprint": "sha256:242a92a05db9e045edbb57b19b5182341c2ae7c50fb99dd5ddb92aff65b66c69"
     },
     {
       "canonical_name": "ac.Switch",
       "availability": "declared_unavailable",
       "schema_path": "schemas/stdlib/Switch.json",
-      "schema_fingerprint": "sha256:1ee33185fa739e64df4ecd3c4abb21851b806413513dfde9695f7523233da4d9"
+      "schema_fingerprint": "sha256:b17edbd26dc9bd856095287c3d1445baf7fe8d015e5cadf4ce3a18fa3b04a669"
     },
     {
       "canonical_name": "ac.TimeDomainBridge",
       "availability": "declared_unavailable",
       "schema_path": "schemas/stdlib/TimeDomainBridge.json",
-      "schema_fingerprint": "sha256:1dd4277d628cc341f5e02b5405ee87ee6d3e9f8de121f7d8df80678569a9e50b"
+      "schema_fingerprint": "sha256:77f73e3950a3c34f20a93f72c831404975b3c69e39407b09dfd381cf23f86cce"
     },
     {
       "canonical_name": "ac.Tlb",
       "availability": "declared_unavailable",
       "schema_path": "schemas/stdlib/Tlb.json",
-      "schema_fingerprint": "sha256:ed41a90003807c98bb713b67e213aa48055d8205f1dcd4af812fbdb113b7d6c6"
+      "schema_fingerprint": "sha256:727f72c7d2e1becd27206d9a8116805c709f62478839c6c6a7407ac4311706a0"
     },
     {
       "canonical_name": "ac.TraceSource",
       "availability": "available",
       "schema_path": "schemas/stdlib/TraceSource.json",
-      "schema_fingerprint": "sha256:8bb0e5dfa3a7798478901b9e001b0aed528ba79f89160b27cb81cccef66b070b"
+      "schema_fingerprint": "sha256:dd46cf0b83710a1425ea997a91efd413688998efeff38c94ca15050b7fe49a07"
     },
     {
       "canonical_name": "ac.TrafficSource",
       "availability": "declared_unavailable",
       "schema_path": "schemas/stdlib/TrafficSource.json",
-      "schema_fingerprint": "sha256:9016d03e6fe637c8feaf2ab9f7dd90cbbb6754079065ed57533806dccbf3dc04"
+      "schema_fingerprint": "sha256:b5c165bd89a51654bec35a50970491045a459cfda1a1e239ef11e6c6e678d387"
     },
     {
       "canonical_name": "ac.WidthAdapter",
       "availability": "declared_unavailable",
       "schema_path": "schemas/stdlib/WidthAdapter.json",
-      "schema_fingerprint": "sha256:718422dd3cb3e042decf5b101db364c3c487f45410e25282016934181229c368"
+      "schema_fingerprint": "sha256:de472d25f8f1da54fc3c8794fa1e9b54ec8f9667e306f5a1740b2153ebeb84c7"
     },
     {
       "canonical_name": "ac.ready_valid",
       "availability": "available",
       "schema_path": "schemas/stdlib/ready_valid.json",
-      "schema_fingerprint": "sha256:b4d7c3c1bd1c20ddf1c167f5cd8461047c11bbebe30c768606415bb7120ea803"
+      "schema_fingerprint": "sha256:de509897e393cdb7cace1789747fcdb93af7180ad7838c1522f2e44c302f11c6"
     },
     {
       "canonical_name": "ac.request_response",
       "availability": "available",
       "schema_path": "schemas/stdlib/request_response.json",
-      "schema_fingerprint": "sha256:e482b094b9c8dea94e08832255f6a7cc53bec6a6623f4be30e2476a78ddfc6f2"
+      "schema_fingerprint": "sha256:e111345757ee022bf9f25c613a6146edf9b7ec7326097374b8515e070ebcc2d4"
     }
   ]
 }

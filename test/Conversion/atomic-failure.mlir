@@ -12,7 +12,7 @@
 // rejects orphaned or incomplete binding option sets before any pass runs.
 
 //--- unfrozen.mlir
-builtin.module attributes {ac.contract_epoch = "0.2"} {
+builtin.module attributes {ac.contract_epoch = "0.3"} {
   ac.system @soc root @Top as "root" tick 0 "cycle"
       workload @Top::@workload seed {kind = "fixed", value = 7 : i64}
       instrumentation [] results {id = "default", format = "json"} selected true
@@ -25,7 +25,7 @@ builtin.module attributes {ac.contract_epoch = "0.2"} {
 }
 
 //--- results.mlir
-builtin.module attributes {ac.contract_epoch = "0.2"} {
+builtin.module attributes {ac.contract_epoch = "0.3"} {
   ac.system @soc root @Top as "root" tick 0 "cycle"
       workload @Top::@workload seed {kind = "fixed", value = 7 : i64}
       instrumentation [] results {id = "default", format = "json"} selected true
@@ -38,7 +38,7 @@ builtin.module attributes {ac.contract_epoch = "0.2"} {
   }
 }
 
-// UNFROZEN: error: ACLOWER-EPOCH-MISMATCH: ac-lower-to-acsim requires a topology-frozen v0.2 model; run ac-freeze-topology first
+// UNFROZEN: error: ACLOWER-EPOCH-MISMATCH: ac-lower-to-acsim requires a topology-frozen v0.3 model; run ac-freeze-topology first
 // RESULTS: error: ACLOWER-UNSUPPORTED-CONSTRUCT: operation 'arith.constant' has no ACSim realization
 // OPTIONS: error: ACLOWER-BINDING-OPTIONS: --ac-lower-to-acsim requires --ac-binding-profile
 // ORPHAN: error: ACLOWER-BINDING-OPTIONS: binding options require --ac-resolve-gfsim-bindings or --ac-lower-to-acsim

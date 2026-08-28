@@ -10,7 +10,7 @@ from urllib.parse import unquote
 
 
 ROOT = Path(__file__).resolve().parents[1]
-EPOCH = "0.2"
+EPOCH = "0.3"
 GOVERNANCE_FILES = (
     "LICENSE",
     "CONTRIBUTING.md",
@@ -107,7 +107,7 @@ def check_epochs(errors):
     pyproject = (ROOT / "pyproject.toml").read_text()
     match = re.search(r'^contract-epoch\s*=\s*"([^"]+)"\s*$', pyproject, re.MULTILINE)
     if match is None or match.group(1) != EPOCH:
-        errors.append('pyproject.toml must declare contract-epoch = "0.2"')
+        errors.append('pyproject.toml must declare contract-epoch = "0.3"')
 
 
 def check_schemas(errors):
@@ -387,7 +387,7 @@ def main():
         return 1
     print(
         "repository contracts: OK "
-        "(11 public schemas, 36 stdlib components, epoch 0.2, LLVM 22.1.8)"
+        "(11 public schemas, 36 stdlib components, epoch 0.3, LLVM 22.1.8)"
     )
     return 0
 

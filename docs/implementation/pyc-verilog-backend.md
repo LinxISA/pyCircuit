@@ -19,6 +19,11 @@ FIFO, register, wiring, constants, mux/boolean/integer expressions, concat,
 extract, Popcount, and round-robin Arbiter. Unsupported PYC operations fail
 explicitly instead of silently producing incomplete RTL.
 
+Pure Python compute regions spell population count as `ac.popcount(value)`.
+The bridge also preserves canonical `pyc.assert` operations as simulation-only
+Verilog checks guarded by synthesis translation directives; failure semantics
+are not silently removed from Verilator runs.
+
 Example:
 
 ```bash
@@ -51,5 +56,5 @@ one LLVM/MLIR toolchain.
 The same path is covered by `test/CodeGen/popcount-verilog-v0.2.mlir`; the
 fixture exercises packed-field extraction (`i12` to `i8`) before the qualified
 `pyc.popcount` primitive.  `test/CodeGen/pyc-primitives-smoke.sv` provides a
-bounded N=2/N=3/N=4 arbitration and popcount simulation when a Verilator binary
-smoke is desired.
+bounded N=2/N=3/N=4 arbitration, popcount, and FIFO simulation. The smoke is
+part of `PycVerilogBackendTests` whenever Verilator is available.

@@ -6,6 +6,7 @@
 
 #include "mlir/IR/Operation.h"
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/StringSet.h"
@@ -211,8 +212,8 @@ public:
 
   llvm::Expected<QueueGraphPlan> run() {
     auto epoch = module->getAttrOfType<mlir::StringAttr>("ac.contract_epoch");
-    if (!epoch || epoch.getValue() != "0.2")
-      return planError("module requires ac.contract_epoch exactly '0.2'");
+    if (!epoch || epoch.getValue() != "0.3")
+      return planError("module requires ac.contract_epoch exactly '0.3'");
     auto system = module->getAttrOfType<mlir::StringAttr>("ac.system");
     if (!system || system.getValue().empty())
       return planError("module requires non-empty ac.system");
@@ -285,6 +286,14 @@ private:
           }
           plan.payloads.push_back(std::move(payload));
         }
+        continue;
+      }
+      if (auto instance = mlir::dyn_cast<ac::MemoryInstanceOp>(operation)) {
+        plan.memoryInstances.push_back(
+            {instance.getSymName().str(), printType(instance.getDataType()),
+             uint64_t(instance.getEntries()), uint64_t(instance.getInit()),
+             uint64_t(instance.getLatency()), instance.getStableId().str(),
+             instance.getOwner().str()});
         continue;
       }
       if (auto source = mlir::dyn_cast<ac::SourceOp>(operation)) {
@@ -536,25 +545,25 @@ private:
         plan.blocks.push_back(std::move(blockPlan));
         continue;
       }
-      if (auto memory = mlir::dyn_cast<ac::MemoryOp>(operation)) {
+      if (auto memory = mlir::dyn_cast<ac::MemoryRequestOp>(operation)) {
         auto input = queueName(memory.getInput(), names);
         if (!input)
           return input.takeError();
         std::vector<std::string> outputs;
         if (auto error = addOutputs(
                 memory, memory->getResults(), {int64_t(memory.getDepth())},
-                {int64_t(memory.getLatency())}, scope, outputs))
+                {1}, scope, outputs))
           return error;
-        QueueBlockPlan blockPlan{"memory",
+        QueueBlockPlan blockPlan{"memory_request",
                                  outputs.front(),
                                  scopePath(scope),
                                  {*input},
                                  outputs,
                                  {uint64_t(memory.getDepth())},
-                                 {uint64_t(memory.getLatency())}};
-        blockPlan.entries = memory.getEntries();
-        blockPlan.init = memory.getInit();
+                                 {1}};
         blockPlan.resultField = memory.getResultField().str();
+        blockPlan.memoryInstance = memory.getInstance().str();
+        blockPlan.endpointOrdinal = memory.getOrdinal();
         blockPlan.region = printRegion(memory.getAddress());
         std::vector<std::string> policyYields;
         for (mlir::Region *policy :
@@ -566,6 +575,11 @@ private:
           policyYields.push_back(blockPlan.yields.front());
         }
         blockPlan.yields = std::move(policyYields);
+        plan.memoryRequests.push_back(
+            {blockPlan.memoryInstance, blockPlan.name, blockPlan.scope,
+             blockPlan.inputs.front(), blockPlan.outputs.front(),
+             blockPlan.endpointOrdinal, blockPlan.depths.front(),
+             blockPlan.resultField});
         plan.blocks.push_back(std::move(blockPlan));
         continue;
       }
@@ -693,6 +707,32 @@ llvm::Error verifyQueueGraphPlan(const QueueGraphPlan &plan) {
     return planError("QueueGraph plan is incomplete");
 
   llvm::StringSet<> queueNames;
+  llvm::StringMap<const MemoryInstancePlan *> memoryInstances;
+  for (const MemoryInstancePlan &instance : plan.memoryInstances) {
+    if (instance.name.empty() || !memoryInstances.try_emplace(instance.name, &instance).second)
+      return planError("memory instance identities must be non-empty and unique");
+    if (instance.dataType.empty() || instance.entries == 0 ||
+        instance.init != 0 || instance.latency == 0 ||
+        instance.stableId.empty() || instance.ownerPath.empty())
+      return planError("memory instance metadata is incomplete");
+  }
+  llvm::StringMap<llvm::DenseSet<uint64_t>> endpointOrdinals;
+  for (const MemoryRequestPlan &request : plan.memoryRequests) {
+    if (!memoryInstances.contains(request.instance))
+      return planError("memory request references unknown instance '" +
+                       request.instance + "'");
+    if (!endpointOrdinals[request.instance].insert(request.ordinal).second)
+      return planError("memory request endpoint ordinals must be unique");
+  }
+  for (const auto &entry : memoryInstances)
+    if (!endpointOrdinals.contains(entry.getKey()))
+      return planError("memory instance '" + entry.getKey() +
+                       "' has no request endpoints");
+  for (const auto &entry : endpointOrdinals)
+    for (uint64_t ordinal = 0; ordinal < entry.getValue().size(); ++ordinal)
+      if (!entry.getValue().contains(ordinal))
+        return planError("memory request endpoint ordinals must be contiguous "
+                         "from zero");
   llvm::StringMap<unsigned> producers;
   llvm::StringMap<unsigned> consumers;
   llvm::StringMap<unsigned> indegree;
@@ -706,6 +746,9 @@ llvm::Error verifyQueueGraphPlan(const QueueGraphPlan &plan) {
   }
 
   for (const QueueBlockPlan &block : plan.blocks) {
+    if (block.kind == "memory_request" &&
+        !memoryInstances.contains(block.memoryInstance))
+      return planError("memory request block references unknown instance");
     for (const std::string &input : block.inputs)
       if (!queueNames.contains(input))
         return planError("block input references unknown Queue '" + input +
@@ -821,8 +864,10 @@ llvm::Expected<std::string> QueueGraphPlan::canonicalJson() const {
                            {"latencies", std::move(latencies)},
                            {"max_iterations", block.maxIterations},
                            {"message", block.message},
+                           {"memory_instance", block.memoryInstance},
                            {"name", block.name},
                            {"no_dependency", block.noDependency},
+                           {"endpoint_ordinal", block.endpointOrdinal},
                            {"outputs", std::move(outputs)},
                            {"policy", block.policy},
                            {"region", block.region},
@@ -833,14 +878,31 @@ llvm::Expected<std::string> QueueGraphPlan::canonicalJson() const {
                            {"init", block.init},
                            {"yields", std::move(yields)}});
   }
+  llvm::json::Array memoryInstanceValues;
+  for (const MemoryInstancePlan &instance : memoryInstances)
+    memoryInstanceValues.push_back(llvm::json::Object{
+        {"data_type", instance.dataType}, {"entries", instance.entries},
+        {"init", instance.init}, {"latency", instance.latency},
+        {"name", instance.name},
+        {"owner_path", instance.ownerPath}, {"stable_id", instance.stableId}});
+  llvm::json::Array memoryRequestValues;
+  for (const MemoryRequestPlan &request : memoryRequests)
+    memoryRequestValues.push_back(llvm::json::Object{
+        {"depth", request.depth}, {"input", request.input},
+        {"instance", request.instance}, {"name", request.name},
+        {"ordinal", request.ordinal},
+        {"output", request.output}, {"result_field", request.resultField},
+        {"scope", request.scope}});
   llvm::json::Object root{{"blocks", std::move(blockValues)},
-                          {"contract_epoch", "0.2"},
+                          {"contract_epoch", "0.3"},
+                          {"memory_instances", std::move(memoryInstanceValues)},
+                          {"memory_requests", std::move(memoryRequestValues)},
                           {"payloads", std::move(payloadValues)},
                           {"queues", std::move(queueValues)},
                           {"schema", "agentic-circuit-queue-graph-plan"},
                           {"scopes", std::move(scopeValues)},
                           {"system", system},
-                          {"version", "0.2"}};
+                          {"version", "0.3"}};
   return bindings::canonicalizeJson(llvm::json::Value(std::move(root)));
 }
 

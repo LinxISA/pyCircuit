@@ -1,4 +1,5 @@
-# Proposed ACIR v0.2 public inventory under active implementation.
+# ACIR v0.3 public inventory. The historical filename is retained for
+# compatibility with existing tooling paths during the epoch transition.
 #
 # This manifest is the contract-side source of truth for the public ACIR
 # surface. scripts/check-ir-coverage.py requires the ODS definitions to
@@ -6,7 +7,7 @@
 # or type must be reflected here in the same commit, and every entry must
 # have observable lit coverage.
 schema: acir-ir-inventory
-contract_epoch: "0.2"
+contract_epoch: "0.3"
 dialect: acir
 operations:
   - ac.system
@@ -72,7 +73,8 @@ operations:
   - ac.credit.yield
   - ac.dependency
   - ac.dependency.yield
-  - ac.memory
+  - ac.memory.instance
+  - ac.memory.request
   - ac.memory.yield
   - ac.reorder
   - ac.reorder.yield

@@ -20,6 +20,7 @@ ATOMIC_EXAMPLE = ROOT / "examples" / "v02" / "pyc_atomic_pipeline.py"
 REORDER_EXAMPLE = ROOT / "examples" / "v02" / "pyc_reorder_pipeline.py"
 DEPENDENCY_EXAMPLE = ROOT / "examples" / "v02" / "pyc_dependency_pipeline.py"
 MEMORY_EXAMPLE = ROOT / "examples" / "v02" / "pyc_memory_pipeline.py"
+MEMORY_BANKS_EXAMPLE = ROOT / "examples" / "v03" / "memory_banks.py"
 FORK_EXAMPLE = ROOT / "examples" / "v02" / "pyc_fork_pipeline.py"
 CONDITIONAL_EXAMPLE = ROOT / "examples" / "v02" / "pyc_conditional_pipeline.py"
 FEEDBACK_EXAMPLE = ROOT / "examples" / "v02" / "pyc_feedback_pipeline.py"
@@ -36,6 +37,38 @@ DAVINCIOO_PROJECTION = ROOT / "examples/v02/davincioo-softmax-projection.json"
 
 
 class V02PycBackendTest(unittest.TestCase):
+    def test_memory_array_frontend_expands_to_one_sync_mem_per_bank(self) -> None:
+        acir_opt = ROOT / "build/dev-llvm22/bin/acir-opt"
+        pycgen = ROOT / "build/dev-llvm22/bin/acir-queue-pycgen"
+        if not acir_opt.is_file() or not pycgen.is_file():
+            self.skipTest("ACIR optimizer or Queue PYC generator is unavailable")
+        source = MEMORY_BANKS_EXAMPLE.read_text(encoding="utf-8")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            raw = root / "memory_banks.raw.ac.mlir"
+            frozen = root / "memory_banks.frozen.ac.mlir"
+            raw.write_text(
+                lower_queue_source(source, "memory_banks"), encoding="utf-8"
+            )
+            optimized = subprocess.run(
+                (str(acir_opt), str(raw)),
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(0, optimized.returncode, optimized.stderr)
+            frozen.write_text(optimized.stdout, encoding="utf-8")
+            generated = subprocess.run(
+                (str(pycgen), str(frozen)),
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(0, generated.returncode, generated.stderr)
+            self.assertEqual(4, generated.stdout.count("pyc.sync_mem"))
+            for bank in range(4):
+                self.assertIn(f'name = "banks__{bank}"', generated.stdout)
+
     def test_bounded_feedback_is_cycle_equivalent_in_pyc_cpp_and_verilog(
         self,
     ) -> None:
@@ -354,7 +387,7 @@ int main() {{
             self.assertIn("pyc.eq", pyc)
             self.assertIn("pyc.fifo", pyc)
             manifest = json.loads((output / "manifest.json").read_text())
-            self.assertEqual("0.2", manifest["contract_epoch"])
+            self.assertEqual("0.3", manifest["contract_epoch"])
             verilog = "\n".join(
                 path.read_text(encoding="utf-8")
                 for path in sorted((output / "verilog").glob("*.v"))
@@ -426,9 +459,9 @@ int main() {{
             )
             self.assertEqual(0, completed.returncode, completed.stderr)
             manifest = json.loads((output / "manifest.json").read_text())
-            self.assertEqual("0.2", manifest["contract_epoch"])
+            self.assertEqual("0.3", manifest["contract_epoch"])
             pyc = (output / "model.pyc").read_text(encoding="utf-8")
-            self.assertEqual(2, pyc.count("pyc.reg"))
+            self.assertEqual(3, pyc.count("pyc.reg"))
             self.assertIn("%out0_ready", pyc)
             self.assertIn("%out1_ready", pyc)
 
@@ -789,12 +822,18 @@ int main() {
             )
             self.assertEqual(0, completed.returncode, completed.stderr)
             pyc = (output / "model.pyc").read_text(encoding="utf-8")
-            self.assertEqual(2, pyc.count("pyc.reg"))
+            self.assertEqual(4, pyc.count("pyc.reg"))
             self.assertEqual(1, pyc.count("pyc.sync_mem"))
-            self.assertIn('{depth = 16, name = "responses"}', pyc)
+            self.assertIn("pyc.sub", pyc)
+            self.assertIn('{depth = 16, name = "sram"}', pyc)
             manifest = json.loads((output / "manifest.json").read_text())
             self.assertEqual(
-                ["ac.memory", "ac.sink", "ac.source"],
+                [
+                    "ac.memory.instance",
+                    "ac.memory.request",
+                    "ac.sink",
+                    "ac.source",
+                ],
                 manifest["opcode_lowering_inventory"],
             )
 

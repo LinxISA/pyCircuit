@@ -59,7 +59,7 @@ using namespace mlir;
 namespace acir {
 namespace {
 
-constexpr llvm::StringLiteral kEpoch = "0.2";
+constexpr llvm::StringLiteral kEpoch = "0.3";
 constexpr llvm::StringLiteral kResultRoleIdentity = "acsim.result.role";
 constexpr uint64_t kMaxExpandedRows = 1U << 20;
 
@@ -1294,7 +1294,7 @@ mlir::LogicalResult ACIRToACSimPass::plan(mlir::ModuleOp input) {
   if (!frozen || !frozen.getValue() || !freezeEpoch ||
       freezeEpoch.getValue() != kEpoch)
     return lowerError(input, "ACLOWER-EPOCH-MISMATCH",
-                      "ac-lower-to-acsim requires a topology-frozen v0.2 "
+                      "ac-lower-to-acsim requires a topology-frozen v0.3 "
                       "model; run ac-freeze-topology first");
   auto frozenOwners = input->getAttrOfType<ArrayAttr>("ac.frozen_owners");
   if (!frozenOwners)

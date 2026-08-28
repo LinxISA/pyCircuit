@@ -261,9 +261,9 @@ llvm::Expected<std::string> generateQueueGraphCpp(const QueueGraphPlan &plan) {
         (block.inputs.size() != 1 || !block.outputs.empty() ||
          block.yields.size() != 1 || block.message.empty()))
       return generatorError("expect contract is unsupported");
-    if (block.kind == "memory" &&
+    if (block.kind == "memory_request" &&
         (block.inputs.size() != 1 || block.outputs.size() != 1 ||
-         block.yields.size() != 3 || block.entries == 0 || block.init != 0 ||
+         block.yields.size() != 3 || block.memoryInstance.empty() ||
          block.resultField.empty()))
       return generatorError("memory contract is unsupported");
   }
@@ -311,8 +311,17 @@ llvm::Expected<std::string> generateQueueGraphCpp(const QueueGraphPlan &plan) {
 
   std::vector<const QueueBlockPlan *> runtimeBlocks;
   for (const QueueBlockPlan &block : plan.blocks)
-    if (isRuntimeBlock(block))
+    if (isRuntimeBlock(block) && block.kind != "memory_request")
       runtimeBlocks.push_back(&block);
+  llvm::StringMap<std::vector<const QueueBlockPlan *>> memoryEndpoints;
+  for (const QueueBlockPlan &block : plan.blocks)
+    if (block.kind == "memory_request")
+      memoryEndpoints[block.memoryInstance].push_back(&block);
+  for (auto &entry : memoryEndpoints)
+    llvm::sort(entry.getValue(), [](const QueueBlockPlan *left,
+                                    const QueueBlockPlan *right) {
+      return left->endpointOrdinal < right->endpointOrdinal;
+    });
   llvm::StringMap<uint64_t> queueIds;
   for (auto [index, queue] : llvm::enumerate(plan.queues))
     queueIds[queue.name] = index;
@@ -324,6 +333,9 @@ llvm::Expected<std::string> generateQueueGraphCpp(const QueueGraphPlan &plan) {
   llvm::StringMap<uint64_t> blockIds;
   for (auto [index, block] : llvm::enumerate(runtimeBlocks))
     blockIds[block->name + "#" + std::to_string(index)] = nextId++;
+  llvm::StringMap<uint64_t> memoryIds;
+  for (const MemoryInstancePlan &instance : plan.memoryInstances)
+    memoryIds[instance.name] = nextId++;
 
   std::ostringstream output;
   output << "// Generated from frozen ACIR QueueGraph plan; do not edit.\n"
@@ -351,7 +363,7 @@ llvm::Expected<std::string> generateQueueGraphCpp(const QueueGraphPlan &plan) {
     if (block->kind != "transform" && block->kind != "route" &&
         block->kind != "select" && block->kind != "expect" &&
         block->kind != "dependency" && block->kind != "credit" &&
-        block->kind != "memory" && block->kind != "reorder" &&
+        block->kind != "reorder" &&
         block->kind != "feedback")
       continue;
     if (block->kind == "dependency") {
@@ -386,44 +398,6 @@ llvm::Expected<std::string> generateQueueGraphCpp(const QueueGraphPlan &plan) {
           return body.takeError();
         output << *body << "  }\n};\n\n";
       }
-      continue;
-    }
-    if (block->kind == "memory") {
-      const QueuePlan *input = findQueue(plan, block->inputs.front());
-      if (!input)
-        return generatorError("memory input Queue is missing");
-      auto inputType = cppType(input->payloadType);
-      if (!inputType)
-        return inputType.takeError();
-      constexpr llvm::StringLiteral policyNames[] = {"address", "write",
-                                                     "data"};
-      std::vector<std::string> resultTypes;
-      for (auto [policyIndex, policyName] : llvm::enumerate(policyNames)) {
-        auto expression = std::find_if(
-            block->expressions.begin(), block->expressions.end(),
-            [&](const QueueExpressionPlan &candidate) {
-              return candidate.result == block->yields[policyIndex];
-            });
-        if (expression == block->expressions.end())
-          return generatorError("memory policy yield type is missing");
-        auto resultType = cppType(expression->type);
-        if (!resultType)
-          return resultType.takeError();
-        resultTypes.push_back(*resultType);
-        output << "struct block_" << index << '_' << policyName.str()
-               << "_policy {\n  " << *resultType << " operator()(const "
-               << *inputType << " &item) const {\n";
-        auto body = emitExpressionBody(*block, block->yields[policyIndex], 4);
-        if (!body)
-          return body.takeError();
-        output << *body << "  }\n};\n\n";
-      }
-      output << "struct block_" << index << "_response_policy {\n  "
-             << *inputType << " operator()(const " << *inputType
-             << " &item, const " << resultTypes[2]
-             << " &old_data) const {\n    auto result = item;\n    result."
-             << block->resultField
-             << " = old_data;\n    return result;\n  }\n};\n\n";
       continue;
     }
     if (block->kind == "transform" &&
@@ -539,6 +513,50 @@ llvm::Expected<std::string> generateQueueGraphCpp(const QueueGraphPlan &plan) {
         return condition.takeError();
       output << *condition << "  }\n};\n\n";
     }
+  }
+
+  for (auto [memoryIndex, instance] : llvm::enumerate(plan.memoryInstances)) {
+    auto found = memoryEndpoints.find(instance.name);
+    if (found == memoryEndpoints.end() || found->getValue().empty())
+      return generatorError("memory instance has no endpoints");
+    const auto &endpoints = found->getValue();
+    const QueuePlan *input = findQueue(plan, endpoints.front()->inputs.front());
+    if (!input)
+      return generatorError("memory endpoint input Queue is missing");
+    auto inputType = cppType(input->payloadType);
+    auto dataType = cppType(instance.dataType);
+    if (!inputType)
+      return inputType.takeError();
+    if (!dataType)
+      return dataType.takeError();
+    constexpr llvm::StringLiteral policyNames[] = {"address", "write", "data"};
+    const std::array<std::string, 3> resultTypes = {
+        "std::uint64_t", "bool", *dataType};
+    for (auto [policyIndex, policyName] : llvm::enumerate(policyNames)) {
+      output << "struct memory_" << memoryIndex << '_' << policyName.str()
+             << "_policy {\n  " << resultTypes[policyIndex]
+             << " operator()(size_t endpoint, const " << *inputType
+             << " &item) const {\n    switch (endpoint) {\n";
+      for (const QueueBlockPlan *endpoint : endpoints) {
+        output << "    case " << endpoint->endpointOrdinal << ": {\n";
+        auto body = emitExpressionBody(*endpoint,
+                                       endpoint->yields[policyIndex], 6);
+        if (!body)
+          return body.takeError();
+        output << *body << "    }\n";
+      }
+      output << "    default: return {};\n    }\n  }\n};\n\n";
+    }
+    output << "struct memory_" << memoryIndex
+           << "_response_policy {\n  " << *inputType
+           << " operator()(size_t endpoint, const " << *inputType
+           << " &item, const " << *dataType
+           << " &old_data) const {\n    auto result = item;\n"
+              "    switch (endpoint) {\n";
+    for (const QueueBlockPlan *endpoint : endpoints)
+      output << "    case " << endpoint->endpointOrdinal << ": result."
+             << endpoint->resultField << " = old_data; break;\n";
+    output << "    default: break;\n    }\n    return result;\n  }\n};\n\n";
   }
 
   std::string modelClass = className(plan.system);
@@ -709,12 +727,6 @@ llvm::Expected<std::string> generateQueueGraphCpp(const QueueGraphPlan &plan) {
           initializers, member, "(\"", instanceName, "\", ", blockIds[key],
           ", ", *parent, ", ", queueMembers[block->inputs[0]], ", ",
           queueMembers[block->outputs[0]], ", ", block->credits, ")");
-    } else if (block->kind == "memory") {
-      appendInitializer(initializers, member, "(\"", instanceName, "\", ",
-                        blockIds[key], ", ", *parent, ", ",
-                        queueMembers[block->inputs[0]], ", ",
-                        queueMembers[block->outputs[0]], ", ", block->entries,
-                        ", ", block->init, ")");
     } else if (block->kind == "feedback") {
       appendInitializer(initializers, member, "(\"", instanceName, "\", ",
                         blockIds[key], ", ", *parent, ", ",
@@ -735,6 +747,38 @@ llvm::Expected<std::string> generateQueueGraphCpp(const QueueGraphPlan &plan) {
       return generatorError("unsupported native Queue block '" + block->kind +
                             "'");
     }
+  }
+  for (auto [memoryIndex, instance] : llvm::enumerate(plan.memoryInstances)) {
+    auto found = memoryEndpoints.find(instance.name);
+    if (found == memoryEndpoints.end() || found->getValue().empty())
+      return generatorError("memory instance has no endpoints");
+    const auto &endpoints = found->getValue();
+    const QueuePlan *input = findQueue(plan, endpoints.front()->inputs.front());
+    auto type = input ? cppType(input->payloadType)
+                      : llvm::Expected<std::string>(
+                            generatorError("memory input missing"));
+    auto parent = modulePointer(instance.ownerPath);
+    if (!type)
+      return type.takeError();
+    if (!parent)
+      return parent.takeError();
+    std::string inputs;
+    std::string outputs;
+    for (auto [index, endpoint] : llvm::enumerate(endpoints)) {
+      if (index) {
+        inputs.append(", ");
+        outputs.append(", ");
+      }
+      inputs.append("&").append(queueMembers[endpoint->inputs.front()]);
+      outputs.append("&").append(queueMembers[endpoint->outputs.front()]);
+    }
+    appendInitializer(
+        initializers, "memory_", memoryIndex, "_(\"memory_", instance.name,
+        "\", ", memoryIds[instance.name], ", ", *parent,
+        ", std::array<gfsim::SimQueue<", *type, "> *, ", endpoints.size(),
+        ">{", inputs, "}, std::array<gfsim::SimQueue<", *type, "> *, ",
+        endpoints.size(), ">{", outputs, "}, ", instance.entries, ", ",
+        instance.init, ", ", instance.latency, ")");
   }
   for (auto [index, initializer] : llvm::enumerate(initializers))
     output << "        " << initializer
@@ -760,6 +804,13 @@ llvm::Expected<std::string> generateQueueGraphCpp(const QueueGraphPlan &plan) {
       continue;
     auto line =
         attach(block->scope, "block_" + std::to_string(index) + "_state_");
+    if (!line)
+      return line.takeError();
+    output << *line << '\n';
+  }
+  for (auto [memoryIndex, instance] : llvm::enumerate(plan.memoryInstances)) {
+    auto line = attach(instance.ownerPath,
+                       "memory_" + std::to_string(memoryIndex) + "_");
     if (!line)
       return line.takeError();
     output << *line << '\n';
@@ -835,9 +886,11 @@ llvm::Expected<std::string> generateQueueGraphCpp(const QueueGraphPlan &plan) {
       output << "        gfsim::makeDispatchRow(&block_" << index
              << "_state_),\n";
   for (size_t index = 0; index < runtimeBlocks.size(); ++index) {
-    output << "        gfsim::makeDispatchRow(&block_" << index << "_)"
-           << (index + 1 == runtimeBlocks.size() ? "\n" : ",\n");
+    output << "        gfsim::makeDispatchRow(&block_" << index << "_),\n";
   }
+  for (size_t index = 0; index < plan.memoryInstances.size(); ++index)
+    output << "        gfsim::makeDispatchRow(&memory_" << index << "_)"
+           << (index + 1 == plan.memoryInstances.size() ? "\n" : ",\n");
   output << "    };\n  }\n\nprivate:\n";
   for (const std::string &scope : plan.scopes)
     output << "  gfsim::Module " << scopeMembers[scope] << ";\n";
@@ -993,27 +1046,6 @@ llvm::Expected<std::string> generateQueueGraphCpp(const QueueGraphPlan &plan) {
         return type.takeError();
       output << "  gfsim::QueueCredit<" << *type << ", block_" << index
              << "_policy> block_" << index << "_;\n";
-    } else if (block->kind == "memory") {
-      const QueuePlan *input = findQueue(plan, block->inputs[0]);
-      auto type = input ? cppType(input->payloadType)
-                        : llvm::Expected<std::string>(
-                              generatorError("memory input missing"));
-      if (!type)
-        return type.takeError();
-      auto dataExpression =
-          std::find_if(block->expressions.begin(), block->expressions.end(),
-                       [&](const QueueExpressionPlan &candidate) {
-                         return candidate.result == block->yields[2];
-                       });
-      if (dataExpression == block->expressions.end())
-        return generatorError("memory data yield type is missing");
-      auto dataType = cppType(dataExpression->type);
-      if (!dataType)
-        return dataType.takeError();
-      output << "  gfsim::QueueMemory<" << *type << ", " << *dataType
-             << ", block_" << index << "_address_policy, block_" << index
-             << "_write_policy, block_" << index << "_data_policy, block_"
-             << index << "_response_policy> block_" << index << "_;\n";
     } else if (block->kind == "feedback") {
       const QueuePlan *input = findQueue(plan, block->inputs[0]);
       auto type = input ? cppType(input->payloadType)
@@ -1049,6 +1081,27 @@ llvm::Expected<std::string> generateQueueGraphCpp(const QueueGraphPlan &plan) {
                << "_;\n";
       }
     }
+  }
+  for (auto [memoryIndex, instance] : llvm::enumerate(plan.memoryInstances)) {
+    auto found = memoryEndpoints.find(instance.name);
+    if (found == memoryEndpoints.end() || found->getValue().empty())
+      return generatorError("memory instance has no endpoints");
+    const auto &endpoints = found->getValue();
+    const QueuePlan *input = findQueue(plan, endpoints.front()->inputs.front());
+    auto type = input ? cppType(input->payloadType)
+                      : llvm::Expected<std::string>(
+                            generatorError("memory input missing"));
+    auto dataType = cppType(instance.dataType);
+    if (!type)
+      return type.takeError();
+    if (!dataType)
+      return dataType.takeError();
+    output << "  gfsim::QueueMemoryArbiter<" << *type << ", " << *dataType
+           << ", " << endpoints.size() << ", memory_" << memoryIndex
+           << "_address_policy, memory_" << memoryIndex
+           << "_write_policy, memory_" << memoryIndex
+           << "_data_policy, memory_" << memoryIndex
+           << "_response_policy> memory_" << memoryIndex << "_;\n";
   }
   output << "};\n\n} // namespace ac_generated\n";
   return output.str();

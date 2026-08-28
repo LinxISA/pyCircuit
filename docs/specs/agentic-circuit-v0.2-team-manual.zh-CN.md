@@ -2,7 +2,7 @@
 
 | 字段 | 内容 |
 | --- | --- |
-| 目标版本 | Queue/Var contract epoch `0.2` |
+| 目标版本 | Explicit Memory contract epoch `0.3` |
 | 状态 | 已在 `main` 实现；本文是团队阅读入口 |
 | 适用读者 | Python 前端、ACIR、gfsim、PYC/Verilog 和模型验证开发者 |
 | 规范主文档 | [Agentic Circuit Queue/Var v0.2 Specification Manual](agentic-circuit-v0.2.md) |
@@ -314,21 +314,32 @@ class Request:
 
 @ac.system
 def memory_pipeline() -> None:
+    sram = ac.memory(ac.u16, entries=16, init=0, latency=3)
     requests = ac.source(Request)
-    responses = requests.memory(
+    responses = sram.request(
+        requests,
         address=lambda item: item.address,
         write=lambda item: item.write,
         data=lambda item: item.data,
-        entries=16,
-        init=0,
         result_field="data",
         depth=4,
-        latency=1,
     )
     ac.sink(responses)
 ```
 
-v0.2 只允许 `init=0`。PYC 后端使用 `pyc.sync_mem`，并用寄存器对齐请求和同步读响应。
+只允许 `init=0`，实例 `latency` 必须为正数。周期 `T` 接受的请求最早在
+`T + latency` 提交响应；request 的 response Queue latency 固定为 1。一个实例可以
+连接多个逻辑 endpoint，但只有一个物理端口和一个 outstanding request。endpoint 按
+冻结 ordinal 固定优先级仲裁；访问延迟期间及 response Queue 阻塞时全部反压，直到
+选中 response Queue 接纳响应。PYC 每个实例只生成一个 `pyc.sync_mem`。
+
+Python 前端允许用同构 `ac.array` 静态声明 memory banks，并以
+`banks.select(requests, key=...).request(...)` 明确选择 bank。该写法只在前端展开：
+冻结 ACIR 包含一个 `ac.route`、每个 bank 各一个普通 memory instance/request，以及
+一个 response `ac.merge`，不会引入新的 primitive。各 bank 的 outstanding 状态独立，
+因此跨 bank response 可能乱序；需要保序时应在 payload 中保留 tag 并显式接
+`reorder`。epoch 0.3 仅支持一维、data type、entries、init 和 latency 完全相同的 memory
+array。
 
 可执行示例：
 [`pyc_memory_pipeline.py`](../../examples/v02/pyc_memory_pipeline.py)。
@@ -641,7 +652,7 @@ QueueGraph、gfsim、PYC、测试和 opcode catalog。
 | loop 被拒绝 | 不是受支持的单 Queue 有界 feedback 形状 | 简化为一次 Queue update，或显式组合 route/merge/feedback |
 | PYC 拒绝 `ac.expect` | verification leaf 不能进入 design | 把 assertion 放入 PYC testbench boundary |
 | 后端结果内部 cycle 不同 | gfsim 与 RTL IR 不同 | 比较声明的 transaction/state/refinement projection |
-| artifact epoch 不匹配 | v0.2 是 hard break | 重新生成 exact epoch `0.2` artifact，不使用兼容 shim |
+| artifact epoch 不匹配 | v0.3 是 hard break | 重新生成 exact epoch `0.3` artifact，不使用兼容 shim |
 
 ## 修改公共契约的完成条件
 

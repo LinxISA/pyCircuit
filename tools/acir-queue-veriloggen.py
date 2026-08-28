@@ -13,10 +13,14 @@ from __future__ import annotations
 
 import argparse
 import ast
+import json
+import math
+import os
 import re
 import shutil
 import subprocess
 import sys
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
@@ -24,6 +28,9 @@ from typing import Iterable
 
 class PYCVerilogError(ValueError):
     pass
+
+
+_IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
 @dataclass(frozen=True)
@@ -40,7 +47,10 @@ class Value:
         match = re.fullmatch(r"i(\d+)", self.type)
         if not match:
             raise PYCVerilogError(f"expected integer PYC type, got {self.type}")
-        return int(match.group(1))
+        width = int(match.group(1))
+        if width <= 0:
+            raise PYCVerilogError("PYC integer widths must be positive")
+        return width
 
 
 @dataclass
@@ -83,6 +93,9 @@ def _split_csv(text: str) -> list[str]:
 
 
 def _parse_types(text: str) -> list[str]:
+    text = text.strip()
+    if text.startswith("(") and text.endswith(")"):
+        text = text[1:-1]
     return [part.strip() for part in _split_csv(text) if part.strip()]
 
 
@@ -91,8 +104,14 @@ def _parse_names_attr(header: str, key: str) -> list[str]:
     if not match:
         raise PYCVerilogError(f"function header is missing {key}")
     value = ast.literal_eval(match.group(1))
-    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
-        raise PYCVerilogError(f"{key} must be a string list")
+    if (
+        not isinstance(value, list)
+        or not all(
+            isinstance(item, str) and _IDENTIFIER.fullmatch(item) for item in value
+        )
+        or len(value) != len(set(value))
+    ):
+        raise PYCVerilogError(f"{key} must be a unique Verilog identifier list")
     return value
 
 
@@ -104,7 +123,9 @@ def parse_pyc_module(text: str) -> Module:
         re.MULTILINE | re.DOTALL,
     )
     if not func_match:
-        raise PYCVerilogError("canonical PYC module does not contain a supported func.func")
+        raise PYCVerilogError(
+            "canonical PYC module does not contain a supported func.func"
+        )
 
     arg_parts = _split_csv(func_match.group("args"))
     args: list[Value] = []
@@ -113,16 +134,23 @@ def parse_pyc_module(text: str) -> Module:
         if not match:
             raise PYCVerilogError(f"cannot parse function argument: {part}")
         args.append(Value(match.group(1), match.group(2).strip()))
+    if len({value.name for value in args}) != len(args):
+        raise PYCVerilogError("function arguments must have unique SSA names")
 
     result_types = _parse_types(func_match.group("results"))
     result_names = _parse_names_attr(func_match.group("attrs"), "result_names")
     if len(result_types) != len(result_names):
         raise PYCVerilogError("result_names and result types have different lengths")
     results = [Value(name, type_) for name, type_ in zip(result_names, result_types)]
+    argument_ports = {value.net for value in args}
+    if argument_ports.intersection(result_names):
+        raise PYCVerilogError("function input and result port names must be unique")
 
     lines = text.splitlines()
     func_line = next(
-        index for index, line in enumerate(lines) if line.strip().startswith("func.func @")
+        index
+        for index, line in enumerate(lines)
+        if line.strip().startswith("func.func @")
     )
     body: list[str] = []
     for line in lines[func_line + 1 :]:
@@ -182,13 +210,15 @@ def emit_verilog(module: Module, runtime_dir: Path) -> str:
     declarations: list[str] = []
     assigns: list[str] = []
     instances: list[str] = []
+    assertions: list[str] = []
     returns: list[str] | None = None
     seen_outputs: set[str] = set()
 
     def add_value(name: str, type_: str) -> Value:
         value = Value(name, type_)
-        if name in values and values[name].type != type_:
-            raise PYCVerilogError(f"SSA value {name} changes type")
+        if name in values:
+            raise PYCVerilogError(f"SSA value {name} is defined more than once")
+        value.width
         values[name] = value
         if name not in {arg.name for arg in module.args}:
             if type_ not in ("!pyc.clock", "!pyc.reset"):
@@ -205,7 +235,32 @@ def emit_verilog(module: Module, runtime_dir: Path) -> str:
             returns = _ssa_names(match.group(1))
             continue
         if line.startswith("pyc.assert "):
-            assigns.append(f"  // {line} (verification-only assertion omitted in RTL)")
+            match = re.fullmatch(
+                r"pyc\.assert\s+(%[A-Za-z_][A-Za-z0-9_]*)\s*"
+                r"\{\s*msg\s*=\s*(\"(?:[^\"\\]|\\.)*\")\s*\}",
+                line,
+            )
+            if not match:
+                raise PYCVerilogError(f"cannot parse assertion: {line}")
+            condition = _value(values, match.group(1))
+            if condition.type != "i1":
+                raise PYCVerilogError("assertion condition must be i1")
+            try:
+                message = json.loads(match.group(2))
+            except json.JSONDecodeError as exc:
+                raise PYCVerilogError("assertion message is invalid") from exc
+            assertions.extend(
+                (
+                    "  // synthesis translate_off",
+                    "  always @* begin",
+                    f"    if (!{condition.net}) begin",
+                    f"      $display({json.dumps(message)});",
+                    "      $stop;",
+                    "    end",
+                    "  end",
+                    "  // synthesis translate_on",
+                )
+            )
             continue
 
         lhs: list[str] = []
@@ -226,22 +281,32 @@ def emit_verilog(module: Module, runtime_dir: Path) -> str:
             if not match or len(lhs) != 1:
                 raise PYCVerilogError(f"cannot parse constant: {line}")
             value = add_value(lhs[0], match.group(2))
-            assigns.append(f"  assign {value.net} = {_literal(match.group(1), value.width)};")
+            assigns.append(
+                f"  assign {value.net} = {_literal(match.group(1), value.width)};"
+            )
             continue
 
         if rhs.startswith("pyc.fifo "):
-            match = re.fullmatch(
-                r"pyc\.fifo\s+(.*?)\s*\{(.*?)\}\s*:\s*(\S+)", rhs
-            )
+            match = re.fullmatch(r"pyc\.fifo\s+(.*?)\s*\{(.*?)\}\s*:\s*(\S+)", rhs)
             if not match or len(lhs) != 3:
                 raise PYCVerilogError(f"cannot parse FIFO: {line}")
             inputs = _ssa_names(match.group(1))
             if len(inputs) != 5:
                 raise PYCVerilogError(f"FIFO expects five operands: {line}")
             depth = _parse_attr_int(match.group(2), "depth")
+            if depth <= 0:
+                raise PYCVerilogError("FIFO depth must be positive")
             payload = match.group(3)
-            out_values = [add_value(lhs[0], "i1"), add_value(lhs[1], "i1"), add_value(lhs[2], payload)]
-            in_valid, in_data, out_ready = (_value(values, inputs[2]), _value(values, inputs[3]), _value(values, inputs[4]))
+            out_values = [
+                add_value(lhs[0], "i1"),
+                add_value(lhs[1], "i1"),
+                add_value(lhs[2], payload),
+            ]
+            in_valid, in_data, out_ready = (
+                _value(values, inputs[2]),
+                _value(values, inputs[3]),
+                _value(values, inputs[4]),
+            )
             clk, rst = _value(values, inputs[0]), _value(values, inputs[1])
             instances.append(
                 f"  pyc_fifo #(.WIDTH({out_values[2].width}), .DEPTH({depth})) fifo_{out_values[0].net} (\n"
@@ -270,17 +335,27 @@ def emit_verilog(module: Module, runtime_dir: Path) -> str:
             continue
 
         if rhs.startswith("pyc.rr_arbiter "):
-            match = re.fullmatch(r"pyc\.rr_arbiter\s+(.*?)\s*\{(.*?)\}\s*:\s*(.*?)\s*->\s*(\S+)", rhs)
+            match = re.fullmatch(
+                r"pyc\.rr_arbiter\s+(.*?)\s*\{(.*?)\}\s*:\s*(.*?)\s*->\s*(\S+)", rhs
+            )
             if not match or len(lhs) != 1:
                 raise PYCVerilogError(f"cannot parse round-robin arbiter: {line}")
             inputs = _ssa_names(match.group(1))
             if len(inputs) != 2:
-                raise PYCVerilogError(f"round-robin arbiter expects request and cursor: {line}")
+                raise PYCVerilogError(
+                    f"round-robin arbiter expects request and cursor: {line}"
+                )
             req, cursor = (_value(values, item) for item in inputs)
             out = add_value(lhs[0], match.group(4))
             num_inputs = _parse_attr_int(match.group(2), "num_inputs")
             if num_inputs != req.width or num_inputs != out.width:
-                raise PYCVerilogError("rr_arbiter num_inputs must match request and grant widths")
+                raise PYCVerilogError(
+                    "rr_arbiter num_inputs must match request and grant widths"
+                )
+            if (1 << cursor.width) < num_inputs:
+                raise PYCVerilogError(
+                    "rr_arbiter cursor width cannot address every input"
+                )
             instances.append(
                 f"  pyc_rr_arbiter #(.NUM_INPUTS({num_inputs}), .POINTER_WIDTH({cursor.width})) rr_arbiter_{out.net} (\n"
                 f"    .req({req.net}), .cursor({cursor.net}), .grant({out.net})\n"
@@ -289,7 +364,9 @@ def emit_verilog(module: Module, runtime_dir: Path) -> str:
             continue
 
         if rhs.startswith("pyc.popcount "):
-            match = re.fullmatch(r"pyc\.popcount\s+(.*?)\s*\{.*?\}\s*:\s*(\S+)\s*->\s*(\S+)", rhs)
+            match = re.fullmatch(
+                r"pyc\.popcount\s+(.*?)\s*\{.*?\}\s*:\s*(\S+)\s*->\s*(\S+)", rhs
+            )
             if not match or len(lhs) != 1:
                 raise PYCVerilogError(f"cannot parse popcount: {line}")
             inputs = _ssa_names(match.group(1))
@@ -297,6 +374,8 @@ def emit_verilog(module: Module, runtime_dir: Path) -> str:
                 raise PYCVerilogError(f"popcount expects one operand: {line}")
             src = _value(values, inputs[0])
             out = add_value(lhs[0], match.group(3))
+            if out.width < src.width.bit_length():
+                raise PYCVerilogError("popcount result width is too small")
             instances.append(
                 f"  pyc_popcount #(.IN_WIDTH({src.width}), .OUT_WIDTH({out.width})) popcount_{out.net} (\n"
                 f"    .in({src.net}), .out({out.net})\n"
@@ -310,13 +389,26 @@ def emit_verilog(module: Module, runtime_dir: Path) -> str:
                 raise PYCVerilogError(f"cannot parse concat: {line}")
             inputs = _ssa_names(match.group(1))
             out = add_value(lhs[0], match.group(3))
-            for item in inputs:
-                _value(values, item)
-            assigns.append(f"  assign {out.net} = {{{', '.join(_value(values, item).net for item in inputs)}}};")
+            annotated_types = _parse_types(match.group(2))
+            input_values = [_value(values, item) for item in inputs]
+            if (
+                len(annotated_types) != len(input_values)
+                or any(
+                    value.type != annotated
+                    for value, annotated in zip(input_values, annotated_types)
+                )
+                or sum(value.width for value in input_values) != out.width
+            ):
+                raise PYCVerilogError("concat operand/result types are inconsistent")
+            assigns.append(
+                f"  assign {out.net} = {{{', '.join(_value(values, item).net for item in inputs)}}};"
+            )
             continue
 
         if rhs.startswith("pyc.extract "):
-            match = re.fullmatch(r"pyc\.extract\s+(.*?)\s*\{(.*?)\}\s*:\s*(\S+)\s*->\s*(\S+)", rhs)
+            match = re.fullmatch(
+                r"pyc\.extract\s+(.*?)\s*\{(.*?)\}\s*:\s*(\S+)\s*->\s*(\S+)", rhs
+            )
             if not match or len(lhs) != 1:
                 raise PYCVerilogError(f"cannot parse extract: {line}")
             inputs = _ssa_names(match.group(1))
@@ -324,6 +416,10 @@ def emit_verilog(module: Module, runtime_dir: Path) -> str:
                 raise PYCVerilogError(f"extract expects one operand: {line}")
             src = _value(values, inputs[0])
             out = add_value(lhs[0], match.group(4))
+            if src.type != match.group(3):
+                raise PYCVerilogError(
+                    "extract source annotation does not match operand"
+                )
             lsb = _parse_attr_int(match.group(2), "lsb")
             if lsb < 0 or lsb + out.width > src.width:
                 raise PYCVerilogError("extract slice is outside source width")
@@ -344,26 +440,58 @@ def emit_verilog(module: Module, runtime_dir: Path) -> str:
                 raise PYCVerilogError(f"mux expects select, true, false: {line}")
             select, true_value, false_value = (_value(values, item) for item in inputs)
             out = add_value(lhs[0], match.group(2))
-            assigns.append(f"  assign {out.net} = {select.net} ? {true_value.net} : {false_value.net};")
+            if (
+                select.type != "i1"
+                or true_value.type != out.type
+                or false_value.type != out.type
+            ):
+                raise PYCVerilogError("mux select/data types are inconsistent")
+            assigns.append(
+                f"  assign {out.net} = {select.net} ? {true_value.net} : {false_value.net};"
+            )
             continue
 
         if rhs.startswith("pyc.assign "):
-            match = re.fullmatch(r"pyc\.assign\s+(.*?),\s*(%[A-Za-z_][A-Za-z0-9_]*)\s*:\s*(\S+)", rhs)
+            match = re.fullmatch(
+                r"pyc\.assign\s+(.*?),\s*(%[A-Za-z_][A-Za-z0-9_]*)\s*:\s*(\S+)", rhs
+            )
             if not match:
                 raise PYCVerilogError(f"cannot parse assign: {line}")
             target = _value(values, match.group(1).strip())
             source = _value(values, match.group(2))
+            if target.type != match.group(3) or source.type != target.type:
+                raise PYCVerilogError("assign source/target types are inconsistent")
             assigns.append(f"  assign {target.net} = {source.net};")
             continue
 
-        binary = re.fullmatch(r"pyc\.(and|or|xor|add|sub|mul|eq|ne|ult|ule|ugt|uge)\s+(.*?)\s*:\s*(\S+)", rhs)
+        binary = re.fullmatch(
+            r"pyc\.(and|or|xor|add|sub|mul|eq|ne|ult|ule|ugt|uge)\s+(.*?)\s*:\s*(\S+)",
+            rhs,
+        )
         if binary and len(lhs) == 1:
             inputs = _ssa_names(binary.group(2))
             if len(inputs) != 2:
                 raise PYCVerilogError(f"binary PYC op expects two operands: {line}")
             left, right = (_value(values, item) for item in inputs)
-            out = add_value(lhs[0], binary.group(3))
-            operator = {"and": "&", "or": "|", "xor": "^", "add": "+", "sub": "-", "mul": "*", "eq": "==", "ne": "!=", "ult": "<", "ule": "<=", "ugt": ">", "uge": ">="}[binary.group(1)]
+            operand_type = binary.group(3)
+            if left.type != operand_type or right.type != operand_type:
+                raise PYCVerilogError("binary operand annotations are inconsistent")
+            comparison = binary.group(1) in {"eq", "ne", "ult", "ule", "ugt", "uge"}
+            out = add_value(lhs[0], "i1" if comparison else operand_type)
+            operator = {
+                "and": "&",
+                "or": "|",
+                "xor": "^",
+                "add": "+",
+                "sub": "-",
+                "mul": "*",
+                "eq": "==",
+                "ne": "!=",
+                "ult": "<",
+                "ule": "<=",
+                "ugt": ">",
+                "uge": ">=",
+            }[binary.group(1)]
             assigns.append(f"  assign {out.net} = {left.net} {operator} {right.net};")
             continue
 
@@ -405,6 +533,7 @@ def emit_verilog(module: Module, runtime_dir: Path) -> str:
     ]
     text.extend(declarations)
     text.extend(assigns)
+    text.extend(assertions)
     text.append("")
     text.extend(instances)
     text.extend(["", "endmodule", ""])
@@ -441,24 +570,78 @@ def _default_runtime_dir() -> Path:
     return candidates[0]
 
 
+def _write_atomic(path: Path, content: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary = tempfile.mkstemp(
+        dir=path.parent, prefix=f".{path.name}.", suffix=".tmp", text=True
+    )
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as stream:
+            stream.write(content)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+
+
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("input", type=Path, help="frozen Queue ACIR MLIR, or canonical PYC with --pyc-input")
-    parser.add_argument("-o", "--output", type=Path, default=Path("-"), help="output Verilog path (default: stdout)")
-    parser.add_argument("--pycgen", default=_default_pycgen(), help="acir-queue-pycgen executable")
+    parser = argparse.ArgumentParser(
+        prog="acir-queue-veriloggen.py", description=__doc__
+    )
+    parser.add_argument(
+        "input",
+        type=Path,
+        help="frozen Queue ACIR MLIR, or canonical PYC with --pyc-input",
+    )
+    parser.add_argument(
+        "-o",
+        "--output",
+        type=Path,
+        default=Path("-"),
+        help="output Verilog path (default: stdout)",
+    )
+    parser.add_argument(
+        "--pycgen", default=_default_pycgen(), help="acir-queue-pycgen executable"
+    )
     parser.add_argument(
         "--timeout",
         type=float,
         default=120.0,
         help="maximum seconds allowed for ACIR-to-PYC lowering (default: 120)",
     )
-    parser.add_argument("--pyc-input", action="store_true", help="treat input as canonical PYC instead of ACIR")
-    parser.add_argument("--emit-pyc", type=Path, help="also save the canonical PYC artifact")
+    parser.add_argument(
+        "--pyc-input",
+        action="store_true",
+        help="treat input as canonical PYC instead of ACIR",
+    )
+    parser.add_argument(
+        "--emit-pyc", type=Path, help="also save the canonical PYC artifact"
+    )
     parser.add_argument("--runtime-dir", type=Path, default=_default_runtime_dir())
     args = parser.parse_args(argv)
 
+    if not math.isfinite(args.timeout) or args.timeout <= 0:
+        parser.error("--timeout must be a finite positive number")
+    try:
+        input_identity = args.input.resolve(strict=True)
+    except OSError as exc:
+        parser.error(f"cannot resolve input: {exc}")
+    destinations = [
+        path for path in (args.emit_pyc, args.output) if path and str(path) != "-"
+    ]
+    destination_identities = [path.resolve(strict=False) for path in destinations]
+    if input_identity in destination_identities:
+        parser.error("input and output paths must be different")
+    if len(destination_identities) != len(set(destination_identities)):
+        parser.error("--emit-pyc and --output must be different paths")
+
     if args.pyc_input:
-        pyc_text = args.input.read_text(encoding="utf-8")
+        try:
+            pyc_text = args.input.read_text(encoding="utf-8")
+        except (OSError, UnicodeError) as exc:
+            parser.error(f"cannot read PYC input: {exc}")
     else:
         try:
             completed = subprocess.run(
@@ -477,21 +660,25 @@ def main(argv: list[str] | None = None) -> int:
             )
         except subprocess.CalledProcessError as exc:
             sys.stderr.write(exc.stderr or "")
-            return exc.returncode or 1
+            return 1
         pyc_text = completed.stdout
     if args.emit_pyc:
-        args.emit_pyc.parent.mkdir(parents=True, exist_ok=True)
-        args.emit_pyc.write_text(pyc_text, encoding="utf-8")
+        try:
+            _write_atomic(args.emit_pyc, pyc_text)
+        except OSError as exc:
+            parser.error(f"cannot publish PYC output: {exc}")
 
     try:
         output = emit_verilog(parse_pyc_module(pyc_text), args.runtime_dir)
-    except PYCVerilogError as exc:
+    except (OSError, PYCVerilogError) as exc:
         parser.error(str(exc))
     if str(args.output) == "-":
         sys.stdout.write(output)
     else:
-        args.output.parent.mkdir(parents=True, exist_ok=True)
-        args.output.write_text(output, encoding="utf-8")
+        try:
+            _write_atomic(args.output, output)
+        except OSError as exc:
+            parser.error(f"cannot publish Verilog output: {exc}")
     return 0
 
 

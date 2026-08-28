@@ -169,8 +169,8 @@ llvm::Error validateModelPlan(const ModelPlan &plan) {
   if (plan.modelSymbol.empty() || plan.rootSymbol.empty())
     return planError("ACLOWER-FINGERPRINT",
                      "model and root symbols must be non-empty");
-  if (plan.contractEpoch != "0.2")
-    return planError("ACLOWER-FINGERPRINT", "model contract epoch must be 0.2");
+  if (plan.contractEpoch != "0.3")
+    return planError("ACLOWER-FINGERPRINT", "model contract epoch must be 0.3");
   for (const Fingerprint *fingerprint :
        {&plan.frozenAcirFingerprint, &plan.bindingLockFingerprint,
         &plan.providerFingerprint, &plan.profileFingerprint,

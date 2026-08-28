@@ -20,7 +20,7 @@ implementation specification and its machine-readable sources take precedence.
 
 This document records the Agentic Circuit `0.2` programming and lowering model
 for design review and implementation planning. The upgrade branch now uses
-exact contract epoch `0.2` and rejects epoch `0.1`; the implementation manual
+exact contract epoch `0.3` and rejects earlier epochs; the implementation manual
 and machine-readable contracts define the executable candidate surface.
 
 The `0.2` proposal becomes normative only after the project lands matching

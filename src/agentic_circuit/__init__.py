@@ -65,6 +65,8 @@ __all__ = (
     "Flow",
     "Endpoint",
     "source",
+    "popcount",
+    "memory",
     "sink",
     "observe",
     "expect",
@@ -85,7 +87,7 @@ __all__ = (
 
 def _not_implemented(primitive: str) -> Never:
     raise NotImplementedError(
-        f"{primitive} is part of the v0.2 public surface but is not implemented yet"
+        f"{primitive} is part of the v0.3 public surface but is not implemented yet"
     )
 
 
@@ -115,6 +117,16 @@ def view(value: object, *selectors: object) -> Never:
 
 def source(payload: object, *, depth: int = 1, latency: int = 1) -> Never:
     return _not_implemented("source")
+
+
+def popcount(value: object) -> Never:
+    return _not_implemented("popcount")
+
+
+def memory(
+    data_type: object, *, entries: int = 16, init: int = 0, latency: int = 1
+) -> Never:
+    return _not_implemented("memory")
 
 
 def sink(value: object) -> Never:
