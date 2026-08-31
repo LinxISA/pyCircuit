@@ -225,8 +225,13 @@ int main(int argc, char **argv) {
     if (backupRoot && fs::exists(*backupRoot / "previous")) {
       std::error_code restore;
       fs::rename(*backupRoot / "previous", finalDir, restore);
-      if (!restore)
+      if (!restore) {
         fs::remove_all(*backupRoot, restore);
+      } else {
+        llvm::errs() << "acir-build: cannot restore previous output from "
+                     << (*backupRoot / "previous").string() << ": "
+                     << restore.message() << '\n';
+      }
     }
     fs::remove_all(work, ec);
     llvm::errs() << "acir-build: cannot publish " << finalDir.string() << '\n';

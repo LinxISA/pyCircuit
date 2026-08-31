@@ -518,8 +518,13 @@ public:
       if (backupRoot && fs::exists(*backupRoot / "previous")) {
         std::error_code restore;
         fs::rename(*backupRoot / "previous", finalDir, restore);
-        if (!restore)
+        if (!restore) {
           fs::remove_all(*backupRoot, restore);
+        } else {
+          model.emitError("ACSIM-EMIT: cannot restore previous output from ")
+              << (*backupRoot / "previous").string() << ": "
+              << restore.message();
+        }
       }
       fs::remove_all(staging, ec);
       model.emitError("ACSIM-EMIT: cannot publish staging directory");

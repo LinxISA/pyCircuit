@@ -721,9 +721,11 @@ private:
   /// Emission. Runs only after every check succeeded.
   mlir::FailureOr<mlir::OwningOpRef<mlir::ModuleOp>> emit(mlir::ModuleOp input);
   void publish(mlir::ModuleOp input, mlir::ModuleOp staged);
-  void emitModuleBody(OpBuilder &builder, const ModulePlan &planned);
-  void emitProcessBody(OpBuilder &builder, const PlacementPlan &placement,
-                       const llvm::DenseMap<Value, Value> &moduleValues);
+  mlir::LogicalResult emitModuleBody(OpBuilder &builder,
+                                     const ModulePlan &planned);
+  mlir::LogicalResult
+  emitProcessBody(OpBuilder &builder, const PlacementPlan &placement,
+                  const llvm::DenseMap<Value, Value> &moduleValues);
 
   std::string moduleFingerprint(ac::ModuleOp module);
   std::string processFingerprint(const ModulePlan &module,
@@ -2085,7 +2087,7 @@ std::string plannedValueKey(const ProcessPlannedValue &value) {
   return key;
 }
 
-void ACIRToACSimPass::emitProcessBody(
+mlir::LogicalResult ACIRToACSimPass::emitProcessBody(
     OpBuilder &builder, const PlacementPlan &placement,
     const llvm::DenseMap<Value, Value> &moduleValues) {
   MLIRContext *context = builder.getContext();
@@ -2208,7 +2210,7 @@ void ACIRToACSimPass::emitProcessBody(
 
   if (isYieldOnlyProcess(placement.process)) {
     emitSuspend(wakeImplSymbol);
-    return;
+    return mlir::success();
   }
 
   Region *state = &process.getStates().front();
@@ -2223,17 +2225,28 @@ void ACIRToACSimPass::emitProcessBody(
       values[slot.source] = unwrap.getResult();
     }
   };
-  auto emitLiveStores = [&]() {
+  auto emitLiveStores = [&]() -> LogicalResult {
     for (const LiveSlotEmission &slot : liveSlots) {
       Value scalar = values.lookup(slot.source);
-      if (!scalar || scalar.getParentRegion() != state)
-        continue;
+      if (!scalar || scalar.getParentRegion() != state) {
+        Operation *reporter = slot.source.getDefiningOp();
+        if (!reporter)
+          reporter = sourceProcess;
+        return lowerError(
+            reporter, "ACLOWER-PROCESS-STATE",
+            "planned live slot '" + llvm::Twine(slot.name) +
+                "' has no proven value in the current suspension state; "
+                "lowering refuses to synthesize or drop process state");
+      }
       auto wrap = acsim::InlineOp::create(builder, loc, slot.storageType,
                                           ValueRange{scalar}, slot.wrap);
       acsim::LiveStoreOp::create(
           builder, loc, wrap.getResult(), placement.name, slot.name);
     }
+    return mlir::success();
   };
+  LogicalResult emissionStatus = success();
+  Operation *mappingConsumer = nullptr;
   std::function<Block *(Block *, Block::iterator, Block::iterator)> emitOps;
   emitOps = [&](Block *current, Block::iterator begin, Block::iterator end) {
     builder.setInsertionPointToEnd(current);
@@ -2247,15 +2260,25 @@ void ACIRToACSimPass::emitProcessBody(
         values[source] = copy.getResult();
         return copy.getResult();
       }
-      Attribute zero = builder.getZeroAttr(source.getType());
-      if (!zero)
-        zero = builder.getIntegerAttr(source.getType(), 0);
-      auto copy = arith::ConstantOp::create(builder, loc, cast<TypedAttr>(zero));
-      values[source] = copy.getResult();
-      return copy.getResult();
+      if (succeeded(emissionStatus)) {
+        Operation *reporter = mappingConsumer;
+        if (!reporter)
+          reporter = source.getDefiningOp();
+        if (!reporter)
+          reporter = sourceProcess;
+        lowerError(reporter, "ACLOWER-PROCESS-STATE",
+                   "SSA operand has no proven value in the current process "
+                   "state; lowering refuses backend zero substitution");
+        emissionStatus = failure();
+      }
+      return Value();
     };
     for (auto it = begin; it != end; ++it) {
       Operation &op = *it;
+      mappingConsumer = &op;
+      for (Value operand : op.getOperands())
+        if (!mapValue(operand))
+          return current;
       auto copyBin = [&](auto bin) {
         auto copy = std::remove_cvref_t<decltype(bin)>::create(
             builder, loc, mapValue(bin.getLhs()), mapValue(bin.getRhs()));
@@ -2569,7 +2592,10 @@ void ACIRToACSimPass::emitProcessBody(
         // Top-level waits are split by the outer slice loop. A nested wait is
         // a real suspension edge inside its current acyclic control-flow path.
         if (op.getParentOp() != sourceProcess.getOperation()) {
-          emitLiveStores();
+          if (failed(emitLiveStores())) {
+            emissionStatus = failure();
+            return current;
+          }
           emitSuspend(nextTickImpl, resumePcByWait.lookup(&op));
           return current;
         }
@@ -2590,6 +2616,8 @@ void ACIRToACSimPass::emitProcessBody(
           values[forOp.getInductionVar()] = constant.getResult();
           current =
               emitOps(current, body.begin(), std::prev(body.end()));
+          if (failed(emissionStatus))
+            return current;
           builder.setInsertionPointToEnd(current);
         }
         continue;
@@ -2612,6 +2640,8 @@ void ACIRToACSimPass::emitProcessBody(
                                  ValueRange{});
         Block &thenSrc = ifOp.getThenRegion().front();
         Block *thenEnd = emitOps(thenBlock, thenSrc.begin(), thenSrc.end());
+        if (failed(emissionStatus))
+          return current;
         if (thenEnd->empty() ||
             !thenEnd->back().hasTrait<OpTrait::IsTerminator>()) {
           builder.setInsertionPointToEnd(thenEnd);
@@ -2624,6 +2654,8 @@ void ACIRToACSimPass::emitProcessBody(
         if (elseBlock != joinBlock) {
           Block &elseSrc = ifOp.getElseRegion().front();
           Block *elseEnd = emitOps(elseBlock, elseSrc.begin(), elseSrc.end());
+          if (failed(emissionStatus))
+            return current;
           if (elseEnd->empty() ||
               !elseEnd->back().hasTrait<OpTrait::IsTerminator>()) {
             builder.setInsertionPointToEnd(elseEnd);
@@ -2705,6 +2737,8 @@ void ACIRToACSimPass::emitProcessBody(
     if (index != 0)
       emitLiveLoads();
     emitOps(start, cursor, Block::iterator(waits[index]));
+    if (failed(emissionStatus))
+      return mlir::failure();
     auto currentPc = cast<FlatSymbolRefAttr>(pcAttrs[index]);
     auto nextPc = resumePcByWait.lookup(waits[index]);
     Value condition;
@@ -2721,7 +2755,8 @@ void ACIRToACSimPass::emitProcessBody(
           FlatSymbolRefAttr::get(context, typeSymbols.symbolFor(identity)));
       condition = invoke.getResult(0);
     }
-    emitLiveStores();
+    if (failed(emitLiveStores()))
+      return mlir::failure();
     suspendSlice(*state, condition, nextPc, currentPc);
     cursor = std::next(Block::iterator(waits[index]));
   }
@@ -2731,6 +2766,8 @@ void ACIRToACSimPass::emitProcessBody(
   if (!waits.empty())
     emitLiveLoads();
   emitOps(&state->front(), cursor, sourceBody.end());
+  if (failed(emissionStatus))
+    return mlir::failure();
   finishRegion(*state);
 
   // A nested suspension resumes at the enclosing branch continuation. For the
@@ -2743,10 +2780,12 @@ void ACIRToACSimPass::emitProcessBody(
     emitLiveLoads();
     finishRegion(*state);
   }
+  return mlir::success();
 }
 
-void ACIRToACSimPass::emitModuleBody(OpBuilder &builder,
-                                     const ModulePlan &planned) {
+mlir::LogicalResult
+ACIRToACSimPass::emitModuleBody(OpBuilder &builder,
+                                const ModulePlan &planned) {
   MLIRContext *context = builder.getContext();
   llvm::SmallVector<Attribute> portRecords;
   llvm::SmallVector<Attribute> resultRecords;
@@ -2907,9 +2946,11 @@ void ACIRToACSimPass::emitModuleBody(OpBuilder &builder,
   // Rank 8: stateful processes.
   for (const PlacementPlan &placement : planned.placements)
     if (placement.kind == PlacementPlan::Kind::Process)
-      emitProcessBody(builder, placement, emittedValues);
+      if (failed(emitProcessBody(builder, placement, emittedValues)))
+        return mlir::failure();
 
   acsim::ReturnOp::create(builder, planned.source->getLoc(), returned);
+  return mlir::success();
 }
 
 mlir::FailureOr<mlir::OwningOpRef<mlir::ModuleOp>>
@@ -3004,7 +3045,8 @@ ACIRToACSimPass::emit(mlir::ModuleOp input) {
   // Rank 2: acsim.module declarations, child-before-parent with
   // symbol-sorted ties between independent nodes.
   for (const ModulePlan &planned : modules)
-    emitModuleBody(builder, planned);
+    if (failed(emitModuleBody(builder, planned)))
+      return mlir::failure();
 
   // Rank 3: one typed dispatch row per runtime object, dense IDs.
   llvm::SmallVector<acsim::DispatchOp> dispatches;
