@@ -152,7 +152,7 @@ bool isDatapathProcess(ac::ProcessOp process) {
   if (!process.getBody().hasOneBlock())
     return false;
   unsigned yields = 0;
-  bool hasEffect = false;
+  bool hasBody = false;
   WalkResult walk = process.walk([&](Operation *op) {
     if (op == process.getOperation())
       return WalkResult::advance();
@@ -160,15 +160,24 @@ bool isDatapathProcess(ac::ProcessOp process) {
       ++yields;
       return WalkResult::advance();
     }
+    hasBody = true;
     if (isa<ac::TrySendOp, ac::TryRecvOp, ac::ScheduleOp, ac::WaitUntilOp,
             ac::WaitForOp, ac::AwaitEventOp, ac::StatAddOp, ac::StatOp,
             ac::ProbeOp, ac::RequireOp, ac::EnsureOp, ac::TraceOpenOp,
             ac::TraceNextOp, ac::TraceDecodeOp, ac::TraceEofOp,
             ac::TracePositionOp>(op)) {
-      hasEffect = true;
       if (isa<ac::WaitUntilOp, ac::WaitForOp, ac::AwaitEventOp>(op) &&
-          op->getParentOp() != process.getOperation())
-        return WalkResult::interrupt();
+          op->getParentOp() != process.getOperation()) {
+        auto ifOp = dyn_cast<scf::IfOp>(op->getParentOp());
+        if (!ifOp || ifOp->getParentOp() != process.getOperation() ||
+            ifOp.getNumResults() != 0 || &op->getBlock()->back() == op ||
+            !isa<scf::YieldOp>(*std::next(Block::iterator(op))) ||
+            std::next(Block::iterator(op), 2) != op->getBlock()->end() ||
+            &ifOp->getBlock()->back() == ifOp ||
+            !isa<ac::YieldSimOp>(*std::next(Block::iterator(ifOp))) ||
+            std::next(Block::iterator(ifOp), 2) != ifOp->getBlock()->end())
+          return WalkResult::interrupt();
+      }
       return WalkResult::advance();
     }
     if (isDatapathArith(op) ||
@@ -176,7 +185,7 @@ bool isDatapathProcess(ac::ProcessOp process) {
       return WalkResult::advance();
     return WalkResult::interrupt();
   });
-  return !walk.wasInterrupted() && yields == 1 && hasEffect;
+  return !walk.wasInterrupted() && yields == 1 && hasBody;
 }
 
 bool isCompletePrefix(llvm::StringRef message) {
@@ -1467,8 +1476,7 @@ mlir::LogicalResult ACIRToACSimPass::planProcesses(mlir::ModuleOp input) {
 
   auto plans =
       hasDatapath
-          ? detail::PlanSetBuilder::buildFrozenFixture(
-                input, /*requireYieldOnly=*/false)
+          ? planProcessState(input)
           : detail::PlanSetBuilder::buildYieldOnly(input);
   if (failed(plans))
     return mlir::failure();
@@ -1482,6 +1490,27 @@ mlir::LogicalResult ACIRToACSimPass::planProcesses(mlir::ModuleOp input) {
                       "failed to serialize the canonical process-state plan");
   }
   processPlanBytes = std::move(*serializedPlans);
+
+  // ProcessStatePlan owns the canonical storage and helper identities used by
+  // live values. Publish every referenced declaration before the type table is
+  // finalized instead of inventing backend-local spellings.
+  for (const ProcessValueTypePlan &type : processPlans->valueTypes()) {
+    llvm::StringRef identity = type.symbol();
+    identity.consume_front("@");
+    llvm::StringRef kind = type.kind() == ProcessValueTypeKind::Value
+                               ? llvm::StringRef("value")
+                               : llvm::StringRef("packet");
+    if (failed(typeSymbols.intern(input, identity, kind, type.cpp(),
+                                  type.fingerprint())))
+      return mlir::failure();
+  }
+  for (const ProcessGeneratedCalleePlan &callee : processPlans->callees()) {
+    llvm::StringRef identity = callee.symbol();
+    identity.consume_front("@");
+    if (failed(typeSymbols.intern(input, identity, "implementation",
+                                  callee.cpp(), callee.fingerprint())))
+      return mlir::failure();
+  }
 
   if (hasDatapath) {
     if (failed(typeSymbols.intern(
@@ -2061,30 +2090,104 @@ void ACIRToACSimPass::emitProcessBody(
     const llvm::DenseMap<Value, Value> &moduleValues) {
   MLIRContext *context = builder.getContext();
   Location loc = placement.process->getLoc();
-  llvm::SmallVector<Operation *> waits;
   ac::ProcessOp sourceProcess = placement.process;
+  auto owner = sourceProcess->getParentOfType<ac::ModuleOp>();
+  std::string moduleName = owner ? owner.getSymName().str() : std::string();
+  std::string definitionKey = "@" + moduleName + "::@" + placement.name;
+  assert(processPlans && "validated process plan must be available");
+  const ProcessStatePlan *processPlan =
+      processPlans->lookupByDefinitionKey(definitionKey);
+  assert(processPlan && "validated process must have a canonical plan");
+
+  llvm::SmallVector<Operation *> waits;
+  llvm::SmallVector<Operation *> allWaits;
   for (Operation &op : sourceProcess.getBody().front()) {
     if (isa<ac::WaitUntilOp, ac::WaitForOp, ac::AwaitEventOp>(op) &&
         op.getParentOp() == sourceProcess.getOperation())
       waits.push_back(&op);
   }
+  sourceProcess.walk([&](Operation *op) {
+    if (isa<ac::WaitUntilOp, ac::WaitForOp, ac::AwaitEventOp>(op))
+      allWaits.push_back(op);
+  });
 
   llvm::SmallVector<Attribute> pcAttrs;
-  auto entry = FlatSymbolRefAttr::get(context, "entry");
-  pcAttrs.push_back(entry);
-  for (size_t index = 0; index < waits.size(); ++index)
-    pcAttrs.push_back(FlatSymbolRefAttr::get(
-        context, ("s" + Twine(index + 1)).str()));
+  for (const ProcessPcPlan &pc : processPlan->pcs())
+    pcAttrs.push_back(FlatSymbolRefAttr::get(context, pc.name()));
+  assert(!pcAttrs.empty() && "validated process plan must have an entry PC");
+  auto entry = cast<FlatSymbolRefAttr>(pcAttrs.front());
+
+  llvm::DenseMap<Operation *, FlatSymbolRefAttr> resumePcByWait;
+  for (auto [index, wait] : llvm::enumerate(allWaits)) {
+    assert(index + 1 < pcAttrs.size() &&
+           "each planned suspension must have a resume PC");
+    resumePcByWait[wait] = cast<FlatSymbolRefAttr>(pcAttrs[index + 1]);
+  }
+
+  struct LiveSlotEmission {
+    std::string name;
+    Type storageType;
+    Value source;
+    FlatSymbolRefAttr wrap;
+    FlatSymbolRefAttr unwrap;
+  };
+  llvm::SmallVector<LiveSlotEmission> liveSlots;
+  llvm::SmallVector<Attribute> liveAttrs;
+  for (const ProcessLiveSlotPlan &slot : processPlan->liveSlots()) {
+    const ProcessValueTypePlan &storage =
+        processPlans->valueTypes()[slot.storageType().value()];
+    llvm::StringRef storageIdentity = storage.symbol();
+    storageIdentity.consume_front("@");
+    auto storageType = acsim::ValueType::get(
+        context, FlatSymbolRefAttr::get(
+                     context, typeSymbols.symbolFor(storageIdentity)));
+    Value source;
+    for (const ProcessPlannedValue &member : slot.memberValues())
+      if (member.kind() == ProcessPlannedValueKind::Original) {
+        source = member.original().value();
+        break;
+      }
+    assert(source && "live slot must retain an original source value");
+    assert(slot.wrapCallee() && slot.unwrapCallee() &&
+           "scalar live slot must have wrap and unwrap helpers");
+    auto helperReference = [&](ProcessCalleeId id) {
+      llvm::StringRef identity = processPlans->callees()[id.value()].symbol();
+      identity.consume_front("@");
+      return FlatSymbolRefAttr::get(context,
+                                    typeSymbols.symbolFor(identity));
+    };
+    liveSlots.push_back({slot.name().str(), storageType, source,
+                         helperReference(*slot.wrapCallee()),
+                         helperReference(*slot.unwrapCallee())});
+    liveAttrs.push_back(builder.getDictionaryAttr(
+        {builder.getNamedAttr("name", builder.getStringAttr(slot.name())),
+         builder.getNamedAttr("type", TypeAttr::get(storageType))}));
+  }
+
+  llvm::SmallVector<Value> captureValues;
+  llvm::SmallVector<Attribute> captureNames;
+  for (auto [index, capture] :
+       llvm::enumerate(sourceProcess.getCaptures())) {
+    Value mapped = moduleValues.lookup(capture);
+    assert(mapped && "validated process capture must be emitted");
+    captureValues.push_back(mapped);
+    captureNames.push_back(builder.getStringAttr(
+        llvm::formatv("capture{0:08}", index).str()));
+  }
 
   auto process = acsim::ProcessOp::create(
-      builder, loc, ValueRange{}, placement.name, builder.getArrayAttr({}),
-      "entry", builder.getArrayAttr(pcAttrs), builder.getArrayAttr({}),
+      builder, loc, captureValues, placement.name,
+      builder.getArrayAttr(captureNames),
+      entry.getValue(), builder.getArrayAttr(pcAttrs),
+      builder.getArrayAttr(liveAttrs),
       placement.fairnessCap, placement.specialization,
       /*statesCount=*/static_cast<unsigned>(pcAttrs.size()));
 
   for (Region &region : process.getStates()) {
     Block *block = new Block();
     region.push_back(block);
+    for (Value capture : captureValues)
+      block->addArgument(capture.getType(), loc);
   }
   OpBuilder::InsertionGuard guard(builder);
   builder.setInsertionPointToStart(&process.getStates().front().front());
@@ -2108,10 +2211,29 @@ void ACIRToACSimPass::emitProcessBody(
     return;
   }
 
-  auto owner = placement.process->getParentOfType<ac::ModuleOp>();
-  std::string moduleName = owner ? owner.getSymName().str() : std::string();
   Region *state = &process.getStates().front();
   llvm::DenseMap<Value, Value> values;
+  auto emitLiveLoads = [&]() {
+    for (const LiveSlotEmission &slot : liveSlots) {
+      auto load = acsim::LiveLoadOp::create(
+          builder, loc, slot.storageType, placement.name, slot.name);
+      auto unwrap = acsim::InlineOp::create(
+          builder, loc, slot.source.getType(), ValueRange{load.getResult()},
+          slot.unwrap);
+      values[slot.source] = unwrap.getResult();
+    }
+  };
+  auto emitLiveStores = [&]() {
+    for (const LiveSlotEmission &slot : liveSlots) {
+      Value scalar = values.lookup(slot.source);
+      if (!scalar || scalar.getParentRegion() != state)
+        continue;
+      auto wrap = acsim::InlineOp::create(builder, loc, slot.storageType,
+                                          ValueRange{scalar}, slot.wrap);
+      acsim::LiveStoreOp::create(
+          builder, loc, wrap.getResult(), placement.name, slot.name);
+    }
+  };
   std::function<Block *(Block *, Block::iterator, Block::iterator)> emitOps;
   emitOps = [&](Block *current, Block::iterator begin, Block::iterator end) {
     builder.setInsertionPointToEnd(current);
@@ -2443,8 +2565,16 @@ void ACIRToACSimPass::emitProcessBody(
         (void)invoke;
         continue;
       }
-      if (isa<ac::WaitUntilOp, ac::AwaitEventOp>(op))
+      if (isa<ac::WaitUntilOp, ac::WaitForOp, ac::AwaitEventOp>(op)) {
+        // Top-level waits are split by the outer slice loop. A nested wait is
+        // a real suspension edge inside its current acyclic control-flow path.
+        if (op.getParentOp() != sourceProcess.getOperation()) {
+          emitLiveStores();
+          emitSuspend(nextTickImpl, resumePcByWait.lookup(&op));
+          return current;
+        }
         continue;
+      }
       if (auto forOp = dyn_cast<scf::ForOp>(op)) {
         auto trip = ac::analyzeStaticFor(forOp);
         if (failed(trip) || !forOp.getInitArgs().empty())
@@ -2528,14 +2658,11 @@ void ACIRToACSimPass::emitProcessBody(
     return current;
   };
   Block &sourceBody = sourceProcess.getBody().front();
-  for (BlockArgument arg : sourceBody.getArguments()) {
-    Attribute zero = builder.getZeroAttr(arg.getType());
-    if (!zero)
-      zero = builder.getIntegerAttr(arg.getType(), 0);
-    auto constant = arith::ConstantOp::create(builder, loc,
-                                              cast<TypedAttr>(zero));
-    values[arg] = constant.getResult();
-  }
+  auto bindCaptures = [&](Region &region) {
+    for (auto [arg, mapped] : llvm::zip_equal(
+             sourceBody.getArguments(), region.front().getArguments()))
+      values[arg] = mapped;
+  };
 
   auto suspendSlice = [&](Region &region, Value condition,
                           FlatSymbolRefAttr onTrue, FlatSymbolRefAttr onFalse) {
@@ -2572,10 +2699,14 @@ void ACIRToACSimPass::emitProcessBody(
   Block::iterator cursor = sourceBody.begin();
   for (size_t index = 0; index < waits.size(); ++index) {
     state = &process.getStates()[index];
+    bindCaptures(*state);
     Block *start = &state->front();
+    builder.setInsertionPointToStart(start);
+    if (index != 0)
+      emitLiveLoads();
     emitOps(start, cursor, Block::iterator(waits[index]));
     auto currentPc = cast<FlatSymbolRefAttr>(pcAttrs[index]);
-    auto nextPc = cast<FlatSymbolRefAttr>(pcAttrs[index + 1]);
+    auto nextPc = resumePcByWait.lookup(waits[index]);
     Value condition;
     if (auto waitUntil = dyn_cast<ac::WaitUntilOp>(waits[index]))
       condition = values.lookup(waitUntil.getCondition());
@@ -2590,12 +2721,28 @@ void ACIRToACSimPass::emitProcessBody(
           FlatSymbolRefAttr::get(context, typeSymbols.symbolFor(identity)));
       condition = invoke.getResult(0);
     }
+    emitLiveStores();
     suspendSlice(*state, condition, nextPc, currentPc);
     cursor = std::next(Block::iterator(waits[index]));
   }
-  state = &process.getStates().back();
+  state = &process.getStates()[waits.size()];
+  bindCaptures(*state);
+  builder.setInsertionPointToStart(&state->front());
+  if (!waits.empty())
+    emitLiveLoads();
   emitOps(&state->front(), cursor, sourceBody.end());
   finishRegion(*state);
+
+  // A nested suspension resumes at the enclosing branch continuation. For the
+  // currently lowerable form there are no operations after the nested wait in
+  // that branch, so the resume PC rejoins the next-tick loop directly.
+  for (size_t index = waits.size() + 1; index < pcAttrs.size(); ++index) {
+    state = &process.getStates()[index];
+    bindCaptures(*state);
+    builder.setInsertionPointToEnd(&state->front());
+    emitLiveLoads();
+    finishRegion(*state);
+  }
 }
 
 void ACIRToACSimPass::emitModuleBody(OpBuilder &builder,

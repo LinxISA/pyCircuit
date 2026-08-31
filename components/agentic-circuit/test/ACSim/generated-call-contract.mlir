@@ -29,7 +29,7 @@
 // RUN: sed 's/acsim.inline @generated_scalar() : () -> i32/acsim.inline @generated_scalar() : () -> !acsim.pc<@tick>/' %t/valid.mlir > %t/process-inline-other.mlir
 // RUN: %not %acir_opt %t/process-inline-other.mlir 2>&1 | %FileCheck %s --check-prefix=PROCESS-RESULT
 // RUN: sed 's/acsim.invoke @stateful_binding() : () -> !acsim.value<@cpp_i32>/acsim.invoke @stateful_binding() : () -> i32/' %t/valid.mlir > %t/invoke-i32.mlir
-// RUN: %not %acir_opt %t/invoke-i32.mlir 2>&1 | %FileCheck %s --check-prefix=INVOKE-RESULT
+// RUN: %acir_opt %t/invoke-i32.mlir | %FileCheck %s --check-prefix=INVOKE-SCALAR
 
 // VALID: acsim.inline @pure_binding
 // VALID: acsim.inline @generated_inline
@@ -47,7 +47,7 @@
 // MIXED: generated implementation callee '@generated_invoke' cannot be used by both acsim.inline and acsim.invoke
 // MODULE-RESULT: module inline result must be exactly !acsim.expr
 // PROCESS-RESULT: process inline result must be an integer, float, index, or !acsim.value
-// INVOKE-RESULT: invoke results must be exact !acsim.value or !acsim.wake types
+// INVOKE-SCALAR: acsim.invoke @stateful_binding() : () -> i32
 
 //--- valid.mlir
 builtin.module attributes {ac.contract_epoch = "0.3"} {

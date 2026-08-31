@@ -45,7 +45,7 @@
 // INLINE-MODULE-TYPE: module inline result must be exactly !acsim.expr
 // LIVE-LOAD-TYPE: live load must resolve to an exact typed slot of this process
 // LIVE-STORE-TYPE: live store must resolve to an exact typed slot of this process
-// INVOKE-TYPE: invoke results must be exact !acsim.value or !acsim.wake types
+// INVOKE-TYPE: invoke results must be exact !acsim.value, !acsim.wake, or integer types
 // CONTINUE-MISSING: expected attribute value
 // DISPATCH-NEGATIVE: dispatch object ID has no expanded runtime object
 // ACTIVATE-TYPES: invalid kind of type specified
@@ -325,7 +325,7 @@ builtin.module {
     acsim.module @M interface {ports = [], resources = [], results = []} static [] specialization "sha256:0000000000000000000000000000000000000000000000000000000000000000" exports [] {
       acsim.process @p captures() names [] entry @entry pcs [@entry, @done] live [] fairness 3 specialization "sha256:0000000000000000000000000000000000000000000000000000000000000000" {
         state @entry {
-          %bad = acsim.invoke @f() : () -> i32
+          %bad = acsim.invoke @f() : () -> f32
           acsim.continue @done
         }
         state @done { acsim.terminate "success" }

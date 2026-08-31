@@ -11,14 +11,16 @@
 #include "mlir/Pass/Pass.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
-#include "llvm/ADT/SmallSet.h"
 #include "llvm/ADT/STLExtras.h"
-#include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/STLFunctionalExtras.h"
+#include "llvm/ADT/SmallSet.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/Twine.h"
 #include "llvm/Support/CommandLine.h"
+#include "llvm/Support/FileSystem.h"
 #include "llvm/Support/JSON.h"
 #include "llvm/Support/MemoryBuffer.h"
+#include "llvm/Support/Path.h"
 #include "llvm/Support/raw_ostream.h"
 
 #include <algorithm>
@@ -33,11 +35,11 @@
 #include <utility>
 
 using namespace mlir;
-using acir::acsim::ActivationIdType;
 using acir::acsim::ActivateOp;
+using acir::acsim::ActivationIdType;
 using acir::acsim::ArrayOp;
-using acir::acsim::BindOp;
 using acir::acsim::BindingOp;
+using acir::acsim::BindOp;
 using acir::acsim::ContinueOp;
 using acir::acsim::DispatchOp;
 using acir::acsim::ElementOp;
@@ -88,6 +90,82 @@ struct StatMember {
 
 namespace acir::codegen {
 namespace {
+
+constexpr llvm::StringLiteral kOutputMarker = "agentic-circuit-output-v1\n";
+
+FailureOr<std::filesystem::path> prepareOutputPath(StringRef requested,
+                                                   Operation *owner) {
+  namespace fs = std::filesystem;
+  if (requested.empty()) {
+    owner->emitError("ACSIM-EMIT: unsafe output directory");
+    return failure();
+  }
+  std::error_code ec;
+  fs::path output = fs::absolute(requested.str(), ec).lexically_normal();
+  if (ec || output.empty() || output == output.root_path() ||
+      output.filename().empty()) {
+    owner->emitError("ACSIM-EMIT: unsafe output directory");
+    return failure();
+  }
+  fs::create_directories(output.parent_path(), ec);
+  if (ec) {
+    owner->emitError("ACSIM-EMIT: cannot create output parent");
+    return failure();
+  }
+  fs::path parent = fs::weakly_canonical(output.parent_path(), ec);
+  if (ec) {
+    owner->emitError("ACSIM-EMIT: cannot canonicalize output parent");
+    return failure();
+  }
+  output = parent / output.filename();
+  fs::file_status status = fs::symlink_status(output, ec);
+  if (ec && ec != std::errc::no_such_file_or_directory) {
+    owner->emitError("ACSIM-EMIT: cannot inspect output directory");
+    return failure();
+  }
+  ec.clear();
+  if (fs::is_symlink(status)) {
+    owner->emitError("ACSIM-EMIT: output directory must not be a symlink");
+    return failure();
+  }
+  if (fs::exists(status)) {
+    if (!fs::is_directory(status)) {
+      owner->emitError("ACSIM-EMIT: output path is not a directory");
+      return failure();
+    }
+    const bool empty = fs::is_empty(output, ec);
+    if (ec) {
+      owner->emitError("ACSIM-EMIT: cannot inspect output contents");
+      return failure();
+    }
+    if (!empty) {
+      std::ifstream marker(output / ".agentic-circuit-output");
+      std::string value((std::istreambuf_iterator<char>(marker)), {});
+      if (!marker || value != kOutputMarker.str()) {
+        owner->emitError(
+            "ACSIM-EMIT: refusing to replace an unowned output directory");
+        return failure();
+      }
+    }
+  }
+  return output;
+}
+
+FailureOr<std::filesystem::path>
+createOwnedSibling(const std::filesystem::path &finalDir, StringRef role,
+                   Operation *owner) {
+  llvm::SmallString<256> created;
+  const std::string prefix = (finalDir.parent_path() /
+                              (finalDir.filename().string() + "." + role.str()))
+                                 .string();
+  if (std::error_code error =
+          llvm::sys::fs::createUniqueDirectory(prefix, created)) {
+    owner->emitError("ACSIM-EMIT: cannot create owned temporary directory: ")
+        << error.message();
+    return failure();
+  }
+  return std::filesystem::path(created.str().str());
+}
 
 llvm::cl::opt<std::string>
     clOutputDir("acsim-output-dir",
@@ -289,7 +367,7 @@ std::string memberAccessFromPath(StringRef path, StringRef rootName) {
   else if (rest == "root")
     return {};
   else if (rest.starts_with(rootName) && rest.size() > rootName.size() &&
-      rest[rootName.size()] == '.')
+           rest[rootName.size()] == '.')
     rest = rest.drop_front(rootName.size() + 1);
   else if (rest == rootName)
     return {};
@@ -340,11 +418,26 @@ public:
       files.push_back(emitMain());
 
     namespace fs = std::filesystem;
-    fs::path finalDir = options.outputDir;
-    fs::path staging = fs::path(options.outputDir + ".staging");
+    auto finalDirOr =
+        prepareOutputPath(options.outputDir, model.getOperation());
+    if (failed(finalDirOr))
+      return failure();
+    fs::path finalDir = *finalDirOr;
+    auto stagingOr =
+        createOwnedSibling(finalDir, "staging", model.getOperation());
+    if (failed(stagingOr))
+      return failure();
+    fs::path staging = *stagingOr;
     std::error_code ec;
-    fs::remove_all(staging, ec);
-    fs::create_directories(staging);
+    {
+      std::ofstream marker(staging / ".agentic-circuit-output");
+      marker.write(kOutputMarker.data(), kOutputMarker.size());
+      if (!marker) {
+        fs::remove_all(staging, ec);
+        model.emitError("ACSIM-EMIT: cannot write output ownership marker");
+        return failure();
+      }
+    }
     BuildManifest manifest;
     manifest.contractEpoch = "0.3";
     manifest.schema = "agentic-circuit-build-manifest";
@@ -359,7 +452,8 @@ public:
         .toolchainTarget = options.toolchainTarget,
     };
     constexpr llvm::StringLiteral kPlaceholder =
-        "sha256:0000000000000000000000000000000000000000000000000000000000000000";
+        "sha256:"
+        "0000000000000000000000000000000000000000000000000000000000000000";
     std::string buildPreimage = manifest.normalizedAcirSha256 +
                                 manifest.buildProfile +
                                 manifest.compiler.toolchainTarget;
@@ -402,21 +496,37 @@ public:
       fs::remove_all(staging, ec);
       return failure();
     }
-    fs::path backup = fs::path(finalDir.string() + ".prev");
+    std::optional<fs::path> backupRoot;
     if (fs::exists(finalDir)) {
-      fs::remove_all(backup, ec);
-      fs::rename(finalDir, backup, ec);
+      auto backupOr =
+          createOwnedSibling(finalDir, "backup", model.getOperation());
+      if (failed(backupOr)) {
+        fs::remove_all(staging, ec);
+        return failure();
+      }
+      backupRoot = *backupOr;
+      fs::rename(finalDir, *backupRoot / "previous", ec);
+      if (ec) {
+        fs::remove_all(staging, ec);
+        fs::remove_all(*backupRoot, ec);
+        model.emitError("ACSIM-EMIT: cannot preserve previous output");
+        return failure();
+      }
     }
     fs::rename(staging, finalDir, ec);
     if (ec) {
-      if (fs::exists(backup)) {
+      if (backupRoot && fs::exists(*backupRoot / "previous")) {
         std::error_code restore;
-        fs::rename(backup, finalDir, restore);
+        fs::rename(*backupRoot / "previous", finalDir, restore);
+        if (!restore)
+          fs::remove_all(*backupRoot, restore);
       }
+      fs::remove_all(staging, ec);
       model.emitError("ACSIM-EMIT: cannot publish staging directory");
       return failure();
     }
-    fs::remove_all(backup, ec);
+    if (backupRoot)
+      fs::remove_all(*backupRoot, ec);
     options.outputDir = finalDir.string();
     return manifest;
   }
@@ -478,16 +588,14 @@ private:
                     member.name = name.str();
                     return member;
                   });
-        noteTyped("acir.regfile.read",
-                  "acir_regfile_read_" + moduleName + "_",
+        noteTyped("acir.regfile.read", "acir_regfile_read_" + moduleName + "_",
                   devicesByModule[moduleName], [&](StringRef name) {
                     DeviceMember member;
                     member.kind = DeviceMember::Kind::RegFile;
                     member.name = name.str();
                     return member;
                   });
-        noteTyped("gfsim::Resource",
-                  "acir_resource_" + moduleName + "_",
+        noteTyped("gfsim::Resource", "acir_resource_" + moduleName + "_",
                   resourcesByModule[moduleName], [&](StringRef rest) {
                     ResourceMember member;
                     StringRef name = rest;
@@ -501,8 +609,7 @@ private:
                     member.name = name.str();
                     return member;
                   });
-        noteTyped("acir.stat.add",
-                  "acir_stat_add_" + moduleName + "_",
+        noteTyped("acir.stat.add", "acir_stat_add_" + moduleName + "_",
                   statsByModule[moduleName], [&](StringRef name) {
                     StatMember member;
                     member.name = name.str();
@@ -568,8 +675,8 @@ private:
     // invoke operands/results so i64 registers do not silently truncate.
     for (acsim::ModuleOp owner : modules) {
       owner.walk([&](InvokeOp invoke) {
-        auto type =
-            dyn_cast_or_null<TypeOp>(lookupSymbol(model, invoke.getCalleeAttr()));
+        auto type = dyn_cast_or_null<TypeOp>(
+            lookupSymbol(model, invoke.getCalleeAttr()));
         if (!type)
           return;
         StringRef stem;
@@ -658,7 +765,7 @@ private:
             if (target)
               if (auto child = dyn_cast_or_null<acsim::ModuleOp>(
                       lookupSymbol(model, target)))
-              appendModule(child);
+                appendModule(child);
           }
           declarationOrder.push_back(module);
         };
@@ -695,7 +802,9 @@ private:
     os << "};\n\n";
     os << "gfsim::TerminationResult simulate();\n\n";
     os << "constexpr char kBuildFingerprint[] = "
-          "\"sha256:0000000000000000000000000000000000000000000000000000000000000000\";\n\n";
+          "\"sha256:"
+          "0000000000000000000000000000000000000000000000000000000000000000\";"
+          "\n\n";
     os << "} // namespace acsim_generated\n";
 
     file.relativePath = "include/generated/model.h";
@@ -728,8 +837,7 @@ private:
     emitOpenNamespaces(os, ns);
     os << "struct Owner {\n";
     os << "  void *parent_ = nullptr;\n";
-    for (const QueueMember &queue :
-         queuesByModule[module.getSymName().str()]) {
+    for (const QueueMember &queue : queuesByModule[module.getSymName().str()]) {
       os << "  gfsim::SimQueue<" << queue.cppType << "> " << queue.name
          << ";\n";
     }
@@ -890,10 +998,9 @@ private:
     os << ownerTypeName(module)
        << "::Owner(gfsim::SimSystem &system, std::string path)";
     llvm::SmallVector<std::string> inits;
-    for (const QueueMember &queue :
-         queuesByModule[module.getSymName().str()]) {
-      inits.push_back(queue.name + "(\"" + queue.name +
-                      "\", 0, nullptr, " + std::to_string(queue.capacity) +
+    for (const QueueMember &queue : queuesByModule[module.getSymName().str()]) {
+      inits.push_back(queue.name + "(\"" + queue.name + "\", 0, nullptr, " +
+                      std::to_string(queue.capacity) +
                       (queue.byteCapacity > 0
                            ? (", " + std::to_string(queue.byteCapacity))
                            : std::string()) +
@@ -901,8 +1008,9 @@ private:
     }
     for (const ResourceMember &resource :
          resourcesByModule[module.getSymName().str()]) {
-      inits.push_back(resource.name + "(\"" + resource.name + "\", 0, nullptr, " +
-                      std::to_string(resource.capacity) + ")");
+      inits.push_back(resource.name + "(\"" + resource.name +
+                      "\", 0, nullptr, " + std::to_string(resource.capacity) +
+                      ")");
     }
     for (Operation &op : module.getBody().front()) {
       if (auto instance = dyn_cast<InstanceOp>(op)) {
@@ -963,8 +1071,7 @@ private:
           "queuesCommittedEpoch_.delta == epoch.delta)\n";
     os << "    return;\n";
     os << "  queuesCommittedEpoch_ = epoch;\n";
-    for (const QueueMember &queue :
-         queuesByModule[module.getSymName().str()])
+    for (const QueueMember &queue : queuesByModule[module.getSymName().str()])
       os << "  " << queue.name << ".doXfer(epoch);\n";
     for (const ResourceMember &resource :
          resourcesByModule[module.getSymName().str()]) {
@@ -974,8 +1081,8 @@ private:
     os << "}\n\n";
   }
 
-  LogicalResult emitProcessMethods(llvm::raw_ostream &os, acsim::ModuleOp module,
-                                   ProcessOp process) {
+  LogicalResult emitProcessMethods(llvm::raw_ostream &os,
+                                   acsim::ModuleOp module, ProcessOp process) {
     std::string type = processTypeName(module, process);
     os << "void " << type
        << "::bind(gfsim::SimSystem &sys, gfsim::ObjectId objectId, "
@@ -985,10 +1092,12 @@ private:
     os << "  owner_ = moduleOwner;\n";
     os << "}\n\n";
 
-    os << "void " << type << "::thunkWork(void *object, gfsim::Epoch epoch) {\n";
+    os << "void " << type
+       << "::thunkWork(void *object, gfsim::Epoch epoch) {\n";
     os << "  static_cast<Process *>(object)->work(epoch);\n";
     os << "}\n\n";
-    os << "void " << type << "::thunkXfer(void *object, gfsim::Epoch epoch) {\n";
+    os << "void " << type
+       << "::thunkXfer(void *object, gfsim::Epoch epoch) {\n";
     os << "  static_cast<Process *>(object)->xfer(epoch);\n";
     os << "}\n\n";
     os << "void " << type << "::thunkReset(void *object) {\n";
@@ -1176,7 +1285,8 @@ private:
             const llvm::APInt &bits = integer.getValue();
             Type ty = constant.getType();
             if (isa<IndexType>(ty)) {
-              os << "static_cast<std::size_t>(" << bits.getZExtValue() << "ull)";
+              os << "static_cast<std::size_t>(" << bits.getZExtValue()
+                 << "ull)";
             } else if (auto intTy = dyn_cast<IntegerType>(ty);
                        intTy && intTy.getWidth() == 1) {
               os << (bits.getBoolValue() ? "true" : "false");
@@ -1222,19 +1332,17 @@ private:
           continue;
         }
         if (auto shl = dyn_cast<arith::ShLIOp>(op)) {
-          emitAssign(shl.getResult(),
-                     Twine(bind(shl.getLhs())) + " << (" + bind(shl.getRhs()) +
-                         " & " +
-                         std::to_string(integerBitWidth(shl.getType()) - 1) +
-                         "u)");
+          emitAssign(
+              shl.getResult(),
+              Twine(bind(shl.getLhs())) + " << (" + bind(shl.getRhs()) + " & " +
+                  std::to_string(integerBitWidth(shl.getType()) - 1) + "u)");
           continue;
         }
         if (auto shr = dyn_cast<arith::ShRUIOp>(op)) {
-          emitAssign(shr.getResult(),
-                     Twine(bind(shr.getLhs())) + " >> (" + bind(shr.getRhs()) +
-                         " & " +
-                         std::to_string(integerBitWidth(shr.getType()) - 1) +
-                         "u)");
+          emitAssign(
+              shr.getResult(),
+              Twine(bind(shr.getLhs())) + " >> (" + bind(shr.getRhs()) + " & " +
+                  std::to_string(integerBitWidth(shr.getType()) - 1) + "u)");
           continue;
         }
         if (auto sra = dyn_cast<arith::ShRSIOp>(op)) {
@@ -1260,16 +1368,16 @@ private:
             expr = lhs + " != " + rhs;
             break;
           case arith::CmpIPredicate::slt:
-            expr = "static_cast<" + signedTy + ">(" + lhs +
-                   ") < static_cast<" + signedTy + ">(" + rhs + ")";
+            expr = "static_cast<" + signedTy + ">(" + lhs + ") < static_cast<" +
+                   signedTy + ">(" + rhs + ")";
             break;
           case arith::CmpIPredicate::sle:
             expr = "static_cast<" + signedTy + ">(" + lhs +
                    ") <= static_cast<" + signedTy + ">(" + rhs + ")";
             break;
           case arith::CmpIPredicate::sgt:
-            expr = "static_cast<" + signedTy + ">(" + lhs +
-                   ") > static_cast<" + signedTy + ">(" + rhs + ")";
+            expr = "static_cast<" + signedTy + ">(" + lhs + ") > static_cast<" +
+                   signedTy + ">(" + rhs + ")";
             break;
           case arith::CmpIPredicate::sge:
             expr = "static_cast<" + signedTy + ">(" + lhs +
@@ -1306,11 +1414,9 @@ private:
           continue;
         }
         if (auto branch = dyn_cast<cf::BranchOp>(op)) {
-          for (auto [argument, operand] :
-               llvm::zip_equal(branch.getDest()->getArguments(),
-                               branch.getDestOperands()))
-            os << "      " << bind(argument) << " = " << bind(operand)
-               << ";\n";
+          for (auto [argument, operand] : llvm::zip_equal(
+                   branch.getDest()->getArguments(), branch.getDestOperands()))
+            os << "      " << bind(argument) << " = " << bind(operand) << ";\n";
           os << "      goto " << label(branch.getDest()) << ";\n";
           continue;
         }
@@ -1326,8 +1432,7 @@ private:
           for (auto [argument, operand] :
                llvm::zip_equal(cond.getFalseDest()->getArguments(),
                                cond.getFalseDestOperands()))
-            os << "      " << bind(argument) << " = " << bind(operand)
-               << ";\n";
+            os << "      " << bind(argument) << " = " << bind(operand) << ";\n";
           os << "      goto " << label(cond.getFalseDest()) << ";\n";
           continue;
         }
@@ -1340,8 +1445,8 @@ private:
           continue;
         }
         if (auto store = dyn_cast<LiveStoreOp>(op)) {
-          os << "      proposed_" << store.getSlot() << "_ = "
-             << bind(store.getValue()) << ";\n";
+          os << "      proposed_" << store.getSlot()
+             << "_ = " << bind(store.getValue()) << ";\n";
           continue;
         }
         if (auto invoke = dyn_cast<InvokeOp>(op)) {
@@ -1352,9 +1457,9 @@ private:
           continue;
         }
         if (auto inlineOp = dyn_cast<InlineOp>(op)) {
-          if (failed(emitCall(os, module, inlineOp.getCalleeAttr(),
-                              inlineOp.getArgs(), ValueRange(inlineOp.getResult()),
-                              names, bind, false)))
+          if (failed(emitCall(
+                  os, module, inlineOp.getCalleeAttr(), inlineOp.getArgs(),
+                  ValueRange(inlineOp.getResult()), names, bind, false)))
             return failure();
           continue;
         }
@@ -1423,15 +1528,14 @@ private:
         os << cppTypeName(model, result.getType()) << ' ';
       os << bind(result) << " = " << expr << ";\n";
     };
-    auto resolveMember = [&](StringRef stem)
-        -> std::pair<acsim::ModuleOp, StringRef> {
+    auto resolveMember =
+        [&](StringRef stem) -> std::pair<acsim::ModuleOp, StringRef> {
       StringRef symbol = callee.getValue();
       acsim::ModuleOp declaring;
       StringRef field;
       size_t best = 0;
       for (acsim::ModuleOp candidate : modules) {
-        std::string prefix =
-            (stem + "_" + candidate.getSymName() + "_").str();
+        std::string prefix = (stem + "_" + candidate.getSymName() + "_").str();
         if (symbol.starts_with(prefix) && prefix.size() > best) {
           declaring = candidate;
           field = symbol.drop_front(prefix.size());
@@ -1443,23 +1547,20 @@ private:
     auto ownerCast = [&](acsim::ModuleOp declaring) {
       if (!declaring || declaring == module)
         return "static_cast<" + ownerTypeName(module) + " *>(owner_)";
-      return "static_cast<" + ownerTypeName(declaring) +
-             " *>(static_cast<" + ownerTypeName(module) +
-             " *>(owner_)->parent_)";
+      return "static_cast<" + ownerTypeName(declaring) + " *>(static_cast<" +
+             ownerTypeName(module) + " *>(owner_)->parent_)";
     };
     auto traceSource = [&](StringRef kind) {
       std::string prefix = ("acir_trace_" + kind + "_").str();
       StringRef symbol = callee.getValue();
-      return symbol.starts_with(prefix)
-                 ? symbol.drop_front(prefix.size()).str()
-                 : std::string("pto");
+      return symbol.starts_with(prefix) ? symbol.drop_front(prefix.size()).str()
+                                        : std::string("pto");
     };
 
     if (cppName == "acir.trace.open") {
       std::string source = traceSource("open");
-      emitResult(results.front(),
-                 Twine("system ? system->traceOpen(\"") + source +
-                     "\") : UINT64_C(0)");
+      emitResult(results.front(), Twine("system ? system->traceOpen(\"") +
+                                      source + "\") : UINT64_C(0)");
       return success();
     }
     if (cppName == "acir.trace.next") {
@@ -1468,33 +1569,31 @@ private:
       os << "      gfsim::TraceNextResult " << pack << "{};\n";
       os << "      if (system)\n";
       os << "        " << pack << " = system->traceNext(\"" << source
-         << "\", static_cast<std::uint64_t>(" << bind(args.front())
-         << "));\n";
-      emitResult(results[0],
-                 Twine("static_cast<") +
-                     cppTypeName(model, results[0].getType()) + ">(" + pack +
-                     ".cursor)");
-      emitResult(results[1],
-                 Twine("static_cast<") +
-                     cppTypeName(model, results[1].getType()) + ">(" + pack +
-                     ".handle)");
+         << "\", static_cast<std::uint64_t>(" << bind(args.front()) << "));\n";
+      emitResult(results[0], Twine("static_cast<") +
+                                 cppTypeName(model, results[0].getType()) +
+                                 ">(" + pack + ".cursor)");
+      emitResult(results[1], Twine("static_cast<") +
+                                 cppTypeName(model, results[1].getType()) +
+                                 ">(" + pack + ".handle)");
       emitResult(results[2], Twine(pack) + ".advanced");
       return success();
     }
     if (cppName == "acir.trace.decode") {
-      emitResult(results.front(),
-                 Twine("static_cast<") +
-                     cppTypeName(model, results.front().getType()) +
-                     ">(system ? system->traceDecode(static_cast<std::uint64_t>(" +
-                     bind(args.front()) + ")) : UINT64_C(0))");
+      emitResult(
+          results.front(),
+          Twine("static_cast<") +
+              cppTypeName(model, results.front().getType()) +
+              ">(system ? system->traceDecode(static_cast<std::uint64_t>(" +
+              bind(args.front()) + ")) : UINT64_C(0))");
       return success();
     }
     if (cppName == "acir.trace.eof") {
       std::string source = traceSource("eof");
-      emitResult(results.front(),
-                 Twine("system && system->traceEof(\"") + source +
-                     "\", static_cast<std::uint64_t>(" + bind(args.front()) +
-                     "))");
+      emitResult(results.front(), Twine("system && system->traceEof(\"") +
+                                      source +
+                                      "\", static_cast<std::uint64_t>(" +
+                                      bind(args.front()) + "))");
       return success();
     }
     if (cppName == "acir.trace.position") {
@@ -1511,9 +1610,8 @@ private:
       auto [declaring, field] = resolveMember("acir_register_load");
       std::string owner = ownerCast(declaring);
       emitResult(results.front(),
-                 Twine(owner) + " ? " + owner + "->" + field +
-                     ".load() : " + cppTypeName(model, results.front().getType()) +
-                     "{}");
+                 Twine(owner) + " ? " + owner + "->" + field + ".load() : " +
+                     cppTypeName(model, results.front().getType()) + "{}");
       emitResult(results[1], "true");
       return success();
     }
@@ -1558,8 +1656,8 @@ private:
       auto [declaring, queue] = resolveMember("acir_queue_pop");
       std::string valueName = bind(results.front());
       std::string validName = bind(results[1]);
-      os << "      auto popped_" << valueName << " = "
-         << ownerCast(declaring) << "->" << queue << ".proposePop();\n";
+      os << "      auto popped_" << valueName << " = " << ownerCast(declaring)
+         << "->" << queue << ".proposePop();\n";
       os << "      ";
       if (!assignResults)
         os << cppTypeName(model, results.front().getType()) << ' ';
@@ -1662,8 +1760,7 @@ private:
                  Twine("static_cast<") +
                      cppTypeName(model, results.front().getType()) + ">(" +
                      ownerCast(module) + " ? " + ownerCast(module) + "->" +
-                     target +
-                     ".committedSize() : 0)");
+                     target + ".committedSize() : 0)");
       return success();
     }
 
@@ -1837,7 +1934,8 @@ private:
     os << "    else if (std::strcmp(argv[index], \"--max-ticks\") == 0 && "
           "index + 1 < argc)\n";
     os << "      maxTicks = std::strtoull(argv[++index], nullptr, 10);\n";
-    os << "    else if (std::strncmp(argv[index], \"--max-events=\", 13) == 0)\n";
+    os << "    else if (std::strncmp(argv[index], \"--max-events=\", 13) == "
+          "0)\n";
     os << "      maxEvents = std::strtoull(argv[index] + 13, nullptr, 10);\n";
     os << "    else if (std::strcmp(argv[index], \"--max-events\") == 0 && "
           "index + 1 < argc)\n";
@@ -1979,7 +2077,8 @@ private:
       llvm::json::Object profileInput;
       profileInput["kind"] = "profile";
       profileInput["value"] = options.profile;
-      specializationInputs.push_back(llvm::json::Value(std::move(profileInput)));
+      specializationInputs.push_back(
+          llvm::json::Value(std::move(profileInput)));
       llvm::json::Object targetInput;
       targetInput["kind"] = "toolchain_target";
       targetInput["value"] = options.toolchainTarget;
@@ -1987,7 +2086,8 @@ private:
     }
 
     llvm::json::Array instrumentation;
-    if (auto frozen = model.getFingerprints().getAs<StringAttr>("frozen_acir")) {
+    if (auto frozen =
+            model.getFingerprints().getAs<StringAttr>("frozen_acir")) {
       llvm::json::Object layer;
       layer["kind"] = "frozen_acir";
       layer["fingerprint"] = frozen.getValue().str();
@@ -2045,7 +2145,8 @@ private:
   int64_t activationCount = 0;
 };
 
-class EmitCxxPass final : public PassWrapper<EmitCxxPass, OperationPass<ModuleOp>> {
+class EmitCxxPass final
+    : public PassWrapper<EmitCxxPass, OperationPass<ModuleOp>> {
 public:
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(EmitCxxPass)
 
@@ -2118,7 +2219,9 @@ class CheckCxxContractPass final
 public:
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(CheckCxxContractPass)
 
-  StringRef getArgument() const override { return "acsim-verify-cxx-fingerprint"; }
+  StringRef getArgument() const override {
+    return "acsim-verify-cxx-fingerprint";
+  }
   StringRef getDescription() const override {
     return "Check generated C++ fingerprint against the build manifest";
   }
@@ -2151,9 +2254,9 @@ LogicalResult emitCxxFile(ModuleOp file, const EmitCxxOptions &options) {
     }
   }
   if (!model)
-    return file.emitError(
-        "ACSIM-EMIT: canonical ACSim input is required (run --ac-lower-to-acsim "
-        "first)");
+    return file.emitError("ACSIM-EMIT: canonical ACSim input is required (run "
+                          "--ac-lower-to-acsim "
+                          "first)");
   return emitCxx(model, options);
 }
 
