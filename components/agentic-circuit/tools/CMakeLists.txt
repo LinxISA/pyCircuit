@@ -12,6 +12,16 @@ add_subdirectory(acir-queue-plan)
 add_subdirectory(acir-queue-pycgen)
 add_subdirectory(acir-opt)
 
+install(TARGETS
+  acir-cxxgen
+  acir-opcode-catalog
+  acir-opt
+  acir-queue-cxxgen
+  acir-queue-plan
+  acir-queue-pycgen
+  RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+)
+
 # The integrated ACIR-to-PYC lane always consumes the pyc6 targets built from
 # this checkout.  Keeping the dependency explicit prevents a stale external
 # pyCircuit install from becoming an accidental build input.

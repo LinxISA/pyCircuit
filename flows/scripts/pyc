@@ -127,7 +127,7 @@ case "${cmd}" in
     ninja -C "${build_dir}" pycc pyc6_runtime
     if [[ "${PYC_BUILD_AGENTIC_CIRCUIT:-ON}" == "ON" ]]; then
       pyc_log "build integrated ACIR/ACSim/gfsim toolchain"
-      ninja -C "${build_dir}" acir-pyc-toolchain acir-opt acir-cxxgen gfsim
+      ninja -C "${build_dir}" all
     fi
     ninja -C "${build_dir}" pyc-opt 2>/dev/null || true
     cmake --install "${build_dir}" --prefix "${install_prefix}"

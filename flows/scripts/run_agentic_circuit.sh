@@ -10,8 +10,8 @@ ac_root="${PYC_ROOT_DIR}/components/agentic-circuit"
 venv="$(pyc_out_root)/agentic-circuit/venv"
 mkdir -p "${docs_gate_dir}" "${gate_out_dir}" "$(dirname "${venv}")"
 
-exec > >(tee "${docs_gate_dir}/agentic_circuit.stdout") \
-  2> >(tee "${docs_gate_dir}/agentic_circuit.stderr" >&2)
+exec > >(tee -a "${docs_gate_dir}/agentic_circuit.stdout") \
+  2> >(tee -a "${docs_gate_dir}/agentic_circuit.stderr" >&2)
 
 cat > "${docs_gate_dir}/agentic_circuit_commands.txt" <<EOF
 bash flows/scripts/run_agentic_circuit.sh
@@ -25,10 +25,17 @@ EOF
 
 pyc_log "Agentic Circuit closure run-id=${gate_run_id}"
 
-if [[ ! -x "${venv}/bin/python" ]]; then
-  python3 -m venv "${venv}"
+resume_from="${AC_GATE_RESUME_FROM:-g0}"
+if [[ "${resume_from}" != "g0" && "${resume_from}" != "g2" ]]; then
+  pyc_die "AC_GATE_RESUME_FROM must be g0 or g2"
 fi
-"${venv}/bin/python" -m pip install -e "${ac_root}[test]"
+
+if [[ "${resume_from}" == "g0" ]]; then
+  if [[ ! -x "${venv}/bin/python" ]]; then
+    python3 -m venv "${venv}"
+  fi
+  "${venv}/bin/python" -m pip install -e "${ac_root}[test]"
+fi
 
 llvm_config="${LLVM_CONFIG:-}"
 if [[ -z "${llvm_config}" ]]; then
@@ -39,36 +46,52 @@ if [[ -z "${llvm_config}" ]]; then
     fi
   done
 fi
+if [[ -z "${llvm_config}" ]]; then
+  for candidate in \
+    /opt/homebrew/opt/llvm/bin/llvm-config \
+    /usr/local/opt/llvm/bin/llvm-config; do
+    if [[ -x "${candidate}" ]]; then
+      llvm_config="${candidate}"
+      break
+    fi
+  done
+fi
 [[ -n "${llvm_config}" ]] || pyc_die "LLVM 22 llvm-config is required"
 [[ "$("${llvm_config}" --version | cut -d. -f1)" == "22" ]] || \
   pyc_die "Agentic Circuit requires LLVM 22"
 export LLVM_DIR="${LLVM_DIR:-$("${llvm_config}" --cmakedir)}"
 export MLIR_DIR="${MLIR_DIR:-$(dirname "${LLVM_DIR}")/mlir}"
 
-pyc_log "AC G0/G1: configure standalone AC component"
-PATH="${venv}/bin:${PATH}" cmake --preset dev-llvm22 \
-  -S "${ac_root}" -DACIR_BUILD_TESTING=ON
-cmake --build "${ac_root}/build/dev-llvm22" -j "${PYC_BUILD_JOBS:-6}"
+if [[ "${resume_from}" == "g0" ]]; then
+  pyc_log "AC G0/G1: configure standalone AC component"
+  PATH="${venv}/bin:${PATH}" cmake --preset dev-llvm22 \
+    -S "${ac_root}" -DACIR_BUILD_TESTING=ON
+  cmake --build "${ac_root}/build/dev-llvm22" -j "${PYC_BUILD_JOBS:-6}"
 
-site_packages="$("${venv}/bin/python" -c \
-  'import sysconfig; print(sysconfig.get_paths()["purelib"])')"
-(
-  cd "${ac_root}"
-  PYTHONPATH="src:build/dev-llvm22/python" \
-    "${venv}/bin/python" -m unittest discover \
-      -s tests/python_frontend -p 'test_*.py'
-  PYTHONPATH="src:build/dev-llvm22/python" \
-    "${venv}/bin/python" -m unittest discover \
-      -s tests/cli -p 'test_*.py'
-  PYTHONPATH="${site_packages}" \
-    cmake --build build/dev-llvm22 --target check-acir -j "${PYC_BUILD_JOBS:-6}"
-  ctest --test-dir build/dev-llvm22 --output-on-failure \
-    -j "${PYC_TEST_JOBS:-6}"
-)
+  site_packages="$("${venv}/bin/python" -c \
+    'import sysconfig; print(sysconfig.get_paths()["purelib"])')"
+  (
+    cd "${ac_root}"
+    PYTHONPATH="src:build/dev-llvm22/python" \
+      "${venv}/bin/python" -m unittest discover \
+        -s tests/python_frontend -p 'test_*.py'
+    PYTHONPATH="src:build/dev-llvm22/python" \
+      "${venv}/bin/python" -m unittest discover \
+        -s tests/cli -p 'test_*.py'
+    PYTHONPATH="${site_packages}" \
+      cmake --build build/dev-llvm22 --target check-acir -j "${PYC_BUILD_JOBS:-6}"
+    ctest --test-dir build/dev-llvm22 --output-on-failure \
+      -j "${PYC_TEST_JOBS:-6}"
+  )
+fi
 
 pyc_log "AC G2: build and install the repo-local pyc6 + AC toolchain"
-PYC_BUILD_AGENTIC_CIRCUIT=ON bash "${PYC_ROOT_DIR}/flows/scripts/pyc" build
-toolchain="${PYC_ROOT_DIR}/.pycircuit_out/toolchain/install"
+gate_toolchain="${gate_out_dir}/toolchain"
+PYC_BUILD_DIR="${gate_toolchain}/build" \
+PYC_INSTALL_PREFIX="${gate_toolchain}/install" \
+PYC_BUILD_AGENTIC_CIRCUIT=ON \
+  bash "${PYC_ROOT_DIR}/flows/scripts/pyc" build
+toolchain="${gate_toolchain}/install"
 pycgen="${toolchain}/bin/acir-queue-pycgen"
 pycc="${toolchain}/bin/pycc"
 metadata="${toolchain}/share/pycircuit/toolchain-metadata.json"
