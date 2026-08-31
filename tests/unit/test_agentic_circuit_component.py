@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import importlib
 import sys
-import tomllib
 from pathlib import Path
 
+import tomllib
 
 REPOSITORY = Path(__file__).resolve().parents[2]
 AC_ROOT = REPOSITORY / "components" / "agentic-circuit"
@@ -38,9 +38,7 @@ def test_two_distributions_use_distinct_namespaces_and_bsd_license() -> None:
 
 
 def test_acpy_contract_epoch_remains_0_3() -> None:
-    metadata = tomllib.loads(
-        (AC_ROOT / "pyproject.toml").read_text(encoding="utf-8")
-    )
+    metadata = tomllib.loads((AC_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     assert metadata["tool"]["agentic-circuit"]["contract-epoch"] == "0.3"
 
     source = (AC_ROOT / "src" / "agentic_circuit" / "_acpy.py").read_text(

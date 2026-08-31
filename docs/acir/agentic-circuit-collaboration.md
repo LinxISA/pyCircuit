@@ -1,6 +1,6 @@
 # Agentic Circuit Collaboration Migration
 
-Source repository: `PTO-ISA/agentic-circuit`  
+Source repository: `PTO-ISA/agentic-circuit`
 Inventory baseline: `756002e2998b11dfe1fed14dc3d63cdad8be694c`
 
 ## Open pull requests
