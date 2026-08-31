@@ -138,4 +138,3 @@ assign data = pyc_comb_24;
 assign lo8 = pyc_comb_25;
 
 endmodule
-

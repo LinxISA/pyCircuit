@@ -221,4 +221,3 @@ assign load_unit_wb_lq_idx = pyc_comb_46;
 assign load_unit_tlb_miss = pyc_comb_35;
 
 endmodule
-

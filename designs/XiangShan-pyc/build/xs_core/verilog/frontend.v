@@ -468,4 +468,3 @@ assign frontend_dec_pc_1 = pyc_comb_61;
 assign frontend_frontend_stall = pyc_comb_62;
 
 endmodule
-

@@ -44,7 +44,7 @@
 
 ### 1.3 模块层次
 
-```
+```text
 XSTop (SoC)
 ├── XSTile[0..N-1]
 │   ├── XSCore
@@ -71,7 +71,7 @@ XSTop (SoC)
 
 ### 目录布局
 
-```
+```text
 designs/XiangShan-pyc/
 ├── docs/
 │   ├── port_XiangShan_to_pyc.md        ← 本文件
@@ -248,6 +248,7 @@ def build_bpu(m: CycleAwareCircuit, domain: CycleAwareDomain):
 ### Step 7 — 规格追溯
 
 每个子系统的 `traceability/<subsystem>.md`：
+
 - 设计文档章节 → PyCircuit V5 模块 → 特性 ID → 测试 ID
 - 验证每个规格中定义的功能在 PyCircuit V5 实现中都有对应
 
@@ -449,4 +450,4 @@ m.output("req_ready", ready_signal)
 
 ---
 
-**Copyright (C) 2024–2026 PyCircuit Contributors**
+Copyright (C) 2024–2026 PyCircuit Contributors

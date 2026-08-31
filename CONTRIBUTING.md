@@ -39,7 +39,7 @@ pyCircuit is a Python-based hardware description framework that compiles Python 
 
 ```bash
 # Clone the repository
-git clone https://github.com/LinxISA/pyCircuit.git
+git clone https://github.com/PTO-ISA/pyCircuit.git
 cd pyCircuit
 
 # Install Python package in development mode
@@ -151,7 +151,7 @@ When reporting bugs, please include:
 4. **Actual behavior**: What actually happened
 5. **Logs**: Any relevant error messages
 
-Use the [GitHub Issue Tracker](https://github.com/LinxISA/pyCircuit/issues) to report bugs.
+Use the [GitHub Issue Tracker](https://github.com/PTO-ISA/pyCircuit/issues) to report bugs.
 
 ## Feature Requests
 
@@ -163,7 +163,7 @@ We welcome feature requests! Please include:
 
 ## Directory Structure
 
-```
+```text
 pyCircuit
 ├── compiler/
 │   ├── frontend/          # Python frontend (pycircuit package)

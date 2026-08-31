@@ -12,9 +12,9 @@ Key features:
   M-SU-003  Pipeline kill on redirect
   M-SU-004  Writeback acknowledgement with rob_idx
 """
+
 from __future__ import annotations
 
-import math
 import sys
 from pathlib import Path
 
@@ -27,9 +27,6 @@ from pycircuit import (
     CycleAwareDomain,
     CycleAwareSignal,
     cas,
-    compile_cycle_aware,
-    mux,
-    u,
     wire_of,
 )
 from top.parameters import *
@@ -51,35 +48,58 @@ def store_unit(
     _in = inputs or {}
     _out: dict[str, CycleAwareSignal] = {}
 
-
     # ================================================================
     # s0 — Address Generation + TLB request
     # ================================================================
 
-    flush = (_in["flush"] if "flush" in _in else
+    flush = (
+        _in["flush"]
+        if "flush" in _in
+        else cas(domain, m.input(f"{prefix}_flush", width=1), cycle=0)
+    )
 
-        cas(domain, m.input(f"{prefix}_flush", width=1), cycle=0))
-
-    issue_valid = (_in["issue_valid"] if "issue_valid" in _in else
-
-        cas(domain, m.input(f"{prefix}_issue_valid", width=1), cycle=0))
-    issue_addr = (_in["issue_addr"] if "issue_addr" in _in else
-        cas(domain, m.input(f"{prefix}_issue_addr", width=addr_width), cycle=0))
-    issue_data = (_in["issue_data"] if "issue_data" in _in else
-        cas(domain, m.input(f"{prefix}_issue_data", width=data_width), cycle=0))
-    issue_rob_idx = (_in["issue_rob_idx"] if "issue_rob_idx" in _in else
-        cas(domain, m.input(f"{prefix}_issue_rob_idx", width=rob_idx_width), cycle=0))
-    issue_sq_idx = (_in["issue_sq_idx"] if "issue_sq_idx" in _in else
-        cas(domain, m.input(f"{prefix}_issue_sq_idx", width=sq_idx_width), cycle=0))
+    issue_valid = (
+        _in["issue_valid"]
+        if "issue_valid" in _in
+        else cas(domain, m.input(f"{prefix}_issue_valid", width=1), cycle=0)
+    )
+    issue_addr = (
+        _in["issue_addr"]
+        if "issue_addr" in _in
+        else cas(domain, m.input(f"{prefix}_issue_addr", width=addr_width), cycle=0)
+    )
+    issue_data = (
+        _in["issue_data"]
+        if "issue_data" in _in
+        else cas(domain, m.input(f"{prefix}_issue_data", width=data_width), cycle=0)
+    )
+    issue_rob_idx = (
+        _in["issue_rob_idx"]
+        if "issue_rob_idx" in _in
+        else cas(
+            domain, m.input(f"{prefix}_issue_rob_idx", width=rob_idx_width), cycle=0
+        )
+    )
+    issue_sq_idx = (
+        _in["issue_sq_idx"]
+        if "issue_sq_idx" in _in
+        else cas(domain, m.input(f"{prefix}_issue_sq_idx", width=sq_idx_width), cycle=0)
+    )
 
     # TLB response (arrives in s1)
-    tlb_resp_hit = (_in["tlb_resp_hit"] if "tlb_resp_hit" in _in else
-        cas(domain, m.input(f"{prefix}_tlb_resp_hit", width=1), cycle=0))
-    tlb_resp_ppn = (_in["tlb_resp_ppn"] if "tlb_resp_ppn" in _in else
-        cas(domain, m.input(f"{prefix}_tlb_resp_ppn", width=ppn_width), cycle=0))
+    tlb_resp_hit = (
+        _in["tlb_resp_hit"]
+        if "tlb_resp_hit" in _in
+        else cas(domain, m.input(f"{prefix}_tlb_resp_hit", width=1), cycle=0)
+    )
+    tlb_resp_ppn = (
+        _in["tlb_resp_ppn"]
+        if "tlb_resp_ppn" in _in
+        else cas(domain, m.input(f"{prefix}_tlb_resp_ppn", width=ppn_width), cycle=0)
+    )
 
     s0_fire = issue_valid & (~flush)
-    s0_vpn = issue_addr[12:12 + (addr_width - 12)]
+    s0_vpn = issue_addr[12 : 12 + (addr_width - 12)]
 
     m.output(f"{prefix}_tlb_req_valid", wire_of(s0_fire))
     _out["tlb_req_valid"] = s0_fire
@@ -138,6 +158,4 @@ store_unit.__pycircuit_name__ = "store_unit"
 
 
 if __name__ == "__main__":
-    print(compile_cycle_aware(
-        store_unit, name="store_unit", eager=True,
-    ).emit_mlir())
+    pass

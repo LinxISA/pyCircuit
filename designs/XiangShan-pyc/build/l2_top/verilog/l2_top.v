@@ -593,4 +593,3 @@ assign l2top_dc_grant_data = l2top_ds_resp_data;
 assign l2top_l2_busy = pyc_comb_43;
 
 endmodule
-

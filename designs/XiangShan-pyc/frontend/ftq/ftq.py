@@ -15,6 +15,7 @@ Key features:
   F-FTQ-006  Backpressure: BPU stalled when queue full or run-ahead exceeded
   F-FTQ-007  BPU S3 override replaces earlier prediction in-place
 """
+
 from __future__ import annotations
 
 import sys
@@ -29,15 +30,11 @@ from pycircuit import (
     CycleAwareDomain,
     CycleAwareSignal,
     cas,
-    compile_cycle_aware,
     mux,
-    u,
     wire_of,
 )
-
 from top.parameters import (
     FETCH_BLOCK_INST_NUM,
-    FTQ_IDX_WIDTH,
     FTQ_SIZE,
     PC_WIDTH,
 )
@@ -68,38 +65,78 @@ def ftq(
     # ── Cycle 0: Inputs ──────────────────────────────────────────────
 
     # BPU prediction input
-    bpu_in_valid = (_in["bpu_in_valid"] if "bpu_in_valid" in _in else
-        cas(domain, m.input(f"{prefix}_bpu_in_valid", width=1), cycle=0))
-    bpu_in_start_pc = (_in["bpu_in_start_pc"] if "bpu_in_start_pc" in _in else
-        cas(domain, m.input(f"{prefix}_bpu_in_start_pc", width=pc_width), cycle=0))
-    bpu_in_target = (_in["bpu_in_target"] if "bpu_in_target" in _in else
-        cas(domain, m.input(f"{prefix}_bpu_in_target", width=pc_width), cycle=0))
-    bpu_in_taken = (_in["bpu_in_taken"] if "bpu_in_taken" in _in else
-        cas(domain, m.input(f"{prefix}_bpu_in_taken", width=1), cycle=0))
-    bpu_in_cfi_offset = (_in["bpu_in_cfi_offset"] if "bpu_in_cfi_offset" in _in else
-        cas(domain, m.input(f"{prefix}_bpu_in_cfi_offset", width=cfi_offset_width), cycle=0))
+    bpu_in_valid = (
+        _in["bpu_in_valid"]
+        if "bpu_in_valid" in _in
+        else cas(domain, m.input(f"{prefix}_bpu_in_valid", width=1), cycle=0)
+    )
+    bpu_in_start_pc = (
+        _in["bpu_in_start_pc"]
+        if "bpu_in_start_pc" in _in
+        else cas(domain, m.input(f"{prefix}_bpu_in_start_pc", width=pc_width), cycle=0)
+    )
+    bpu_in_target = (
+        _in["bpu_in_target"]
+        if "bpu_in_target" in _in
+        else cas(domain, m.input(f"{prefix}_bpu_in_target", width=pc_width), cycle=0)
+    )
+    bpu_in_taken = (
+        _in["bpu_in_taken"]
+        if "bpu_in_taken" in _in
+        else cas(domain, m.input(f"{prefix}_bpu_in_taken", width=1), cycle=0)
+    )
+    bpu_in_cfi_offset = (
+        _in["bpu_in_cfi_offset"]
+        if "bpu_in_cfi_offset" in _in
+        else cas(
+            domain,
+            m.input(f"{prefix}_bpu_in_cfi_offset", width=cfi_offset_width),
+            cycle=0,
+        )
+    )
 
     # BPU S3 override: rewrite an existing entry and reset bpu_ptr
-    bpu_s3_override = (_in["bpu_s3_override"] if "bpu_s3_override" in _in else
-        cas(domain, m.input(f"{prefix}_bpu_s3_override", width=1), cycle=0))
-    bpu_s3_ptr = (_in["bpu_s3_ptr"] if "bpu_s3_ptr" in _in else
-        cas(domain, m.input(f"{prefix}_bpu_s3_ptr", width=ptr_w), cycle=0))
+    bpu_s3_override = (
+        _in["bpu_s3_override"]
+        if "bpu_s3_override" in _in
+        else cas(domain, m.input(f"{prefix}_bpu_s3_override", width=1), cycle=0)
+    )
+    bpu_s3_ptr = (
+        _in["bpu_s3_ptr"]
+        if "bpu_s3_ptr" in _in
+        else cas(domain, m.input(f"{prefix}_bpu_s3_ptr", width=ptr_w), cycle=0)
+    )
 
     # IFU handshake
-    ifu_req_ready = (_in["ifu_req_ready"] if "ifu_req_ready" in _in else
-        cas(domain, m.input(f"{prefix}_ifu_req_ready", width=1), cycle=0))
-    ifu_wb_valid = (_in["ifu_wb_valid"] if "ifu_wb_valid" in _in else
-        cas(domain, m.input(f"{prefix}_ifu_wb_valid", width=1), cycle=0))
+    ifu_req_ready = (
+        _in["ifu_req_ready"]
+        if "ifu_req_ready" in _in
+        else cas(domain, m.input(f"{prefix}_ifu_req_ready", width=1), cycle=0)
+    )
+    ifu_wb_valid = (
+        _in["ifu_wb_valid"]
+        if "ifu_wb_valid" in _in
+        else cas(domain, m.input(f"{prefix}_ifu_wb_valid", width=1), cycle=0)
+    )
 
     # Backend redirect
-    redirect_valid = (_in["redirect_valid"] if "redirect_valid" in _in else
-        cas(domain, m.input(f"{prefix}_redirect_valid", width=1), cycle=0))
-    redirect_ftq_idx = (_in["redirect_ftq_idx"] if "redirect_ftq_idx" in _in else
-        cas(domain, m.input(f"{prefix}_redirect_ftq_idx", width=ptr_w), cycle=0))
+    redirect_valid = (
+        _in["redirect_valid"]
+        if "redirect_valid" in _in
+        else cas(domain, m.input(f"{prefix}_redirect_valid", width=1), cycle=0)
+    )
+    redirect_ftq_idx = (
+        _in["redirect_ftq_idx"]
+        if "redirect_ftq_idx" in _in
+        else cas(domain, m.input(f"{prefix}_redirect_ftq_idx", width=ptr_w), cycle=0)
+    )
 
     # Backend commit
-    commit_valid = (_in["commit_valid"] if "commit_valid" in _in else
-        cas(domain, m.input(f"{prefix}_commit_valid", width=1), cycle=0))
+    commit_valid = (
+        _in["commit_valid"]
+        if "commit_valid" in _in
+        else cas(domain, m.input(f"{prefix}_commit_valid", width=1), cycle=0)
+    )
 
     # ── State ─────────────────────────────────────────────────────────
 
@@ -121,7 +158,9 @@ def ftq(
         for i in range(size)
     ]
     entry_cfi_off = [
-        domain.signal(width=cfi_offset_width, reset_value=0, name=f"{prefix}_ent_cfi_{i}")
+        domain.signal(
+            width=cfi_offset_width, reset_value=0, name=f"{prefix}_ent_cfi_{i}"
+        )
         for i in range(size)
     ]
     entry_valid = [
@@ -141,9 +180,13 @@ def ftq(
     commit_idx = commit_ptr[0:idx_w]
 
     # Modular distances (wrap bit disambiguates full vs empty)
-    dist_bpu_commit = cas(domain, (wire_of(bpu_ptr) - wire_of(commit_ptr))[0:cnt_w], cycle=0)
+    dist_bpu_commit = cas(
+        domain, (wire_of(bpu_ptr) - wire_of(commit_ptr))[0:cnt_w], cycle=0
+    )
     dist_bpu_ifu = cas(domain, (wire_of(bpu_ptr) - wire_of(ifu_ptr))[0:cnt_w], cycle=0)
-    dist_ifu_commit = cas(domain, (wire_of(ifu_ptr) - wire_of(commit_ptr))[0:cnt_w], cycle=0)
+    dist_ifu_commit = cas(
+        domain, (wire_of(ifu_ptr) - wire_of(commit_ptr))[0:cnt_w], cycle=0
+    )
 
     # BPU backpressure:
     #   ready = (bpu-commit distance < size) & (bpu-ifu distance < run_ahead) & ~redirect
@@ -259,10 +302,12 @@ def ftq(
     next_commit = mux(commit_valid, next_comm_inc, commit_ptr)
 
     # Redirect: roll back bpu, ifu, ifu_wb to (redirect_ftq_idx + 1)
-    redir_new_ptr = cas(domain, (wire_of(redirect_ftq_idx) + wire_of(one))[0:ptr_w], cycle=0)
+    redir_new_ptr = cas(
+        domain, (wire_of(redirect_ftq_idx) + wire_of(one))[0:ptr_w], cycle=0
+    )
 
     # S3 override also rolls back ifu/ifu_wb if they went past the override point
-    s3_rollback_ifu = s3_fire & (dist_bpu_ifu == zero_cnt)
+    s3_fire & (dist_bpu_ifu == zero_cnt)
 
     bpu_ptr <<= mux(redirect_valid, redir_new_ptr, next_bpu)
     ifu_ptr <<= mux(redirect_valid, redir_new_ptr, next_ifu)
@@ -275,7 +320,4 @@ ftq.__pycircuit_name__ = "ftq"
 
 
 if __name__ == "__main__":
-    print(compile_cycle_aware(
-        ftq, name="ftq", eager=True,
-        size=FTQ_SIZE, pc_width=PC_WIDTH,
-    ).emit_mlir())
+    pass

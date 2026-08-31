@@ -270,4 +270,3 @@ assign mem_sbuf_drain_valid = mem_commit_st_valid;
 assign mem_flush_out = mem_flush;
 
 endmodule
-

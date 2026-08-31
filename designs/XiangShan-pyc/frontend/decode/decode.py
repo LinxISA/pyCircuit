@@ -18,6 +18,7 @@ Key features:
   F-DEC-005  FP / Vec detection (simplified)
   F-DEC-006  Registered output pipeline stage
 """
+
 from __future__ import annotations
 
 import sys
@@ -32,48 +33,44 @@ from pycircuit import (
     CycleAwareDomain,
     CycleAwareSignal,
     cas,
-    compile_cycle_aware,
-    mux,
-    u,
     wire_of,
 )
-
 from top.parameters import DECODE_WIDTH, PC_WIDTH
 
 INST_WIDTH = 32
 IMM_WIDTH = 32
 
 # ── RISC-V base opcode constants (bits [6:0]) ────────────────────────
-OP_LUI       = 0x37  # 0110111
-OP_AUIPC     = 0x17  # 0010111
-OP_JAL       = 0x6F  # 1101111
-OP_JALR      = 0x67  # 1100111
-OP_BRANCH    = 0x63  # 1100011
-OP_LOAD      = 0x03  # 0000011
-OP_STORE     = 0x23  # 0100011
-OP_OP_IMM    = 0x13  # 0010011
-OP_OP        = 0x33  # 0110011
-OP_OP_IMM_W  = 0x1B  # 0011011  (RV64 word-immediate)
-OP_OP_W      = 0x3B  # 0111011  (RV64 word-register)
-OP_SYSTEM    = 0x73  # 1110011
-OP_FENCE     = 0x0F  # 0001111
+OP_LUI = 0x37  # 0110111
+OP_AUIPC = 0x17  # 0010111
+OP_JAL = 0x6F  # 1101111
+OP_JALR = 0x67  # 1100111
+OP_BRANCH = 0x63  # 1100011
+OP_LOAD = 0x03  # 0000011
+OP_STORE = 0x23  # 0100011
+OP_OP_IMM = 0x13  # 0010011
+OP_OP = 0x33  # 0110011
+OP_OP_IMM_W = 0x1B  # 0011011  (RV64 word-immediate)
+OP_OP_W = 0x3B  # 0111011  (RV64 word-register)
+OP_SYSTEM = 0x73  # 1110011
+OP_FENCE = 0x0F  # 0001111
 
 # FP / Vec opcodes (simplified detection)
-OP_FP_LOAD   = 0x07  # 0000111
-OP_FP_STORE  = 0x27  # 0100111
-OP_FMADD     = 0x43  # 1000011
-OP_FMSUB     = 0x47  # 1000111
-OP_FNMSUB    = 0x4B  # 1001011
-OP_FNMADD    = 0x4F  # 1001111
-OP_FP_OP     = 0x53  # 1010011
-OP_VEC       = 0x57  # 1010111
+OP_FP_LOAD = 0x07  # 0000111
+OP_FP_STORE = 0x27  # 0100111
+OP_FMADD = 0x43  # 1000011
+OP_FMSUB = 0x47  # 1000111
+OP_FNMSUB = 0x4B  # 1001011
+OP_FNMADD = 0x4F  # 1001111
+OP_FP_OP = 0x53  # 1010011
+OP_VEC = 0x57  # 1010111
 
 
 def _sext_wire(m, val, from_w: int, to_w: int):
     """Sign-extend a *wire* from ``from_w`` bits to ``to_w`` bits."""
     if from_w >= to_w:
         return val[0:to_w]
-    sign = val[from_w - 1:from_w]
+    sign = val[from_w - 1 : from_w]
     ext_w = to_w - from_w
     ext = sign.select(
         m.const((1 << ext_w) - 1, width=ext_w),
@@ -95,47 +92,50 @@ def decode(
     _in = inputs or {}
     _out: dict[str, CycleAwareSignal] = {}
 
-
-    flush = (_in["flush"] if "flush" in _in else
-
-
-        cas(domain, m.input(f"{prefix}_flush", width=1), cycle=0))
+    flush = (
+        _in["flush"]
+        if "flush" in _in
+        else cas(domain, m.input(f"{prefix}_flush", width=1), cycle=0)
+    )
 
     reg_out: dict[str, object] = {}
 
     # ── Cycle 0: combinational decode ─────────────────────────────────
 
     for i in range(decode_width):
-        in_valid  = cas(domain, m.input(f"{prefix}_in_valid_{i}", width=1), cycle=0)
-        in_inst   = cas(domain, m.input(f"{prefix}_in_inst_{i}", width=INST_WIDTH), cycle=0)
-        in_pc     = cas(domain, m.input(f"{prefix}_in_pc_{i}", width=pc_width), cycle=0)
-        in_is_rvc = cas(domain, m.input(f"{prefix}_in_is_rvc_{i}", width=1), cycle=0)
+        in_valid = cas(domain, m.input(f"{prefix}_in_valid_{i}", width=1), cycle=0)
+        in_inst = cas(
+            domain, m.input(f"{prefix}_in_inst_{i}", width=INST_WIDTH), cycle=0
+        )
+        in_pc = cas(domain, m.input(f"{prefix}_in_pc_{i}", width=pc_width), cycle=0)
+        cas(domain, m.input(f"{prefix}_in_is_rvc_{i}", width=1), cycle=0)
 
         inst = wire_of(in_inst)
 
         # ── Fixed-position field extraction ──
         opcode = inst[0:7]
-        rd     = inst[7:12]
+        rd = inst[7:12]
         funct3 = inst[12:15]
-        rs1    = inst[15:20]
-        rs2    = inst[20:25]
+        rs1 = inst[15:20]
+        rs2 = inst[20:25]
         funct7 = inst[25:32]
 
         # ── Instruction type detection ──
-        _c = lambda v: m.const(v, width=7)
+        def _c(v):
+            return m.const(v, width=7)
 
-        is_lui      = opcode == _c(OP_LUI)
-        is_auipc    = opcode == _c(OP_AUIPC)
-        is_jal      = opcode == _c(OP_JAL)
-        is_jalr     = opcode == _c(OP_JALR)
-        is_branch   = opcode == _c(OP_BRANCH)
-        is_load     = opcode == _c(OP_LOAD)
-        is_store    = opcode == _c(OP_STORE)
-        is_op_imm   = opcode == _c(OP_OP_IMM)
-        is_op       = opcode == _c(OP_OP)
+        is_lui = opcode == _c(OP_LUI)
+        is_auipc = opcode == _c(OP_AUIPC)
+        is_jal = opcode == _c(OP_JAL)
+        is_jalr = opcode == _c(OP_JALR)
+        is_branch = opcode == _c(OP_BRANCH)
+        is_load = opcode == _c(OP_LOAD)
+        is_store = opcode == _c(OP_STORE)
+        is_op_imm = opcode == _c(OP_OP_IMM)
+        is_op = opcode == _c(OP_OP)
         is_op_imm_w = opcode == _c(OP_OP_IMM_W)
-        is_op_w     = opcode == _c(OP_OP_W)
-        is_system   = opcode == _c(OP_SYSTEM)
+        is_op_w = opcode == _c(OP_OP_W)
+        opcode == _c(OP_SYSTEM)
 
         # FP / Vec
         is_fp = (
@@ -167,7 +167,10 @@ def decode(
 
         # B-type: {inst[31], inst[7], inst[30:25], inst[11:8], 0} → 13 bits
         imm_b_raw = m.cat(
-            inst[31:32], inst[7:8], inst[25:31], inst[8:12],
+            inst[31:32],
+            inst[7:8],
+            inst[25:31],
+            inst[8:12],
             m.const(0, width=1),
         )
         imm_b = _sext_wire(m, imm_b_raw, 13, IMM_WIDTH)
@@ -177,7 +180,10 @@ def decode(
 
         # J-type: {inst[31], inst[19:12], inst[20], inst[30:21], 0} → 21 bits
         imm_j_raw = m.cat(
-            inst[31:32], inst[12:20], inst[20:21], inst[21:31],
+            inst[31:32],
+            inst[12:20],
+            inst[20:21],
+            inst[21:31],
             m.const(0, width=1),
         )
         imm_j = _sext_wire(m, imm_j_raw, 21, IMM_WIDTH)
@@ -191,8 +197,8 @@ def decode(
 
         # ── Control signal generation ──
 
-        use_imm   = is_i_type | is_s_type | is_b_type | is_u_type | is_j_type
-        rd_valid  = is_r_type | is_i_type | is_u_type | is_j_type
+        use_imm = is_i_type | is_s_type | is_b_type | is_u_type | is_j_type
+        rd_valid = is_r_type | is_i_type | is_u_type | is_j_type
         rs1_valid = is_r_type | is_i_type | is_s_type | is_b_type
         rs2_valid = is_r_type | is_s_type | is_b_type
 
@@ -200,54 +206,54 @@ def decode(
 
         # ── Pipeline registers (cycle 0 → cycle 1) ──
         tag = f"d{i}"
-        reg_out[f"v_{i}"]          = domain.cycle(wire_of(dec_valid), name=f"{prefix}_{tag}_v")
-        reg_out[f"pc_{i}"]         = domain.cycle(wire_of(in_pc),     name=f"{prefix}_{tag}_pc")
-        reg_out[f"inst_{i}"]       = domain.cycle(inst,           name=f"{prefix}_{tag}_inst")
-        reg_out[f"rd_{i}"]         = domain.cycle(rd,             name=f"{prefix}_{tag}_rd")
-        reg_out[f"rs1_{i}"]        = domain.cycle(rs1,            name=f"{prefix}_{tag}_rs1")
-        reg_out[f"rs2_{i}"]        = domain.cycle(rs2,            name=f"{prefix}_{tag}_rs2")
-        reg_out[f"funct3_{i}"]     = domain.cycle(funct3,         name=f"{prefix}_{tag}_f3")
-        reg_out[f"funct7_{i}"]     = domain.cycle(funct7,         name=f"{prefix}_{tag}_f7")
-        reg_out[f"imm_{i}"]        = domain.cycle(imm,            name=f"{prefix}_{tag}_imm")
-        reg_out[f"alu_op_{i}"]     = domain.cycle(funct3,         name=f"{prefix}_{tag}_alu")
-        reg_out[f"is_branch_{i}"]  = domain.cycle(is_branch,      name=f"{prefix}_{tag}_br")
-        reg_out[f"is_jal_{i}"]     = domain.cycle(is_jal,         name=f"{prefix}_{tag}_jal")
-        reg_out[f"is_jalr_{i}"]    = domain.cycle(is_jalr,        name=f"{prefix}_{tag}_jalr")
-        reg_out[f"is_load_{i}"]    = domain.cycle(is_load,        name=f"{prefix}_{tag}_ld")
-        reg_out[f"is_store_{i}"]   = domain.cycle(is_store,       name=f"{prefix}_{tag}_st")
-        reg_out[f"use_imm_{i}"]    = domain.cycle(use_imm,        name=f"{prefix}_{tag}_uimm")
-        reg_out[f"rd_valid_{i}"]   = domain.cycle(rd_valid,       name=f"{prefix}_{tag}_rdv")
-        reg_out[f"rs1_valid_{i}"]  = domain.cycle(rs1_valid,      name=f"{prefix}_{tag}_r1v")
-        reg_out[f"rs2_valid_{i}"]  = domain.cycle(rs2_valid,      name=f"{prefix}_{tag}_r2v")
-        reg_out[f"is_fp_{i}"]      = domain.cycle(is_fp,          name=f"{prefix}_{tag}_fp")
-        reg_out[f"is_vec_{i}"]     = domain.cycle(is_vec,         name=f"{prefix}_{tag}_vec")
+        reg_out[f"v_{i}"] = domain.cycle(wire_of(dec_valid), name=f"{prefix}_{tag}_v")
+        reg_out[f"pc_{i}"] = domain.cycle(wire_of(in_pc), name=f"{prefix}_{tag}_pc")
+        reg_out[f"inst_{i}"] = domain.cycle(inst, name=f"{prefix}_{tag}_inst")
+        reg_out[f"rd_{i}"] = domain.cycle(rd, name=f"{prefix}_{tag}_rd")
+        reg_out[f"rs1_{i}"] = domain.cycle(rs1, name=f"{prefix}_{tag}_rs1")
+        reg_out[f"rs2_{i}"] = domain.cycle(rs2, name=f"{prefix}_{tag}_rs2")
+        reg_out[f"funct3_{i}"] = domain.cycle(funct3, name=f"{prefix}_{tag}_f3")
+        reg_out[f"funct7_{i}"] = domain.cycle(funct7, name=f"{prefix}_{tag}_f7")
+        reg_out[f"imm_{i}"] = domain.cycle(imm, name=f"{prefix}_{tag}_imm")
+        reg_out[f"alu_op_{i}"] = domain.cycle(funct3, name=f"{prefix}_{tag}_alu")
+        reg_out[f"is_branch_{i}"] = domain.cycle(is_branch, name=f"{prefix}_{tag}_br")
+        reg_out[f"is_jal_{i}"] = domain.cycle(is_jal, name=f"{prefix}_{tag}_jal")
+        reg_out[f"is_jalr_{i}"] = domain.cycle(is_jalr, name=f"{prefix}_{tag}_jalr")
+        reg_out[f"is_load_{i}"] = domain.cycle(is_load, name=f"{prefix}_{tag}_ld")
+        reg_out[f"is_store_{i}"] = domain.cycle(is_store, name=f"{prefix}_{tag}_st")
+        reg_out[f"use_imm_{i}"] = domain.cycle(use_imm, name=f"{prefix}_{tag}_uimm")
+        reg_out[f"rd_valid_{i}"] = domain.cycle(rd_valid, name=f"{prefix}_{tag}_rdv")
+        reg_out[f"rs1_valid_{i}"] = domain.cycle(rs1_valid, name=f"{prefix}_{tag}_r1v")
+        reg_out[f"rs2_valid_{i}"] = domain.cycle(rs2_valid, name=f"{prefix}_{tag}_r2v")
+        reg_out[f"is_fp_{i}"] = domain.cycle(is_fp, name=f"{prefix}_{tag}_fp")
+        reg_out[f"is_vec_{i}"] = domain.cycle(is_vec, name=f"{prefix}_{tag}_vec")
 
     # ── Cycle 1: emit registered outputs ──────────────────────────────
 
     domain.next()
 
     for i in range(decode_width):
-        m.output(f"{prefix}_out_valid_{i}",      reg_out[f"v_{i}"])
-        m.output(f"{prefix}_out_pc_{i}",         reg_out[f"pc_{i}"])
-        m.output(f"{prefix}_out_inst_{i}",       reg_out[f"inst_{i}"])
-        m.output(f"{prefix}_out_rd_{i}",         reg_out[f"rd_{i}"])
-        m.output(f"{prefix}_out_rs1_{i}",        reg_out[f"rs1_{i}"])
-        m.output(f"{prefix}_out_rs2_{i}",        reg_out[f"rs2_{i}"])
-        m.output(f"{prefix}_out_funct3_{i}",     reg_out[f"funct3_{i}"])
-        m.output(f"{prefix}_out_funct7_{i}",     reg_out[f"funct7_{i}"])
-        m.output(f"{prefix}_out_imm_{i}",        reg_out[f"imm_{i}"])
-        m.output(f"{prefix}_out_alu_op_{i}",     reg_out[f"alu_op_{i}"])
-        m.output(f"{prefix}_out_is_branch_{i}",  reg_out[f"is_branch_{i}"])
-        m.output(f"{prefix}_out_is_jal_{i}",     reg_out[f"is_jal_{i}"])
-        m.output(f"{prefix}_out_is_jalr_{i}",    reg_out[f"is_jalr_{i}"])
-        m.output(f"{prefix}_out_is_load_{i}",    reg_out[f"is_load_{i}"])
-        m.output(f"{prefix}_out_is_store_{i}",   reg_out[f"is_store_{i}"])
-        m.output(f"{prefix}_out_use_imm_{i}",    reg_out[f"use_imm_{i}"])
-        m.output(f"{prefix}_out_rd_valid_{i}",   reg_out[f"rd_valid_{i}"])
-        m.output(f"{prefix}_out_rs1_valid_{i}",  reg_out[f"rs1_valid_{i}"])
-        m.output(f"{prefix}_out_rs2_valid_{i}",  reg_out[f"rs2_valid_{i}"])
-        m.output(f"{prefix}_out_is_fp_{i}",      reg_out[f"is_fp_{i}"])
-        m.output(f"{prefix}_out_is_vec_{i}",     reg_out[f"is_vec_{i}"])
+        m.output(f"{prefix}_out_valid_{i}", reg_out[f"v_{i}"])
+        m.output(f"{prefix}_out_pc_{i}", reg_out[f"pc_{i}"])
+        m.output(f"{prefix}_out_inst_{i}", reg_out[f"inst_{i}"])
+        m.output(f"{prefix}_out_rd_{i}", reg_out[f"rd_{i}"])
+        m.output(f"{prefix}_out_rs1_{i}", reg_out[f"rs1_{i}"])
+        m.output(f"{prefix}_out_rs2_{i}", reg_out[f"rs2_{i}"])
+        m.output(f"{prefix}_out_funct3_{i}", reg_out[f"funct3_{i}"])
+        m.output(f"{prefix}_out_funct7_{i}", reg_out[f"funct7_{i}"])
+        m.output(f"{prefix}_out_imm_{i}", reg_out[f"imm_{i}"])
+        m.output(f"{prefix}_out_alu_op_{i}", reg_out[f"alu_op_{i}"])
+        m.output(f"{prefix}_out_is_branch_{i}", reg_out[f"is_branch_{i}"])
+        m.output(f"{prefix}_out_is_jal_{i}", reg_out[f"is_jal_{i}"])
+        m.output(f"{prefix}_out_is_jalr_{i}", reg_out[f"is_jalr_{i}"])
+        m.output(f"{prefix}_out_is_load_{i}", reg_out[f"is_load_{i}"])
+        m.output(f"{prefix}_out_is_store_{i}", reg_out[f"is_store_{i}"])
+        m.output(f"{prefix}_out_use_imm_{i}", reg_out[f"use_imm_{i}"])
+        m.output(f"{prefix}_out_rd_valid_{i}", reg_out[f"rd_valid_{i}"])
+        m.output(f"{prefix}_out_rs1_valid_{i}", reg_out[f"rs1_valid_{i}"])
+        m.output(f"{prefix}_out_rs2_valid_{i}", reg_out[f"rs2_valid_{i}"])
+        m.output(f"{prefix}_out_is_fp_{i}", reg_out[f"is_fp_{i}"])
+        m.output(f"{prefix}_out_is_vec_{i}", reg_out[f"is_vec_{i}"])
     return _out
 
 
@@ -255,7 +261,4 @@ decode.__pycircuit_name__ = "decode"
 
 
 if __name__ == "__main__":
-    print(compile_cycle_aware(
-        decode, name="decode", eager=True,
-        decode_width=2, pc_width=PC_WIDTH,
-    ).emit_mlir())
+    pass

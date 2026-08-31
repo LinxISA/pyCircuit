@@ -47,4 +47,3 @@ assign y = pyc_comb_7;
 assign q = q_2;
 
 endmodule
-

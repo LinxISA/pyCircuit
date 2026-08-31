@@ -222,9 +222,12 @@ elif find "${LINX_CONTRIB_DIR}/designs/examples/linx_cpu_pyc" -name '*.py' \
 fi
 
 if [[ "${need_regen}" -ne 0 ]]; then
-  PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="${LINX_CONTRIB_DIR}/designs:$(pyc_pythonpath)" \
-    python3 -m pycircuit.cli emit ${EMIT_PARAMS[@]+"${EMIT_PARAMS[@]}"} \
-    contrib/linx/designs/examples/linx_cpu_pyc/linx_cpu_pyc.py -o "${PYC_PATH}"
+  (
+    cd "${TMP_DIR}"
+    PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="${LINX_CONTRIB_DIR}:${LINX_CONTRIB_DIR}/designs:$(pyc_pythonpath)" \
+      python3 -m pycircuit.cli emit ${EMIT_PARAMS[@]+"${EMIT_PARAMS[@]}"} \
+      "${LINX_CONTRIB_DIR}/designs/examples/linx_cpu_pyc/linx_cpu_pyc.py" -o "${PYC_PATH}"
+  )
 
   rm -rf "${CPP_OUT_DIR}"
   mkdir -p "${CPP_OUT_DIR}"

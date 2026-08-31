@@ -18,6 +18,7 @@ Key features:
   B-FPU-003  Valid/ready handshake
   B-FPU-004  Flush support to cancel in-flight operations
 """
+
 from __future__ import annotations
 
 import sys
@@ -32,12 +33,10 @@ from pycircuit import (
     CycleAwareDomain,
     CycleAwareSignal,
     cas,
-    compile_cycle_aware,
     mux,
     u,
     wire_of,
 )
-
 from top.parameters import XLEN
 
 FPU_OP_WIDTH = 2
@@ -70,24 +69,41 @@ def fpu(
     _in = inputs or {}
     _out: dict[str, CycleAwareSignal] = {}
 
-
     op_w = FPU_OP_WIDTH
     cnt_w = max(1, fdiv_latency.bit_length())
     double_w = data_width * 2
 
     # ── Cycle 0: Inputs ──────────────────────────────────────────
-    in_valid = (_in["in_valid"] if "in_valid" in _in else
-        cas(domain, m.input(f"{prefix}_in_valid", width=1), cycle=0))
-    src1 = (_in["src1"] if "src1" in _in else
-        cas(domain, m.input(f"{prefix}_src1", width=data_width), cycle=0))
-    src2 = (_in["src2"] if "src2" in _in else
-        cas(domain, m.input(f"{prefix}_src2", width=data_width), cycle=0))
-    fpu_op = (_in["fpu_op"] if "fpu_op" in _in else
-        cas(domain, m.input(f"{prefix}_fpu_op", width=op_w), cycle=0))
-    out_ready = (_in["out_ready"] if "out_ready" in _in else
-        cas(domain, m.input(f"{prefix}_out_ready", width=1), cycle=0))
-    flush = (_in["flush"] if "flush" in _in else
-        cas(domain, m.input(f"{prefix}_flush", width=1), cycle=0))
+    in_valid = (
+        _in["in_valid"]
+        if "in_valid" in _in
+        else cas(domain, m.input(f"{prefix}_in_valid", width=1), cycle=0)
+    )
+    src1 = (
+        _in["src1"]
+        if "src1" in _in
+        else cas(domain, m.input(f"{prefix}_src1", width=data_width), cycle=0)
+    )
+    src2 = (
+        _in["src2"]
+        if "src2" in _in
+        else cas(domain, m.input(f"{prefix}_src2", width=data_width), cycle=0)
+    )
+    fpu_op = (
+        _in["fpu_op"]
+        if "fpu_op" in _in
+        else cas(domain, m.input(f"{prefix}_fpu_op", width=op_w), cycle=0)
+    )
+    out_ready = (
+        _in["out_ready"]
+        if "out_ready" in _in
+        else cas(domain, m.input(f"{prefix}_out_ready", width=1), cycle=0)
+    )
+    flush = (
+        _in["flush"]
+        if "flush" in _in
+        else cas(domain, m.input(f"{prefix}_flush", width=1), cycle=0)
+    )
 
     def _const(val, w=data_width):
         return cas(domain, m.const(val, width=w), cycle=0)
@@ -95,8 +111,8 @@ def fpu(
     def _op(val):
         return cas(domain, m.const(val, width=op_w), cycle=0)
 
-    ZERO_1 = cas(domain, m.const(0, width=1), cycle=0)
-    ONE_1 = cas(domain, m.const(1, width=1), cycle=0)
+    cas(domain, m.const(0, width=1), cycle=0)
+    cas(domain, m.const(1, width=1), cycle=0)
 
     is_fdiv = fpu_op == _op(OP_FDIV)
     is_pipe = ~is_fdiv
@@ -107,7 +123,9 @@ def fpu(
 
     src1_wide = cas(domain, (wire_of(src1) + u(double_w, 0))[0:double_w], cycle=0)
     src2_wide = cas(domain, (wire_of(src2) + u(double_w, 0))[0:double_w], cycle=0)
-    mul_full = cas(domain, (wire_of(src1_wide) * wire_of(src2_wide))[0:double_w], cycle=0)
+    mul_full = cas(
+        domain, (wire_of(src1_wide) * wire_of(src2_wide))[0:double_w], cycle=0
+    )
     mul_result = mul_full[0:data_width]
 
     pipe_result = add_result
@@ -126,7 +144,9 @@ def fpu(
         pipe_r = cas(domain, pipe_r_w, cycle=0)
 
     # ── FDIV FSM path ────────────────────────────────────────────
-    cur_state = domain.signal(width=STATE_WIDTH, reset_value=ST_IDLE, name=f"{prefix}_fdiv_fsm")
+    cur_state = domain.signal(
+        width=STATE_WIDTH, reset_value=ST_IDLE, name=f"{prefix}_fdiv_fsm"
+    )
     cur_cnt = domain.signal(width=cnt_w, reset_value=0, name=f"{prefix}_fdiv_cnt")
     cur_ds1 = domain.signal(width=data_width, reset_value=0, name=f"{prefix}_fdiv_s1")
     cur_ds2 = domain.signal(width=data_width, reset_value=0, name=f"{prefix}_fdiv_s2")
@@ -141,7 +161,9 @@ def fpu(
     # Simplified division: dividend shifted right (placeholder for real FP div)
     divisor_zero = cur_ds2 == _const(0)
     all_ones = _const((1 << data_width) - 1)
-    div_quot = cas(domain, wire_of(cur_ds1).lshr(amount=m.const(0, width=1))[0:data_width], cycle=0)
+    div_quot = cas(
+        domain, wire_of(cur_ds1).lshr(amount=m.const(0, width=1))[0:data_width], cycle=0
+    )
     div_safe = mux(divisor_zero, all_ones, div_quot)
 
     # ── Outputs ──────────────────────────────────────────────────
@@ -164,11 +186,15 @@ def fpu(
     domain.next()
 
     LAT_CONST = cas(domain, m.const(fdiv_latency - 1, width=cnt_w), cycle=0)
-    CNT_DEC = cas(domain, (wire_of(cur_cnt) - m.const(1, width=cnt_w))[0:cnt_w], cycle=0)
+    CNT_DEC = cas(
+        domain, (wire_of(cur_cnt) - m.const(1, width=cnt_w))[0:cnt_w], cycle=0
+    )
 
     # FDIV: IDLE → BUSY on valid fdiv input
     div_start = is_idle & in_valid & is_fdiv & (~flush)
-    cur_state.assign(cas(domain, m.const(ST_BUSY, width=STATE_WIDTH), cycle=0), when=div_start)
+    cur_state.assign(
+        cas(domain, m.const(ST_BUSY, width=STATE_WIDTH), cycle=0), when=div_start
+    )
     cur_cnt.assign(LAT_CONST, when=div_start)
     cur_ds1.assign(src1, when=div_start)
     cur_ds2.assign(src2, when=div_start)
@@ -177,15 +203,21 @@ def fpu(
     busy_tick = is_busy & (~flush)
     cur_cnt.assign(CNT_DEC, when=busy_tick)
     busy_to_done = is_busy & cnt_zero & (~flush)
-    cur_state.assign(cas(domain, m.const(ST_DONE, width=STATE_WIDTH), cycle=0), when=busy_to_done)
+    cur_state.assign(
+        cas(domain, m.const(ST_DONE, width=STATE_WIDTH), cycle=0), when=busy_to_done
+    )
     cur_dres.assign(div_safe, when=busy_to_done)
 
     # DONE → IDLE on downstream accept
     done_ack = is_done & out_ready & (~flush)
-    cur_state.assign(cas(domain, m.const(ST_IDLE, width=STATE_WIDTH), cycle=0), when=done_ack)
+    cur_state.assign(
+        cas(domain, m.const(ST_IDLE, width=STATE_WIDTH), cycle=0), when=done_ack
+    )
 
     # Flush: return to IDLE
-    cur_state.assign(cas(domain, m.const(ST_IDLE, width=STATE_WIDTH), cycle=0), when=flush)
+    cur_state.assign(
+        cas(domain, m.const(ST_IDLE, width=STATE_WIDTH), cycle=0), when=flush
+    )
     cur_cnt.assign(cas(domain, m.const(0, width=cnt_w), cycle=0), when=flush)
     return _out
 
@@ -194,7 +226,4 @@ fpu.__pycircuit_name__ = "fpu"
 
 
 if __name__ == "__main__":
-    print(compile_cycle_aware(
-        fpu, name="fpu", eager=True,
-        data_width=16, pipe_latency=2, fdiv_latency=4,
-    ).emit_mlir())
+    pass

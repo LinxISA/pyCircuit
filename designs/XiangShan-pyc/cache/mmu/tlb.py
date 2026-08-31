@@ -19,9 +19,9 @@ Simplified vs full XiangShan:
   - Single lookup port (XiangShan has per-pipeline TLBs)
   - No A/D bit management (handled by page-fault exceptions)
 """
+
 from __future__ import annotations
 
-import math
 import sys
 from pathlib import Path
 
@@ -34,9 +34,7 @@ from pycircuit import (
     CycleAwareDomain,
     CycleAwareSignal,
     cas,
-    compile_cycle_aware,
     mux,
-    u,
     wire_of,
 )
 from top.parameters import *
@@ -57,40 +55,64 @@ def tlb(
     _in = inputs or {}
     _out: dict[str, CycleAwareSignal] = {}
 
-
     way_bits = max(1, (n_ways - 1).bit_length())
-
-    cd = domain.clock_domain
 
     # ================================================================
     # Cycle 0 — CAM Lookup: compare VPN+ASID against all entries
     # ================================================================
 
-    flush = (_in["flush"] if "flush" in _in else
+    flush = (
+        _in["flush"]
+        if "flush" in _in
+        else cas(domain, m.input(f"{prefix}_flush", width=1), cycle=0)
+    )
+    flush_asid_valid = (
+        _in["flush_asid_valid"]
+        if "flush_asid_valid" in _in
+        else cas(domain, m.input(f"{prefix}_flush_asid_valid", width=1), cycle=0)
+    )
+    flush_asid = (
+        _in["flush_asid"]
+        if "flush_asid" in _in
+        else cas(domain, m.input(f"{prefix}_flush_asid", width=asid_width), cycle=0)
+    )
 
-        cas(domain, m.input(f"{prefix}_flush", width=1), cycle=0))
-    flush_asid_valid = (_in["flush_asid_valid"] if "flush_asid_valid" in _in else
-        cas(domain, m.input(f"{prefix}_flush_asid_valid", width=1), cycle=0))
-    flush_asid = (_in["flush_asid"] if "flush_asid" in _in else
-        cas(domain, m.input(f"{prefix}_flush_asid", width=asid_width), cycle=0))
+    lookup_valid = (
+        _in["lookup_valid"]
+        if "lookup_valid" in _in
+        else cas(domain, m.input(f"{prefix}_lookup_valid", width=1), cycle=0)
+    )
+    lookup_vpn = (
+        _in["lookup_vpn"]
+        if "lookup_vpn" in _in
+        else cas(domain, m.input(f"{prefix}_lookup_vpn", width=vpn_width), cycle=0)
+    )
+    lookup_asid = (
+        _in["lookup_asid"]
+        if "lookup_asid" in _in
+        else cas(domain, m.input(f"{prefix}_lookup_asid", width=asid_width), cycle=0)
+    )
 
-    lookup_valid = (_in["lookup_valid"] if "lookup_valid" in _in else
-
-        cas(domain, m.input(f"{prefix}_lookup_valid", width=1), cycle=0))
-    lookup_vpn = (_in["lookup_vpn"] if "lookup_vpn" in _in else
-        cas(domain, m.input(f"{prefix}_lookup_vpn", width=vpn_width), cycle=0))
-    lookup_asid = (_in["lookup_asid"] if "lookup_asid" in _in else
-        cas(domain, m.input(f"{prefix}_lookup_asid", width=asid_width), cycle=0))
-
-    refill_valid = (_in["refill_valid"] if "refill_valid" in _in else
-
-        cas(domain, m.input(f"{prefix}_refill_valid", width=1), cycle=0))
-    refill_vpn = (_in["refill_vpn"] if "refill_vpn" in _in else
-        cas(domain, m.input(f"{prefix}_refill_vpn", width=vpn_width), cycle=0))
-    refill_ppn = (_in["refill_ppn"] if "refill_ppn" in _in else
-        cas(domain, m.input(f"{prefix}_refill_ppn", width=ppn_width), cycle=0))
-    refill_asid = (_in["refill_asid"] if "refill_asid" in _in else
-        cas(domain, m.input(f"{prefix}_refill_asid", width=asid_width), cycle=0))
+    refill_valid = (
+        _in["refill_valid"]
+        if "refill_valid" in _in
+        else cas(domain, m.input(f"{prefix}_refill_valid", width=1), cycle=0)
+    )
+    refill_vpn = (
+        _in["refill_vpn"]
+        if "refill_vpn" in _in
+        else cas(domain, m.input(f"{prefix}_refill_vpn", width=vpn_width), cycle=0)
+    )
+    refill_ppn = (
+        _in["refill_ppn"]
+        if "refill_ppn" in _in
+        else cas(domain, m.input(f"{prefix}_refill_ppn", width=ppn_width), cycle=0)
+    )
+    refill_asid = (
+        _in["refill_asid"]
+        if "refill_asid" in _in
+        else cas(domain, m.input(f"{prefix}_refill_asid", width=asid_width), cycle=0)
+    )
 
     # ── Entry storage (fully-associative CAM) ─────────────────────
 
@@ -111,7 +133,9 @@ def tlb(
         for i in range(n_ways)
     ]
 
-    replace_ptr = domain.signal(width=way_bits, reset_value=0, name=f"{prefix}_repl_ptr")
+    replace_ptr = domain.signal(
+        width=way_bits, reset_value=0, name=f"{prefix}_repl_ptr"
+    )
 
     # ── Read entries as CAS signals at cycle 0 ────────────────────
 
@@ -124,8 +148,8 @@ def tlb(
 
     way_hit = []
     for i in range(n_ways):
-        vpn_eq = (evpn[i] == lookup_vpn)
-        asid_eq = (easid[i] == lookup_asid)
+        vpn_eq = evpn[i] == lookup_vpn
+        asid_eq = easid[i] == lookup_asid
         way_hit.append(ev[i] & vpn_eq & asid_eq)
 
     any_hit = way_hit[0]
@@ -166,10 +190,10 @@ def tlb(
 
     for i in range(n_ways):
         i_const = m.const(i, width=way_bits)
-        is_victim = (rptr == i_const)
+        is_victim = rptr == i_const
         do_write = wire_of(refill_valid) & is_victim
 
-        asid_match = (wire_of(entry_asid[i]) == wire_of(flush_asid))
+        asid_match = wire_of(entry_asid[i]) == wire_of(flush_asid)
         selective_flush = wire_of(flush_asid_valid) & asid_match
         invalidate = wire_of(flush) | selective_flush
 
@@ -182,7 +206,7 @@ def tlb(
         entry_asid[i] <<= do_write.select(wire_of(refill_asid), wire_of(entry_asid[i]))
 
     # Advance replace pointer on refill (wrap at n_ways)
-    at_limit = (rptr == m.const(n_ways - 1, width=way_bits))
+    at_limit = rptr == m.const(n_ways - 1, width=way_bits)
     next_ptr = at_limit.select(
         m.const(0, width=way_bits),
         (rptr + m.const(1, width=way_bits))[0:way_bits],
@@ -213,8 +237,4 @@ tlb.__pycircuit_name__ = "tlb"
 
 
 if __name__ == "__main__":
-    print(compile_cycle_aware(
-        tlb, name="tlb", eager=True,
-        n_ways=ITLB_WAYS, vpn_width=27, ppn_width=24,
-        asid_width=ASID_LENGTH,
-    ).emit_mlir())
+    pass

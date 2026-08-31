@@ -13,7 +13,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  LLVM_VERSION: "19"
+  LLVM_VERSION: "22"
 
 jobs:
   # Skip the duplicate push run when the pushed branch has an open PR —
@@ -71,13 +71,13 @@ jobs:
       - name: Install Homebrew packages
         run: |
           brew update
-          brew install ninja cmake llvm@19 python@3
-          echo "$(brew --prefix llvm@19)/bin" >> "$GITHUB_PATH"
+          brew install ninja cmake "llvm@${LLVM_VERSION}" python@3
+          echo "$(brew --prefix "llvm@${LLVM_VERSION}")/bin" >> "$GITHUB_PATH"
 
       - name: Build staged toolchain
         run: |
           bash flows/scripts/pyc build \
-            --llvm-config "$(brew --prefix llvm@19)/bin/llvm-config" \
+            --llvm-config "$(brew --prefix "llvm@${LLVM_VERSION}")/bin/llvm-config" \
             --build-dir "$PWD/.pycircuit_out/toolchain/build" \
             --install-prefix "$PWD/.pycircuit_out/toolchain/install"
 

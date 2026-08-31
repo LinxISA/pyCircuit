@@ -17,4 +17,3 @@ This section covers **pyc4.0** (`@module` / `Circuit`) authoring and the **tick/
 - Frontend API surface: `docs/FRONTEND_API.md`
 - Writing testbenches: `docs/TESTBENCH.md`
 - Real examples: `designs/examples/README.md`
-

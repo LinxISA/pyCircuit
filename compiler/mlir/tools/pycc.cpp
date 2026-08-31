@@ -196,7 +196,7 @@ static llvm::cl::opt<std::string> inlinePolicy(
 
 static llvm::cl::opt<std::string> hierarchyPolicy(
     "hierarchy-policy",
-    llvm::cl::desc("Module hierarchy policy: strict | instantiate"),
+    llvm::cl::desc("Module hierarchy policy (strict only)"),
     llvm::cl::init("strict"));
 
 static llvm::cl::opt<unsigned> canonicalizeBudget(
@@ -2163,23 +2163,17 @@ int main(int argc, char **argv) {
       noInline = true;
   }
   if (wantFlatten) {
-    if (hierarchyPolicy.getNumOccurrences() == 0)
-      hierarchyPolicy = "instantiate";
     if (inlinePolicy.getNumOccurrences() == 0)
       inlinePolicy = "off";
   }
 
-  bool strictHierarchy = false;
-  bool instantiateHierarchy = false;
-  if (hierarchyPolicy == "strict") {
-    strictHierarchy = true;
-  } else if (hierarchyPolicy == "instantiate") {
-    instantiateHierarchy = true;
-  } else {
-    llvm::errs() << "error: unknown --hierarchy-policy: " << hierarchyPolicy
-                 << " (expected: strict | instantiate)\n";
+  if (hierarchyPolicy != "strict") {
+    llvm::errs() << "error: unsupported --hierarchy-policy: " << hierarchyPolicy
+                 << " (expected: strict)\n";
     return 1;
   }
+  const bool strictHierarchy = true;
+  const bool instantiateHierarchy = wantFlatten;
 
   const std::set<std::string> moduleSymbolsBefore = collectFrontendModuleSymbols(*module);
 

@@ -60,4 +60,3 @@ assign op = pyc_comb_21;
 assign len = pyc_comb_22;
 
 endmodule
-

@@ -1448,4 +1448,3 @@ assign xs_core_rob_wb_rob_idx_3 = xs_core_wb_rob_idx_3;
 assign xs_core_debug_pc = pyc_comb_32;
 
 endmodule
-

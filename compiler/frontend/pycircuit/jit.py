@@ -4,13 +4,19 @@ import ast
 import copy
 import inspect
 import operator as _pyop
-from dataclasses import dataclass
+from dataclasses import dataclass, fields, is_dataclass
+from pathlib import Path
 from typing import Any, Hashable, Mapping, get_args, get_origin
 
 from .api_contract import removed_call_diagnostic
 from .connectors import Connector, ConnectorBundle, is_connector, is_connector_bundle
 from .data import Bits, Data, Vector
-from .diagnostics import Diagnostic, make_diagnostic, render_diagnostic, snippet_from_text
+from .diagnostics import (
+    Diagnostic,
+    make_diagnostic,
+    render_diagnostic,
+    snippet_from_text,
+)
 from .dsl import Signal
 from .hw import (
     Bundle,
@@ -18,8 +24,56 @@ from .hw import (
     Reg,
     Wire,
 )
-from .jit_cache import assigned_names_for, get_function_meta, get_signature, get_structural_metrics
+from .jit_cache import (
+    assigned_names_for,
+    get_function_meta,
+    get_signature,
+    get_structural_metrics,
+)
 from .literals import LiteralValue
+
+
+_DEFAULT_INLINE_COMPLEXITY_CAP = 1400
+_INTERNAL_INLINE_COMPLEXITY_HARD_MAX = 2600
+_PYCIRCUIT_ROOT = Path(__file__).resolve().parents[3]
+_INTERNAL_INLINE_COMPLEXITY_ALLOWLIST = frozenset(
+    {
+        (
+            "decode_window",
+            (
+                _PYCIRCUIT_ROOT / "contrib/linx/designs/examples/linx_cpu_pyc/decode.py"
+            ).resolve(),
+        ),
+        (
+            "decode_window",
+            (
+                _PYCIRCUIT_ROOT
+                / "contrib/linx/designs/examples/linxcore_inorder/decode.py"
+            ).resolve(),
+        ),
+    }
+)
+
+
+def _inline_complexity_cap(fn: Any, *, source_file: str | None = None) -> int:
+    """Return the fixed cap, with a narrow internal exception for Linx decoders."""
+
+    candidate = source_file
+    if candidate is None:
+        try:
+            candidate = inspect.getsourcefile(fn)
+        except (OSError, TypeError):
+            candidate = None
+    if candidate is None:
+        return _DEFAULT_INLINE_COMPLEXITY_CAP
+    try:
+        source_path = Path(candidate).resolve()
+    except (OSError, RuntimeError):
+        return _DEFAULT_INLINE_COMPLEXITY_CAP
+    provenance = (str(getattr(fn, "__name__", "")), source_path)
+    if provenance in _INTERNAL_INLINE_COMPLEXITY_ALLOWLIST:
+        return _INTERNAL_INLINE_COMPLEXITY_HARD_MAX
+    return _DEFAULT_INLINE_COMPLEXITY_CAP
 
 
 class JitError(RuntimeError):
@@ -135,7 +189,9 @@ def _normalize_value_param_ty(ty: str) -> str:
         try:
             w = int(raw[1:])
         except ValueError as e:
-            raise JitError(f"invalid value-param type {ty!r}: expected iN/clock/reset") from e
+            raise JitError(
+                f"invalid value-param type {ty!r}: expected iN/clock/reset"
+            ) from e
         if w <= 0:
             raise JitError(f"invalid value-param type {ty!r}: iN width must be > 0")
         return f"i{w}"
@@ -147,7 +203,9 @@ def _value_params_of(fn: Any) -> dict[str, str]:
     if raw is None:
         return {}
     if not isinstance(raw, Mapping):
-        raise JitError(f"invalid value_params metadata on {getattr(fn, '__name__', fn)!r}: expected mapping")
+        raise JitError(
+            f"invalid value_params metadata on {getattr(fn, '__name__', fn)!r}: expected mapping"
+        )
     out: dict[str, str] = {}
     for k in sorted(raw.keys(), key=lambda x: str(x)):
         name = str(k).strip()
@@ -193,15 +251,22 @@ def _wire_ifexpr(cond: Wire, true_v: Any, false_v: Any) -> Wire:
     if isinstance(false_v, Connector):
         false_v = false_v.read()
     if not isinstance(true_v, (Wire, Reg, Signal, int, LiteralValue)):
-        raise JitError(f"if-expression true branch must be Wire/Reg/Signal/int/literal, got {type(true_v).__name__}")
+        raise JitError(
+            f"if-expression true branch must be Wire/Reg/Signal/int/literal, got {type(true_v).__name__}"
+        )
     if not isinstance(false_v, (Wire, Reg, Signal, int, LiteralValue)):
-        raise JitError(f"if-expression false branch must be Wire/Reg/Signal/int/literal, got {type(false_v).__name__}")
+        raise JitError(
+            f"if-expression false branch must be Wire/Reg/Signal/int/literal, got {type(false_v).__name__}"
+        )
     return cond._select_internal(true_v, false_v)
+
 
 _TemplateKey = tuple[int, Hashable, Hashable]
 
 
-def _resolve_call_target(node: ast.Call, *, eval_expr: Any, env: dict[str, Any], globals_: dict[str, Any]) -> Any:
+def _resolve_call_target(
+    node: ast.Call, *, eval_expr: Any, env: dict[str, Any], globals_: dict[str, Any]
+) -> Any:
     if isinstance(node.func, ast.Attribute):
         recv = eval_expr(node.func.value)
         try:
@@ -222,7 +287,9 @@ def _resolve_call_target(node: ast.Call, *, eval_expr: Any, env: dict[str, Any],
     raise JitError("unsupported call target")
 
 
-def _eval_call_args(node: ast.Call, *, eval_expr: Any) -> tuple[list[Any], dict[str, Any]]:
+def _eval_call_args(
+    node: ast.Call, *, eval_expr: Any
+) -> tuple[list[Any], dict[str, Any]]:
     args = [eval_expr(a) for a in node.args]
     kwargs = {kw.arg: eval_expr(kw.value) for kw in node.keywords if kw.arg is not None}
     return args, kwargs
@@ -235,7 +302,9 @@ def _template_meta_value(v: Any) -> Any | None:
     try:
         rep = fn()
     except Exception as e:  # noqa: BLE001
-        raise JitError(f"template meta value provider failed for {type(v).__name__}: {e}") from e
+        raise JitError(
+            f"template meta value provider failed for {type(v).__name__}: {e}"
+        ) from e
     return rep
 
 
@@ -266,9 +335,18 @@ def _template_identity_snapshot(v: Any) -> Hashable:
         return ("signal", id(v), v.ref, v.ty)
     if isinstance(v, Connector):
         rd = v.read()
-        return ("connector", type(v).__name__, id(v), str(getattr(v, "name", "")), _template_identity_snapshot(rd))
+        return (
+            "connector",
+            type(v).__name__,
+            id(v),
+            str(getattr(v, "name", "")),
+            _template_identity_snapshot(rd),
+        )
     if isinstance(v, ConnectorBundle):
-        items = tuple((str(k), _template_identity_snapshot(vv)) for k, vv in sorted(v.items(), key=lambda kv: str(kv[0])))
+        items = tuple(
+            (str(k), _template_identity_snapshot(vv))
+            for k, vv in sorted(v.items(), key=lambda kv: str(kv[0]))
+        )
         return ("connector_bundle", items)
     if isinstance(v, (list, tuple)):
         return (type(v).__name__, tuple(_template_identity_snapshot(x) for x in v))
@@ -278,6 +356,18 @@ def _template_identity_snapshot(v: Any) -> Hashable:
             for k, vv in sorted(v.items(), key=lambda kv: str(kv[0]))
         )
         return ("dict", items)
+    if is_dataclass(v):
+        params = getattr(v, "__dataclass_params__", None)
+        if params is not None and not bool(getattr(params, "frozen", False)):
+            raise JitError(f"template dataclass must be frozen: {type(v).__name__}")
+        return (
+            "dataclass",
+            f"{type(v).__module__}.{type(v).__qualname__}",
+            tuple(
+                (field.name, _template_identity_snapshot(getattr(v, field.name)))
+                for field in fields(v)
+            ),
+        )
     raise JitError(
         "template arguments must be canonicalizable primitives/containers or hardware references; "
         + f"unsupported value type: {type(v).__name__}"
@@ -292,7 +382,9 @@ def _validate_template_return(v: Any, *, where: str = "return") -> None:
     if v is None or isinstance(v, (bool, int, str, LiteralValue)):
         return
     if isinstance(v, (Wire, Reg, Signal, Connector, ConnectorBundle, Bundle)):
-        raise JitError(f"@const {where} cannot be a hardware value ({type(v).__name__})")
+        raise JitError(
+            f"@const {where} cannot be a hardware value ({type(v).__name__})"
+        )
     if isinstance(v, (list, tuple)):
         for i, elem in enumerate(v):
             _validate_template_return(elem, where=f"{where}[{i}]")
@@ -304,6 +396,17 @@ def _validate_template_return(v: Any, *, where: str = "return") -> None:
                     f"@const {where} dict keys must be str/int/bool, got {type(k).__name__}"
                 )
             _validate_template_return(elem, where=f"{where}[{k!r}]")
+        return
+    if is_dataclass(v):
+        params = getattr(v, "__dataclass_params__", None)
+        if params is not None and not bool(getattr(params, "frozen", False)):
+            raise JitError(
+                f"@const {where} dataclass must be frozen, got {type(v).__name__}"
+            )
+        for field in fields(v):
+            _validate_template_return(
+                getattr(v, field.name), where=f"{where}.{field.name}"
+            )
         return
     raise JitError(f"@const {where} has unsupported value type: {type(v).__name__}")
 
@@ -317,7 +420,9 @@ def _emit_scf_yield(m: Circuit, values: list[Wire]) -> None:
     m.emit_line(f"scf.yield {refs} : {tys}")
 
 
-def _emit_scf_if_header(m: Circuit, results: list[str], cond: Wire, result_types: list[Data]) -> None:
+def _emit_scf_if_header(
+    m: Circuit, results: list[str], cond: Wire, result_types: list[Data]
+) -> None:
     if not results:
         m.emit_line(f"scf.if {cond.ref} {{")
         return
@@ -420,7 +525,9 @@ class _Compiler:
         elif isinstance(v, int):
             w = self.m.const(int(v), width=self._ty_width(expected_ty))
         else:
-            raise JitError(f"{ctx}: expected Wire/Reg/Signal/int/literal, got {type(v).__name__}")
+            raise JitError(
+                f"{ctx}: expected Wire/Reg/Signal/int/literal, got {type(v).__name__}"
+            )
 
         if w.ty == expected_ty:
             return w
@@ -454,12 +561,23 @@ class _Compiler:
             return None
         return int(col) + 1
 
-    def _error_with_node(self, node: ast.AST, err: Exception, *, code: str = "PYC500", hint: str | None = None) -> JitError:
+    def _error_with_node(
+        self,
+        node: ast.AST,
+        err: Exception,
+        *,
+        code: str = "PYC500",
+        hint: str | None = None,
+    ) -> JitError:
         if isinstance(err, JitError) and err.diagnostic is not None:
             return err
         message = str(err) if str(err).strip() else err.__class__.__name__
         line = self._abs_lineno(node)
-        snippet = snippet_from_text(self.source_text, line) if (self.source_text is not None and line is not None) else None
+        snippet = (
+            snippet_from_text(self.source_text, line)
+            if (self.source_text is not None and line is not None)
+            else None
+        )
         diag = make_diagnostic(
             code=code,
             stage="jit",
@@ -499,7 +617,10 @@ class _Compiler:
         if isinstance(v, (list, tuple)):
             return all(_Compiler._is_specialization_literal(x) for x in v)
         if isinstance(v, dict):
-            return all(isinstance(k, str) and _Compiler._is_specialization_literal(vv) for k, vv in v.items())
+            return all(
+                isinstance(k, str) and _Compiler._is_specialization_literal(vv)
+                for k, vv in v.items()
+            )
         return False
 
     @staticmethod
@@ -529,7 +650,10 @@ class _Compiler:
         if origin in (list, dict, set):
             return True
         if origin is tuple:
-            return any(_Compiler._return_annotation_blocks_instance(a) for a in get_args(ret_ann))
+            return any(
+                _Compiler._return_annotation_blocks_instance(a)
+                for a in get_args(ret_ann)
+            )
         return False
 
     def _next_instance_name(self, fn: Any, node: ast.Call) -> str:
@@ -541,7 +665,9 @@ class _Compiler:
         loc = f"L{line}" if line is not None else "L0"
         return self._scoped_name(f"{base}__{loc}__N{idx}")
 
-    def _maybe_instance_call(self, fn: Any, *, args: list[Any], kwargs: dict[str, Any], node: ast.Call) -> Any | None:
+    def _maybe_instance_call(
+        self, fn: Any, *, args: list[Any], kwargs: dict[str, Any], node: ast.Call
+    ) -> Any | None:
         # Auto-instance only applies to plain function calls in a multi-module design context.
         if self.m._design_ctx is None:  # noqa: SLF001
             return None
@@ -555,7 +681,9 @@ class _Compiler:
 
         callee_value_params = _value_params_of(fn)
 
-        has_hw = any(self._is_hw_value(a) for a in args) or any(self._is_hw_value(v) for v in kwargs.values())
+        has_hw = any(self._is_hw_value(a) for a in args) or any(
+            self._is_hw_value(v) for v in kwargs.values()
+        )
         # Value-params are always runtime boundary values, even when callsites
         # pass Python literals. Such calls must still materialize as instances.
         has_value_param_bindings = False
@@ -566,7 +694,11 @@ class _Compiler:
                 pnames_probe = [
                     p.name
                     for p in ps_probe[1:]
-                    if p.kind not in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD)
+                    if p.kind
+                    not in (
+                        inspect.Parameter.VAR_POSITIONAL,
+                        inspect.Parameter.VAR_KEYWORD,
+                    )
                 ]
                 for i, _ in enumerate(args[1:]):
                     if i < len(pnames_probe) and pnames_probe[i] in callee_value_params:
@@ -611,7 +743,9 @@ class _Compiler:
 
         params = list(sig.parameters.values())
         if not params:
-            raise JitError("instance callee must take at least one argument (the Circuit builder)")
+            raise JitError(
+                "instance callee must take at least one argument (the Circuit builder)"
+            )
 
         # Allow callsites that pass the current builder explicitly:
         #   submod(m, in_a=..., ...)
@@ -626,7 +760,9 @@ class _Compiler:
 
         # Positional args map by function signature; hardware values become ports.
         if len(args_for_params) > len(param_names):
-            raise JitError(f"too many positional arguments for auto-instance call to {getattr(fn, '__name__', fn)!r}")
+            raise JitError(
+                f"too many positional arguments for auto-instance call to {getattr(fn, '__name__', fn)!r}"
+            )
         for i, v in enumerate(args_for_params):
             pname = param_names[i]
             if pname in callee_value_params:
@@ -674,7 +810,9 @@ class _Compiler:
         try:
             return self.m.instance(fn, name=inst_name, params=spec_params, **ports)
         except Exception as e:
-            raise JitError(f"auto-instance call failed for {getattr(fn, '__name__', fn)!r}: {e}") from e
+            raise JitError(
+                f"auto-instance call failed for {getattr(fn, '__name__', fn)!r}: {e}"
+            ) from e
 
     def _alias_if_wire(self, v: Any, *, base_name: str, node: ast.AST) -> Any:
         if isinstance(v, Wire):
@@ -688,14 +826,20 @@ class _Compiler:
         if isinstance(v, Reg):
             n = self._scoped_name(self._name_with_loc(base_name, node))
             q_named = Wire(self.m, self.m.alias(v.q.sig, name=n), signed=v.q.signed)
-            return Reg(q=q_named, clk=v.clk, rst=v.rst, en=v.en, next=v.next, init=v.init)
+            return Reg(
+                q=q_named, clk=v.clk, rst=v.rst, en=v.en, next=v.next, init=v.init
+            )
         return v
 
-    def _assign_wire_target(self, target: ast.AST, value: Any, *, node: ast.AST) -> None:
+    def _assign_wire_target(
+        self, target: ast.AST, value: Any, *, node: ast.AST
+    ) -> None:
         if isinstance(target, ast.Name):
             if isinstance(value, _IndexValue):
                 raise JitError("cannot assign index values into hardware variables")
-            self.env[target.id] = self._alias_if_wire(value, base_name=target.id, node=node)
+            self.env[target.id] = self._alias_if_wire(
+                value, base_name=target.id, node=node
+            )
             return
         if isinstance(target, ast.Subscript):
             if isinstance(target.slice, ast.Slice):
@@ -710,12 +854,16 @@ class _Compiler:
                 try:
                     container[idx_v] = value
                 except IndexError as e:
-                    raise JitError(f"list assignment index out of range: {idx_v}") from e
+                    raise JitError(
+                        f"list assignment index out of range: {idx_v}"
+                    ) from e
                 return
             if isinstance(container, dict):
                 container[idx_v] = value
                 return
-            raise JitError("subscript assignment target must be a list or dict variable")
+            raise JitError(
+                "subscript assignment target must be a list or dict variable"
+            )
         if isinstance(target, (ast.Tuple, ast.List)):
             if not isinstance(value, (tuple, list)):
                 raise JitError("tuple/list assignment requires tuple/list values")
@@ -724,7 +872,9 @@ class _Compiler:
             for sub_t, sub_v in zip(target.elts, value):
                 self._assign_wire_target(sub_t, sub_v, node=node)
             return
-        raise JitError("assignment target must be a name, subscript, or tuple/list of targets")
+        raise JitError(
+            "assignment target must be a name, subscript, or tuple/list of targets"
+        )
 
     # ---- constant evaluation (for range bounds, widths, etc) ----
     def eval_const(self, node: ast.AST) -> int:
@@ -756,7 +906,9 @@ class _Compiler:
                 return int(v)
             if isinstance(v, LiteralValue):
                 return int(v.value)
-            raise JitError(f"const-eval attribute {ast.unparse(node)!r} is not an int/bool/literal")
+            raise JitError(
+                f"const-eval attribute {ast.unparse(node)!r} is not an int/bool/literal"
+            )
         if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.USub):
             return -self.eval_const(node.operand)
         if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.UAdd):
@@ -781,14 +933,28 @@ class _Compiler:
             if isinstance(node.op, ast.RShift):
                 return a >> b
         if isinstance(node, ast.Call):
-            if isinstance(node.func, ast.Name) and node.func.id == "int" and len(node.args) == 1 and not node.keywords:
+            if (
+                isinstance(node.func, ast.Name)
+                and node.func.id == "int"
+                and len(node.args) == 1
+                and not node.keywords
+            ):
                 return int(self.eval_const(node.args[0]))
-            if isinstance(node.func, ast.Name) and node.func.id == "len" and len(node.args) == 1 and not node.keywords:
+            if (
+                isinstance(node.func, ast.Name)
+                and node.func.id == "len"
+                and len(node.args) == 1
+                and not node.keywords
+            ):
                 v = self.eval_expr(node.args[0])
                 if isinstance(v, (list, tuple, Bundle)):
                     return int(len(v))
-                raise JitError(f"len() const-eval expects list/tuple/Bundle, got {type(v).__name__}")
-        raise JitError(f"unsupported const-eval expression: {ast.dump(node, include_attributes=False)}")
+                raise JitError(
+                    f"len() const-eval expects list/tuple/Bundle, got {type(v).__name__}"
+                )
+        raise JitError(
+            f"unsupported const-eval expression: {ast.dump(node, include_attributes=False)}"
+        )
 
     # ---- expression evaluation (hardware + params) ----
     def eval_expr(self, node: ast.AST) -> Any:
@@ -808,7 +974,9 @@ class _Compiler:
                             continue
                         parts.append(str(inner))
                         continue
-                raise JitError("f-strings in JIT expressions must resolve to compile-time str/int/bool values")
+                raise JitError(
+                    "f-strings in JIT expressions must resolve to compile-time str/int/bool values"
+                )
             return "".join(parts)
         if isinstance(node, ast.List):
             elts = [self.eval_expr(e) for e in node.elts]
@@ -817,7 +985,9 @@ class _Compiler:
             return elts
         if isinstance(node, ast.ListComp):
             if len(node.generators) != 1:
-                raise JitError("only single-generator list comprehensions are supported")
+                raise JitError(
+                    "only single-generator list comprehensions are supported"
+                )
             gen = node.generators[0]
             if gen.is_async:
                 raise JitError("async list comprehensions are not supported")
@@ -826,10 +996,16 @@ class _Compiler:
             if not isinstance(gen.target, ast.Name):
                 raise JitError("list-comprehension target must be a simple name")
             iter_vals: list[Any]
-            if isinstance(gen.iter, ast.Call) and isinstance(gen.iter.func, ast.Name) and gen.iter.func.id == "range":
+            if (
+                isinstance(gen.iter, ast.Call)
+                and isinstance(gen.iter.func, ast.Name)
+                and gen.iter.func.id == "range"
+            ):
                 args = gen.iter.args
                 if not (1 <= len(args) <= 3):
-                    raise JitError("range() in list comprehensions must have 1..3 arguments")
+                    raise JitError(
+                        "range() in list comprehensions must have 1..3 arguments"
+                    )
                 if len(args) == 1:
                     lb_i = 0
                     ub_i = self.eval_const(args[0])
@@ -885,14 +1061,18 @@ class _Compiler:
                 try:
                     hash(k)
                 except Exception as e:  # noqa: BLE001
-                    raise JitError(f"dict key must be hashable, got {type(k).__name__}") from e
+                    raise JitError(
+                        f"dict key must be hashable, got {type(k).__name__}"
+                    ) from e
                 out[k] = self.eval_expr(v_node)
             return out
         if isinstance(node, ast.Name):
             if node.id in self.env:
                 v = self.env[node.id]
                 if isinstance(v, _IndexValue):
-                    raise JitError("loop induction variables are not usable in expressions (prototype limitation)")
+                    raise JitError(
+                        "loop induction variables are not usable in expressions (prototype limitation)"
+                    )
                 return v
             if node.id in self.globals:
                 return self.globals[node.id]
@@ -903,7 +1083,9 @@ class _Compiler:
             if _is_cas(base):
                 if isinstance(sl, ast.Slice):
                     if sl.step is not None:
-                        raise JitError("cycle-aware signal slicing does not support step")
+                        raise JitError(
+                            "cycle-aware signal slicing does not support step"
+                        )
                     lo = None if sl.lower is None else self.eval_const(sl.lower)
                     hi = None if sl.upper is None else self.eval_const(sl.upper)
                     return base[slice(lo, hi)]
@@ -917,7 +1099,9 @@ class _Compiler:
                 key_v = self.eval_expr(sl)
                 if isinstance(key_v, str):
                     return base[key_v]
-                raise JitError("Bundle subscript must resolve to a compile-time constant string key")
+                raise JitError(
+                    "Bundle subscript must resolve to a compile-time constant string key"
+                )
             if isinstance(base, ConnectorBundle):
                 if isinstance(sl, ast.Name) and sl.id in self._value_param_names:
                     raise JitError(
@@ -927,7 +1111,9 @@ class _Compiler:
                 key_v = self.eval_expr(sl)
                 if isinstance(key_v, str):
                     return base[key_v]
-                raise JitError("ConnectorBundle subscript must resolve to a compile-time constant string key")
+                raise JitError(
+                    "ConnectorBundle subscript must resolve to a compile-time constant string key"
+                )
             if isinstance(base, (Wire, Reg)):
                 if isinstance(sl, ast.Slice):
                     if sl.step is not None:
@@ -950,7 +1136,9 @@ class _Compiler:
             if hasattr(base, "__getitem__"):
                 if isinstance(sl, ast.Slice):
                     if sl.step is not None:
-                        raise JitError("slice step is not supported for generic subscript bases")
+                        raise JitError(
+                            "slice step is not supported for generic subscript bases"
+                        )
                     lo = None if sl.lower is None else self.eval_const(sl.lower)
                     hi = None if sl.upper is None else self.eval_const(sl.upper)
                     idx = slice(lo, hi, None)
@@ -961,7 +1149,9 @@ class _Compiler:
                 try:
                     return base[idx]
                 except Exception as e:  # noqa: BLE001
-                    raise JitError(f"subscript failed for {type(base).__name__}: {e}") from e
+                    raise JitError(
+                        f"subscript failed for {type(base).__name__}: {e}"
+                    ) from e
             raise JitError(f"unsupported subscript base type: {type(base).__name__}")
         if isinstance(node, ast.BinOp):
             lhs = self.eval_expr(node.left)
@@ -1007,7 +1197,9 @@ class _Compiler:
                     return _expect_wire(rhs, ctx="*") * lhs
                 return _as_py_int(lhs) * _as_py_int(rhs)
             if isinstance(node.op, ast.Div):
-                raise JitError("hardware `/` division is not supported; use `//` for integer division")
+                raise JitError(
+                    "hardware `/` division is not supported; use `//` for integer division"
+                )
             if isinstance(node.op, ast.FloorDiv):
                 if isinstance(lhs, (Wire, Reg)):
                     return _expect_wire(lhs, ctx="/") // rhs
@@ -1050,7 +1242,9 @@ class _Compiler:
                         raise JitError("<< only supports constant shift amounts")
                     return w.shl(amount=int(amt))
                 if isinstance(rhs, (Wire, Reg)):
-                    raise JitError("<< requires a wire on the left side when using hardware values")
+                    raise JitError(
+                        "<< requires a wire on the left side when using hardware values"
+                    )
                 return _as_py_int(lhs) << _as_py_int(rhs)
             if isinstance(node.op, ast.RShift):
                 if isinstance(lhs, (Wire, Reg)):
@@ -1060,7 +1254,9 @@ class _Compiler:
                         raise JitError(">> only supports constant shift amounts")
                     return w >> int(amt)
                 if isinstance(rhs, (Wire, Reg)):
-                    raise JitError(">> requires a wire on the left side when using hardware values")
+                    raise JitError(
+                        ">> requires a wire on the left side when using hardware values"
+                    )
                 return _as_py_int(lhs) >> _as_py_int(rhs)
         if isinstance(node, ast.UnaryOp):
             v = self.eval_expr(node.operand)
@@ -1126,7 +1322,9 @@ class _Compiler:
         if isinstance(node, ast.IfExp):
             cond_v = self.eval_expr(node.test)
             if isinstance(cond_v, LiteralValue):
-                return self.eval_expr(node.body if bool(int(cond_v.value)) else node.orelse)
+                return self.eval_expr(
+                    node.body if bool(int(cond_v.value)) else node.orelse
+                )
             if not isinstance(cond_v, (Wire, Reg)) and isinstance(cond_v, (bool, int)):
                 return self.eval_expr(node.body if bool(cond_v) else node.orelse)
             cond = _expect_wire(cond_v, ctx="if-expression condition")
@@ -1134,10 +1332,12 @@ class _Compiler:
             false_v = self.eval_expr(node.orelse)
             return _wire_ifexpr(cond, true_v, false_v)
         if isinstance(node, ast.Compare):
+
             def _py_cmp_value(v: Any) -> Any:
                 if isinstance(v, LiteralValue):
                     return int(v.value)
                 return v
+
             def _eval_single_compare(op: ast.cmpop, lhs: Any, rhs: Any) -> Any:
                 if isinstance(op, ast.Is):
                     return lhs is rhs
@@ -1154,7 +1354,7 @@ class _Compiler:
                     # Compile-time membership test (e.g. `if "decode" in cut_after:`).
                     # Operands must be static Python values; the branch is folded
                     # during elaboration and the emitted netlist stays fully static.
-                    if isinstance(lhs, (Wire, Reg, Vec)) or isinstance(rhs, (Wire, Reg, Vec)):
+                    if isinstance(lhs, (Wire, Reg)) or isinstance(rhs, (Wire, Reg)):
                         raise JitError(
                             "`in` is a compile-time membership test on Python values; "
                             "hardware values are not supported (use ==/mux instead)"
@@ -1162,14 +1362,26 @@ class _Compiler:
                     contained = _py_cmp_value(lhs) in rhs
                     return contained if isinstance(op, ast.In) else (not contained)
                 if isinstance(op, ast.Eq):
-                    if not isinstance(lhs, (Wire, Reg)) and not isinstance(rhs, (Wire, Reg)):
+                    if not isinstance(lhs, (Wire, Reg)) and not isinstance(
+                        rhs, (Wire, Reg)
+                    ):
                         return _py_cmp_value(lhs) == _py_cmp_value(rhs)
-                    w = _expect_wire(lhs, ctx="==") if isinstance(lhs, (Wire, Reg)) else _expect_wire(rhs, ctx="==")
+                    w = (
+                        _expect_wire(lhs, ctx="==")
+                        if isinstance(lhs, (Wire, Reg))
+                        else _expect_wire(rhs, ctx="==")
+                    )
                     return w == (rhs if isinstance(lhs, (Wire, Reg)) else lhs)
                 if isinstance(op, ast.NotEq):
-                    if not isinstance(lhs, (Wire, Reg)) and not isinstance(rhs, (Wire, Reg)):
+                    if not isinstance(lhs, (Wire, Reg)) and not isinstance(
+                        rhs, (Wire, Reg)
+                    ):
                         return _py_cmp_value(lhs) != _py_cmp_value(rhs)
-                    w = _expect_wire(lhs, ctx="!=") if isinstance(lhs, (Wire, Reg)) else _expect_wire(rhs, ctx="!=")
+                    w = (
+                        _expect_wire(lhs, ctx="!=")
+                        if isinstance(lhs, (Wire, Reg))
+                        else _expect_wire(rhs, ctx="!=")
+                    )
                     eq = w == (rhs if isinstance(lhs, (Wire, Reg)) else lhs)
                     return ~eq
                 if isinstance(op, ast.Lt):
@@ -1178,16 +1390,24 @@ class _Compiler:
                     if isinstance(rhs, (Wire, Reg)):
                         # a < b  ==>  b > a
                         return _expect_wire(rhs, ctx="<") > lhs
-                    lhs_i = int(lhs.value) if isinstance(lhs, LiteralValue) else int(lhs)
-                    rhs_i = int(rhs.value) if isinstance(rhs, LiteralValue) else int(rhs)
+                    lhs_i = (
+                        int(lhs.value) if isinstance(lhs, LiteralValue) else int(lhs)
+                    )
+                    rhs_i = (
+                        int(rhs.value) if isinstance(rhs, LiteralValue) else int(rhs)
+                    )
                     return lhs_i < rhs_i
                 if isinstance(op, ast.LtE):
                     if isinstance(lhs, (Wire, Reg)):
                         return _expect_wire(lhs, ctx="<=") <= rhs
                     if isinstance(rhs, (Wire, Reg)):
                         return _expect_wire(rhs, ctx="<=") >= lhs
-                    lhs_i = int(lhs.value) if isinstance(lhs, LiteralValue) else int(lhs)
-                    rhs_i = int(rhs.value) if isinstance(rhs, LiteralValue) else int(rhs)
+                    lhs_i = (
+                        int(lhs.value) if isinstance(lhs, LiteralValue) else int(lhs)
+                    )
+                    rhs_i = (
+                        int(rhs.value) if isinstance(rhs, LiteralValue) else int(rhs)
+                    )
                     return lhs_i <= rhs_i
                 if isinstance(op, ast.Gt):
                     if isinstance(lhs, (Wire, Reg)):
@@ -1195,18 +1415,28 @@ class _Compiler:
                     if isinstance(rhs, (Wire, Reg)):
                         # a > b  ==>  b < a
                         return _expect_wire(rhs, ctx=">") < lhs
-                    lhs_i = int(lhs.value) if isinstance(lhs, LiteralValue) else int(lhs)
-                    rhs_i = int(rhs.value) if isinstance(rhs, LiteralValue) else int(rhs)
+                    lhs_i = (
+                        int(lhs.value) if isinstance(lhs, LiteralValue) else int(lhs)
+                    )
+                    rhs_i = (
+                        int(rhs.value) if isinstance(rhs, LiteralValue) else int(rhs)
+                    )
                     return lhs_i > rhs_i
                 if isinstance(op, ast.GtE):
                     if isinstance(lhs, (Wire, Reg)):
                         return _expect_wire(lhs, ctx=">=") >= rhs
                     if isinstance(rhs, (Wire, Reg)):
                         return _expect_wire(rhs, ctx=">=") <= lhs
-                    lhs_i = int(lhs.value) if isinstance(lhs, LiteralValue) else int(lhs)
-                    rhs_i = int(rhs.value) if isinstance(rhs, LiteralValue) else int(rhs)
+                    lhs_i = (
+                        int(lhs.value) if isinstance(lhs, LiteralValue) else int(lhs)
+                    )
+                    rhs_i = (
+                        int(rhs.value) if isinstance(rhs, LiteralValue) else int(rhs)
+                    )
                     return lhs_i >= rhs_i
-                raise JitError(f"unsupported comparison operator: {op.__class__.__name__}")
+                raise JitError(
+                    f"unsupported comparison operator: {op.__class__.__name__}"
+                )
 
             lhs = self.eval_expr(node.left)
             if isinstance(lhs, Connector):
@@ -1219,8 +1449,12 @@ class _Compiler:
                 cmp_out = _eval_single_compare(op, lhs, rhs)
                 if chain_out is None:
                     chain_out = cmp_out
-                elif isinstance(chain_out, (Wire, Reg)) or isinstance(cmp_out, (Wire, Reg)):
-                    chain_out = _expect_wire(chain_out, ctx="comparison chain") & cmp_out
+                elif isinstance(chain_out, (Wire, Reg)) or isinstance(
+                    cmp_out, (Wire, Reg)
+                ):
+                    chain_out = (
+                        _expect_wire(chain_out, ctx="comparison chain") & cmp_out
+                    )
                 else:
                     chain_out = bool(chain_out) and bool(cmp_out)
                 lhs = rhs
@@ -1236,21 +1470,35 @@ class _Compiler:
             except AttributeError as e:
                 raise JitError(str(e)) from e
 
-        raise JitError(f"unsupported expression: {ast.dump(node, include_attributes=False)}")
+        raise JitError(
+            f"unsupported expression: {ast.dump(node, include_attributes=False)}"
+        )
 
     def eval_call(self, node: ast.Call) -> Any:
         _check_removed_api_call(node, compiler=self)
         if isinstance(node.func, ast.Name) and node.func.id == "range":
             raise JitError("range() is only supported in for-loops")
 
-        fn = _resolve_call_target(node, eval_expr=self.eval_expr, env=self.env, globals_=self.globals)
+        fn = _resolve_call_target(
+            node, eval_expr=self.eval_expr, env=self.env, globals_=self.globals
+        )
         args, kwargs = _eval_call_args(node, eval_expr=self.eval_expr)
         kind = _call_kind(fn)
-        has_hw = any(self._is_hw_value(a) for a in args) or any(self._is_hw_value(v) for v in kwargs.values())
+        has_hw = any(self._is_hw_value(a) for a in args) or any(
+            self._is_hw_value(v) for v in kwargs.values()
+        )
         try:
-            if has_hw and inspect.isfunction(fn) and kind is None and not self._is_frontend_intrinsic_helper(fn):
+            if (
+                has_hw
+                and inspect.isfunction(fn)
+                and kind is None
+                and not self._is_frontend_intrinsic_helper(fn)
+            ):
                 struct_metrics = get_structural_metrics(fn)
-                if struct_metrics.module_call_count > 0 or struct_metrics.state_call_count > 0:
+                if (
+                    struct_metrics.module_call_count > 0
+                    or struct_metrics.state_call_count > 0
+                ):
                     raise JitError(
                         f"hardware-carrying call to undecorated function {getattr(fn, '__name__', fn)!r}; "
                         "use @module for hierarchy boundaries, @function for inline helpers, or @const for compile-time metaprogramming"
@@ -1260,7 +1508,9 @@ class _Compiler:
                 # Module calls with hardware values are hierarchy boundaries and
                 # must materialize as `pyc.instance` through `Circuit.instance`.
                 if isinstance(node.func, ast.Name) and self._allow_auto_instance:
-                    inst = self._maybe_instance_call(fn, args=args, kwargs=kwargs, node=node)
+                    inst = self._maybe_instance_call(
+                        fn, args=args, kwargs=kwargs, node=node
+                    )
                     if inst is not None:
                         return inst
                 if has_hw:
@@ -1286,7 +1536,9 @@ class _Compiler:
         require_builder: bool = True,
     ) -> Any:
         if fn in self._inline_stack:
-            raise JitError(f"recursive @function call is not supported: {getattr(fn, '__name__', fn)!r}")
+            raise JitError(
+                f"recursive @function call is not supported: {getattr(fn, '__name__', fn)!r}"
+            )
 
         try:
             fn_name = getattr(fn, "__name__", None)
@@ -1294,7 +1546,9 @@ class _Compiler:
                 raise JitError(f"cannot inline non-function target: {fn!r}")
             meta = get_function_meta(fn, fn_name=fn_name)
         except OSError as e:
-            raise JitError(f"cannot inline {getattr(fn, '__name__', fn)!r}: failed to read source ({e})") from e
+            raise JitError(
+                f"cannot inline {getattr(fn, '__name__', fn)!r}: failed to read source ({e})"
+            ) from e
         except RuntimeError as e:
             raise JitError(f"cannot inline {getattr(fn, '__name__', fn)!r}: {e}") from e
 
@@ -1312,10 +1566,11 @@ class _Compiler:
                 f"(state_call_count={struct_metrics.state_call_count}); "
                 "move the stateful logic behind a `@module` boundary"
             )
-        if struct_metrics.estimated_inline_cost > 1400:
+        inline_complexity_cap = _inline_complexity_cap(fn, source_file=meta.source_file)
+        if struct_metrics.estimated_inline_cost > inline_complexity_cap:
             raise JitError(
                 f"@function {getattr(fn, '__name__', fn)!r} exceeds inline complexity cap "
-                f"(estimated_inline_cost={struct_metrics.estimated_inline_cost} > 1400); "
+                f"(estimated_inline_cost={struct_metrics.estimated_inline_cost} > {inline_complexity_cap}); "
                 "split the helper or promote it to `@module`"
             )
         if struct_metrics.repeat_pressure() > 96:
@@ -1327,7 +1582,9 @@ class _Compiler:
 
         if require_builder:
             if not fdef.args.args:
-                raise JitError("@function must take at least one argument (the Circuit builder)")
+                raise JitError(
+                    "@function must take at least one argument (the Circuit builder)"
+                )
             builder_arg = fdef.args.args[0].arg
         else:
             builder_arg = None
@@ -1341,9 +1598,13 @@ class _Compiler:
 
         if require_builder:
             if builder_arg not in bound.arguments:
-                raise JitError("internal: failed to bind builder argument for @function call")
+                raise JitError(
+                    "internal: failed to bind builder argument for @function call"
+                )
             if bound.arguments[builder_arg] is not self.m:
-                raise JitError("@function must be called with the current Circuit builder")
+                raise JitError(
+                    "@function must be called with the current Circuit builder"
+                )
 
         child = _Compiler(
             self.m,
@@ -1371,7 +1632,9 @@ class _Compiler:
             except _InlineReturn as ret:
                 return ret.value
             except Exception as e:  # noqa: BLE001
-                raise child._error_with_node(stmt, e, code="PYC510", hint=f"inline call target: {fn_name!r}") from e
+                raise child._error_with_node(
+                    stmt, e, code="PYC510", hint=f"inline call target: {fn_name!r}"
+                ) from e
 
         # No explicit return => None.
         return None
@@ -1389,7 +1652,9 @@ class _Compiler:
         if hasattr(self.m, "_scope_stack"):
             snap["scope_stack"] = list(getattr(self.m, "_scope_stack"))  # noqa: SLF001
         if hasattr(self.m, "_debug_exports"):
-            snap["debug_exports"] = dict(getattr(self.m, "_debug_exports"))  # noqa: SLF001
+            snap["debug_exports"] = dict(
+                getattr(self.m, "_debug_exports")
+            )  # noqa: SLF001
         return snap
 
     def _restore_template_purity_state(self, snap: Mapping[str, Any]) -> None:
@@ -1418,19 +1683,35 @@ class _Compiler:
             changed.append("_args")
         if list(self.m._results) != list(snap["results"]):  # noqa: SLF001
             changed.append("_results")
-        if list(getattr(self.m, "_finalizers", [])) != list(snap.get("finalizers", [])):  # noqa: SLF001
+        if list(getattr(self.m, "_finalizers", [])) != list(
+            snap.get("finalizers", [])
+        ):  # noqa: SLF001
             changed.append("_finalizers")
-        if int(getattr(self.m, "_indent_level", 0)) != int(snap.get("indent_level", 0)):  # noqa: SLF001
+        if int(getattr(self.m, "_indent_level", 0)) != int(
+            snap.get("indent_level", 0)
+        ):  # noqa: SLF001
             changed.append("_indent_level")
-        if dict(getattr(self.m, "_func_attrs", {})) != dict(snap.get("func_attrs", {})):  # noqa: SLF001
+        if dict(getattr(self.m, "_func_attrs", {})) != dict(
+            snap.get("func_attrs", {})
+        ):  # noqa: SLF001
             changed.append("_func_attrs")
-        if hasattr(self.m, "_scope_stack") and list(getattr(self.m, "_scope_stack")) != list(snap.get("scope_stack", [])):  # noqa: SLF001
+        if hasattr(self.m, "_scope_stack") and list(
+            getattr(self.m, "_scope_stack")
+        ) != list(
+            snap.get("scope_stack", [])
+        ):  # noqa: SLF001
             changed.append("_scope_stack")
-        if hasattr(self.m, "_debug_exports") and dict(getattr(self.m, "_debug_exports")) != dict(snap.get("debug_exports", {})):  # noqa: SLF001
+        if hasattr(self.m, "_debug_exports") and dict(
+            getattr(self.m, "_debug_exports")
+        ) != dict(
+            snap.get("debug_exports", {})
+        ):  # noqa: SLF001
             changed.append("_debug_exports")
         return changed
 
-    def _eval_template_call(self, fn: Any, *, args: list[Any], kwargs: dict[str, Any]) -> Any:
+    def _eval_template_call(
+        self, fn: Any, *, args: list[Any], kwargs: dict[str, Any]
+    ) -> Any:
         fn_name = getattr(fn, "__name__", repr(fn))
         try:
             sig = inspect.signature(fn)
@@ -1441,14 +1722,20 @@ class _Compiler:
 
         ps = list(sig.parameters.values())
         if not ps:
-            raise JitError(f"@const {fn_name!r} must take at least one argument (the current Circuit builder)")
+            raise JitError(
+                f"@const {fn_name!r} must take at least one argument (the current Circuit builder)"
+            )
 
         builder_arg = ps[0].name
         if bound.arguments.get(builder_arg) is not self.m:
-            raise JitError(f"@const {fn_name!r} must be called with the current Circuit as first argument")
+            raise JitError(
+                f"@const {fn_name!r} must be called with the current Circuit as first argument"
+            )
 
         args_key = tuple(_template_identity_snapshot(a) for a in args)
-        kwargs_key = tuple((str(k), _template_identity_snapshot(v)) for k, v in sorted(kwargs.items()))
+        kwargs_key = tuple(
+            (str(k), _template_identity_snapshot(v)) for k, v in sorted(kwargs.items())
+        )
         cache_key: _TemplateKey = (id(fn), ("args", args_key), ("kwargs", kwargs_key))
         if cache_key in self._template_cache:
             return copy.deepcopy(self._template_cache[cache_key])
@@ -1469,7 +1756,9 @@ class _Compiler:
                 f"@const {fn_name!r} must be compile-time pure and emit no IR; mutated module state: {details}"
             )
         if call_err is not None:
-            raise JitError(f"@const call failed for {fn_name!r}: {call_err}") from call_err
+            raise JitError(
+                f"@const call failed for {fn_name!r}: {call_err}"
+            ) from call_err
 
         _validate_template_return(result)
         self._template_cache[cache_key] = copy.deepcopy(result)
@@ -1488,7 +1777,11 @@ class _Compiler:
     def compile_stmt(self, node: ast.stmt) -> None:
         if isinstance(node, ast.Pass):
             return
-        if isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant) and isinstance(node.value.value, str):
+        if (
+            isinstance(node, ast.Expr)
+            and isinstance(node.value, ast.Constant)
+            and isinstance(node.value.value, str)
+        ):
             # Ignore docstrings.
             return
         if isinstance(node, ast.Expr):
@@ -1529,20 +1822,30 @@ class _Compiler:
                 self.env[name] = fn(cur, rhs)
                 return
             if isinstance(node.op, ast.Add):
-                self.env[name] = self._alias_if_wire(_expect_wire(cur, ctx="+=") + rhs, base_name=name, node=node)
+                self.env[name] = self._alias_if_wire(
+                    _expect_wire(cur, ctx="+=") + rhs, base_name=name, node=node
+                )
                 return
             if isinstance(node.op, ast.BitAnd):
-                self.env[name] = self._alias_if_wire(_expect_wire(cur, ctx="&=") & rhs, base_name=name, node=node)
+                self.env[name] = self._alias_if_wire(
+                    _expect_wire(cur, ctx="&=") & rhs, base_name=name, node=node
+                )
                 return
             if isinstance(node.op, ast.BitOr):
-                self.env[name] = self._alias_if_wire(_expect_wire(cur, ctx="|=") | rhs, base_name=name, node=node)
+                self.env[name] = self._alias_if_wire(
+                    _expect_wire(cur, ctx="|=") | rhs, base_name=name, node=node
+                )
                 return
             if isinstance(node.op, ast.BitXor):
-                self.env[name] = self._alias_if_wire(_expect_wire(cur, ctx="^=") ^ rhs, base_name=name, node=node)
+                self.env[name] = self._alias_if_wire(
+                    _expect_wire(cur, ctx="^=") ^ rhs, base_name=name, node=node
+                )
                 return
             if isinstance(node.op, ast.LShift):
                 if not isinstance(cur, Reg):
-                    raise JitError("<<= is only supported for Reg variables (use x = x.shl(amount=...) for wires)")
+                    raise JitError(
+                        "<<= is only supported for Reg variables (use x = x.shl(amount=...) for wires)"
+                    )
                 cur <<= rhs
                 self.env[name] = cur
                 return
@@ -1558,7 +1861,9 @@ class _Compiler:
 
             if isinstance(test_v, (bool, int)):
                 if not bool(test_v):
-                    raise JitError(f"compile-time assert failed{': ' + msg if msg else ''}")
+                    raise JitError(
+                        f"compile-time assert failed{': ' + msg if msg else ''}"
+                    )
                 return
 
             w = _expect_wire(test_v, ctx="assert")
@@ -1584,9 +1889,13 @@ class _Compiler:
                 v = None if node.value is None else self.eval_expr(node.value)
                 raise _InlineReturn(v)
             # Return is handled by the top-level driver; disallow in nested blocks.
-            raise JitError("return is only supported at top-level (use m.output instead inside control flow)")
+            raise JitError(
+                "return is only supported at top-level (use m.output instead inside control flow)"
+            )
 
-        raise JitError(f"unsupported statement: {ast.dump(node, include_attributes=False)}")
+        raise JitError(
+            f"unsupported statement: {ast.dump(node, include_attributes=False)}"
+        )
 
     def compile_with(self, node: ast.With) -> None:
         # Prototype support for naming scopes / context managers.
@@ -1624,7 +1933,9 @@ class _Compiler:
         pre_env = dict(self.env)
         assigned = sorted(_assigned_names(node.body) | _assigned_names(node.orelse))
         if not assigned:
-            raise JitError("if does not assign any variables under a dynamic condition (use a compile-time condition instead)")
+            raise JitError(
+                "if does not assign any variables under a dynamic condition (use a compile-time condition instead)"
+            )
 
         def capture(fn: Any) -> list[str]:
             # Avoid slicing/copying the shared line buffer in hot dynamic-if paths.
@@ -1729,9 +2040,13 @@ class _Compiler:
                     expected_types.append(then_ty)
                     continue
                 if isinstance(then_ty, Bits) and isinstance(else_ty, Bits):
-                    expected_types.append(Bits(max(self._ty_width(then_ty), self._ty_width(else_ty))))
+                    expected_types.append(
+                        Bits(max(self._ty_width(then_ty), self._ty_width(else_ty)))
+                    )
                     continue
-                raise JitError(f"if assigns {name!r} with incompatible types: {then_ty} vs {else_ty}")
+                raise JitError(
+                    f"if assigns {name!r} with incompatible types: {then_ty} vs {else_ty}"
+                )
 
             if then_ty is not None:
                 expected_types.append(then_ty)
@@ -1761,7 +2076,9 @@ class _Compiler:
                 then_vals: list[Wire] = []
                 for name, ty in zip(phi_vars, expected_types):
                     v = then_comp.env.get(name, 0)
-                    then_vals.append(then_comp._coerce_to_type(v, expected_ty=ty, ctx="if then"))
+                    then_vals.append(
+                        then_comp._coerce_to_type(v, expected_ty=ty, ctx="if then")
+                    )
                 _emit_scf_yield(self.m, then_vals)
             finally:
                 self.m.pop_indent()
@@ -1778,7 +2095,9 @@ class _Compiler:
                 else_vals: list[Wire] = []
                 for name, ty in zip(phi_vars, expected_types):
                     v = else_comp.env.get(name, 0)
-                    else_vals.append(else_comp._coerce_to_type(v, expected_ty=ty, ctx="if else"))
+                    else_vals.append(
+                        else_comp._coerce_to_type(v, expected_ty=ty, ctx="if else")
+                    )
                 _emit_scf_yield(self.m, else_vals)
             finally:
                 self.m.pop_indent()
@@ -1789,11 +2108,15 @@ class _Compiler:
 
         # Merge results back into env (including newly introduced names).
         for name, res_ref, ty in zip(phi_vars, results, expected_types):
-            self.env[name] = self._alias_if_wire(Wire(self.m, Signal(ref=res_ref, ty=ty)), base_name=name, node=node)
+            self.env[name] = self._alias_if_wire(
+                Wire(self.m, Signal(ref=res_ref, ty=ty)), base_name=name, node=node
+            )
 
     def compile_match(self, node: ast.Match) -> None:
         subject_v = self.eval_expr(node.subject)
-        subj_name = f"__match_subject_{len(self._inline_stack)}_{len(self._callsite_counts)}"
+        subj_name = (
+            f"__match_subject_{len(self._inline_stack)}_{len(self._callsite_counts)}"
+        )
         while subj_name in self.env:
             subj_name = f"{subj_name}_n"
         self.env[subj_name] = subject_v
@@ -1805,7 +2128,11 @@ class _Compiler:
                 raise JitError("match guards are not supported yet")
 
             pat = case.pattern
-            if isinstance(pat, ast.MatchAs) and pat.pattern is None and pat.name is None:
+            if (
+                isinstance(pat, ast.MatchAs)
+                and pat.pattern is None
+                and pat.name is None
+            ):
                 default_body = list(case.body)
                 break
 
@@ -1827,7 +2154,9 @@ class _Compiler:
                 branches.append((cmp, list(case.body)))
                 continue
 
-            raise JitError("unsupported match pattern (only literal values and wildcard `_` are supported)")
+            raise JitError(
+                "unsupported match pattern (only literal values and wildcard `_` are supported)"
+            )
 
         if default_body is None:
             default_body = []
@@ -1861,7 +2190,9 @@ class _Compiler:
                 return
             if isinstance(t, (ast.Tuple, ast.List)):
                 if not isinstance(v, (tuple, list)):
-                    raise JitError("tuple/list for-loop target requires tuple/list values")
+                    raise JitError(
+                        "tuple/list for-loop target requires tuple/list values"
+                    )
                 if len(v) != len(t.elts):
                     raise JitError("for-loop unpacking arity mismatch")
                 for sub_t, sub_v in zip(t.elts, v):
@@ -1869,7 +2200,11 @@ class _Compiler:
                 return
             raise JitError("for-loop target must be a name or tuple/list of names")
 
-        if isinstance(node.iter, ast.Call) and isinstance(node.iter.func, ast.Name) and node.iter.func.id == "range":
+        if (
+            isinstance(node.iter, ast.Call)
+            and isinstance(node.iter.func, ast.Name)
+            and node.iter.func.id == "range"
+        ):
             args = node.iter.args
             if not (1 <= len(args) <= 3):
                 raise JitError("range() must have 1..3 arguments")
@@ -1894,7 +2229,9 @@ class _Compiler:
             try:
                 iter_vals = list(iter_raw)
             except TypeError as e:
-                raise JitError(f"for-loop iterator is not statically iterable: {type(iter_raw).__name__}") from e
+                raise JitError(
+                    f"for-loop iterator is not statically iterable: {type(iter_raw).__name__}"
+                ) from e
 
         names = target_names(node.target)
         saved = {n: self.env[n] for n in names if n in self.env}
@@ -1939,13 +2276,17 @@ def compile_module(
             raise JitError(f"invalid JIT function target: {fn!r}")
         meta = get_function_meta(fn, fn_name=fn_name)
     except OSError as e:
-        raise JitError(f"cannot compile {getattr(fn, '__name__', fn)!r}: failed to read source ({e})") from e
+        raise JitError(
+            f"cannot compile {getattr(fn, '__name__', fn)!r}: failed to read source ({e})"
+        ) from e
     except RuntimeError as e:
         raise JitError(f"cannot compile {getattr(fn, '__name__', fn)!r}: {e}") from e
 
     fdef = meta.fdef
     if _call_kind(fn) == "template":
-        raise JitError(f"cannot compile @const function {getattr(fn, '__name__', fn)!r} as a hardware module")
+        raise JitError(
+            f"cannot compile @const function {getattr(fn, '__name__', fn)!r} as a hardware module"
+        )
 
     sig = meta.signature
     ps = list(sig.parameters.values())
@@ -1959,7 +2300,9 @@ def compile_module(
     port_specs_dict = dict(port_specs or {})
     declared_value_params = _value_params_of(fn)
     if value_params is not None:
-        explicit_vp = {str(k): _normalize_value_param_ty(str(v)) for k, v in value_params.items()}
+        explicit_vp = {
+            str(k): _normalize_value_param_ty(str(v)) for k, v in value_params.items()
+        }
         if declared_value_params and explicit_vp != declared_value_params:
             raise JitError(
                 f"value_params mismatch for {getattr(fn, '__name__', fn)!r}: "
@@ -1994,10 +2337,14 @@ def compile_module(
         )
 
     extra_params = set(params.keys()) - {
-        p.name for p in ps[1:] if p.name not in port_specs_dict and p.name not in value_param_names
+        p.name
+        for p in ps[1:]
+        if p.name not in port_specs_dict and p.name not in value_param_names
     }
     if extra_params:
-        raise JitError(f"unknown JIT param(s) for {getattr(fn, '__name__', fn)!r}: {', '.join(sorted(extra_params))}")
+        raise JitError(
+            f"unknown JIT param(s) for {getattr(fn, '__name__', fn)!r}: {', '.join(sorted(extra_params))}"
+        )
 
     bound_params: dict[str, Any] = {}
     for p in ps[1:]:
@@ -2044,7 +2391,9 @@ def compile_module(
             continue
         spec = port_specs_dict[p.name]
         if not isinstance(spec, dict):
-            raise JitError(f"invalid signature-bound port spec for {p.name!r}: expected dict")
+            raise JitError(
+                f"invalid signature-bound port spec for {p.name!r}: expected dict"
+            )
         kind = str(spec.get("kind", "")).strip()
         if kind == "clock":
             c.env[p.name] = m.clock(p.name)
@@ -2055,38 +2404,60 @@ def compile_module(
         if kind == "wire":
             ty = str(spec.get("ty", "")).strip()
             if not ty.startswith("i"):
-                raise JitError(f"invalid integer type in signature-bound port {p.name!r}: {ty!r}")
+                raise JitError(
+                    f"invalid integer type in signature-bound port {p.name!r}: {ty!r}"
+                )
             try:
                 width = int(ty[1:])
             except ValueError as e:
-                raise JitError(f"invalid integer width in signature-bound port {p.name!r}: {ty!r}") from e
+                raise JitError(
+                    f"invalid integer width in signature-bound port {p.name!r}: {ty!r}"
+                ) from e
             if width <= 0:
-                raise JitError(f"invalid integer width in signature-bound port {p.name!r}: {ty!r}")
+                raise JitError(
+                    f"invalid integer width in signature-bound port {p.name!r}: {ty!r}"
+                )
             signed = bool(spec.get("signed", False))
             c.env[p.name] = m.input(p.name, width=width, signed=signed)
             continue
         if kind == "vec":
             ty = str(spec.get("ty", "")).strip()
             if not ty.startswith("vector<"):
-                raise JitError(f"invalid vector type in signature-bound port {p.name!r}: {ty!r}")
+                raise JitError(
+                    f"invalid vector type in signature-bound port {p.name!r}: {ty!r}"
+                )
             try:
                 parsed = Data.from_str(ty)
             except ValueError as e:
-                raise JitError(f"invalid vector type in signature-bound port {p.name!r}: {ty!r}") from e
+                raise JitError(
+                    f"invalid vector type in signature-bound port {p.name!r}: {ty!r}"
+                ) from e
             if not isinstance(parsed, Vector):
-                raise JitError(f"invalid vector type in signature-bound port {p.name!r}: {ty!r}")
+                raise JitError(
+                    f"invalid vector type in signature-bound port {p.name!r}: {ty!r}"
+                )
             shape = parsed.shape()
             elem_ty = parsed.datatype()
             if not isinstance(elem_ty, Bits):
-                raise JitError(f"invalid vector element type in signature-bound port {p.name!r}: {elem_ty!r}")
+                raise JitError(
+                    f"invalid vector element type in signature-bound port {p.name!r}: {elem_ty!r}"
+                )
             width = elem_ty.width
             if width <= 0:
-                raise JitError(f"invalid vector element width in signature-bound port {p.name!r}: {elem_ty!r}")
+                raise JitError(
+                    f"invalid vector element width in signature-bound port {p.name!r}: {elem_ty!r}"
+                )
             signed_raw = spec.get("signed", False)
-            signed = any(bool(v) for v in signed_raw) if isinstance(signed_raw, list) else bool(signed_raw)
+            signed = (
+                any(bool(v) for v in signed_raw)
+                if isinstance(signed_raw, list)
+                else bool(signed_raw)
+            )
             c.env[p.name] = m.input(p.name, width=width, shape=shape, signed=signed)
             continue
-        raise JitError(f"unsupported signature-bound port kind for {p.name!r}: {kind!r}")
+        raise JitError(
+            f"unsupported signature-bound port kind for {p.name!r}: {kind!r}"
+        )
 
     returned: list[Any] = []
     for stmt in fdef.body:
@@ -2110,6 +2481,7 @@ def compile_module(
     if returned and getattr(m, "_results", []):  # noqa: SLF001
         raise JitError("cannot mix `return` and explicit `m.output(...)`")
     if returned:
+
         def as_out(v: Any) -> Any:
             if isinstance(v, Reg):
                 return v.q
@@ -2127,8 +2499,6 @@ def compile_module(
                 m.output(f"out{i}", as_out(v))
 
     return m
-
-
 
 
 def compile(top_fn: Any, *, name: str | None = None, **top_params: Any):

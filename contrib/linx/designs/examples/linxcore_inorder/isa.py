@@ -185,16 +185,173 @@ OP_BSTART_VSEQ = 142
 # --- block header descriptors ---
 OP_B_TEXT = 143
 OP_B_IOT = 144
-OP_B_IOTI = 145
+OP_B_IOS = 145
 OP_B_IOR = 146
-OP_B_ATTR = 147
 OP_B_DIM = 148
 
 # --- system register ops (bring-up no-op semantics in the pyc core model) ---
 OP_SSRSET = 149
 OP_HL_SSRSET = 150
+OP_B_FPATR = 151
+OP_BSTART_STD_ICALL = 152
 
 REG_INVALID = 0x3F
+
+# Exact allowed B.FPATR selectors from the PTO ISA 0.58.1 catalog. Values not
+# present in these sets are reserved and must remain OP_INVALID.
+PTO_FPATR_PREQUANT_MODES = (
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    12,
+    13,
+    16,
+    17,
+    18,
+    19,
+    20,
+    23,
+    24,
+    25,
+    26,
+    27,
+    28,
+    32,
+    33,
+    34,
+    35,
+    36,
+    37,
+    38,
+    39,
+)
+PTO_FPATR_RELU_MODES = (0, 1, 2, 3)
+PTO_FPATR_GROUP_N_CODES = (0, 1, 2, 3, 4, 5, 6, 7, 8, 9)
+PTO_C_BSTART_STD_BRTYPES = (1, 5, 7)
+
+# Accepted PTO ISA 0.58 TEPL selectors, encoded as (Mode << 5) | Function.
+# Reserved selectors must remain OP_INVALID even though they share the TEPL
+# family mask/match.
+PTO_TEPL_SELECTORS = (
+    0,
+    1,
+    2,
+    3,
+    4,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    12,
+    13,
+    15,
+    16,
+    17,
+    18,
+    19,
+    20,
+    21,
+    22,
+    23,
+    26,
+    27,
+    28,
+    32,
+    33,
+    34,
+    35,
+    36,
+    38,
+    39,
+    40,
+    41,
+    42,
+    43,
+    44,
+    45,
+    58,
+    59,
+    64,
+    65,
+    66,
+    67,
+    68,
+    69,
+    70,
+    71,
+    72,
+    73,
+    74,
+    75,
+    76,
+    77,
+    80,
+    81,
+    82,
+    83,
+    84,
+    85,
+    86,
+    87,
+    88,
+    89,
+    90,
+    91,
+    92,
+    93,
+    96,
+    98,
+    99,
+    100,
+    101,
+    102,
+    103,
+    104,
+    106,
+    107,
+    108,
+    109,
+    110,
+    111,
+    112,
+    113,
+    114,
+    115,
+    116,
+)
+
+PTO_TLSU_HEADER_MATCHES = (
+    0x00011181,
+    0x00111181,
+    0x00211181,
+    0x00311181,
+    0x00411181,
+    0x00511181,
+    0x00611181,
+    0x00711181,
+    0x00811181,
+    0x00D11181,
+)
+
+PTO_CUBE_HEADER_MATCHES = (
+    0x00031181,
+    0x00131181,
+    0x00231181,
+    0x00431181,
+    0x00531181,
+    0x00631181,
+    0x01031181,
+    0x01131181,
+    0x01231181,
+    0x01431181,
+    0x01531181,
+    0x01631181,
+)
 
 ST_IF = 0
 ST_ID = 1

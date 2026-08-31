@@ -1,13 +1,175 @@
 from __future__ import annotations
-from pycircuit import Circuit, Wire, function, u
-from pycircuit import unsigned
-from ..isa import OP_ADDTPC, OP_ADDI, OP_ADDIW, OP_ADD, OP_AND, OP_ANDI, OP_ANDIW, OP_BSTART_STD_COND, OP_BSTART_STD_DIRECT, OP_BSTART_STD_FALL, OP_ADDW, OP_ANDW, OP_BXS, OP_BXU, OP_BSTART_STD_CALL, OP_CMP_EQ, OP_CMP_EQI, OP_CMP_LT, OP_CMP_NE, OP_CMP_NEI, OP_CMP_ANDI, OP_CMP_ORI, OP_CMP_LTI, OP_CMP_LTUI, OP_CMP_LTU, OP_CMP_GEI, OP_CMP_GEUI, OP_C_ADD, OP_C_ADDI, OP_C_AND, OP_C_BSTART_COND, OP_C_BSTART_DIRECT, OP_C_BSTART_STD, OP_C_OR, OP_C_SUB, OP_CSEL, OP_C_LDI, OP_C_LWI, OP_C_MOVI, OP_C_MOVR, OP_C_SETC_EQ, OP_C_SETC_NE, OP_C_SETC_TGT, OP_C_SDI, OP_C_SEXT_W, OP_C_SETRET, OP_C_SWI, OP_C_ZEXT_W, OP_HL_LB_PCR, OP_HL_LBU_PCR, OP_HL_LD_PCR, OP_HL_LH_PCR, OP_HL_LHU_PCR, OP_HL_LUI, OP_HL_LW_PCR, OP_HL_LWU_PCR, OP_HL_SB_PCR, OP_HL_SD_PCR, OP_HL_SH_PCR, OP_HL_SW_PCR, OP_LB, OP_LBI, OP_LBU, OP_LBUI, OP_LD, OP_LH, OP_LHI, OP_LHU, OP_LHUI, OP_LDI, OP_LUI, OP_LW, OP_LWI, OP_LWU, OP_LWUI, OP_MADD, OP_MADDW, OP_MUL, OP_MULW, OP_OR, OP_ORI, OP_ORIW, OP_ORW, OP_XOR, OP_XORIW, OP_DIV, OP_DIVU, OP_DIVW, OP_DIVUW, OP_REM, OP_REMU, OP_REMW, OP_REMUW, OP_SB, OP_SETC_AND, OP_SETC_ANDI, OP_SETC_EQ, OP_SETC_EQI, OP_SETC_GE, OP_SETC_GEI, OP_SETC_GEU, OP_SETC_GEUI, OP_SETC_LT, OP_SETC_LTI, OP_SETC_LTU, OP_SETC_LTUI, OP_SETC_NE, OP_SETC_NEI, OP_SETC_OR, OP_SETC_ORI, OP_SETRET, OP_SBI, OP_SD, OP_SH, OP_SHI, OP_SLL, OP_SLLI, OP_SLLIW, OP_SDI, OP_SRL, OP_SRA, OP_SRAIW, OP_SRLIW, OP_SW, OP_SUB, OP_SUBI, OP_SUBIW, OP_SUBW, OP_SWI, OP_XORW, REG_INVALID
+
+from pycircuit import Circuit, Wire, function, u, unsigned
+
+from ..isa import (
+    OP_ADD,
+    OP_ADDI,
+    OP_ADDIW,
+    OP_ADDTPC,
+    OP_ADDW,
+    OP_AND,
+    OP_ANDI,
+    OP_ANDIW,
+    OP_ANDW,
+    OP_BSTART_STD_CALL,
+    OP_BSTART_STD_COND,
+    OP_BSTART_STD_DIRECT,
+    OP_BSTART_STD_FALL,
+    OP_BSTART_STD_ICALL,
+    OP_BXS,
+    OP_BXU,
+    OP_C_ADD,
+    OP_C_ADDI,
+    OP_C_AND,
+    OP_C_BSTART_COND,
+    OP_C_BSTART_DIRECT,
+    OP_C_BSTART_STD,
+    OP_C_LDI,
+    OP_C_LWI,
+    OP_C_MOVI,
+    OP_C_MOVR,
+    OP_C_OR,
+    OP_C_SDI,
+    OP_C_SETC_EQ,
+    OP_C_SETC_NE,
+    OP_C_SETC_TGT,
+    OP_C_SETRET,
+    OP_C_SEXT_W,
+    OP_C_SUB,
+    OP_C_SWI,
+    OP_C_ZEXT_W,
+    OP_CMP_ANDI,
+    OP_CMP_EQ,
+    OP_CMP_EQI,
+    OP_CMP_GEI,
+    OP_CMP_GEUI,
+    OP_CMP_LT,
+    OP_CMP_LTI,
+    OP_CMP_LTU,
+    OP_CMP_LTUI,
+    OP_CMP_NE,
+    OP_CMP_NEI,
+    OP_CMP_ORI,
+    OP_CSEL,
+    OP_DIV,
+    OP_DIVU,
+    OP_DIVUW,
+    OP_DIVW,
+    OP_HL_LB_PCR,
+    OP_HL_LBU_PCR,
+    OP_HL_LD_PCR,
+    OP_HL_LH_PCR,
+    OP_HL_LHU_PCR,
+    OP_HL_LUI,
+    OP_HL_LW_PCR,
+    OP_HL_LWU_PCR,
+    OP_HL_SB_PCR,
+    OP_HL_SD_PCR,
+    OP_HL_SH_PCR,
+    OP_HL_SW_PCR,
+    OP_LB,
+    OP_LBI,
+    OP_LBU,
+    OP_LBUI,
+    OP_LD,
+    OP_LDI,
+    OP_LH,
+    OP_LHI,
+    OP_LHU,
+    OP_LHUI,
+    OP_LUI,
+    OP_LW,
+    OP_LWI,
+    OP_LWU,
+    OP_LWUI,
+    OP_MADD,
+    OP_MADDW,
+    OP_MUL,
+    OP_MULW,
+    OP_OR,
+    OP_ORI,
+    OP_ORIW,
+    OP_ORW,
+    OP_REM,
+    OP_REMU,
+    OP_REMUW,
+    OP_REMW,
+    OP_SB,
+    OP_SBI,
+    OP_SD,
+    OP_SDI,
+    OP_SETC_AND,
+    OP_SETC_ANDI,
+    OP_SETC_EQ,
+    OP_SETC_EQI,
+    OP_SETC_GE,
+    OP_SETC_GEI,
+    OP_SETC_GEU,
+    OP_SETC_GEUI,
+    OP_SETC_LT,
+    OP_SETC_LTI,
+    OP_SETC_LTU,
+    OP_SETC_LTUI,
+    OP_SETC_NE,
+    OP_SETC_NEI,
+    OP_SETC_OR,
+    OP_SETC_ORI,
+    OP_SETRET,
+    OP_SH,
+    OP_SHI,
+    OP_SLL,
+    OP_SLLI,
+    OP_SLLIW,
+    OP_SRA,
+    OP_SRAIW,
+    OP_SRL,
+    OP_SRLIW,
+    OP_SUB,
+    OP_SUBI,
+    OP_SUBIW,
+    OP_SUBW,
+    OP_SW,
+    OP_SWI,
+    OP_XOR,
+    OP_XORIW,
+    OP_XORW,
+    REG_INVALID,
+)
 from ..pipeline import ExMemRegs, IdExRegs
 from ..util import Consts, ashr_var, lshr_var, shl_var
 
+
 @function
-def build_ex_stage(m: Circuit, *, do_ex: Wire, idex: IdExRegs, exmem: ExMemRegs, consts: Consts, mem0_fwd_valid: Wire, mem0_fwd_regdst: Wire, mem0_fwd_value: Wire, mem1_fwd_valid: Wire, mem1_fwd_regdst: Wire, mem1_fwd_value: Wire, wb0_fwd_valid: Wire, wb0_fwd_regdst: Wire, wb0_fwd_value: Wire, wb1_fwd_valid: Wire, wb1_fwd_regdst: Wire, wb1_fwd_value: Wire, t0_fwd: Wire, t1_fwd: Wire, t2_fwd: Wire, t3_fwd: Wire, u0_fwd: Wire, u1_fwd: Wire, u2_fwd: Wire, u3_fwd: Wire) -> None:
-    with m.scope('EX'):
+def build_ex_stage(
+    m: Circuit,
+    *,
+    do_ex: Wire,
+    idex: IdExRegs,
+    exmem: ExMemRegs,
+    consts: Consts,
+    mem0_fwd_valid: Wire,
+    mem0_fwd_regdst: Wire,
+    mem0_fwd_value: Wire,
+    mem1_fwd_valid: Wire,
+    mem1_fwd_regdst: Wire,
+    mem1_fwd_value: Wire,
+    wb0_fwd_valid: Wire,
+    wb0_fwd_regdst: Wire,
+    wb0_fwd_value: Wire,
+    wb1_fwd_valid: Wire,
+    wb1_fwd_regdst: Wire,
+    wb1_fwd_value: Wire,
+    t0_fwd: Wire,
+    t1_fwd: Wire,
+    t2_fwd: Wire,
+    t3_fwd: Wire,
+    u0_fwd: Wire,
+    u1_fwd: Wire,
+    u2_fwd: Wire,
+    u3_fwd: Wire,
+) -> None:
+    with m.scope("EX"):
         z1 = consts.zero1
         z4 = consts.zero4
         z64 = consts.zero64
@@ -26,10 +188,18 @@ def build_ex_stage(m: Circuit, *, do_ex: Wire, idex: IdExRegs, exmem: ExMemRegs,
         srcr_val = idex.srcr_val.out()
         srcp_val = idex.srcp_val.out()
         imm = idex.imm.out()
-        can_fwd_mem0 = mem0_fwd_valid & (mem0_fwd_regdst != REG_INVALID) & (mem0_fwd_regdst != 0)
-        can_fwd_mem1 = mem1_fwd_valid & (mem1_fwd_regdst != REG_INVALID) & (mem1_fwd_regdst != 0)
-        can_fwd_wb0 = wb0_fwd_valid & (wb0_fwd_regdst != REG_INVALID) & (wb0_fwd_regdst != 0)
-        can_fwd_wb1 = wb1_fwd_valid & (wb1_fwd_regdst != REG_INVALID) & (wb1_fwd_regdst != 0)
+        can_fwd_mem0 = (
+            mem0_fwd_valid & (mem0_fwd_regdst != REG_INVALID) & (mem0_fwd_regdst != 0)
+        )
+        can_fwd_mem1 = (
+            mem1_fwd_valid & (mem1_fwd_regdst != REG_INVALID) & (mem1_fwd_regdst != 0)
+        )
+        can_fwd_wb0 = (
+            wb0_fwd_valid & (wb0_fwd_regdst != REG_INVALID) & (wb0_fwd_regdst != 0)
+        )
+        can_fwd_wb1 = (
+            wb1_fwd_valid & (wb1_fwd_regdst != REG_INVALID) & (wb1_fwd_regdst != 0)
+        )
         if can_fwd_wb0 & (wb0_fwd_regdst == srcl):
             srcl_val = wb0_fwd_value
         if can_fwd_wb1 & (wb1_fwd_regdst == srcl):
@@ -109,6 +279,7 @@ def build_ex_stage(m: Circuit, *, do_ex: Wire, idex: IdExRegs, exmem: ExMemRegs,
         op_bstart_std_direct = op == OP_BSTART_STD_DIRECT
         op_bstart_std_cond = op == OP_BSTART_STD_COND
         op_bstart_std_call = op == OP_BSTART_STD_CALL
+        op_bstart_std_icall = op == OP_BSTART_STD_ICALL
         op_c_movr = op == OP_C_MOVR
         op_c_movi = op == OP_C_MOVI
         op_c_setret = op == OP_C_SETRET
@@ -259,7 +430,16 @@ def build_ex_stage(m: Circuit, *, do_ex: Wire, idex: IdExRegs, exmem: ExMemRegs,
         if srcr_type == 0:
             idx_mod = srcr_val[0:32].as_signed()
         idx_mod_shl = shl_var(m, idx_mod, shamt)
-        if op_c_bstart_std | op_c_bstart_cond | op_c_bstart_direct | op_bstart_std_fall | op_bstart_std_direct | op_bstart_std_cond | op_bstart_std_call:
+        if (
+            op_c_bstart_std
+            | op_c_bstart_cond
+            | op_c_bstart_direct
+            | op_bstart_std_fall
+            | op_bstart_std_direct
+            | op_bstart_std_cond
+            | op_bstart_std_call
+            | op_bstart_std_icall
+        ):
             alu = imm
             is_load = z1
             is_store = z1

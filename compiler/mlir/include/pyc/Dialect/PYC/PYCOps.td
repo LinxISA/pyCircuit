@@ -18,7 +18,7 @@ class PYC_Op<string mnemonic, list<Trait> traits = []> :
 //===----------------------------------------------------------------------===//
 
 // Matches scalar IntegerType or VectorType.
-def AnyIntegerOrV : AnyTypeOf<[AnyInteger, AnyVector],
+def AnyIntegerOrV : AnyTypeOf<[AnyInteger, AnyVectorOfAnyRank],
                               "integer or vector">;
 
 //===----------------------------------------------------------------------===//

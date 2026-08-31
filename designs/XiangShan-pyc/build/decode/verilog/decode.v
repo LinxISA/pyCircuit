@@ -1093,4 +1093,3 @@ assign dec_out_is_fp_1 = pyc_comb_335;
 assign dec_out_is_vec_1 = pyc_comb_336;
 
 endmodule
-

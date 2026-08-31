@@ -24,4 +24,3 @@ assign pyc_comb_5 = pyc_add_4;
 assign y = pyc_comb_5;
 
 endmodule
-

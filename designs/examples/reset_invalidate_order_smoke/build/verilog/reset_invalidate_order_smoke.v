@@ -49,4 +49,3 @@ pyc_reg #(.WIDTH(8)) pyc_reg_7_inst (
 assign y = pyc_comb_10;
 
 endmodule
-

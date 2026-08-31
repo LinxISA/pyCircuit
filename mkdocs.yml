@@ -2,13 +2,13 @@
 
 site_name: pyCircuit
 site_description: "A Python-based hardware description framework that compiles Python functions to synthesizable RTL through MLIR"
-site_author: LinxISA Contributors
-site_url: https://github.com/LinxISA/pyCircuit
+site_author: PTO-ISA Contributors
+site_url: https://github.com/PTO-ISA/pyCircuit
 
-repo_url: https://github.com/LinxISA/pyCircuit
-repo_name: LinxISA/pyCircuit
+repo_url: https://github.com/PTO-ISA/pyCircuit
+repo_name: PTO-ISA/pyCircuit
 
-copyright: "Copyright &copy; 2024 LinxISA Contributors"
+copyright: "Copyright &copy; 2024 PTO-ISA Contributors"
 
 # Configuration
 docs_dir: docs
@@ -76,7 +76,7 @@ nav:
       - tutorial/index.md
       - tutorial/unified-signal-model.md
       - tutorial/cycle-aware-computing.md
-      - pyCircuit_Tutorial.md
+      - v6_PyCircuit_Tutorial.md
   - Core Docs:
       - QUICKSTART.md
       - FRONTEND_API.md
@@ -90,7 +90,11 @@ nav:
       - PIPELINE.md
   - API Reference:
       - api/index.md
-  - Development: development/index.md
+  - Development:
+      - development/index.md
+      - development/contributing-workflow.md
+      - development/testing-and-gates.md
+      - development/review-and-merge.md
   - Upgrade:
       - updatePLAN.md
       - rfcs/pyc4.0-decisions.md
@@ -107,6 +111,6 @@ plugins:
 extra:
   social:
     - icon: fontawesome/brands/github
-      link: https://github.com/LinxISA/pyCircuit
+      link: https://github.com/PTO-ISA/pyCircuit
     - icon: fontawesome/brands/python
       link: https://python.org

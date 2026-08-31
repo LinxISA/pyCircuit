@@ -678,4 +678,3 @@ assign frontend_dec_pc_7 = pyc_comb_103;
 assign frontend_frontend_stall = pyc_comb_104;
 
 endmodule
-

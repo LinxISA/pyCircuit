@@ -1768,4 +1768,3 @@ assign ifu_out_is_br_31 = pyc_comb_676;
 assign ifu_out_num = pyc_comb_677;
 
 endmodule
-

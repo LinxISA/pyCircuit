@@ -24,6 +24,7 @@ Simplified vs full XiangShan:
   - No TileLink coherence (Probe/Release)
   - Unified load/store pipeline (XiangShan has separate load pipe + main pipe)
 """
+
 from __future__ import annotations
 
 import math
@@ -39,9 +40,7 @@ from pycircuit import (
     CycleAwareDomain,
     CycleAwareSignal,
     cas,
-    compile_cycle_aware,
     mux,
-    u,
     wire_of,
 )
 from top.parameters import *
@@ -62,14 +61,12 @@ def dcache(
     _in = inputs or {}
     _out: dict[str, CycleAwareSignal] = {}
 
-
     block_bits = block_bytes * 8
     offset_bits = int(math.log2(block_bytes))
     index_bits = int(math.log2(n_sets))
     tag_bits = paddr_width - index_bits - offset_bits
     way_bits = max(1, int(math.log2(n_ways)))
     tag_strobe_w = (tag_bits + 7) // 8
-    data_strobe_w = block_bytes
 
     cd = domain.clock_domain
 
@@ -77,41 +74,79 @@ def dcache(
     # s0 — Request: accept load/store, decompose address, read SRAMs
     # ================================================================
 
-    flush = (_in["flush"] if "flush" in _in else
+    flush = (
+        _in["flush"]
+        if "flush" in _in
+        else cas(domain, m.input(f"{prefix}_flush", width=1), cycle=0)
+    )
 
-        cas(domain, m.input(f"{prefix}_flush", width=1), cycle=0))
+    load_valid = (
+        _in["load_valid"]
+        if "load_valid" in _in
+        else cas(domain, m.input(f"{prefix}_load_valid", width=1), cycle=0)
+    )
+    load_vaddr = (
+        _in["load_vaddr"]
+        if "load_vaddr" in _in
+        else cas(domain, m.input(f"{prefix}_load_vaddr", width=paddr_width), cycle=0)
+    )
+    load_ptag = (
+        _in["load_ptag"]
+        if "load_ptag" in _in
+        else cas(domain, m.input(f"{prefix}_load_ptag", width=tag_bits), cycle=0)
+    )
 
-    load_valid = (_in["load_valid"] if "load_valid" in _in else
+    store_valid = (
+        _in["store_valid"]
+        if "store_valid" in _in
+        else cas(domain, m.input(f"{prefix}_store_valid", width=1), cycle=0)
+    )
+    store_vaddr = (
+        _in["store_vaddr"]
+        if "store_vaddr" in _in
+        else cas(domain, m.input(f"{prefix}_store_vaddr", width=paddr_width), cycle=0)
+    )
+    store_ptag = (
+        _in["store_ptag"]
+        if "store_ptag" in _in
+        else cas(domain, m.input(f"{prefix}_store_ptag", width=tag_bits), cycle=0)
+    )
+    store_wdata = (
+        _in["store_wdata"]
+        if "store_wdata" in _in
+        else cas(domain, m.input(f"{prefix}_store_wdata", width=block_bits), cycle=0)
+    )
+    store_wmask = (
+        _in["store_wmask"]
+        if "store_wmask" in _in
+        else cas(domain, m.input(f"{prefix}_store_wmask", width=block_bytes), cycle=0)
+    )
 
-        cas(domain, m.input(f"{prefix}_load_valid", width=1), cycle=0))
-    load_vaddr = (_in["load_vaddr"] if "load_vaddr" in _in else
-        cas(domain, m.input(f"{prefix}_load_vaddr", width=paddr_width), cycle=0))
-    load_ptag = (_in["load_ptag"] if "load_ptag" in _in else
-        cas(domain, m.input(f"{prefix}_load_ptag", width=tag_bits), cycle=0))
-
-    store_valid = (_in["store_valid"] if "store_valid" in _in else
-
-        cas(domain, m.input(f"{prefix}_store_valid", width=1), cycle=0))
-    store_vaddr = (_in["store_vaddr"] if "store_vaddr" in _in else
-        cas(domain, m.input(f"{prefix}_store_vaddr", width=paddr_width), cycle=0))
-    store_ptag = (_in["store_ptag"] if "store_ptag" in _in else
-        cas(domain, m.input(f"{prefix}_store_ptag", width=tag_bits), cycle=0))
-    store_wdata = (_in["store_wdata"] if "store_wdata" in _in else
-        cas(domain, m.input(f"{prefix}_store_wdata", width=block_bits), cycle=0))
-    store_wmask = (_in["store_wmask"] if "store_wmask" in _in else
-        cas(domain, m.input(f"{prefix}_store_wmask", width=block_bytes), cycle=0))
-
-    refill_valid = (_in["refill_valid"] if "refill_valid" in _in else
-
-        cas(domain, m.input(f"{prefix}_refill_valid", width=1), cycle=0))
-    refill_set = (_in["refill_set"] if "refill_set" in _in else
-        cas(domain, m.input(f"{prefix}_refill_set", width=index_bits), cycle=0))
-    refill_tag = (_in["refill_tag"] if "refill_tag" in _in else
-        cas(domain, m.input(f"{prefix}_refill_tag", width=tag_bits), cycle=0))
-    refill_way = (_in["refill_way"] if "refill_way" in _in else
-        cas(domain, m.input(f"{prefix}_refill_way", width=way_bits), cycle=0))
-    refill_data = (_in["refill_data"] if "refill_data" in _in else
-        cas(domain, m.input(f"{prefix}_refill_data", width=block_bits), cycle=0))
+    refill_valid = (
+        _in["refill_valid"]
+        if "refill_valid" in _in
+        else cas(domain, m.input(f"{prefix}_refill_valid", width=1), cycle=0)
+    )
+    refill_set = (
+        _in["refill_set"]
+        if "refill_set" in _in
+        else cas(domain, m.input(f"{prefix}_refill_set", width=index_bits), cycle=0)
+    )
+    refill_tag = (
+        _in["refill_tag"]
+        if "refill_tag" in _in
+        else cas(domain, m.input(f"{prefix}_refill_tag", width=tag_bits), cycle=0)
+    )
+    refill_way = (
+        _in["refill_way"]
+        if "refill_way" in _in
+        else cas(domain, m.input(f"{prefix}_refill_way", width=way_bits), cycle=0)
+    )
+    refill_data = (
+        _in["refill_data"]
+        if "refill_data" in _in
+        else cas(domain, m.input(f"{prefix}_refill_data", width=block_bits), cycle=0)
+    )
 
     # Load has priority; store accepted only when no load
     req_valid = load_valid | store_valid
@@ -119,7 +154,7 @@ def dcache(
     req_vaddr = mux(load_valid, load_vaddr, store_vaddr)
     req_ptag = mux(load_valid, load_ptag, store_ptag)
 
-    s0_set_idx = req_vaddr[offset_bits:offset_bits + index_bits]
+    s0_set_idx = req_vaddr[offset_bits : offset_bits + index_bits]
     s0_fire = req_valid & (~flush)
 
     # ── Feedback state ────────────────────────────────────────────
@@ -141,7 +176,9 @@ def dcache(
     swb_set = domain.signal(width=index_bits, reset_value=0, name=f"{prefix}_swb_set")
     swb_way = domain.signal(width=way_bits, reset_value=0, name=f"{prefix}_swb_way")
     swb_data = domain.signal(width=block_bits, reset_value=0, name=f"{prefix}_swb_data")
-    swb_mask = domain.signal(width=block_bytes, reset_value=0, name=f"{prefix}_swb_mask")
+    swb_mask = domain.signal(
+        width=block_bytes, reset_value=0, name=f"{prefix}_swb_mask"
+    )
 
     # ── Data SRAM write mux: refill has priority over store writeback ─
 
@@ -172,23 +209,35 @@ def dcache(
         tag_wr_en = wire_of(refill_valid & (refill_way == w_const))
         data_wr_en = wire_of(data_wr_valid & (data_wr_way == w_const))
 
-        tag_rd.append(m.sync_mem(
-            cd.clk, cd.rst,
-            ren=wire_of(s0_fire), raddr=wire_of(s0_set_idx),
-            wvalid=tag_wr_en, waddr=wire_of(refill_set),
-            wdata=wire_of(refill_tag),
-            wstrb=m.const((1 << tag_strobe_w) - 1, width=tag_strobe_w),
-            depth=n_sets, name=f"{prefix}_tag_w{w}",
-        ))
+        tag_rd.append(
+            m.sync_mem(
+                cd.clk,
+                cd.rst,
+                ren=wire_of(s0_fire),
+                raddr=wire_of(s0_set_idx),
+                wvalid=tag_wr_en,
+                waddr=wire_of(refill_set),
+                wdata=wire_of(refill_tag),
+                wstrb=m.const((1 << tag_strobe_w) - 1, width=tag_strobe_w),
+                depth=n_sets,
+                name=f"{prefix}_tag_w{w}",
+            )
+        )
 
-        data_rd.append(m.sync_mem(
-            cd.clk, cd.rst,
-            ren=wire_of(s0_fire), raddr=wire_of(s0_set_idx),
-            wvalid=data_wr_en, waddr=wire_of(data_wr_set),
-            wdata=wire_of(data_wr_data),
-            wstrb=wire_of(data_wr_mask),
-            depth=n_sets, name=f"{prefix}_data_w{w}",
-        ))
+        data_rd.append(
+            m.sync_mem(
+                cd.clk,
+                cd.rst,
+                ren=wire_of(s0_fire),
+                raddr=wire_of(s0_set_idx),
+                wvalid=data_wr_en,
+                waddr=wire_of(data_wr_set),
+                wdata=wire_of(data_wr_data),
+                wstrb=wire_of(data_wr_mask),
+                depth=n_sets,
+                name=f"{prefix}_data_w{w}",
+            )
+        )
 
     # ── Pipeline registers s0 → s1 ───────────────────────────────
 
@@ -208,7 +257,7 @@ def dcache(
     s1_way_hit = []
     for w in range(n_ways):
         vld_bit = wire_of(valid_regs[w]).lshr(amount=s1_set_idx_w)[0:1]
-        tag_eq = (tag_rd[w][0:tag_bits] == s1_ptag_w)
+        tag_eq = tag_rd[w][0:tag_bits] == s1_ptag_w
         s1_way_hit.append(vld_bit & tag_eq)
 
     s1_any_hit = s1_way_hit[0]
@@ -268,8 +317,8 @@ def dcache(
 
     # ── Pipeline registers s2 → s3 ───────────────────────────────
 
-    s3_valid_w = domain.cycle(s2_valid_w, name=f"{prefix}_s3_v")
-    s3_hit_w = domain.cycle(s2_resp_hit, name=f"{prefix}_s3_hit")
+    domain.cycle(s2_valid_w, name=f"{prefix}_s3_v")
+    domain.cycle(s2_resp_hit, name=f"{prefix}_s3_hit")
     s3_data_w = domain.cycle(s2_resp_data, name=f"{prefix}_s3_data")
     s3_store_hit_w = domain.cycle(s2_store_hit, name=f"{prefix}_s3_st_hit")
     s3_load_resp_v_w = domain.cycle(s2_load_resp_valid, name=f"{prefix}_s3_lrv")
@@ -290,7 +339,9 @@ def dcache(
 
     # Valid bits: set way-valid on refill
     for w in range(n_ways):
-        wr_way = wire_of(refill_valid) & (wire_of(refill_way) == m.const(w, width=way_bits))
+        wr_way = wire_of(refill_valid) & (
+            wire_of(refill_way) == m.const(w, width=way_bits)
+        )
         one_hot = m.const(1, width=n_sets).shl(amount=wire_of(refill_set))
         new_vld = wire_of(valid_regs[w]) | one_hot
         valid_regs[w] <<= wr_way.select(new_vld, wire_of(valid_regs[w]))
@@ -346,11 +397,14 @@ def dcache(
 
     m.output(f"{prefix}_miss_valid", mshr_alloc)
     _out["miss_valid"] = cas(domain, mshr_alloc, cycle=domain.cycle_index)
-    m.output(f"{prefix}_miss_addr", m.cat(
-        s2_ptag_w,
-        s2_set_idx_w,
-        m.const(0, width=offset_bits),
-    ))
+    m.output(
+        f"{prefix}_miss_addr",
+        m.cat(
+            s2_ptag_w,
+            s2_set_idx_w,
+            m.const(0, width=offset_bits),
+        ),
+    )
     return _out
 
 
@@ -358,8 +412,4 @@ dcache.__pycircuit_name__ = "dcache"
 
 
 if __name__ == "__main__":
-    print(compile_cycle_aware(
-        dcache, name="dcache", eager=True,
-        n_sets=DCACHE_SETS, n_ways=DCACHE_WAYS,
-        block_bytes=DCACHE_BLOCK_BYTES, paddr_width=36,
-    ).emit_mlir())
+    pass

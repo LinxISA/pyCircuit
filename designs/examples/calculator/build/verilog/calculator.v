@@ -284,4 +284,3 @@ assign display = pyc_comb_100;
 assign op_pending = op;
 
 endmodule
-

@@ -13,7 +13,8 @@ from dataclasses import dataclass, field
 import inspect
 import textwrap
 import threading
-from typing import Any, Callable, Generic, Iterable, Iterator, Mapping, TypeVar, Union, cast, overload
+from typing import Any, Generic, TypeVar, Union, cast, overload
+from collections.abc import Callable, Iterable, Iterator, Mapping
 
 from .data import DT, Bits, Data, Vector
 from .dsl import Signal
@@ -68,7 +69,9 @@ class CycleAwareCircuit(Circuit):
             return self._v5_design.emit_mlir()
         return super().emit_mlir()
 
-    def create_domain(self, name: str, *, frequency_desc: str = "", reset_active_high: bool = False) -> "CycleAwareDomain":
+    def create_domain(
+        self, name: str, *, frequency_desc: str = "", reset_active_high: bool = False
+    ) -> "CycleAwareDomain":
         _ = (frequency_desc, reset_active_high)
         return CycleAwareDomain(self, str(name))
 
@@ -93,7 +96,9 @@ class CycleAwareCircuit(Circuit):
         signed: bool = False,
     ) -> Wire:
         """Create a scalar or Vector input port in a V5 clock domain."""
-        return domain.create_signal(str(name), width=int(width), shape=shape, signed=signed)
+        return domain.create_signal(
+            str(name), width=int(width), shape=shape, signed=signed
+        )
 
 
 class CycleAwareDomain:
@@ -135,7 +140,9 @@ class CycleAwareDomain:
         signed: bool = False,
     ) -> Wire:
         """Declare a scalar or statically shaped Vector input port."""
-        return self._m.input(str(port_name), width=int(width), shape=list(shape or []), signed=signed)
+        return self._m.input(
+            str(port_name), width=int(width), shape=list(shape or []), signed=signed
+        )
 
     def create_const(
         self,
@@ -236,7 +243,9 @@ class CycleAwareDomain:
         """
         if enum is not None:
             if fields is not None or shape is not None:
-                raise TypeError("signal(enum=...) cannot be combined with fields=/shape=")
+                raise TypeError(
+                    "signal(enum=...) cannot be combined with fields=/shape="
+                )
             from .enums import EnumSignal, coerce_enum_cls, enum_width
 
             enum = coerce_enum_cls(enum)
@@ -266,6 +275,23 @@ class CycleAwareDomain:
         st = self._state(width=width, reset_value=reset_value, name=name, shape=shape)
         fwd = ForwardSignal(st)
         return fields.bind(fwd) if fields is not None else fwd
+
+    def state(
+        self,
+        *,
+        width: int,
+        reset_value: int | list[Any] = 0,
+        name: str = "",
+        shape: list[int] | None = None,
+    ) -> "StateSignal":
+        """Create an explicit feedback register on the timed-domain lane."""
+
+        return self._state(
+            width=width,
+            reset_value=reset_value,
+            name=name,
+            shape=shape,
+        )
 
     def call(
         self,
@@ -342,7 +368,11 @@ class CycleAwareDomain:
                 actual = input_map[port_name]
                 actual_sig = _to_wire(actual).sig
 
-                if actual_sig.ty != port_sig.ty and isinstance(actual_sig.ty, Bits) and isinstance(port_sig.ty, Bits):
+                if (
+                    actual_sig.ty != port_sig.ty
+                    and isinstance(actual_sig.ty, Bits)
+                    and isinstance(port_sig.ty, Bits)
+                ):
                     actual_w = actual_sig.ty.width
                     expect_w = port_sig.ty.width
                     w = Wire(self._m, actual_sig)
@@ -352,7 +382,9 @@ class CycleAwareDomain:
                         w = w.trunc(width=expect_w)
                     actual_sig = w.sig
                 if actual_sig.ty != port_sig.ty:
-                    raise TypeError(f"input {port_name!r} type mismatch: actual {actual_sig.ty} != expected {port_sig.ty}")
+                    raise TypeError(
+                        f"input {port_name!r} type mismatch: actual {actual_sig.ty} != expected {port_sig.ty}"
+                    )
                 input_sigs.append(actual_sig)
             else:
                 if isinstance(port_sig.ty, Vector):
@@ -366,7 +398,7 @@ class CycleAwareDomain:
                     shape = []
                     width = 1
                 if port_name.startswith(canonical_prefix + "_"):
-                    suffix = port_name[len(canonical_prefix) + 1:]
+                    suffix = port_name[len(canonical_prefix) + 1 :]
                     parent_port_name = f"{prefix}_{suffix}"
                 else:
                     parent_port_name = f"{prefix}_{port_name}"
@@ -416,7 +448,18 @@ class CycleAwareDomain:
 
     def vec(
         self,
-        *values: CycleAwareSignal[VT] | StateSignal[VT] | ForwardSignal[VT] | Wire[VT] | Reg[VT] | list[CycleAwareSignal[VT] | StateSignal[VT] | ForwardSignal[VT] | Wire[VT] | Reg[VT]],
+        *values: CycleAwareSignal[VT]
+        | StateSignal[VT]
+        | ForwardSignal[VT]
+        | Wire[VT]
+        | Reg[VT]
+        | list[
+            CycleAwareSignal[VT]
+            | StateSignal[VT]
+            | ForwardSignal[VT]
+            | Wire[VT]
+            | Reg[VT]
+        ],
     ) -> CycleAwareSignal[Vector[VT]]:
         """Build a Vector and align every lane to the latest logical cycle."""
         if len(values) == 1 and isinstance(values[0], list):
@@ -427,21 +470,24 @@ class CycleAwareDomain:
         for value in values:
             if isinstance(value, (CycleAwareSignal, StateSignal, ForwardSignal)):
                 if value.domain is not self:
-                    raise ValueError("CycleAwareDomain.vec values must share this domain")
+                    raise ValueError(
+                        "CycleAwareDomain.vec values must share this domain"
+                    )
                 lanes.append((_to_wire(value), value.cycle))
             elif isinstance(value, Reg):
                 lanes.append((value.q, self.cycle_index))
             elif isinstance(value, Wire):
                 if value.m is not self._m:
-                    raise ValueError("CycleAwareDomain.vec values must share this circuit")
+                    raise ValueError(
+                        "CycleAwareDomain.vec values must share this circuit"
+                    )
                 lanes.append((value, self.cycle_index))
             else:
-                raise TypeError(f"CycleAwareDomain.vec expects signal lanes, got {type(value).__name__}")
+                raise TypeError(
+                    f"CycleAwareDomain.vec expects signal lanes, got {type(value).__name__}"
+                )
         cycle = max(c for _, c in lanes)
-        aligned = [
-            self.delay_to(w, from_cycle=c, to_cycle=cycle)
-            for w, c in lanes
-        ]
+        aligned = [self.delay_to(w, from_cycle=c, to_cycle=cycle) for w, c in lanes]
         return CycleAwareSignal(self, self._m.vec(aligned), cycle)
 
     def cat(
@@ -465,15 +511,20 @@ class CycleAwareDomain:
 
 # ── Hierarchical compilation helpers ──────────────────────────────────────
 
-def _hierarchical_cache_key(fn: Callable[..., Any], kwargs: dict[str, Any]) -> tuple[Any, ...]:
+
+def _hierarchical_cache_key(
+    fn: Callable[..., Any], kwargs: dict[str, Any]
+) -> tuple[Any, ...]:
     """Build a cache key from function identity + compile-time kwargs.
 
     ``prefix`` is excluded because it only affects port naming, not the
     module's structural identity."""
     import json as _json
+
     kw_str = _json.dumps(
         {k: repr(v) for k, v in sorted(kwargs.items()) if k != "prefix"},
-        sort_keys=True, separators=(",", ":"),
+        sort_keys=True,
+        separators=(",", ":"),
     )
     return (id(fn), kw_str)
 
@@ -572,14 +623,26 @@ def _make_compiled_module(fn: Any, circuit: CycleAwareCircuit, sym_name: str) ->
     kind = _kind_of(fn)
     inline = "true" if _inline_of(fn) else "false"
     base = _base_name(fn)
-    struct_metrics = _json.dumps({
-        "source_loc": 0, "ast_node_count": 0, "hardware_call_count": 0,
-        "loop_count": 0, "module_call_count": 0, "state_call_count": 0,
-        "estimated_inline_cost": 0, "instance_count": 0,
-        "state_alloc_count": 0, "collection_count": 0,
-        "collection_instance_count": 0, "module_family_collection_count": 0,
-        "repeat_pressure": 0, "repeated_body_clusters": [],
-    }, sort_keys=True, separators=(",", ":"))
+    struct_metrics = _json.dumps(
+        {
+            "source_loc": 0,
+            "ast_node_count": 0,
+            "hardware_call_count": 0,
+            "loop_count": 0,
+            "module_call_count": 0,
+            "state_call_count": 0,
+            "estimated_inline_cost": 0,
+            "instance_count": 0,
+            "state_alloc_count": 0,
+            "collection_count": 0,
+            "collection_instance_count": 0,
+            "module_family_collection_count": 0,
+            "repeat_pressure": 0,
+            "repeated_body_clusters": [],
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
     struct_collections = "[]"
 
     circuit.set_func_attr("pyc.kind", kind)
@@ -613,7 +676,9 @@ def _clock_domain_ports(m: Circuit, name: str) -> ClockDomain:
     return m.domain(name)
 
 
-def _as_wire(m: Circuit, sig: Union[Wire, Reg, "CycleAwareSignal", "ForwardSignal", Signal]) -> Wire:
+def _as_wire(
+    m: Circuit, sig: Union[Wire, Reg, "CycleAwareSignal", "ForwardSignal", Signal]
+) -> Wire:
     if isinstance(sig, ForwardSignal):
         return sig._state._cas._w
     if isinstance(sig, CycleAwareSignal):
@@ -624,7 +689,9 @@ def _as_wire(m: Circuit, sig: Union[Wire, Reg, "CycleAwareSignal", "ForwardSigna
         return sig
     if isinstance(sig, Signal):
         return Wire(m, sig)
-    raise TypeError(f"expected Wire/Reg/CycleAwareSignal/ForwardSignal/Signal, got {type(sig).__name__}")
+    raise TypeError(
+        f"expected Wire/Reg/CycleAwareSignal/ForwardSignal/Signal, got {type(sig).__name__}"
+    )
 
 
 class StateSignal(Generic[DT]):
@@ -640,6 +707,11 @@ class StateSignal(Generic[DT]):
         self._domain = domain
         self._reg = reg
         self._cas = CycleAwareSignal(domain, reg.out(), cycle)
+
+    def _current_view(self) -> "CycleAwareSignal":
+        """Read Q at the current logical occurrence without a balance register."""
+
+        return CycleAwareSignal(self._domain, self._reg.out(), self._domain.cycle_index)
 
     def set(
         self,
@@ -701,95 +773,95 @@ class StateSignal(Generic[DT]):
         return self._cas.wire
 
     def __getattr__(self, name: str) -> object:
-        return getattr(self._cas, name)
+        return getattr(self._current_view(), name)
 
     def __add__(self, other: object) -> "CycleAwareSignal":
-        return self._cas.__add__(other)
+        return self._current_view().__add__(other)
 
     def __radd__(self, other: object) -> "CycleAwareSignal":
-        return self._cas.__radd__(other)
+        return self._current_view().__radd__(other)
 
     def __sub__(self, other: object) -> "CycleAwareSignal":
-        return self._cas.__sub__(other)
+        return self._current_view().__sub__(other)
 
     def __rsub__(self, other: object) -> "CycleAwareSignal":
-        return self._cas.__rsub__(other)
+        return self._current_view().__rsub__(other)
 
     def __mul__(self, other: object) -> "CycleAwareSignal":
-        return self._cas.__mul__(other)
+        return self._current_view().__mul__(other)
 
     def __rmul__(self, other: object) -> "CycleAwareSignal":
-        return self._cas.__rmul__(other)
+        return self._current_view().__rmul__(other)
 
     def __floordiv__(self, other: object) -> "CycleAwareSignal":
-        return self._cas.__floordiv__(other)
+        return self._current_view().__floordiv__(other)
 
     def __rfloordiv__(self, other: object) -> "CycleAwareSignal":
-        return self._cas.__rfloordiv__(other)
+        return self._current_view().__rfloordiv__(other)
 
     def __mod__(self, other: object) -> "CycleAwareSignal":
-        return self._cas.__mod__(other)
+        return self._current_view().__mod__(other)
 
     def __rmod__(self, other: object) -> "CycleAwareSignal":
-        return self._cas.__rmod__(other)
+        return self._current_view().__rmod__(other)
 
     def __and__(self, other: object) -> "CycleAwareSignal":
-        return self._cas.__and__(other)
+        return self._current_view().__and__(other)
 
     def __rand__(self, other: object) -> "CycleAwareSignal":
-        return self._cas.__rand__(other)
+        return self._current_view().__rand__(other)
 
     def __or__(self, other: object) -> "CycleAwareSignal":
         if isinstance(other, str):
-            return self._cas
-        return self._cas.__or__(other)
+            return self._current_view()
+        return self._current_view().__or__(other)
 
     def __ror__(self, other: object) -> "CycleAwareSignal":
         if isinstance(other, str):
-            return self._cas
-        return self._cas.__ror__(other)
+            return self._current_view()
+        return self._current_view().__ror__(other)
 
     def __xor__(self, other: object) -> "CycleAwareSignal":
-        return self._cas.__xor__(other)
+        return self._current_view().__xor__(other)
 
     def __rxor__(self, other: object) -> "CycleAwareSignal":
-        return self._cas.__rxor__(other)
+        return self._current_view().__rxor__(other)
 
     def __invert__(self) -> "CycleAwareSignal":
-        return self._cas.__invert__()
+        return self._current_view().__invert__()
 
     def __eq__(self, other: object) -> "CycleAwareSignal":  # type: ignore[override]
-        return self._cas.__eq__(other)
+        return self._current_view().__eq__(other)
 
     def __ne__(self, other: object) -> "CycleAwareSignal":  # type: ignore[override]
-        return self._cas.__ne__(other)
+        return self._current_view().__ne__(other)
 
     def __lt__(self, other: object) -> "CycleAwareSignal":
-        return self._cas.__lt__(other)
+        return self._current_view().__lt__(other)
 
     def __gt__(self, other: object) -> "CycleAwareSignal":
-        return self._cas.__gt__(other)
+        return self._current_view().__gt__(other)
 
     def __le__(self, other: object) -> "CycleAwareSignal":
-        return self._cas.__le__(other)
+        return self._current_view().__le__(other)
 
     def __ge__(self, other: object) -> "CycleAwareSignal":
-        return self._cas.__ge__(other)
+        return self._current_view().__ge__(other)
 
     def __lshift__(self, amount: object) -> "CycleAwareSignal":
-        return self._cas.__lshift__(amount)
+        return self._current_view().__lshift__(amount)
 
     def __rshift__(self, amount: object) -> "CycleAwareSignal":
-        return self._cas.__rshift__(amount)
+        return self._current_view().__rshift__(amount)
 
     def __len__(self) -> int:
-        return len(self._cas)
+        return len(self._current_view())
 
     def __iter__(self) -> Iterator["CycleAwareSignal"]:
-        return iter(self._cas)
+        return iter(self._current_view())
 
     def __getitem__(self, idx: int | slice) -> "CycleAwareSignal":
-        return self._cas.__getitem__(idx)
+        return self._current_view().__getitem__(idx)
 
     def __repr__(self) -> str:
         return f"StateSignal({self._cas._w}, cycle={self._cas.cycle})"
@@ -831,7 +903,9 @@ class ForwardSignal(Generic[DT]):
 
     # ── assignment operators ──────────────────────────────────────────
 
-    def __ilshift__(self, next_val: Union[Wire, CycleAwareSignal, StateSignal]) -> "ForwardSignal":
+    def __ilshift__(
+        self, next_val: Union[Wire, CycleAwareSignal, StateSignal]
+    ) -> "ForwardSignal":
         """``signal <<= expr`` → unconditional register drive."""
         self._state.set(next_val)
         return self
@@ -996,10 +1070,13 @@ def _to_wire(v: "Wire | Reg | CycleAwareSignal | StateSignal | ForwardSignal") -
         return v.q
     if isinstance(v, Wire):
         return v
-    raise TypeError(f"expected Wire/Reg/CycleAwareSignal/StateSignal/ForwardSignal, got {type(v).__name__}")
+    raise TypeError(
+        f"expected Wire/Reg/CycleAwareSignal/StateSignal/ForwardSignal, got {type(v).__name__}"
+    )
 
 
 # ── Hierarchical-composition helpers ──────────────────────────────────────
+
 
 def submodule_input(
     io: dict[str, Any] | None,
@@ -1048,7 +1125,9 @@ def submodule_input(
             return sig  # type: ignore[return-value]
         if isinstance(sig, Wire):
             return CycleAwareSignal(domain, sig, cycle)
-        raise TypeError(f"submodule_input: unexpected type for key '{key}': {type(sig).__name__}")
+        raise TypeError(
+            f"submodule_input: unexpected type for key '{key}': {type(sig).__name__}"
+        )
     return CycleAwareSignal(domain, m.input(f"{prefix}_{key}", width=width), cycle)
 
 
@@ -1162,10 +1241,16 @@ class CycleAwareSignal(Generic[DT]):
         if isinstance(v, Wire):
             return CycleAwareSignal(domain, v, tag)
         if isinstance(v, int):
-            w = m.const(v, width=max(1, infer_literal_width(v, signed=v < 0)), signed=v < 0)
+            w = m.const(
+                v, width=max(1, infer_literal_width(v, signed=v < 0)), signed=v < 0
+            )
             return CycleAwareSignal(domain, w, tag)
         if isinstance(v, LiteralValue):
-            lw = v.width if v.width is not None else infer_literal_width(int(v.value), signed=bool(v.signed))
+            lw = (
+                v.width
+                if v.width is not None
+                else infer_literal_width(int(v.value), signed=bool(v.signed))
+            )
             w = m.const(int(v.value), width=int(lw))
             return CycleAwareSignal(domain, w, tag)
         raise TypeError(f"as_cas: unsupported operand type {type(v).__name__}")
@@ -1212,7 +1297,10 @@ class CycleAwareSignal(Generic[DT]):
         nw = self._domain._m.named(self._w, str(name))
         return CycleAwareSignal(self._domain, nw, self._cycle)
 
-    def _align(self, other: "CycleAwareSignal | StateSignal | ForwardSignal | Wire | Reg | int | LiteralValue") -> tuple[Wire, Wire, int]:
+    def _align(
+        self,
+        other: "CycleAwareSignal | StateSignal | ForwardSignal | Wire | Reg | int | LiteralValue",
+    ) -> tuple[Wire, Wire, int]:
         if isinstance(other, ForwardSignal):
             return self._align(other._state._cas)
         if isinstance(other, StateSignal):
@@ -1226,16 +1314,24 @@ class CycleAwareSignal(Generic[DT]):
             ow = other.q if isinstance(other, Reg) else other
             oc = self._domain.cycle_index
         elif isinstance(other, int):
-            ow = self._domain._m.const(other, width=max(1, infer_literal_width(other, signed=other < 0)))
+            ow = self._domain._m.const(
+                other, width=max(1, infer_literal_width(other, signed=other < 0))
+            )
             oc = self._domain.cycle_index
         elif isinstance(other, LiteralValue):
-            lit_w = other.width if other.width is not None else infer_literal_width(int(other.value), signed=bool(other.signed))
+            lit_w = (
+                other.width
+                if other.width is not None
+                else infer_literal_width(int(other.value), signed=bool(other.signed))
+            )
             ow = self._domain._m.const(int(other.value), width=int(lit_w))
             oc = self._domain.cycle_index
         else:
             raise TypeError(f"unsupported operand: {type(other).__name__}")
         mx = max(self._cycle, oc)
-        aw = self._domain.delay_to(self._w, from_cycle=self._cycle, to_cycle=mx, width=self._w.width)
+        aw = self._domain.delay_to(
+            self._w, from_cycle=self._cycle, to_cycle=mx, width=self._w.width
+        )
         bw = self._domain.delay_to(ow, from_cycle=oc, to_cycle=mx, width=ow.width)
         a2, b2 = _promote_pair(self._domain._m, aw, bw)
         return a2, b2, mx
@@ -1281,11 +1377,15 @@ class CycleAwareSignal(Generic[DT]):
 
     def __truediv__(self, other: object) -> "CycleAwareSignal":
         _ = other
-        raise TypeError("hardware `/` division is not supported; use `//` for integer division")
+        raise TypeError(
+            "hardware `/` division is not supported; use `//` for integer division"
+        )
 
     def __rtruediv__(self, other: object) -> "CycleAwareSignal":
         _ = other
-        raise TypeError("hardware `/` division is not supported; use `//` for integer division")
+        raise TypeError(
+            "hardware `/` division is not supported; use `//` for integer division"
+        )
 
     def __and__(self, other: object) -> "CycleAwareSignal":
         a, b, c = self._align(other)  # type: ignore[arg-type]
@@ -1414,24 +1514,34 @@ class CycleAwareSignal(Generic[DT]):
 
     def lshr(self, *, amount: object) -> "CycleAwareSignal":
         if isinstance(amount, int):
-            return CycleAwareSignal(self._domain, self._w.lshr(amount=amount), self._cycle)
+            return CycleAwareSignal(
+                self._domain, self._w.lshr(amount=amount), self._cycle
+            )
         a, b, c = self._align(amount)  # type: ignore[arg-type]
         return CycleAwareSignal(self._domain, a.lshr(amount=b), c)
 
     def ashr(self, *, amount: object) -> "CycleAwareSignal":
         if isinstance(amount, int):
-            return CycleAwareSignal(self._domain, self._w.ashr(amount=amount), self._cycle)
+            return CycleAwareSignal(
+                self._domain, self._w.ashr(amount=amount), self._cycle
+            )
         a, b, c = self._align(amount)  # type: ignore[arg-type]
         return CycleAwareSignal(self._domain, a.ashr(amount=b), c)
 
     def trunc(self, width: int) -> "CycleAwareSignal":
-        return CycleAwareSignal(self._domain, self._w.trunc(width=int(width)), self._cycle)
+        return CycleAwareSignal(
+            self._domain, self._w.trunc(width=int(width)), self._cycle
+        )
 
     def zext(self, width: int) -> "CycleAwareSignal":
-        return CycleAwareSignal(self._domain, self._w.zext(width=int(width)), self._cycle)
+        return CycleAwareSignal(
+            self._domain, self._w.zext(width=int(width)), self._cycle
+        )
 
     def sext(self, width: int) -> "CycleAwareSignal":
-        return CycleAwareSignal(self._domain, self._w.sext(width=int(width)), self._cycle)
+        return CycleAwareSignal(
+            self._domain, self._w.sext(width=int(width)), self._cycle
+        )
 
     def slice(
         self,
@@ -1444,15 +1554,21 @@ class CycleAwareSignal(Generic[DT]):
         """Extract a range using legacy ``high, low`` or Wire-style ``lsb, width``."""
         if lsb is not None or width is not None:
             if high is not None or low is not None or lsb is None or width is None:
-                raise TypeError("slice() requires either (high, low) or keyword lsb=..., width=...")
+                raise TypeError(
+                    "slice() requires either (high, low) or keyword lsb=..., width=..."
+                )
             return CycleAwareSignal(
                 self._domain,
                 self._w.slice(lsb=int(lsb), width=int(width)),
                 self._cycle,
             )
         if high is None or low is None:
-            raise TypeError("slice() requires either (high, low) or keyword lsb=..., width=...")
-        return CycleAwareSignal(self._domain, self._w[int(low) : int(high) + 1], self._cycle)
+            raise TypeError(
+                "slice() requires either (high, low) or keyword lsb=..., width=..."
+            )
+        return CycleAwareSignal(
+            self._domain, self._w[int(low) : int(high) + 1], self._cycle
+        )
 
     def extract(self, *, lsb: int, width: int) -> "CycleAwareSignal":
         """Extract a scalar bit range or the corresponding range per Vector lane."""
@@ -1460,12 +1576,16 @@ class CycleAwareSignal(Generic[DT]):
 
     def lane(self, idx: int, *, width: int) -> "CycleAwareSignal":
         """ASL scaled slice ``x[idx *: width]`` — element-granular (keeps cycle)."""
-        return CycleAwareSignal(self._domain, self._w.lane(int(idx), width=int(width)), self._cycle)
+        return CycleAwareSignal(
+            self._domain, self._w.lane(int(idx), width=int(width)), self._cycle
+        )
 
     def select(self, true_val: object, false_val: object) -> "CycleAwareSignal":
         return mux(self, true_val, false_val)
 
-    def broadcast(self: "CycleAwareSignal[Vector[VT]]", *, size: int, dim: int) -> "CycleAwareSignal[Vector[Data]]":
+    def broadcast(
+        self: "CycleAwareSignal[Vector[VT]]", *, size: int, dim: int
+    ) -> "CycleAwareSignal[Vector[Data]]":
         return CycleAwareSignal(
             self.domain,
             self._w.broadcast(size=int(size), dim=int(dim)),
@@ -1549,7 +1669,9 @@ class CycleAwareSignal(Generic[DT]):
             default_w = default
             default_cycle = self.domain.cycle_index
         else:
-            raise TypeError("priority_mux default must be Wire, CycleAwareSignal, or None")
+            raise TypeError(
+                "priority_mux default must be Wire, CycleAwareSignal, or None"
+            )
 
         target_cycle = max(self.cycle, vals_cycle, default_cycle)
         sels_w = self.domain.delay_to(
@@ -1578,10 +1700,14 @@ class CycleAwareSignal(Generic[DT]):
         )
 
     def as_signed(self) -> "CycleAwareSignal":
-        return CycleAwareSignal(self._domain, Wire(self._domain._m, self._w.sig, signed=True), self._cycle)
+        return CycleAwareSignal(
+            self._domain, Wire(self._domain._m, self._w.sig, signed=True), self._cycle
+        )
 
     def as_unsigned(self) -> "CycleAwareSignal":
-        return CycleAwareSignal(self._domain, Wire(self._domain._m, self._w.sig, signed=False), self._cycle)
+        return CycleAwareSignal(
+            self._domain, Wire(self._domain._m, self._w.sig, signed=False), self._cycle
+        )
 
     def matches(self, pattern: str) -> "CycleAwareSignal":
         """ASL-style bit-mask match: ``(self & mask) == value`` (i1, same cycle)."""
@@ -1623,7 +1749,11 @@ class CycleAwareSignal(Generic[DT]):
         from .hw import _normalize_as_values
 
         val_set = _normalize_as_values(args, values)
-        given = [n for n, v in (("width", width), ("range", range), ("values", val_set)) if v is not None]
+        given = [
+            n
+            for n, v in (("width", width), ("range", range), ("values", val_set))
+            if v is not None
+        ]
         if len(given) != 1:
             raise TypeError(
                 "as_ requires exactly one of: positional value(s)/values=, width=, or range="
@@ -1640,9 +1770,11 @@ class CycleAwareSignal(Generic[DT]):
                 )
             if w == self._w.width:
                 return self
-            high = self._w[w:self._w.width]
+            high = self._w[w : self._w.width]
             cond = high == 0
-            self._domain._m.assert_(cond, msg=msg or f"as_: value does not fit in {w} bits")
+            self._domain._m.assert_(
+                cond, msg=msg or f"as_: value does not fit in {w} bits"
+            )
             return CycleAwareSignal(self._domain, self._w.trunc(width=w), self._cycle)
         lo, hi = range  # type: ignore[misc]
         return self.assert_range(lo, hi, msg=msg)
@@ -1651,12 +1783,16 @@ class CycleAwareSignal(Generic[DT]):
         """Alias for ``as_(width=..)``."""
         return self.as_(width=width, msg=msg)
 
-    def assert_range(self, lo: int, hi: int, *, msg: str | None = None) -> "CycleAwareSignal":
+    def assert_range(
+        self, lo: int, hi: int, *, msg: str | None = None
+    ) -> "CycleAwareSignal":
         """Assert (unsigned) ``lo <= self <= hi``; returns self (cycle kept)."""
         self._w.assert_range(int(lo), int(hi), msg=msg)
         return self
 
-    def assert_in(self, values: "Iterable[int]", *, msg: str | None = None) -> "CycleAwareSignal":
+    def assert_in(
+        self, values: "Iterable[int]", *, msg: str | None = None
+    ) -> "CycleAwareSignal":
         """Assert ``self`` equals one of ``values``; returns self (cycle kept)."""
         self._w.assert_in(values, msg=msg)
         return self
@@ -1683,15 +1819,27 @@ def mux(cond: Wire, a: Union[Wire, int], b: Union[Wire, int]) -> Wire: ...
 
 
 @overload
-def mux(cond: Union[CycleAwareSignal, StateSignal, ForwardSignal], a: Union[Wire, int, CycleAwareSignal, StateSignal, ForwardSignal], b: Union[Wire, int, CycleAwareSignal, StateSignal, ForwardSignal]) -> CycleAwareSignal: ...
+def mux(
+    cond: Union[CycleAwareSignal, StateSignal, ForwardSignal],
+    a: Union[Wire, int, CycleAwareSignal, StateSignal, ForwardSignal],
+    b: Union[Wire, int, CycleAwareSignal, StateSignal, ForwardSignal],
+) -> CycleAwareSignal: ...
 
 
 @overload
-def mux(cond: Wire, a: Union[CycleAwareSignal, StateSignal, ForwardSignal], b: Union[Wire, int, CycleAwareSignal, StateSignal, ForwardSignal]) -> CycleAwareSignal: ...
+def mux(
+    cond: Wire,
+    a: Union[CycleAwareSignal, StateSignal, ForwardSignal],
+    b: Union[Wire, int, CycleAwareSignal, StateSignal, ForwardSignal],
+) -> CycleAwareSignal: ...
 
 
 @overload
-def mux(cond: Wire, a: Union[Wire, int, CycleAwareSignal, StateSignal, ForwardSignal], b: Union[CycleAwareSignal, StateSignal, ForwardSignal]) -> CycleAwareSignal: ...
+def mux(
+    cond: Wire,
+    a: Union[Wire, int, CycleAwareSignal, StateSignal, ForwardSignal],
+    b: Union[CycleAwareSignal, StateSignal, ForwardSignal],
+) -> CycleAwareSignal: ...
 
 
 def mux(
@@ -1699,16 +1847,21 @@ def mux(
     a: Union[Wire, CycleAwareSignal, StateSignal, ForwardSignal, int],
     b: Union[Wire, CycleAwareSignal, StateSignal, ForwardSignal, int],
 ) -> Wire | CycleAwareSignal:
-    def _unwrap(v: Union[Wire, CycleAwareSignal, StateSignal, ForwardSignal]) -> Union[Wire, CycleAwareSignal]:
+    def _unwrap(
+        v: Union[Wire, CycleAwareSignal, StateSignal, ForwardSignal]
+    ) -> Union[Wire, CycleAwareSignal]:
         if isinstance(v, ForwardSignal):
             return v._state._cas
         if isinstance(v, StateSignal):
             return v._cas
         return v
+
     raw_cond = _unwrap(cond)
     raw_a = a if isinstance(a, int) else _unwrap(a)
     raw_b = b if isinstance(b, int) else _unwrap(b)
-    if not any(isinstance(value, CycleAwareSignal) for value in (raw_cond, raw_a, raw_b)):
+    if not any(
+        isinstance(value, CycleAwareSignal) for value in (raw_cond, raw_a, raw_b)
+    ):
         raw_cond = cast(Wire, raw_cond)
         if raw_cond.width != 1:
             raise TypeError(f"mux() condition must be i1, got {raw_cond.ty}")
@@ -1733,7 +1886,9 @@ def _mux_cycle_aware(
     dom = pick_dom()
     m = dom._m
 
-    def to_cas(x: Union[Wire, Reg, CycleAwareSignal, int, LiteralValue]) -> CycleAwareSignal:
+    def to_cas(
+        x: Union[Wire, Reg, CycleAwareSignal, int, LiteralValue]
+    ) -> CycleAwareSignal:
         if isinstance(x, CycleAwareSignal):
             return x
         if isinstance(x, Reg):
@@ -1744,7 +1899,11 @@ def _mux_cycle_aware(
             w = m.const(x, width=max(1, infer_literal_width(x, signed=x < 0)))
             return CycleAwareSignal(dom, w, dom.cycle_index)
         if isinstance(x, LiteralValue):
-            lw = x.width if x.width is not None else infer_literal_width(int(x.value), signed=bool(x.signed))
+            lw = (
+                x.width
+                if x.width is not None
+                else infer_literal_width(int(x.value), signed=bool(x.signed))
+            )
             w = m.const(int(x.value), width=int(lw))
             return CycleAwareSignal(dom, w, dom.cycle_index)
         raise TypeError(f"mux: unsupported value {type(x).__name__}")
@@ -1799,7 +1958,9 @@ def priority_mux(
     return sels_cas.priority_mux(vals_cas, mode=mode, default=default_cas)
 
 
-def cat(*elems: Union[Wire, Reg, CycleAwareSignal, StateSignal, ForwardSignal, int]) -> CycleAwareSignal:
+def cat(
+    *elems: Union[Wire, Reg, CycleAwareSignal, StateSignal, ForwardSignal, int]
+) -> Wire | CycleAwareSignal:
     """Concatenate values into a packed bus (MSB-first).
 
     Cycle-aware variant of :func:`pycircuit.cat`: every element is coerced via
@@ -1817,10 +1978,9 @@ def cat(*elems: Union[Wire, Reg, CycleAwareSignal, StateSignal, ForwardSignal, i
             dom = CycleAwareSignal.as_cas(_v).domain
             break
     if dom is None:
-        raise TypeError(
-            "cat/priority_mux: at least one operand must be cycle-aware "
-            "(CycleAwareSignal / StateSignal / ForwardSignal) to anchor the domain"
-        )
+        from .hw import cat as wire_cat
+
+        return wire_cat(*elems)
     cas_elems = [CycleAwareSignal.as_cas(e, domain=dom) for e in elems]
     target_cycle = 0
     for c in cas_elems:
@@ -1828,7 +1988,9 @@ def cat(*elems: Union[Wire, Reg, CycleAwareSignal, StateSignal, ForwardSignal, i
     aligned: list[Wire] = []
     for c in cas_elems:
         w = _to_wire(c)
-        aligned.append(dom.delay_to(w, from_cycle=c.cycle, to_cycle=target_cycle, width=w.width))
+        aligned.append(
+            dom.delay_to(w, from_cycle=c.cycle, to_cycle=target_cycle, width=w.width)
+        )
     packed = dom._m.cat(*aligned)
     return CycleAwareSignal(dom, packed, target_cycle)
 
@@ -1846,11 +2008,15 @@ def cas(
     :meth:`CycleAwareSignal.as_cas` instead.
     """
     if isinstance(w, (CycleAwareSignal, StateSignal, ForwardSignal)):
-        raise TypeError(f"cas() expects Wire, Reg, int, or LiteralValue; got {type(w).__name__} (use CycleAwareSignal.as_cas)")
+        raise TypeError(
+            f"cas() expects Wire, Reg, int, or LiteralValue; got {type(w).__name__} (use CycleAwareSignal.as_cas)"
+        )
     return CycleAwareSignal.as_cas(w, domain=domain, cycle=cycle)
 
 
-def _strip_domain_for_jit(fn: Callable[..., Any], *, domain_name: str) -> Callable[..., Any]:
+def _strip_domain_for_jit(
+    fn: Callable[..., Any], *, domain_name: str
+) -> Callable[..., Any]:
     """Drop the ``domain`` parameter for JIT and prepend ``domain = m.create_domain(...)``."""
     try:
         source = textwrap.dedent(inspect.getsource(fn))
@@ -1868,10 +2034,14 @@ def _strip_domain_for_jit(fn: Callable[..., Any], *, domain_name: str) -> Callab
             fdef = node
             break
     if fdef is None:
-        raise TypeError(f"compile_cycle_aware: could not find def {name!r} in source of {fn!r}")
+        raise TypeError(
+            f"compile_cycle_aware: could not find def {name!r} in source of {fn!r}"
+        )
     pos = fdef.args.args
     if len(pos) < 2:
-        raise TypeError("compile_cycle_aware(fn): source must declare at least (m, domain, ...)")
+        raise TypeError(
+            "compile_cycle_aware(fn): source must declare at least (m, domain, ...)"
+        )
     m_arg = pos[0].arg
     if pos[1].arg != "domain":
         raise TypeError(
@@ -1932,12 +2102,17 @@ def compile_cycle_aware(
     ``emit_mlir()`` emits a multi-module ``Design``.
     """
     if eager:
-        circuit_name = name if isinstance(name, str) and name.strip() else getattr(fn, "__name__", "design") or "design"
+        circuit_name = (
+            name
+            if isinstance(name, str) and name.strip()
+            else getattr(fn, "__name__", "design") or "design"
+        )
         m = CycleAwareCircuit(str(circuit_name), design_ctx=design_ctx)
         dom = m.create_domain(str(domain_name))
 
         if hierarchical:
             from .design import Design
+
             design = Design(top=str(circuit_name))
             dom._hierarchical = True
             dom._design = design
@@ -1965,7 +2140,11 @@ def compile_cycle_aware(
     else:
         sym = str(name).strip()
 
-    struc = bool(getattr(fn, "__pycircuit_emit_structural__", False)) if structural is None else bool(structural)
+    struc = (
+        bool(getattr(fn, "__pycircuit_emit_structural__", False))
+        if structural is None
+        else bool(structural)
+    )
 
     if value_params is None:
         vp_raw = getattr(fn, "__pycircuit_value_params__", None)
@@ -2082,7 +2261,9 @@ class _SignalSlice:
     def __call__(self, *, value: Any = 0, name: str = "") -> CycleAwareSignal:
         dom = _current_domain()
         if dom is None:
-            raise RuntimeError("signal[...](...) requires an active pyc_CircuitModule.module() context")
+            raise RuntimeError(
+                "signal[...](...) requires an active pyc_CircuitModule.module() context"
+            )
         w = _materialize_signal_value(dom, value, self.width, str(name))
         return CycleAwareSignal(dom, w, dom.cycle_index)
 
@@ -2116,15 +2297,23 @@ class signal(metaclass=_SignalMeta):
 def _signal_plain(*, value: Any = 0, name: str = "") -> CycleAwareSignal:
     dom = _current_domain()
     if dom is None:
-        raise RuntimeError("signal(value=...) requires an active pyc_CircuitModule.module() context")
+        raise RuntimeError(
+            "signal(value=...) requires an active pyc_CircuitModule.module() context"
+        )
     w = _materialize_signal_value(dom, value, None, str(name))
     return CycleAwareSignal(dom, w, dom.cycle_index)
 
 
-def _materialize_signal_value(dom: CycleAwareDomain, value: Any, width: int | None, name: str) -> Wire:
+def _materialize_signal_value(
+    dom: CycleAwareDomain, value: Any, width: int | None, name: str
+) -> Wire:
     m = dom._m
     if isinstance(value, int):
-        w = infer_literal_width(int(value), signed=(int(value) < 0)) if width is None else int(width)
+        w = (
+            infer_literal_width(int(value), signed=(int(value) < 0))
+            if width is None
+            else int(width)
+        )
         return m.const(int(value), width=w)
     if isinstance(value, str):
         base = str(value).strip()
@@ -2140,6 +2329,7 @@ def _materialize_signal_value(dom: CycleAwareDomain, value: Any, width: int | No
 # ---------------------------------------------------------------------------
 # V5 Cycle-Aware Testbench wrapper
 # ---------------------------------------------------------------------------
+
 
 class CycleAwareTb:
     """V5 cycle-aware testbench wrapper.
@@ -2247,7 +2437,9 @@ class CycleAwareTb:
 
     # -- stimulus / check (cycle-relative) ----------------------------------
 
-    def drive(self, port: str, value: "int | bool | list[int] | tuple[int, ...]") -> None:
+    def drive(
+        self, port: str, value: "int | bool | list[int] | tuple[int, ...]"
+    ) -> None:
         """Drive *port* at the current cycle.
 
         - ``int`` / ``bool``: passed straight through (scalar port, or a
@@ -2271,7 +2463,9 @@ class CycleAwareTb:
         packed = self._coerce_value(port, value)
         self._t.expect(port, packed, at=self._cycle, phase=phase, msg=msg)
 
-    def _coerce_value(self, port: str, value: "int | bool | list[int] | tuple[int, ...]") -> int:
+    def _coerce_value(
+        self, port: str, value: "int | bool | list[int] | tuple[int, ...]"
+    ) -> int:
         """Translate a drive/expect value into the integer the backend expects."""
         if isinstance(value, (bool, int)):
             return int(value)
@@ -2323,5 +2517,3 @@ def _pack_lanes(leaf_w: int, lanes: list[int]) -> int:
     for i, x in enumerate(lanes):
         v |= (int(x) & mask) << (i * leaf_w)
     return v
-
-

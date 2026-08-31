@@ -1188,10 +1188,12 @@ else
 fi
 
 pyc_log "running decision status coverage gate"
+decision_rfc="${PYC_ROOT_DIR}/docs/rfcs/pyc4.0-decisions.md"
 decision_status="${PYC_ROOT_DIR}/docs/gates/decision_status_v40.md"
 decision_report="${gate_out_dir}/decision_status_report.json"
 decision_status_strict="${PYC_DECISION_STATUS_STRICT:-1}"
 decision_status_args=(
+  --rfc "${decision_rfc}"
   --status "${decision_status}"
   --out "${decision_report}"
 )

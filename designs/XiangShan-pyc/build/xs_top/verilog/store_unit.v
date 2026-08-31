@@ -166,4 +166,3 @@ assign store_unit_wb_rob_idx = store_unit_s1_rob;
 assign store_unit_tlb_miss = pyc_comb_34;
 
 endmodule
-

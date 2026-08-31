@@ -36,4 +36,3 @@ assign pyc_comb_11 = pyc_add_10;
 assign acc = pyc_comb_11;
 
 endmodule
-

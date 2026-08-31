@@ -15,6 +15,7 @@ Key features:
   F-UB-005  Two-stage training pipeline (t0 read / t1 write-back)
   F-UB-006  Always-taken prediction strategy
 """
+
 from __future__ import annotations
 
 import math
@@ -30,12 +31,10 @@ from pycircuit import (
     CycleAwareDomain,
     CycleAwareSignal,
     cas,
-    compile_cycle_aware,
     mux,
     u,
     wire_of,
 )
-
 from top.parameters import (
     BRANCH_TYPE_WIDTH,
     CFI_POSITION_WIDTH,
@@ -73,26 +72,54 @@ def ubtb(
     useful_mid = 1 << (useful_cnt_width - 1)
 
     # ── Cycle 0 (s0): Inputs ─────────────────────────────────────────
-    s0_fire = (_in["s0_fire"] if "s0_fire" in _in else
-        cas(domain, m.input(f"{prefix}_s0_fire", width=1), cycle=0))
-    s0_pc = (_in["s0_pc"] if "s0_pc" in _in else
-        cas(domain, m.input(f"{prefix}_s0_pc", width=pc_width), cycle=0))
-    enable = (_in["enable"] if "enable" in _in else
-        cas(domain, m.input(f"{prefix}_enable", width=1), cycle=0))
+    s0_fire = (
+        _in["s0_fire"]
+        if "s0_fire" in _in
+        else cas(domain, m.input(f"{prefix}_s0_fire", width=1), cycle=0)
+    )
+    s0_pc = (
+        _in["s0_pc"]
+        if "s0_pc" in _in
+        else cas(domain, m.input(f"{prefix}_s0_pc", width=pc_width), cycle=0)
+    )
+    enable = (
+        _in["enable"]
+        if "enable" in _in
+        else cas(domain, m.input(f"{prefix}_enable", width=1), cycle=0)
+    )
 
-    train_valid = (_in["train_valid"] if "train_valid" in _in else
-
-        cas(domain, m.input(f"{prefix}_train_valid", width=1), cycle=0))
-    train_pc = (_in["train_pc"] if "train_pc" in _in else
-        cas(domain, m.input(f"{prefix}_train_pc", width=pc_width), cycle=0))
-    train_target = (_in["train_target"] if "train_target" in _in else
-        cas(domain, m.input(f"{prefix}_train_target", width=pc_width), cycle=0))
-    train_taken = (_in["train_taken"] if "train_taken" in _in else
-        cas(domain, m.input(f"{prefix}_train_taken", width=1), cycle=0))
-    train_cfi_pos = (_in["train_cfi_pos"] if "train_cfi_pos" in _in else
-        cas(domain, m.input(f"{prefix}_train_cfi_pos", width=cfi_pos_width), cycle=0))
-    train_attr = (_in["train_attr"] if "train_attr" in _in else
-        cas(domain, m.input(f"{prefix}_train_attr", width=attr_width), cycle=0))
+    train_valid = (
+        _in["train_valid"]
+        if "train_valid" in _in
+        else cas(domain, m.input(f"{prefix}_train_valid", width=1), cycle=0)
+    )
+    train_pc = (
+        _in["train_pc"]
+        if "train_pc" in _in
+        else cas(domain, m.input(f"{prefix}_train_pc", width=pc_width), cycle=0)
+    )
+    train_target = (
+        _in["train_target"]
+        if "train_target" in _in
+        else cas(domain, m.input(f"{prefix}_train_target", width=pc_width), cycle=0)
+    )
+    train_taken = (
+        _in["train_taken"]
+        if "train_taken" in _in
+        else cas(domain, m.input(f"{prefix}_train_taken", width=1), cycle=0)
+    )
+    train_cfi_pos = (
+        _in["train_cfi_pos"]
+        if "train_cfi_pos" in _in
+        else cas(
+            domain, m.input(f"{prefix}_train_cfi_pos", width=cfi_pos_width), cycle=0
+        )
+    )
+    train_attr = (
+        _in["train_attr"]
+        if "train_attr" in _in
+        else cas(domain, m.input(f"{prefix}_train_attr", width=attr_width), cycle=0)
+    )
 
     zero1 = cas(domain, m.const(0, width=1), cycle=0)
     one1 = cas(domain, m.const(1, width=1), cycle=0)
@@ -107,12 +134,30 @@ def ubtb(
     s0_tag = s0_pc[1 : 1 + tag_width]
 
     # ── Entry storage ─────────────────────────────────────────────────
-    ev = [domain.signal(width=1, reset_value=0, name=f"{prefix}_ev_{i}") for i in range(entries)]
-    et = [domain.signal(width=tag_width, reset_value=0, name=f"{prefix}_et_{i}") for i in range(entries)]
-    etar = [domain.signal(width=target_width, reset_value=0, name=f"{prefix}_etar_{i}") for i in range(entries)]
-    epos = [domain.signal(width=cfi_pos_width, reset_value=0, name=f"{prefix}_epos_{i}") for i in range(entries)]
-    eattr = [domain.signal(width=attr_width, reset_value=0, name=f"{prefix}_eattr_{i}") for i in range(entries)]
-    eu = [domain.signal(width=useful_cnt_width, reset_value=0, name=f"{prefix}_eu_{i}") for i in range(entries)]
+    ev = [
+        domain.signal(width=1, reset_value=0, name=f"{prefix}_ev_{i}")
+        for i in range(entries)
+    ]
+    et = [
+        domain.signal(width=tag_width, reset_value=0, name=f"{prefix}_et_{i}")
+        for i in range(entries)
+    ]
+    etar = [
+        domain.signal(width=target_width, reset_value=0, name=f"{prefix}_etar_{i}")
+        for i in range(entries)
+    ]
+    epos = [
+        domain.signal(width=cfi_pos_width, reset_value=0, name=f"{prefix}_epos_{i}")
+        for i in range(entries)
+    ]
+    eattr = [
+        domain.signal(width=attr_width, reset_value=0, name=f"{prefix}_eattr_{i}")
+        for i in range(entries)
+    ]
+    eu = [
+        domain.signal(width=useful_cnt_width, reset_value=0, name=f"{prefix}_eu_{i}")
+        for i in range(entries)
+    ]
 
     # ── s0: Full-associative tag comparison ───────────────────────────
     hit_vec = []
@@ -127,7 +172,9 @@ def ubtb(
 
     s0_hit_idx = zero_idx
     for i in reversed(range(entries)):
-        s0_hit_idx = mux(hit_vec[i], cas(domain, m.const(i, width=idx_w), cycle=0), s0_hit_idx)
+        s0_hit_idx = mux(
+            hit_vec[i], cas(domain, m.const(i, width=idx_w), cycle=0), s0_hit_idx
+        )
 
     # Read hit entry via mux chain
     s0_hit_target = zero_target_w
@@ -139,7 +186,7 @@ def ubtb(
         s0_hit_attr = mux(hit_vec[i], eattr[i], s0_hit_attr)
 
     # Reconstruct full target: { pc_upper, target_lower }
-    pc_upper = s0_pc[target_width : pc_width]
+    pc_upper = s0_pc[target_width:pc_width]
     s0_full_target = cas(
         domain,
         (wire_of(pc_upper) << target_width) | (wire_of(s0_hit_target) + u(pc_width, 0)),
@@ -161,7 +208,7 @@ def ubtb(
 
     # ── Training: tag / target extraction ─────────────────────────────
     t0_tag = train_pc[1 : 1 + tag_width]
-    t0_target_lower = train_target[0 : target_width]
+    t0_target_lower = train_target[0:target_width]
 
     t0_hit_vec = []
     for i in range(entries):
@@ -174,7 +221,9 @@ def ubtb(
 
     t0_hit_idx = zero_idx
     for i in reversed(range(entries)):
-        t0_hit_idx = mux(t0_hit_vec[i], cas(domain, m.const(i, width=idx_w), cycle=0), t0_hit_idx)
+        t0_hit_idx = mux(
+            t0_hit_vec[i], cas(domain, m.const(i, width=idx_w), cycle=0), t0_hit_idx
+        )
 
     # Victim: first entry with useful == 0, or first invalid
     victim_idx = cas(domain, m.const(entries - 1, width=idx_w), cycle=0)
@@ -182,7 +231,9 @@ def ubtb(
         not_useful = eu[i] == zero_useful
         not_valid = ~ev[i]
         pick = not_useful | not_valid
-        victim_idx = mux(pick, cas(domain, m.const(i, width=idx_w), cycle=0), victim_idx)
+        victim_idx = mux(
+            pick, cas(domain, m.const(i, width=idx_w), cycle=0), victim_idx
+        )
 
     t0_fire = train_valid & enable
     t0_allocate = t0_fire & (~t0_hit) & train_taken
@@ -206,19 +257,35 @@ def ubtb(
     is_max = t0_old_useful == useful_max_c
     is_zero = t0_old_useful == zero_useful
 
-    useful_inc = mux(is_max, useful_max_c,
-                     cas(domain, (wire_of(t0_old_useful) + wire_of(useful_one))[0:useful_cnt_width], cycle=0))
-    useful_dec = mux(is_zero, zero_useful,
-                     cas(domain, (wire_of(t0_old_useful) - wire_of(useful_one))[0:useful_cnt_width], cycle=0))
+    useful_inc = mux(
+        is_max,
+        useful_max_c,
+        cas(
+            domain,
+            (wire_of(t0_old_useful) + wire_of(useful_one))[0:useful_cnt_width],
+            cycle=0,
+        ),
+    )
+    useful_dec = mux(
+        is_zero,
+        zero_useful,
+        cas(
+            domain,
+            (wire_of(t0_old_useful) - wire_of(useful_one))[0:useful_cnt_width],
+            cycle=0,
+        ),
+    )
 
     target_same = t0_old_target == t0_target_lower
 
-    new_useful = mux(t0_hit,
-                     mux(train_taken & target_same, useful_inc, useful_dec),
-                     useful_init_val)
+    new_useful = mux(
+        t0_hit, mux(train_taken & target_same, useful_inc, useful_dec), useful_init_val
+    )
 
     for i in range(entries):
-        we = t0_do_write & (t0_write_idx == cas(domain, m.const(i, width=idx_w), cycle=0))
+        we = t0_do_write & (
+            t0_write_idx == cas(domain, m.const(i, width=idx_w), cycle=0)
+        )
         ev[i].assign(mux(we, one1, ev[i]), when=we)
         et[i].assign(mux(we, t0_tag, et[i]), when=we)
         etar[i].assign(mux(we, t0_target_lower, etar[i]), when=we)
@@ -232,7 +299,4 @@ ubtb.__pycircuit_name__ = "ubtb"
 
 
 if __name__ == "__main__":
-    print(compile_cycle_aware(
-        ubtb, name="ubtb", eager=True,
-        entries=UBTB_NUM_ENTRIES,
-    ).emit_mlir())
+    pass

@@ -7825,4 +7825,3 @@ assign ftq_bpu_ptr_out = pyc_comb_818;
 assign ftq_commit_ptr_out = pyc_comb_820;
 
 endmodule
-

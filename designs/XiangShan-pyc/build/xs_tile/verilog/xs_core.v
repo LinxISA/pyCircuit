@@ -901,4 +901,3 @@ assign xs_core_rob_wb_rob_idx_1 = xs_core_wb_rob_idx_1;
 assign xs_core_debug_pc = pyc_comb_20;
 
 endmodule
-

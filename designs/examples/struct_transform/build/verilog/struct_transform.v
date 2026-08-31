@@ -117,4 +117,3 @@ assign out_u_hdr_op = st_u_hdr_op;
 assign out_u_payload_word = pyc_comb_24;
 
 endmodule
-

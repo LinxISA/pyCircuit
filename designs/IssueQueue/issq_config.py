@@ -2,11 +2,18 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from pycircuit import Circuit, Tb, compile, const, ct, function, module, spec, testbench, u
+from pycircuit import (
+    Circuit,
+    const,
+    ct,
+    function,
+    spec,
+    u,
+)
 from pycircuit.v5 import mux
 
 
-@dataclass
+@dataclass(frozen=True)
 class IqCfg:
     entries: int
     ptag_count: int
@@ -84,18 +91,13 @@ def _uop_spec(m: Circuit, cfg: IqCfg):
 @const
 def _entry_spec(m: Circuit, cfg: IqCfg):
     uop = _uop_spec(m, cfg)
-    return (
-        spec.struct("iq_entry")
-        .field("valid", width=1)
-        .nested("uop", uop)
-        .build()
-    )
+    return spec.struct("iq_entry").field("valid", width=1).nested("uop", uop).build()
 
 
 @function
 def _onehot_mux(m: Circuit, sel: list, vals: list, width: int):
     out = m.const(0, width=int(width))
-    for s, v in zip(sel, vals):
+    for s, v in zip(sel, vals, strict=True):
         out = mux(s, v, out)
     return out
 
@@ -116,7 +118,9 @@ def _not1(m: Circuit, x):
 
 
 @function
-def _ready_lookup(m: Circuit, ready_state: list, ptag_wire, ptag_w: int, ptag_count: int):
+def _ready_lookup(
+    m: Circuit, ready_state: list, ptag_wire, ptag_w: int, ptag_count: int
+):
     _ = m
     hit = u(1, 0)
     for t in range(int(ptag_count)):
@@ -125,7 +129,9 @@ def _ready_lookup(m: Circuit, ready_state: list, ptag_wire, ptag_w: int, ptag_co
 
 
 @function
-def _wake_hit(m: Circuit, wake_valid: list, wake_ptag: list, ptag_wire, issue_ports: int):
+def _wake_hit(
+    m: Circuit, wake_valid: list, wake_ptag: list, ptag_wire, issue_ports: int
+):
     _ = m
     h = u(1, 0)
     for k in range(int(issue_ports)):
@@ -134,7 +140,15 @@ def _wake_hit(m: Circuit, wake_valid: list, wake_ptag: list, ptag_wire, issue_po
 
 
 @function
-def _alloc_field(m: Circuit, enq_uops: list, alloc_lane: list, slot: int, path: str, width: int, enq_ports: int):
+def _alloc_field(
+    m: Circuit,
+    enq_uops: list,
+    alloc_lane: list,
+    slot: int,
+    path: str,
+    width: int,
+    enq_ports: int,
+):
     vals = [enq_uops[k][path].read() for k in range(int(enq_ports))]
     sels = [alloc_lane[k][int(slot)] for k in range(int(enq_ports))]
     return _onehot_mux(m, sels, vals, int(width))
@@ -233,7 +247,9 @@ def _tb_make_stream(*, seed: int, ptag_count: int, payload_base: int) -> list[Tb
     ]
 
 
-def _tb_select_oldest(ready: list[bool], age: list[list[bool]], issue_ports: int) -> list[int | None]:
+def _tb_select_oldest(
+    ready: list[bool], age: list[list[bool]], issue_ports: int
+) -> list[int | None]:
     rem = list(ready)
     winners: list[int | None] = []
     for _ in range(issue_ports):

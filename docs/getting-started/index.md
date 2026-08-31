@@ -5,7 +5,7 @@ Welcome to the pyCircuit getting started guide! This section will help you set u
 ## Prerequisites
 
 - Python 3.10 or later
-- LLVM/MLIR 19 (for compiler backend)
+- LLVM/MLIR 22 (for compiler backend)
 - CMake 3.20+
 - Ninja build system
 
@@ -24,11 +24,11 @@ Welcome to the pyCircuit getting started guide! This section will help you set u
 sudo apt-get install cmake ninja-build python3 python3-pip clang wget
 wget https://apt.llvm.org/llvm.sh
 chmod +x llvm.sh
-sudo ./llvm.sh 19
-sudo apt-get install llvm-19-dev mlir-19-tools libmlir-19-dev
+sudo ./llvm.sh 22
+sudo apt-get install llvm-22-dev mlir-22-tools libmlir-22-dev
 
 # Clone and build
-git clone https://github.com/LinxISA/pyCircuit.git
+git clone https://github.com/PTO-ISA/pyCircuit.git
 cd pyCircuit
 
 # Build the compiler

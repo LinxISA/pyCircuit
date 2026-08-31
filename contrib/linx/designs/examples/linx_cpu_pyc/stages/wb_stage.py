@@ -1,9 +1,52 @@
 from __future__ import annotations
+
 from dataclasses import dataclass
-from pycircuit import Circuit, Wire, function, u
-from pycircuit import unsigned
-from ..isa import BK_CALL, BK_COND, BK_ICALL, BK_IND, BK_DIRECT, BK_FALL, BK_RET, OP_BSTART_STD_CALL, OP_BSTART_STD_COND, OP_BSTART_STD_DIRECT, OP_BSTART_STD_FALL, OP_C_BSTART_COND, OP_C_BSTART_DIRECT, OP_C_BSTART_STD, OP_C_LWI, OP_C_SETC_EQ, OP_C_SETC_NE, OP_C_SETC_TGT, OP_C_BSTOP, OP_FENTRY, OP_FEXIT, OP_FRET_RA, OP_FRET_STK, OP_SETC_AND, OP_SETC_ANDI, OP_SETC_EQ, OP_SETC_EQI, OP_SETC_GE, OP_SETC_GEI, OP_SETC_GEU, OP_SETC_GEUI, OP_SETC_LT, OP_SETC_LTI, OP_SETC_LTU, OP_SETC_LTUI, OP_SETC_NE, OP_SETC_NEI, OP_SETC_OR, OP_SETC_ORI
+
+from pycircuit import Circuit, Wire, function, u, unsigned
+
+from ..isa import (
+    BK_CALL,
+    BK_COND,
+    BK_DIRECT,
+    BK_FALL,
+    BK_ICALL,
+    BK_IND,
+    BK_RET,
+    OP_BSTART_STD_CALL,
+    OP_BSTART_STD_COND,
+    OP_BSTART_STD_DIRECT,
+    OP_BSTART_STD_FALL,
+    OP_BSTART_STD_ICALL,
+    OP_C_BSTART_COND,
+    OP_C_BSTART_DIRECT,
+    OP_C_BSTART_STD,
+    OP_C_BSTOP,
+    OP_C_SETC_EQ,
+    OP_C_SETC_NE,
+    OP_C_SETC_TGT,
+    OP_FENTRY,
+    OP_FEXIT,
+    OP_FRET_RA,
+    OP_FRET_STK,
+    OP_SETC_AND,
+    OP_SETC_ANDI,
+    OP_SETC_EQ,
+    OP_SETC_EQI,
+    OP_SETC_GE,
+    OP_SETC_GEI,
+    OP_SETC_GEU,
+    OP_SETC_GEUI,
+    OP_SETC_LT,
+    OP_SETC_LTI,
+    OP_SETC_LTU,
+    OP_SETC_LTUI,
+    OP_SETC_NE,
+    OP_SETC_NEI,
+    OP_SETC_OR,
+    OP_SETC_ORI,
+)
 from ..pipeline import CoreState, MemWbRegs
+
 
 @dataclass(frozen=True)
 class WbControl:
@@ -14,24 +57,26 @@ class WbControl:
     ra_write_valid: Wire
     ra_write_value: Wire
 
+
 @function
-def build_wb_stage(m: Circuit, *, do_wb: Wire, state: CoreState, memwb: MemWbRegs) -> WbControl:
+def build_wb_stage(
+    m: Circuit, *, do_wb: Wire, state: CoreState, memwb: MemWbRegs
+) -> WbControl:
     boundary_valid = u(1, 0)
     br_take = u(1, 0)
     next_pc = u(64, 0)
     target_pc = u(64, 0)
-    with m.scope('WB'):
+    with m.scope("WB"):
         br_kind = state.br_kind.out()
         br_base_pc = state.br_base_pc.out()
         br_off = state.br_off.out()
         commit_cond = state.commit_cond.out()
         commit_tgt = state.commit_tgt.out()
+        icall_tgt = state.icall_tgt.out()
         pc = memwb.pc.out()
         op = memwb.op.out()
         len_bytes = memwb.len_bytes.out()
-        regdst = memwb.regdst.out()
         value = memwb.value.out()
-        is_store = memwb.is_store.out()
         op_c_bstart_std = op == OP_C_BSTART_STD
         op_c_bstart_cond = op == OP_C_BSTART_COND
         op_c_bstart_direct = op == OP_C_BSTART_DIRECT
@@ -39,13 +84,24 @@ def build_wb_stage(m: Circuit, *, do_wb: Wire, state: CoreState, memwb: MemWbReg
         op_bstart_std_direct = op == OP_BSTART_STD_DIRECT
         op_bstart_std_cond = op == OP_BSTART_STD_COND
         op_bstart_call = op == OP_BSTART_STD_CALL
+        op_bstart_icall = op == OP_BSTART_STD_ICALL
         op_c_bstop = op == OP_C_BSTOP
         op_fentry = op == OP_FENTRY
         op_fexit = op == OP_FEXIT
         op_fret_ra = op == OP_FRET_RA
         op_fret_stk = op == OP_FRET_STK
         op_is_macro = op_fentry | op_fexit | op_fret_ra | op_fret_stk
-        op_is_start_marker = op_c_bstart_std | op_c_bstart_cond | op_c_bstart_direct | op_bstart_std_fall | op_bstart_std_direct | op_bstart_std_cond | op_bstart_call | op_is_macro
+        op_is_start_marker = (
+            op_c_bstart_std
+            | op_c_bstart_cond
+            | op_c_bstart_direct
+            | op_bstart_std_fall
+            | op_bstart_std_direct
+            | op_bstart_std_cond
+            | op_bstart_call
+            | op_bstart_icall
+            | op_is_macro
+        )
         op_is_boundary = op_is_start_marker | op_c_bstop
         br_is_cond = br_kind == BK_COND
         br_is_call = br_kind == BK_CALL
@@ -54,11 +110,20 @@ def build_wb_stage(m: Circuit, *, do_wb: Wire, state: CoreState, memwb: MemWbReg
         br_is_ind = br_kind == BK_IND
         br_is_icall = br_kind == BK_ICALL
         br_target_pc = br_base_pc + br_off
-        if br_is_ret | br_is_ind | br_is_icall:
+        if br_is_ret | br_is_ind:
             br_target_pc = commit_tgt
+        if br_is_icall:
+            br_target_pc = icall_tgt
         if ~(br_is_ret | br_is_ind | br_is_icall) & (commit_tgt != 0):
             br_target_pc = commit_tgt
-        br_take = br_is_call | br_is_direct | br_is_ind | br_is_icall | br_is_cond & commit_cond | br_is_ret & commit_cond
+        br_take = (
+            br_is_call
+            | br_is_direct
+            | br_is_ind
+            | br_is_icall
+            | br_is_cond & commit_cond
+            | br_is_ret & commit_cond
+        )
         boundary_valid = do_wb & op_is_boundary
         take_event = boundary_valid & br_take
         fallthrough_pc = pc + unsigned(len_bytes)
@@ -69,6 +134,8 @@ def build_wb_stage(m: Circuit, *, do_wb: Wire, state: CoreState, memwb: MemWbReg
             ra_fallthrough = pc + unsigned(len_bytes)
         ra_write_valid = take_event & (br_is_call | br_is_icall)
         ra_write_value = ra_fallthrough
+        if br_is_icall:
+            ra_write_value = br_base_pc + br_off
         op_c_setc_eq = op == OP_C_SETC_EQ
         op_c_setc_ne = op == OP_C_SETC_NE
         op_setc_geui = op == OP_SETC_GEUI
@@ -88,12 +155,34 @@ def build_wb_stage(m: Circuit, *, do_wb: Wire, state: CoreState, memwb: MemWbReg
         op_setc_gei = op == OP_SETC_GEI
         op_setc_ltui = op == OP_SETC_LTUI
         op_c_setc_tgt = op == OP_C_SETC_TGT
-        op_setc_any = op_c_setc_eq | op_c_setc_ne | op_setc_geui | op_setc_eq | op_setc_ne | op_setc_and | op_setc_or | op_setc_lt | op_setc_ltu | op_setc_ge | op_setc_geu | op_setc_eqi | op_setc_nei | op_setc_andi | op_setc_ori | op_setc_lti | op_setc_gei | op_setc_ltui
+        op_setc_any = (
+            op_c_setc_eq
+            | op_c_setc_ne
+            | op_setc_geui
+            | op_setc_eq
+            | op_setc_ne
+            | op_setc_and
+            | op_setc_or
+            | op_setc_lt
+            | op_setc_ltu
+            | op_setc_ge
+            | op_setc_geu
+            | op_setc_eqi
+            | op_setc_nei
+            | op_setc_andi
+            | op_setc_ori
+            | op_setc_lti
+            | op_setc_gei
+            | op_setc_ltui
+        )
         commit_cond_next = commit_cond
         commit_tgt_next = commit_tgt
+        icall_tgt_next = icall_tgt
         if do_wb & op_is_boundary:
             commit_cond_next = 0
             commit_tgt_next = 0
+        if do_wb & op_is_boundary & br_take:
+            icall_tgt_next = 0
         if do_wb & op_setc_any:
             commit_cond_next = value[0]
         if do_wb & op_c_setc_tgt:
@@ -133,6 +222,11 @@ def build_wb_stage(m: Circuit, *, do_wb: Wire, state: CoreState, memwb: MemWbReg
             br_kind_next = BK_CALL
             br_base_next = pc
             br_off_next = value
+        if enter_new_block & op_bstart_icall:
+            br_kind_next = BK_ICALL
+            br_base_next = pc
+            br_off_next = value
+            icall_tgt_next = commit_tgt
         if enter_new_block & op_is_macro:
             br_kind_next = BK_FALL
             br_base_next = pc
@@ -162,4 +256,12 @@ def build_wb_stage(m: Circuit, *, do_wb: Wire, state: CoreState, memwb: MemWbReg
         state.br_kind.set(br_kind_next)
         state.br_base_pc.set(br_base_next)
         state.br_off.set(br_off_next)
-    return WbControl(boundary_valid=boundary_valid, br_take=br_take, next_pc=next_pc, target_pc=target_pc, ra_write_valid=ra_write_valid, ra_write_value=ra_write_value)
+        state.icall_tgt.set(icall_tgt_next)
+    return WbControl(
+        boundary_valid=boundary_valid,
+        br_take=br_take,
+        next_pc=next_pc,
+        target_pc=target_pc,
+        ra_write_valid=ra_write_valid,
+        ra_write_value=ra_write_value,
+    )

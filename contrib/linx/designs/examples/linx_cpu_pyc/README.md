@@ -33,3 +33,19 @@ bash flows/tools/run_linx_cpu_pyc_cpp.sh --elf /path/to/test.o --expected 0x0000
 Artifacts are written under:
 
 - `.pycircuit_out/examples/linx_cpu_pyc/`
+
+## PTO ISA decode contract
+
+The example decoder follows the LinxISA PTO ISA 0.58 public encoding contract:
+
+- `B.IOS` uses the 32-bit allocation mask form.
+- `B.IOT` accepts only the destination-only, one-source, and two-source forms.
+- TEPL, TLSU, and CUBE decode use the active 0.58 selector catalogs.
+- Retired allocation, stack, partition-reduction, and legacy spelling encodings
+  fail closed.
+
+Run the contract guard with:
+
+```bash
+python3 contrib/linx/flows/tools/check_pto_isa_v058_decode.py
+```

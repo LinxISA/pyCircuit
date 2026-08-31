@@ -19,7 +19,7 @@ sudo apt-get install -y \
   curl ca-certificates lsb-release
 
 # LLVM/MLIR: use apt.llvm.org to get a recent version with MLIR dev packages.
-LLVM_VER="${LLVM_VER:-17}"
+LLVM_VER="${LLVM_VER:-22}"
 if ! command -v "llvm-config-${LLVM_VER}" >/dev/null 2>&1; then
   log "installing LLVM/MLIR ${LLVM_VER} via apt.llvm.org"
   curl -fsSL https://apt.llvm.org/llvm.sh -o /tmp/llvm.sh

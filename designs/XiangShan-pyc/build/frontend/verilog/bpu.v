@@ -735,4 +735,3 @@ assign bpu_update_branch_type_out = bpu_update_branch_type;
 assign bpu_update_ras_action_out = bpu_update_ras_action;
 
 endmodule
-

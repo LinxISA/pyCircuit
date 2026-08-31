@@ -204,4 +204,3 @@ assign ctrl_wb_fwd_valid_1 = ctrl_wb_valid_1;
 assign ctrl_wb_fwd_rob_idx_1 = ctrl_wb_rob_idx_1;
 
 endmodule
-

@@ -204,4 +204,3 @@ assign ctrlblock_wb_fwd_valid_1 = ctrlblock_wb_valid_1;
 assign ctrlblock_wb_fwd_rob_idx_1 = ctrlblock_wb_rob_idx_1;
 
 endmodule
-

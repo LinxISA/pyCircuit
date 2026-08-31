@@ -16,6 +16,7 @@ Key features:
   F-RA-004  Overflow/underflow pointer wrapping
   F-RA-005  Snapshot save/restore via external FTQ
 """
+
 from __future__ import annotations
 
 import math
@@ -31,12 +32,10 @@ from pycircuit import (
     CycleAwareDomain,
     CycleAwareSignal,
     cas,
-    compile_cycle_aware,
     mux,
     u,
     wire_of,
 )
-
 from top.parameters import PC_WIDTH, RAS_COMMIT_STACK_SIZE, RAS_SPEC_QUEUE_SIZE
 
 
@@ -60,40 +59,81 @@ def ras(
     ctr_max = (1 << ctr_width) - 1
 
     # ── Cycle 0: Inputs ──────────────────────────────────────────────
-    s0_fire = (_in["s0_fire"] if "s0_fire" in _in else
-        cas(domain, m.input(f"{prefix}_s0_fire", width=1), cycle=0))
-    do_push = (_in["do_push"] if "do_push" in _in else
-        cas(domain, m.input(f"{prefix}_do_push", width=1), cycle=0))
-    do_pop = (_in["do_pop"] if "do_pop" in _in else
-        cas(domain, m.input(f"{prefix}_do_pop", width=1), cycle=0))
-    push_addr = (_in["push_addr"] if "push_addr" in _in else
-        cas(domain, m.input(f"{prefix}_push_addr", width=pc_width), cycle=0))
+    s0_fire = (
+        _in["s0_fire"]
+        if "s0_fire" in _in
+        else cas(domain, m.input(f"{prefix}_s0_fire", width=1), cycle=0)
+    )
+    do_push = (
+        _in["do_push"]
+        if "do_push" in _in
+        else cas(domain, m.input(f"{prefix}_do_push", width=1), cycle=0)
+    )
+    do_pop = (
+        _in["do_pop"]
+        if "do_pop" in _in
+        else cas(domain, m.input(f"{prefix}_do_pop", width=1), cycle=0)
+    )
+    push_addr = (
+        _in["push_addr"]
+        if "push_addr" in _in
+        else cas(domain, m.input(f"{prefix}_push_addr", width=pc_width), cycle=0)
+    )
 
-    commit_push = (_in["commit_push"] if "commit_push" in _in else
+    commit_push = (
+        _in["commit_push"]
+        if "commit_push" in _in
+        else cas(domain, m.input(f"{prefix}_commit_push", width=1), cycle=0)
+    )
+    commit_pop = (
+        _in["commit_pop"]
+        if "commit_pop" in _in
+        else cas(domain, m.input(f"{prefix}_commit_pop", width=1), cycle=0)
+    )
+    commit_push_addr = (
+        _in["commit_push_addr"]
+        if "commit_push_addr" in _in
+        else cas(domain, m.input(f"{prefix}_commit_push_addr", width=pc_width), cycle=0)
+    )
 
-        cas(domain, m.input(f"{prefix}_commit_push", width=1), cycle=0))
-    commit_pop = (_in["commit_pop"] if "commit_pop" in _in else
-        cas(domain, m.input(f"{prefix}_commit_pop", width=1), cycle=0))
-    commit_push_addr = (_in["commit_push_addr"] if "commit_push_addr" in _in else
-        cas(domain, m.input(f"{prefix}_commit_push_addr", width=pc_width), cycle=0))
+    redirect_valid = (
+        _in["redirect_valid"]
+        if "redirect_valid" in _in
+        else cas(domain, m.input(f"{prefix}_redirect_valid", width=1), cycle=0)
+    )
+    redirect_sp = (
+        _in["redirect_sp"]
+        if "redirect_sp" in _in
+        else cas(domain, m.input(f"{prefix}_redirect_sp", width=spec_ptr_w), cycle=0)
+    )
+    redirect_top_addr = (
+        _in["redirect_top_addr"]
+        if "redirect_top_addr" in _in
+        else cas(
+            domain, m.input(f"{prefix}_redirect_top_addr", width=pc_width), cycle=0
+        )
+    )
+    redirect_top_ctr = (
+        _in["redirect_top_ctr"]
+        if "redirect_top_ctr" in _in
+        else cas(
+            domain, m.input(f"{prefix}_redirect_top_ctr", width=ctr_width), cycle=0
+        )
+    )
 
-    redirect_valid = (_in["redirect_valid"] if "redirect_valid" in _in else
-
-        cas(domain, m.input(f"{prefix}_redirect_valid", width=1), cycle=0))
-    redirect_sp = (_in["redirect_sp"] if "redirect_sp" in _in else
-        cas(domain, m.input(f"{prefix}_redirect_sp", width=spec_ptr_w), cycle=0))
-    redirect_top_addr = (_in["redirect_top_addr"] if "redirect_top_addr" in _in else
-        cas(domain, m.input(f"{prefix}_redirect_top_addr", width=pc_width), cycle=0))
-    redirect_top_ctr = (_in["redirect_top_ctr"] if "redirect_top_ctr" in _in else
-        cas(domain, m.input(f"{prefix}_redirect_top_ctr", width=ctr_width), cycle=0))
-
-    zero1 = cas(domain, m.const(0, width=1), cycle=0)
-    one1 = cas(domain, m.const(1, width=1), cycle=0)
+    cas(domain, m.const(0, width=1), cycle=0)
+    cas(domain, m.const(1, width=1), cycle=0)
     zero_pc = cas(domain, m.const(0, width=pc_width), cycle=0)
 
     # ── Speculative stack storage ────────────────────────────────────
-    spec_addr = [domain.signal(width=pc_width, reset_value=0, name=f"{prefix}_sa_{i}") for i in range(spec_size)]
-    spec_ctr = [domain.signal(width=ctr_width, reset_value=0, name=f"{prefix}_sc_{i}") for i in range(spec_size)]
+    spec_addr = [
+        domain.signal(width=pc_width, reset_value=0, name=f"{prefix}_sa_{i}")
+        for i in range(spec_size)
+    ]
+    spec_ctr = [
+        domain.signal(width=ctr_width, reset_value=0, name=f"{prefix}_sc_{i}")
+        for i in range(spec_size)
+    ]
     sp = domain.signal(width=spec_ptr_w, reset_value=0, name=f"{prefix}_spec_sp")
 
     sp_m1 = cas(domain, (wire_of(sp) - u(spec_ptr_w, 1))[0:spec_ptr_w], cycle=0)
@@ -119,7 +159,7 @@ def ras(
     pop_fire = s0_fire & do_pop & (~do_push)
 
     tos_ctr_is_zero = tos_ctr == cas(domain, m.const(0, width=ctr_width), cycle=0)
-    pop_target = mux(tos_ctr_is_zero, tos_m1_addr, tos_addr)
+    mux(tos_ctr_is_zero, tos_m1_addr, tos_addr)
 
     # Prediction output
     m.output(f"{prefix}_ras_target", wire_of(tos_addr))
@@ -132,8 +172,14 @@ def ras(
     _out["ras_top_ctr"] = tos_ctr
 
     # ── Commit stack storage ─────────────────────────────────────────
-    c_addr = [domain.signal(width=pc_width, reset_value=0, name=f"{prefix}_ca_{i}") for i in range(commit_size)]
-    c_ctr = [domain.signal(width=ctr_width, reset_value=0, name=f"{prefix}_cc_{i}") for i in range(commit_size)]
+    c_addr = [
+        domain.signal(width=pc_width, reset_value=0, name=f"{prefix}_ca_{i}")
+        for i in range(commit_size)
+    ]
+    c_ctr = [
+        domain.signal(width=ctr_width, reset_value=0, name=f"{prefix}_cc_{i}")
+        for i in range(commit_size)
+    ]
     c_sp = domain.signal(width=commit_ptr_w, reset_value=0, name=f"{prefix}_commit_sp")
 
     c_sp_m1 = cas(domain, (wire_of(c_sp) - u(commit_ptr_w, 1))[0:commit_ptr_w], cycle=0)
@@ -159,22 +205,29 @@ def ras(
         hit_sp = sp == cas(domain, m.const(j, width=spec_ptr_w), cycle=0)
         we_inc = push_fire & same_addr & hit_sp
         old_c = spec_ctr[j]
-        inc_c = mux(old_c == cas(domain, m.const(ctr_max, width=ctr_width), cycle=0),
-                     old_c,
-                     cas(domain, (wire_of(old_c) + u(ctr_width, 1))[0:ctr_width], cycle=0))
+        inc_c = mux(
+            old_c == cas(domain, m.const(ctr_max, width=ctr_width), cycle=0),
+            old_c,
+            cas(domain, (wire_of(old_c) + u(ctr_width, 1))[0:ctr_width], cycle=0),
+        )
         spec_ctr[j].assign(mux(we_inc, inc_c, old_c), when=we_inc)
 
         # New entry case (push different address)
         hit_sp1 = sp_p1 == cas(domain, m.const(j, width=spec_ptr_w), cycle=0)
         we_new = push_fire & (~same_addr) & hit_sp1
         spec_addr[j].assign(mux(we_new, push_addr, spec_addr[j]), when=we_new)
-        spec_ctr[j].assign(mux(we_new, cas(domain, m.const(0, width=ctr_width), cycle=0), spec_ctr[j]), when=we_new)
+        spec_ctr[j].assign(
+            mux(we_new, cas(domain, m.const(0, width=ctr_width), cycle=0), spec_ctr[j]),
+            when=we_new,
+        )
 
         # Pop: decrement counter or move pointer
         we_pop_dec = pop_fire & (~tos_ctr_is_zero) & hit_sp
-        dec_c = mux(old_c == cas(domain, m.const(0, width=ctr_width), cycle=0),
-                     old_c,
-                     cas(domain, (wire_of(old_c) - u(ctr_width, 1))[0:ctr_width], cycle=0))
+        dec_c = mux(
+            old_c == cas(domain, m.const(0, width=ctr_width), cycle=0),
+            old_c,
+            cas(domain, (wire_of(old_c) - u(ctr_width, 1))[0:ctr_width], cycle=0),
+        )
         spec_ctr[j].assign(mux(we_pop_dec, dec_c, spec_ctr[j]), when=we_pop_dec)
 
     # Stack pointer update
@@ -188,8 +241,12 @@ def ras(
     for j in range(spec_size):
         hit = redirect_sp == cas(domain, m.const(j, width=spec_ptr_w), cycle=0)
         we_restore = redirect_valid & hit
-        spec_addr[j].assign(mux(we_restore, redirect_top_addr, spec_addr[j]), when=we_restore)
-        spec_ctr[j].assign(mux(we_restore, redirect_top_ctr, spec_ctr[j]), when=we_restore)
+        spec_addr[j].assign(
+            mux(we_restore, redirect_top_addr, spec_addr[j]), when=we_restore
+        )
+        spec_ctr[j].assign(
+            mux(we_restore, redirect_top_ctr, spec_ctr[j]), when=we_restore
+        )
 
     # Commit stack updates
     for j in range(commit_size):
@@ -198,19 +255,26 @@ def ras(
         old_cc = c_ctr[j]
 
         we_c_inc = commit_push & c_same_addr & hit_csp
-        inc_cc = mux(old_cc == cas(domain, m.const(ctr_max, width=ctr_width), cycle=0),
-                      old_cc,
-                      cas(domain, (wire_of(old_cc) + u(ctr_width, 1))[0:ctr_width], cycle=0))
+        inc_cc = mux(
+            old_cc == cas(domain, m.const(ctr_max, width=ctr_width), cycle=0),
+            old_cc,
+            cas(domain, (wire_of(old_cc) + u(ctr_width, 1))[0:ctr_width], cycle=0),
+        )
         c_ctr[j].assign(mux(we_c_inc, inc_cc, old_cc), when=we_c_inc)
 
         we_c_new = commit_push & (~c_same_addr) & hit_csp1
         c_addr[j].assign(mux(we_c_new, commit_push_addr, c_addr[j]), when=we_c_new)
-        c_ctr[j].assign(mux(we_c_new, cas(domain, m.const(0, width=ctr_width), cycle=0), c_ctr[j]), when=we_c_new)
+        c_ctr[j].assign(
+            mux(we_c_new, cas(domain, m.const(0, width=ctr_width), cycle=0), c_ctr[j]),
+            when=we_c_new,
+        )
 
         we_c_pop = commit_pop & (~c_tos_ctr_zero) & hit_csp
-        dec_cc = mux(old_cc == cas(domain, m.const(0, width=ctr_width), cycle=0),
-                      old_cc,
-                      cas(domain, (wire_of(old_cc) - u(ctr_width, 1))[0:ctr_width], cycle=0))
+        dec_cc = mux(
+            old_cc == cas(domain, m.const(0, width=ctr_width), cycle=0),
+            old_cc,
+            cas(domain, (wire_of(old_cc) - u(ctr_width, 1))[0:ctr_width], cycle=0),
+        )
         c_ctr[j].assign(mux(we_c_pop, dec_cc, c_ctr[j]), when=we_c_pop)
 
     next_csp = c_sp
@@ -224,7 +288,4 @@ ras.__pycircuit_name__ = "ras"
 
 
 if __name__ == "__main__":
-    print(compile_cycle_aware(
-        ras, name="ras", eager=True,
-        commit_size=16, spec_size=32,
-    ).emit_mlir())
+    pass
