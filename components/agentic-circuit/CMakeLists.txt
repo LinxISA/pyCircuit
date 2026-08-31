@@ -71,9 +71,17 @@ include(TableGen)
 include(AddLLVM)
 include(AddMLIR)
 include(AddACIR)
-include(CTest)
 
-if(BUILD_TESTING)
+set(_ACIR_BUILD_TESTING_DEFAULT "${PROJECT_IS_TOP_LEVEL}")
+if(DEFINED BUILD_TESTING)
+  set(_ACIR_BUILD_TESTING_DEFAULT "${BUILD_TESTING}")
+endif()
+option(ACIR_BUILD_TESTING "Build Agentic Circuit tests"
+  "${_ACIR_BUILD_TESTING_DEFAULT}")
+unset(_ACIR_BUILD_TESTING_DEFAULT)
+if(ACIR_BUILD_TESTING)
+  include(CTest)
+  enable_testing()
   find_package(Python3 3.11 REQUIRED COMPONENTS Interpreter)
   find_program(ACIR_LIT_EXECUTABLE NAMES llvm-lit lit
     HINTS "${CMAKE_CURRENT_SOURCE_DIR}/.venv/bin"
@@ -102,7 +110,7 @@ option(ACIR_ENABLE_ASSERTIONS "Keep C/C++ assertions enabled" OFF)
 option(
   ACIR_BUILD_REFERENCE_MODELS
   "Build non-installed reference models used as code-generation baselines"
-  ${BUILD_TESTING}
+  ${ACIR_BUILD_TESTING}
 )
 
 add_library(acir_project_options INTERFACE)
@@ -171,7 +179,7 @@ add_subdirectory(tools)
 if(ACIR_BUILD_REFERENCE_MODELS)
   add_subdirectory(references/davincioo-gfsim)
 endif()
-if(BUILD_TESTING)
+if(ACIR_BUILD_TESTING)
   add_subdirectory(test)
   add_subdirectory(unittests)
   add_test(

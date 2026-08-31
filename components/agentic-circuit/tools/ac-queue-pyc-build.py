@@ -83,7 +83,7 @@ def _normalize_cpp_manifest(path: Path) -> None:
         runtime["cmake_config_dir"] = "${PYC_TOOLCHAIN_ROOT}/share/pycircuit/cmake"
         runtime["include_dirs"] = ["${PYC_TOOLCHAIN_ROOT}/include"]
         runtime["lib_dirs"] = ["${PYC_TOOLCHAIN_ROOT}/lib"]
-        runtime["library_files"] = ["${PYC_TOOLCHAIN_ROOT}/lib/libpyc4_runtime.a"]
+        runtime["library_files"] = ["${PYC_TOOLCHAIN_ROOT}/lib/libpyc6_runtime.a"]
         runtime["toolchain_root_hint"] = "${PYC_TOOLCHAIN_ROOT}"
     path.write_text(
         json.dumps(manifest, sort_keys=True, indent=2) + "\n", encoding="utf-8"
@@ -135,8 +135,11 @@ def main() -> int:
     metadata = _read_json(arguments.toolchain_metadata)
     catalog_path = Path(__file__).resolve().parents[1] / "schemas/opcodes.json"
     catalog = _read_json(catalog_path)
-    if metadata.get("git_sha") != lock.get("pycircuit_commit"):
+    locked_commit = lock.get("pycircuit_commit")
+    if locked_commit != "repo-local" and metadata.get("git_sha") != locked_commit:
         parser.error("pyCircuit commit does not match toolchain lock")
+    if locked_commit == "repo-local" and not metadata.get("git_sha"):
+        parser.error("repo-local pyCircuit metadata has no git revision")
     if metadata.get("llvm_version") != lock.get("llvm_version"):
         parser.error("pycc LLVM version does not match toolchain lock")
 

@@ -12,10 +12,26 @@ add_subdirectory(acir-queue-plan)
 add_subdirectory(acir-queue-pycgen)
 add_subdirectory(acir-opt)
 
+# The integrated ACIR-to-PYC lane always consumes the pyc6 targets built from
+# this checkout.  Keeping the dependency explicit prevents a stale external
+# pyCircuit install from becoming an accidental build input.
+if(TARGET pycc AND TARGET pyc6_runtime)
+  add_custom_target(acir-pyc-toolchain
+    DEPENDS acir-queue-pycgen pycc pyc6_runtime
+  )
+elseif(NOT PROJECT_IS_TOP_LEVEL)
+  message(FATAL_ERROR
+    "Agentic Circuit integration requires repo-local pycc and pyc6_runtime targets")
+else()
+  message(STATUS
+    "Standalone Agentic Circuit build: ACIR-to-PYC toolchain target is disabled")
+endif()
+
 # The PYC-compatible Verilog bridge is intentionally a Python entrypoint: it
 # invokes the in-tree ACIR→PYC generator and lowers the canonical textual PYC
 # contract to a self-contained RTL artifact.
 install(PROGRAMS
+  "${CMAKE_CURRENT_SOURCE_DIR}/ac-queue-pyc-build.py"
   "${CMAKE_CURRENT_SOURCE_DIR}/acir-queue-veriloggen.py"
   DESTINATION bin
 )

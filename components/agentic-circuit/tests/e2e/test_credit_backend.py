@@ -13,10 +13,8 @@ from agentic_circuit._queue_frontend import lower_queue_source
 
 ROOT = Path(__file__).resolve().parents[2]
 EXAMPLE = ROOT / "examples" / "pipelines" / "pyc_credit_pipeline.py"
-DEFAULT_TOOLCHAIN = Path(
-    "/Users/zhoubot/Documents/SummerSchool/vendor/pyCircuit/"
-    ".pycircuit_out/toolchain/install"
-)
+PYC_REPOSITORY = ROOT.parents[1]
+DEFAULT_TOOLCHAIN = PYC_REPOSITORY / ".pycircuit_out/toolchain/install"
 
 
 class CreditBackendTest(unittest.TestCase):
@@ -134,7 +132,7 @@ int main() {
                     str(toolchain / "include"),
                     str(output / "cpp/pyc_credit_pipeline.cpp"),
                     str(cpp_harness),
-                    str(toolchain / "lib/libpyc4_runtime.a"),
+                    str(toolchain / "lib/libpyc6_runtime.a"),
                     "-o",
                     str(cpp_executable),
                 ),

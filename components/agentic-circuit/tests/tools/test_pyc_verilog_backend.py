@@ -32,7 +32,7 @@ func.func @guard(%cond: i1) -> (i1) attributes {result_names = ["out"]} {
 
 PYC_COMPARE = """
 func.func @compare(%left: i8, %right: i8) -> (i1) attributes {result_names = ["equal"]} {
-    %same = pyc.eq %left, %right : i8
+    %same = pyc.eq %left, %right : i8, i8 -> i1
     func.return %same : i1
 }
 """

@@ -6,7 +6,7 @@ set(ACIR_OPT_LIBRARIES
     MLIRTransforms MLIROptLib)
 target_link_libraries(acir-opt PRIVATE ${ACIR_OPT_LIBRARIES})
 
-if(BUILD_TESTING)
+if(ACIR_BUILD_TESTING)
   add_executable(acir-opt-internal ${ACIR_OPT_SOURCES})
   target_compile_definitions(acir-opt-internal PRIVATE ACIR_INTERNAL_TEST_TOOL=1)
   target_link_libraries(acir-opt-internal PRIVATE ${ACIR_OPT_LIBRARIES})

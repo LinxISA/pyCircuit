@@ -15,5 +15,7 @@ module attributes {ac.contract_epoch = "0.3", ac.system = "popcount"} {
   ac.sink %output {ac.name = "sink"} : !ac.queue<!ac.struct<@types::@Item>>
 }
 
-// PYC: pyc.popcount
-// PYC: i8 -> i4
+// PYC: pyc.extract {{.*}} : i8 -> i1
+// PYC: pyc.zext {{.*}} : i1 -> i4
+// PYC: pyc.alias
+// PYC-SAME: primitive_id = "dataflow.popcount.v1"

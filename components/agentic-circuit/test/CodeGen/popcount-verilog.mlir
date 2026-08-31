@@ -16,5 +16,6 @@ module attributes {ac.contract_epoch = "0.3", ac.system = "popcount"} {
 }
 
 // VERILOG: module popcount (
-// VERILOG: pyc_popcount #(.IN_WIDTH(8), .OUT_WIDTH(4))
-// VERILOG: module pyc_popcount #(
+// VERILOG: assign
+// VERILOG: +
+// VERILOG: module pyc_fifo #(

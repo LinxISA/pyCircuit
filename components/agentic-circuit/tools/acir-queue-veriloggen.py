@@ -3,10 +3,9 @@
 
 This is the first in-tree PYC compatibility backend.  It deliberately consumes
 the canonical textual PYC emitted by ``acir-queue-pycgen`` instead of adding a
-second ACIR lowering.  The small emitter covers the PYC operations used by the
-golden primitive slice (FIFO, register, combinational wiring, popcount, and
-round-robin arbitration) and embeds the migrated PYC runtime modules in the
-resulting Verilog file.
+second ACIR lowering.  The small emitter covers the pyCircuit 6 operations used
+by the golden queue slice and embeds only the required sequential runtime
+modules in the resulting Verilog file.
 """
 
 from __future__ import annotations
@@ -198,7 +197,7 @@ def _parse_attr_int(attrs: str, key: str) -> int:
 
 
 def _runtime_sources(runtime_dir: Path) -> Iterable[str]:
-    for name in ("pyc_reg.v", "pyc_fifo.v", "pyc_popcount.v", "pyc_rr_arbiter.v"):
+    for name in ("pyc_reg.v", "pyc_fifo.v"):
         path = runtime_dir / name
         if not path.is_file():
             raise PYCVerilogError(f"missing in-tree PYC runtime module: {path}")
@@ -432,16 +431,20 @@ def emit_verilog(module: Module, runtime_dir: Path) -> str:
             continue
 
         if rhs.startswith("pyc.mux "):
-            match = re.fullmatch(r"pyc\.mux\s+(.*?)\s*:\s*(\S+)", rhs)
+            match = re.fullmatch(
+                r"pyc\.mux\s+(.*?)\s*:\s*(.*?)\s*->\s*(\S+)", rhs
+            )
             if not match or len(lhs) != 1:
                 raise PYCVerilogError(f"cannot parse mux: {line}")
             inputs = _ssa_names(match.group(1))
             if len(inputs) != 3:
                 raise PYCVerilogError(f"mux expects select, true, false: {line}")
             select, true_value, false_value = (_value(values, item) for item in inputs)
-            out = add_value(lhs[0], match.group(2))
+            annotated_types = _parse_types(match.group(2))
+            out = add_value(lhs[0], match.group(3))
             if (
-                select.type != "i1"
+                annotated_types != [select.type, true_value.type, false_value.type]
+                or select.type != "i1"
                 or true_value.type != out.type
                 or false_value.type != out.type
             ):
@@ -449,6 +452,35 @@ def emit_verilog(module: Module, runtime_dir: Path) -> str:
             assigns.append(
                 f"  assign {out.net} = {select.net} ? {true_value.net} : {false_value.net};"
             )
+            continue
+
+        cast = re.fullmatch(
+            r"pyc\.(zext|sext|trunc|alias)\s+(%[A-Za-z_][A-Za-z0-9_]*)"
+            r"(?:\s*\{.*?\})?\s*:\s*(?:(\S+)\s*->\s*)?(\S+)",
+            rhs,
+        )
+        if cast and len(lhs) == 1:
+            source = _value(values, cast.group(2))
+            annotated_source = cast.group(3)
+            out = add_value(lhs[0], cast.group(4))
+            if annotated_source is not None and source.type != annotated_source:
+                raise PYCVerilogError("cast source annotation does not match operand")
+            if cast.group(1) == "alias" and source.type != out.type:
+                raise PYCVerilogError("alias source/result types must match")
+            if cast.group(1) == "trunc" and source.width < out.width:
+                raise PYCVerilogError("trunc cannot widen its operand")
+            if cast.group(1) in {"zext", "sext"} and source.width > out.width:
+                raise PYCVerilogError("extension cannot narrow its operand")
+            if cast.group(1) == "sext" and out.width > source.width:
+                fill = out.width - source.width
+                assigns.append(
+                    f"  assign {out.net} = "
+                    f"{{{{{fill}{{{source.net}[{source.width - 1}]}}}}, {source.net}}};"
+                )
+            elif cast.group(1) == "trunc" and out.width < source.width:
+                assigns.append(f"  assign {out.net} = {source.net}[{out.width - 1}:0];")
+            else:
+                assigns.append(f"  assign {out.net} = {source.net};")
             continue
 
         if rhs.startswith("pyc.assign "):
@@ -465,7 +497,8 @@ def emit_verilog(module: Module, runtime_dir: Path) -> str:
             continue
 
         binary = re.fullmatch(
-            r"pyc\.(and|or|xor|add|sub|mul|eq|ne|ult|ule|ugt|uge)\s+(.*?)\s*:\s*(\S+)",
+            r"pyc\.(and|or|xor|add|sub|mul|eq|ne|ult|slt|ule|ugt|uge)\s+"
+            r"(.*?)\s*:\s*(.*?)\s*->\s*(\S+)",
             rhs,
         )
         if binary and len(lhs) == 1:
@@ -473,11 +506,23 @@ def emit_verilog(module: Module, runtime_dir: Path) -> str:
             if len(inputs) != 2:
                 raise PYCVerilogError(f"binary PYC op expects two operands: {line}")
             left, right = (_value(values, item) for item in inputs)
-            operand_type = binary.group(3)
-            if left.type != operand_type or right.type != operand_type:
+            operand_types = _parse_types(binary.group(3))
+            if operand_types != [left.type, right.type]:
                 raise PYCVerilogError("binary operand annotations are inconsistent")
-            comparison = binary.group(1) in {"eq", "ne", "ult", "ule", "ugt", "uge"}
-            out = add_value(lhs[0], "i1" if comparison else operand_type)
+            comparison = binary.group(1) in {
+                "eq",
+                "ne",
+                "ult",
+                "slt",
+                "ule",
+                "ugt",
+                "uge",
+            }
+            out = add_value(lhs[0], binary.group(4))
+            if comparison and out.type != "i1":
+                raise PYCVerilogError("comparison result must be i1")
+            if not comparison and out.type != left.type:
+                raise PYCVerilogError("binary result type must match operands")
             operator = {
                 "and": "&",
                 "or": "|",
@@ -488,11 +533,16 @@ def emit_verilog(module: Module, runtime_dir: Path) -> str:
                 "eq": "==",
                 "ne": "!=",
                 "ult": "<",
+                "slt": "<",
                 "ule": "<=",
                 "ugt": ">",
                 "uge": ">=",
             }[binary.group(1)]
-            assigns.append(f"  assign {out.net} = {left.net} {operator} {right.net};")
+            if binary.group(1) == "slt":
+                expression = f"$signed({left.net}) < $signed({right.net})"
+            else:
+                expression = f"{left.net} {operator} {right.net}"
+            assigns.append(f"  assign {out.net} = {expression};")
             continue
 
         unary = re.fullmatch(r"pyc\.not\s+(.*?)\s*:\s*(\S+)", rhs)
@@ -502,6 +552,8 @@ def emit_verilog(module: Module, runtime_dir: Path) -> str:
                 raise PYCVerilogError(f"not expects one operand: {line}")
             src = _value(values, inputs[0])
             out = add_value(lhs[0], unary.group(2))
+            if src.type != out.type:
+                raise PYCVerilogError("not source/result types must match")
             assigns.append(f"  assign {out.net} = ~{src.net};")
             continue
 

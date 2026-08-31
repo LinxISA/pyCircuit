@@ -165,13 +165,47 @@ emitTransform(const QueueGraphPlan &plan, const QueueBlockPlan &block,
           return sourceType.takeError();
         if (!resultType)
           return resultType.takeError();
+        auto inputWidth = typeWidth(plan, *inputType);
+        if (!inputWidth)
+          return inputWidth.takeError();
+        std::vector<std::string> terms;
+        terms.reserve(*inputWidth);
+        for (unsigned bit = 0; bit < *inputWidth; ++bit) {
+          std::string extracted = newValue();
+          body << "    " << extracted << " = pyc.extract " << *first
+               << " {lsb = " << bit << "} : " << *sourceType << " -> i1\n";
+          if (*resultType == "i1") {
+            terms.push_back(std::move(extracted));
+          } else {
+            std::string extended = newValue();
+            body << "    " << extended << " = pyc.zext " << extracted
+                 << " : i1 -> " << *resultType << "\n";
+            terms.push_back(std::move(extended));
+          }
+        }
+        while (terms.size() > 1) {
+          std::vector<std::string> next;
+          next.reserve((terms.size() + 1) / 2);
+          for (size_t index = 0; index < terms.size(); index += 2) {
+            if (index + 1 == terms.size()) {
+              next.push_back(std::move(terms[index]));
+              continue;
+            }
+            std::string added = newValue();
+            body << "    " << added << " = pyc.add " << terms[index] << ", "
+                 << terms[index + 1] << " : " << *resultType << ", "
+                 << *resultType << " -> " << *resultType << "\n";
+            next.push_back(std::move(added));
+          }
+          terms = std::move(next);
+        }
         result = newValue();
-        body << "    " << result << " = pyc.popcount " << *first
+        body << "    " << result << " = pyc.alias " << terms.front()
              << " {primitive_id = \"dataflow.popcount.v1\", "
                 "implementation_id = \"internal.reference.popcount.v1\", "
                 "qualification_report = "
                 "\"INT-11/smoke/comparison_report.json\"} : "
-             << *sourceType << " -> " << *resultType << "\n";
+             << *resultType << "\n";
       } else if (expression.kind == "add" || expression.kind == "sub" ||
                  expression.kind == "mul") {
         result = newValue();
@@ -184,7 +218,8 @@ emitTransform(const QueueGraphPlan &plan, const QueueBlockPlan &block,
         if (!type)
           return type.takeError();
         body << "    " << result << " = pyc." << expression.kind << ' '
-             << *first << ", " << *second << " : " << *type << "\n";
+             << *first << ", " << *second << " : " << *type << ", "
+             << *type << " -> " << *type << "\n";
       } else if (expression.kind == "cmp") {
         if (expression.operands.size() != 2)
           return pycError("comparison expression arity mismatch");
@@ -224,7 +259,8 @@ emitTransform(const QueueGraphPlan &plan, const QueueBlockPlan &block,
         }
         std::string compared = newValue();
         body << "    " << compared << " = pyc." << opcode.str() << ' ' << lhs
-             << ", " << rhs << " : " << *type << "\n";
+             << ", " << rhs << " : " << *type << ", " << *type
+             << " -> i1\n";
         if (negate) {
           result = newValue();
           body << "    " << result << " = pyc.not " << compared << " : i1\n";
@@ -636,7 +672,12 @@ llvm::Expected<std::string> generateQueueGraphPyc(const QueueGraphPlan &plan) {
                         llvm::StringRef rhs, llvm::StringRef type) {
     std::string result = newValue();
     body << "    " << result << " = pyc." << operation.str() << ' ' << lhs.str()
-         << ", " << rhs.str() << " : " << type.str() << "\n";
+         << ", " << rhs.str() << " : " << type.str() << ", " << type.str()
+         << " -> "
+         << (operation == "eq" || operation == "ult" || operation == "slt"
+                 ? "i1"
+                 : type.str())
+         << "\n";
     return result;
   };
   auto emitNot = [&](llvm::StringRef value) {
@@ -648,8 +689,8 @@ llvm::Expected<std::string> generateQueueGraphPyc(const QueueGraphPlan &plan) {
                      llvm::StringRef falseValue, llvm::StringRef type) {
     std::string result = newValue();
     body << "    " << result << " = pyc.mux " << select.str() << ", "
-         << trueValue.str() << ", " << falseValue.str() << " : " << type.str()
-         << "\n";
+         << trueValue.str() << ", " << falseValue.str() << " : i1, "
+         << type.str() << ", " << type.str() << " -> " << type.str() << "\n";
     return result;
   };
   auto emitExtract = [&](llvm::StringRef value, uint64_t lsb,
@@ -988,36 +1029,38 @@ llvm::Expected<std::string> generateQueueGraphPyc(const QueueGraphPlan &plan) {
           body << "    " << cursor << " = pyc.reg %clk, %rst, " << enableWire
                << ", " << nextWire << ", " << zeroPointer << " : "
                << pointerType << "\n";
-          std::vector<std::string> reqInputs(valids.rbegin(), valids.rend());
-          std::string req = newValue();
-          std::string reqType = "i" + std::to_string(valids.size());
-          body << "    " << req << " = pyc.concat(";
-          for (auto [index, value] : llvm::enumerate(reqInputs)) {
-            if (index)
-              body << ", ";
-            body << value;
+          std::string zeroGrant = emitConstant(0, "i1");
+          std::vector<std::vector<std::string>> grantsByCursor;
+          grantsByCursor.reserve(valids.size());
+          for (size_t start = 0; start < valids.size(); ++start) {
+            std::vector<std::string> cursorGrants(valids.size(), zeroGrant);
+            std::string prior = zeroGrant;
+            for (size_t offset = 0; offset < valids.size(); ++offset) {
+              const size_t input = (start + offset) % valids.size();
+              cursorGrants[input] =
+                  emitBinary("and", valids[input], emitNot(prior), "i1");
+              prior = emitBinary("or", prior, valids[input], "i1");
+            }
+            grantsByCursor.push_back(std::move(cursorGrants));
           }
-          body << ") : ";
-          for (auto [index, value] : llvm::enumerate(reqInputs)) {
-            if (index)
-              body << ", ";
-            body << "i1";
-          }
-          body << " -> " << reqType << "\n";
-          std::string grant = newValue();
-          body << "    " << grant << " = pyc.rr_arbiter " << req << ", "
-               << cursor << " {num_inputs = " << valids.size()
-               << ", primitive_id = \"control.rr_arbiter.v1\", "
-                  "implementation_id = \"internal.reference.rr_arbiter.v1\", "
-                  "qualification_report = "
-                  "\"DF-09/smoke_v072/arbiter_candidates\"} : "
-               << reqType << ", " << pointerType << " -> " << reqType << "\n";
           grants.reserve(valids.size());
           for (size_t input = 0; input < valids.size(); ++input) {
-            std::string grantBit = newValue();
-            body << "    " << grantBit << " = pyc.extract " << grant
-                 << " {lsb = " << input << "} : " << reqType << " -> i1\n";
-            grants.push_back(std::move(grantBit));
+            std::string selected = zeroGrant;
+            for (size_t start = valids.size(); start-- > 0;) {
+              std::string startValue = emitConstant(start, pointerType);
+              std::string atStart =
+                  emitBinary("eq", cursor, startValue, pointerType);
+              selected = emitMux(atStart, grantsByCursor[start][input],
+                                 selected, "i1");
+            }
+            std::string qualified = newValue();
+            body << "    " << qualified << " = pyc.alias " << selected
+                 << " {num_inputs = " << valids.size() << ", lane = " << input
+                 << ", primitive_id = \"control.rr_arbiter.v1\", "
+                    "implementation_id = \"internal.reference.rr_arbiter.v1\", "
+                    "qualification_report = "
+                    "\"DF-09/smoke_v072/arbiter_candidates\"} : i1\n";
+            grants.push_back(std::move(qualified));
           }
           mergeStates[merge.name] =
               MergeState{nextWire, enableWire, cursor, any, pointerType};

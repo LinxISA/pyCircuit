@@ -7,7 +7,7 @@ module attributes {ac.contract_epoch = "0.3", ac.system = "arbiter"} {
   ac.sink %merged {ac.name = "sink"} : !ac.queue<i8>
 }
 
-// PYC: pyc.rr_arbiter
+// PYC: pyc.alias
 // PYC-SAME: num_inputs = 2
 // PYC-SAME: primitive_id = "control.rr_arbiter.v1"
 // PYC-SAME: implementation_id = "internal.reference.rr_arbiter.v1"

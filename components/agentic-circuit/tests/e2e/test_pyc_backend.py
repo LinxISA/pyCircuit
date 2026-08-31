@@ -24,10 +24,8 @@ MEMORY_BANKS_EXAMPLE = ROOT / "examples" / "memory" / "memory_banks.py"
 FORK_EXAMPLE = ROOT / "examples" / "pipelines" / "pyc_fork_pipeline.py"
 CONDITIONAL_EXAMPLE = ROOT / "examples" / "pipelines" / "pyc_conditional_pipeline.py"
 FEEDBACK_EXAMPLE = ROOT / "examples" / "pipelines" / "pyc_feedback_pipeline.py"
-DEFAULT_TOOLCHAIN = Path(
-    "/Users/zhoubot/Documents/SummerSchool/vendor/pyCircuit/"
-    ".pycircuit_out/toolchain/install"
-)
+PYC_REPOSITORY = ROOT.parents[1]
+DEFAULT_TOOLCHAIN = PYC_REPOSITORY / ".pycircuit_out/toolchain/install"
 DAVINCIOO_TRACE = (
     ROOT
     / "references/davincioo-gfsim/upstream/tests/fixtures/traces"
@@ -177,7 +175,7 @@ int main() {
                     str(toolchain / "include"),
                     str(output / "cpp/pyc_feedback_pipeline.cpp"),
                     str(cpp_harness),
-                    str(toolchain / "lib/libpyc4_runtime.a"),
+                    str(toolchain / "lib/libpyc6_runtime.a"),
                     "-o",
                     str(cpp_executable),
                 ),
@@ -660,7 +658,7 @@ int main() {
                     str(toolchain / "include"),
                     str(output / "cpp/pyc_dependency_pipeline.cpp"),
                     str(cpp_harness),
-                    str(toolchain / "lib/libpyc4_runtime.a"),
+                    str(toolchain / "lib/libpyc6_runtime.a"),
                     "-o",
                     str(cpp_executable),
                 ),
@@ -884,7 +882,7 @@ int main() {
                     str(toolchain / "include"),
                     str(output / "cpp/pyc_memory_pipeline.cpp"),
                     str(cpp_harness),
-                    str(toolchain / "lib/libpyc4_runtime.a"),
+                    str(toolchain / "lib/libpyc6_runtime.a"),
                     "-o",
                     str(cpp_executable),
                 ),
@@ -1102,7 +1100,7 @@ int main() {
                     str(toolchain / "include"),
                     str(output / "cpp/pyc_reorder_pipeline.cpp"),
                     str(cpp_harness),
-                    str(toolchain / "lib/libpyc4_runtime.a"),
+                    str(toolchain / "lib/libpyc6_runtime.a"),
                     "-o",
                     str(cpp_executable),
                 ),
@@ -1355,7 +1353,7 @@ int main() {{
                     str(toolchain / "include"),
                     str(output / "cpp/davincioo_queue_model.cpp"),
                     str(cpp_harness),
-                    str(toolchain / "lib/libpyc4_runtime.a"),
+                    str(toolchain / "lib/libpyc6_runtime.a"),
                     "-o",
                     str(cpp_executable),
                 ),
@@ -1721,7 +1719,7 @@ int main() {
                     str(toolchain / "include"),
                     str(first / "cpp/pyc_queue_pipeline.cpp"),
                     str(cpp_harness),
-                    str(toolchain / "lib/libpyc4_runtime.a"),
+                    str(toolchain / "lib/libpyc6_runtime.a"),
                     "-o",
                     str(cpp_executable),
                 ),

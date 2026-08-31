@@ -8,5 +8,5 @@ module attributes {ac.contract_epoch = "0.3", ac.system = "arbiter"} {
 }
 
 // VERILOG: module arbiter (
-// VERILOG: pyc_rr_arbiter #(.NUM_INPUTS(2), .POINTER_WIDTH(1))
+// VERILOG: assign
 // VERILOG: module pyc_fifo #(

@@ -6,6 +6,8 @@ include(GNUInstallDirs)
 
 option(PYC_BUILD_MLIR_TOOLS "Build MLIR-based pyc tools" ON)
 option(PYC_BUILD_RUNTIME_LIB "Build pyc6 runtime library" ON)
+option(PYC_BUILD_AGENTIC_CIRCUIT "Build the integrated Agentic Circuit component" OFF)
+option(PYC_BUILD_AGENTIC_CIRCUIT_TESTS "Build Agentic Circuit tests" OFF)
 option(PYC_RUNTIME_ENABLE_ZLIB_TRACE "Enable gzip trace output in runtime (optional)" OFF)
 option(PYC_RUNTIME_BUILD_SHARED "Build shared pyc6 runtime library" OFF)
 option(PYC_INSTALL_TEMPLATES "Install runtime template libraries" ON)
@@ -34,12 +36,30 @@ if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/.git")
   endif()
 endif()
 
+if(PYC_BUILD_AGENTIC_CIRCUIT)
+  # Discover LLVM/MLIR in the common parent scope so the PYC and ACIR sibling
+  # subprojects share one imported target graph.
+  find_package(LLVM 22.1.8 EXACT CONFIG REQUIRED)
+  find_package(MLIR 22.1.8 EXACT CONFIG REQUIRED)
+endif()
+
 if(PYC_BUILD_MLIR_TOOLS)
   add_subdirectory(compiler/mlir)
 endif()
 
 if(PYC_BUILD_RUNTIME_LIB)
   add_subdirectory(runtime/cpp)
+endif()
+
+if(PYC_BUILD_AGENTIC_CIRCUIT)
+  if(NOT PYC_BUILD_MLIR_TOOLS OR NOT PYC_BUILD_RUNTIME_LIB)
+    message(FATAL_ERROR
+      "PYC_BUILD_AGENTIC_CIRCUIT requires PYC_BUILD_MLIR_TOOLS=ON and "
+      "PYC_BUILD_RUNTIME_LIB=ON so ACIR-to-PYC uses the repo-local pyc6 toolchain")
+  endif()
+  set(ACIR_BUILD_TESTING "${PYC_BUILD_AGENTIC_CIRCUIT_TESTS}" CACHE BOOL
+    "Build Agentic Circuit tests" FORCE)
+  add_subdirectory(components/agentic-circuit)
 endif()
 
 if(PYC_INSTALL_TEMPLATES)
