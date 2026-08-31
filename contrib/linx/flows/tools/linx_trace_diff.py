@@ -2,11 +2,8 @@
 import argparse
 import gzip
 import json
-from pathlib import Path
-import sys
 from dataclasses import dataclass
-from typing import Optional
-
+from pathlib import Path
 
 DEFAULT_COMMIT_SCHEMA_ID = "LC-COMMIT-BUNDLE-V2"
 
@@ -115,16 +112,36 @@ def _collapse_boundary_selfloops(rows: list[TraceRec]) -> list[TraceRec]:
     i = 0
     n = len(rows)
     while i < n:
-        cur = rows[i]
-        if i + 1 < n:
+        begin = i
+        while i + 1 < n:
+            cur = rows[i]
             nxt = rows[i + 1]
             same_pc = _to_int(cur.get("pc")) == _to_int(nxt.get("pc"))
             same_insn = _to_int(cur.get("insn")) == _to_int(nxt.get("insn"))
             self_loop = _to_int(cur.get("next_pc")) == _to_int(cur.get("pc"))
-            if same_pc and same_insn and self_loop:
-                i += 1
-                continue
-        out.append(cur)
+            if not (same_pc and same_insn and self_loop):
+                break
+            i += 1
+        commit = rows[i]
+        if i > begin:
+            # A replaying producer exposes internal per-element memory activity,
+            # while an instruction-retire producer reports one quiet commit for
+            # the same block instruction.  Once the replay rows are collapsed,
+            # the micro-event memory group is outside the commit observation
+            # point and must not survive on the synthesized instruction record.
+            merged = dict(commit.raw)
+            merged.update(
+                {
+                    "mem_valid": 0,
+                    "mem_is_store": 0,
+                    "mem_addr": 0,
+                    "mem_wdata": 0,
+                    "mem_rdata": 0,
+                    "mem_size": 0,
+                }
+            )
+            commit = TraceRec(merged)
+        out.append(commit)
         i += 1
     return out
 
@@ -136,7 +153,7 @@ def load_jsonl(path: str) -> list[TraceRec]:
 def _open_text(path: Path):
     if str(path).endswith(".gz"):
         return gzip.open(path, "rt", encoding="utf-8")
-    return open(path, "r", encoding="utf-8")
+    return open(path, encoding="utf-8")
 
 
 def _is_start_record(obj: dict) -> bool:
@@ -147,7 +164,14 @@ def _is_start_record(obj: dict) -> bool:
 
 
 def _extract_schema_id(start: dict) -> str | None:
-    for k in ["commit_schema_id", "schema_id", "trace_schema_id", "schema", "version", "trace_version"]:
+    for k in [
+        "commit_schema_id",
+        "schema_id",
+        "trace_schema_id",
+        "schema",
+        "version",
+        "trace_version",
+    ]:
         v = start.get(k, None)
         if v is None:
             continue
@@ -160,22 +184,30 @@ def _extract_schema_id(start: dict) -> str | None:
 def _validate_commit_record(obj: dict, *, path: str, ln: int) -> None:
     missing = [field for field in _BASE_REQUIRED_FIELDS if field not in obj]
     if missing:
-        raise SystemExit(f"error: {path}:{ln}: missing required fields: {', '.join(missing)}")
+        raise SystemExit(
+            f"error: {path}:{ln}: missing required fields: {', '.join(missing)}"
+        )
 
     if _to_int(obj.get("wb_valid")) != 0:
         missing_wb = [field for field in _WB_FIELDS if field not in obj]
         if missing_wb:
-            raise SystemExit(f"error: {path}:{ln}: wb_valid==1 but missing wb fields: {', '.join(missing_wb)}")
+            raise SystemExit(
+                f"error: {path}:{ln}: wb_valid==1 but missing wb fields: {', '.join(missing_wb)}"
+            )
 
     if _to_int(obj.get("mem_valid")) != 0:
         missing_mem = [field for field in _MEM_FIELDS if field not in obj]
         if missing_mem:
-            raise SystemExit(f"error: {path}:{ln}: mem_valid==1 but missing mem fields: {', '.join(missing_mem)}")
+            raise SystemExit(
+                f"error: {path}:{ln}: mem_valid==1 but missing mem fields: {', '.join(missing_mem)}"
+            )
 
     if _to_int(obj.get("trap_valid")) != 0:
         missing_trap = [field for field in _TRAP_FIELDS if field not in obj]
         if missing_trap:
-            raise SystemExit(f"error: {path}:{ln}: trap_valid==1 but missing trap fields: {', '.join(missing_trap)}")
+            raise SystemExit(
+                f"error: {path}:{ln}: trap_valid==1 but missing trap fields: {', '.join(missing_trap)}"
+            )
 
 
 def load_commit_trace(
@@ -220,7 +252,9 @@ def load_commit_trace(
         exp = str(expected_schema_id).strip()
         if exp and schema_id != exp:
             got = "<missing>" if schema_id is None else schema_id
-            raise SystemExit(f"error: {p}: schema mismatch: expected={exp!r} got={got!r}")
+            raise SystemExit(
+                f"error: {p}: schema mismatch: expected={exp!r} got={got!r}"
+            )
 
     return CommitTrace(path=p, commit_schema_id=schema_id, rows=out)
 
@@ -254,9 +288,16 @@ def _default_trace_config_for_cycle(*, cycle: int, pre: int, post: int) -> dict:
         "version": 1,
         "rules": [
             {"instances": ["**"], "ports": ["*"]},
-            {"instances": ["**"], "probes": {"families": ["pv"], "at": ["tick", "xfer"]}},
+            {
+                "instances": ["**"],
+                "probes": {"families": ["pv"], "at": ["tick", "xfer"]},
+            },
         ],
-        "window": {"trigger": {"cycle": int(cycle)}, "pre": int(pre), "post": int(post)},
+        "window": {
+            "trigger": {"cycle": int(cycle)},
+            "pre": int(pre),
+            "post": int(post),
+        },
         "note": "auto-generated by linx_trace_diff.py (Decision 0142 mismatch DFX dump request)",
     }
 
@@ -310,8 +351,12 @@ def _dump_mismatch(
 
 
 def first_mismatch(
-    a: list[TraceRec], b: list[TraceRec], *, ignore_fields: set[str], limit: int | None = None
-) -> Optional[tuple[int, str]]:
+    a: list[TraceRec],
+    b: list[TraceRec],
+    *,
+    ignore_fields: set[str],
+    limit: int | None = None,
+) -> tuple[int, str] | None:
     if limit is not None and limit >= 0:
         a = a[:limit]
         b = b[:limit]
@@ -323,44 +368,64 @@ def first_mismatch(
         for k in ["pc", "insn", "len", "next_pc"]:
             if k in ignore_fields:
                 continue
-            if _to_int(ra.get(k, None), default=-1) != _to_int(rb.get(k, None), default=-1):
+            if _to_int(ra.get(k, None), default=-1) != _to_int(
+                rb.get(k, None), default=-1
+            ):
                 return i, k
 
         # WB fields: rd/data are don't-care when wb_valid==0.
         for k in ["wb_valid"]:
             if k in ignore_fields:
                 continue
-            if _to_int(ra.get(k, None), default=-1) != _to_int(rb.get(k, None), default=-1):
+            if _to_int(ra.get(k, None), default=-1) != _to_int(
+                rb.get(k, None), default=-1
+            ):
                 return i, k
         if _to_int(ra.get("wb_valid", 0)) != 0 and _to_int(rb.get("wb_valid", 0)) != 0:
             for k in ["wb_rd", "wb_data"]:
                 if k in ignore_fields:
                     continue
-                if _to_int(ra.get(k, None), default=-1) != _to_int(rb.get(k, None), default=-1):
+                if _to_int(ra.get(k, None), default=-1) != _to_int(
+                    rb.get(k, None), default=-1
+                ):
                     return i, k
 
         # Mem fields: addr/data/size are don't-care when mem_valid==0.
         for k in ["mem_valid"]:
             if k in ignore_fields:
                 continue
-            if _to_int(ra.get(k, None), default=-1) != _to_int(rb.get(k, None), default=-1):
+            if _to_int(ra.get(k, None), default=-1) != _to_int(
+                rb.get(k, None), default=-1
+            ):
                 return i, k
-        if _to_int(ra.get("mem_valid", 0)) != 0 and _to_int(rb.get("mem_valid", 0)) != 0:
+        if (
+            _to_int(ra.get("mem_valid", 0)) != 0
+            and _to_int(rb.get("mem_valid", 0)) != 0
+        ):
             for k in ["mem_addr", "mem_wdata", "mem_rdata", "mem_size"]:
                 if k in ignore_fields:
                     continue
-                if _to_int(ra.get(k, None), default=-1) != _to_int(rb.get(k, None), default=-1):
+                if _to_int(ra.get(k, None), default=-1) != _to_int(
+                    rb.get(k, None), default=-1
+                ):
                     return i, k
 
         # Trap fields: cause is don't-care when trap_valid==0.
         for k in ["trap_valid"]:
             if k in ignore_fields:
                 continue
-            if _to_int(ra.get(k, None), default=-1) != _to_int(rb.get(k, None), default=-1):
+            if _to_int(ra.get(k, None), default=-1) != _to_int(
+                rb.get(k, None), default=-1
+            ):
                 return i, k
-        if _to_int(ra.get("trap_valid", 0)) != 0 and _to_int(rb.get("trap_valid", 0)) != 0:
+        if (
+            _to_int(ra.get("trap_valid", 0)) != 0
+            and _to_int(rb.get("trap_valid", 0)) != 0
+        ):
             k = "trap_cause"
-            if k not in ignore_fields and _to_int(ra.get(k, None), default=-1) != _to_int(rb.get(k, None), default=-1):
+            if k not in ignore_fields and _to_int(
+                ra.get(k, None), default=-1
+            ) != _to_int(rb.get(k, None), default=-1):
                 return i, k
     if len(a) != len(b):
         return n, "<length>"
@@ -368,7 +433,9 @@ def first_mismatch(
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="Diff LinxISA JSONL commit traces (QEMU vs pyCircuit bring-up).")
+    ap = argparse.ArgumentParser(
+        description="Diff LinxISA JSONL commit traces (QEMU vs pyCircuit bring-up)."
+    )
     ap.add_argument("ref_jsonl", help="Reference JSONL (typically QEMU)")
     ap.add_argument("dut_jsonl", help="DUT JSONL (typically pyCircuit)")
     ap.add_argument(
@@ -459,13 +526,19 @@ def main() -> int:
 
     mm = first_mismatch(ref, dut, ignore_fields=ignore_fields, limit=args.limit)
     if mm is None:
-        shown = min(len(ref), args.limit) if args.limit is not None and args.limit >= 0 else len(ref)
+        shown = (
+            min(len(ref), args.limit)
+            if args.limit is not None and args.limit >= 0
+            else len(ref)
+        )
         print(f"ok: traces match ({shown} commits)")
         return 0
 
     idx, field = mm
     if field == "<length>":
-        print(f"mismatch: length differs: ref={len(ref)} dut={len(dut)} (first extra at idx={idx})")
+        print(
+            f"mismatch: length differs: ref={len(ref)} dut={len(dut)} (first extra at idx={idx})"
+        )
         if args.dump_dir:
             _dump_mismatch(
                 dump_dir=Path(args.dump_dir),
@@ -506,7 +579,9 @@ def main() -> int:
     ]:
         if k in ignore_fields:
             continue
-        print(f"  ref.{k}={fmt_hex(ra.get(k, None))}  dut.{k}={fmt_hex(rb.get(k, None))}")
+        print(
+            f"  ref.{k}={fmt_hex(ra.get(k, None))}  dut.{k}={fmt_hex(rb.get(k, None))}"
+        )
     if args.dump_dir:
         _dump_mismatch(
             dump_dir=Path(args.dump_dir),

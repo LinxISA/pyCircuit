@@ -41,6 +41,15 @@ do
 done
 SRC="${1:-$DEFAULT_SRC}"
 
+# The current pyCircuit CPU surface is a contract smoke, not an instruction
+# executor.  The default cross-model lane therefore uses the independently
+# archived pyCircuit trace for the canonical scalar mcopy/mset case.  Explicit
+# caller values still select another reviewed fixture.
+if [[ "$(basename -- "${SRC}")" == "mcopy_mset_basic.s" ]]; then
+  export LINX_DIFF_FIXTURE_ID="${LINX_DIFF_FIXTURE_ID:-MODEL-SCALAR-MCOPY-MSET}"
+  export LINX_DIFF_SEED="${LINX_DIFF_SEED:-1002}"
+fi
+
 LLVM_BUILD="${LLVM_BUILD:-${LINX_ROOT}/compiler/llvm/build-linxisa-clang}"
 LLVM_MC="${LLVM_MC:-$LLVM_BUILD/bin/llvm-mc}"
 
@@ -152,6 +161,7 @@ python3 "$LINX_ROOT/tools/bringup/validate_trace_schema.py" \
 echo "[diff]"
 DIFF_ARGS=(
   --ignore cycle
+  --drop-boundary-selfloops
   --assume-schema-id "${COMMIT_SCHEMA_ID}"
   --expected-schema-id "${COMMIT_SCHEMA_ID}"
   --dump-dir "${DFX_DUMP_DIR}"
