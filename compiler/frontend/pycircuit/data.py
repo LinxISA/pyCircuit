@@ -2,8 +2,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Generic, TypeVar, cast
-
+from typing import Generic, TypeVar
 
 DT = TypeVar("DT", bound="Data", covariant=True)
 
@@ -35,7 +34,7 @@ class Data(ABC):
         """Integer bit-width (vectors: leaf/element width; clock/reset: 1)."""
 
     @classmethod
-    def from_str(cls, s: str) -> "Data":
+    def from_str(cls, s: str) -> Data:
         raw = str(s).strip()
         if raw.startswith("vector<") and raw.endswith(">"):
             return Vector.from_str(raw)
@@ -58,7 +57,9 @@ class Bits(Data):
 
     def __post_init__(self) -> None:
         if not isinstance(self.bitwidth, int) or self.bitwidth <= 0:
-            raise ValueError(f"Bits.bitwidth must be a positive int, got {self.bitwidth!r}")
+            raise ValueError(
+                f"Bits.bitwidth must be a positive int, got {self.bitwidth!r}"
+            )
 
     @property
     def width(self) -> int:
@@ -68,7 +69,7 @@ class Bits(Data):
         return f"i{self.bitwidth}"
 
     @classmethod
-    def from_str(cls, s: str) -> "Bits":
+    def from_str(cls, s: str) -> Bits:
         raw = str(s).strip()
         if not raw.startswith("i"):
             raise ValueError(f"invalid bits type: {s!r}")
@@ -88,9 +89,13 @@ class Vector(Data, Generic[DT]):
 
     def __post_init__(self) -> None:
         if not isinstance(self.length, int) or self.length <= 0:
-            raise ValueError(f"Vector.length must be a positive int, got {self.length!r}")
+            raise ValueError(
+                f"Vector.length must be a positive int, got {self.length!r}"
+            )
         if not isinstance(self.elem, Data):
-            raise TypeError(f"Vector.elem must be a Data, got {type(self.elem).__name__}")
+            raise TypeError(
+                f"Vector.elem must be a Data, got {type(self.elem).__name__}"
+            )
 
     def __str__(self) -> str:
         shape: list[int] = [self.length]
@@ -122,7 +127,7 @@ class Vector(Data, Generic[DT]):
         return e
 
     @classmethod
-    def from_str(cls, s: str) -> "Vector[Data]":
+    def from_str(cls, s: str) -> Vector[Data]:
         raw = str(s).strip()
         if not (raw.startswith("vector<") and raw.endswith(">")):
             raise ValueError(f"expected vector type, got {raw!r}")
@@ -150,7 +155,7 @@ class Vector(Data, Generic[DT]):
         return cls.from_shape(dims, Data.from_str(parts[-1]))
 
     @classmethod
-    def from_shape(cls, shape: list[int], leaf: Data) -> "Vector[Data]":
+    def from_shape(cls, shape: list[int], leaf: Data) -> Vector[Data]:
         """Wrap ``leaf`` in nested ``Vector`` from outer to inner.
 
         ``cls.from_shape([4, 3], Bits(8))`` → ``Vector(4, Vector(3, Bits(8)))``.
