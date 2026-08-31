@@ -40,7 +40,17 @@ config.substitutions.append(("%source_root", config.acir_source_root))
 
 config.substitutions.append(("%acir_opt_public", os.path.join(tools_dir, "acir-opt")))
 config.substitutions.append(("%acir_opt", os.path.join(tools_dir, "acir-opt-internal")))
+config.substitutions.append(("%acir_build", os.path.join(tools_dir, "acir-build")))
 config.substitutions.append(("%acir_cxxgen", os.path.join(tools_dir, "acir-cxxgen")))
+config.substitutions.append(
+    ("%acir_opcode_catalog", os.path.join(tools_dir, "acir-opcode-catalog"))
+)
+config.substitutions.append(
+    ("%acir_queue_cxxgen", os.path.join(tools_dir, "acir-queue-cxxgen"))
+)
+config.substitutions.append(
+    ("%acir_queue_pycgen", os.path.join(tools_dir, "acir-queue-pycgen"))
+)
 config.substitutions.append(("%FileCheck", os.path.join(llvm_tools_dir, "FileCheck")))
 config.substitutions.append(("%split_file", os.path.join(llvm_tools_dir, "split-file")))
 config.substitutions.append(("%not", os.path.join(llvm_tools_dir, "not")))

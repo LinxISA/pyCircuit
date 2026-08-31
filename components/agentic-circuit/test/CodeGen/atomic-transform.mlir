@@ -1,7 +1,7 @@
-// RUN: %binary_root/bin/acir-queue-cxxgen %s > %t.cpp
+// RUN: %acir_queue_cxxgen %s > %t.cpp
 // RUN: %FileCheck %s --check-prefix=GFSIM < %t.cpp
 // RUN: %cxx -std=c++20 -I%source_root/include -c %t.cpp -o %t.o
-// RUN: %binary_root/bin/acir-queue-pycgen %s | %FileCheck %s --check-prefix=PYC
+// RUN: %acir_queue_pycgen %s | %FileCheck %s --check-prefix=PYC
 
 module attributes {ac.contract_epoch = "0.3", ac.system = "atomic_sum"} {
   %left = ac.source depth 2 latency 1 {ac.name = "left"} : !ac.queue<i64>

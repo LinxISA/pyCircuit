@@ -1,4 +1,4 @@
-// RUN: %binary_root/bin/acir-queue-pycgen %s | %FileCheck %s --check-prefix=PYC
+// RUN: %acir_queue_pycgen %s | %FileCheck %s --check-prefix=PYC
 
 module attributes {ac.contract_epoch = "0.3", ac.system = "popcount"} {
   ac.type_scope @types {

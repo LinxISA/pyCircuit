@@ -1,4 +1,4 @@
-// RUN: %python %source_root/tools/acir-queue-veriloggen.py %s --pycgen %binary_root/bin/acir-queue-pycgen | %FileCheck %s --check-prefix=VERILOG
+// RUN: %python %source_root/tools/acir-queue-veriloggen.py %s --pycgen %acir_queue_pycgen | %FileCheck %s --check-prefix=VERILOG
 
 module attributes {ac.contract_epoch = "0.3", ac.system = "popcount"} {
   ac.type_scope @types {
