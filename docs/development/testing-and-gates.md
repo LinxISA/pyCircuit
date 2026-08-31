@@ -39,6 +39,41 @@ bash flows/scripts/run_semantic_regressions_v6.sh
 | Examples, testbenches, simulation entrypoint behavior | `pytest tests/unit -m unit`; `pytest tests/system -m system`; `bash flows/scripts/run_examples.sh`; `bash flows/scripts/run_sims.sh`; `bash flows/scripts/run_sims_nightly.sh` |
 | MLIR dialect, passes, legality, runtime, codegen, trace semantics | `bash flows/scripts/run_examples.sh`; `bash flows/scripts/run_sims.sh`; `bash flows/scripts/run_sims_nightly.sh`; `bash flows/scripts/run_semantic_regressions_v6.sh`; strict decision-status check |
 | Linx integration changes under `contrib/linx/` or cross-repo interface behavior | Required pyCircuit lanes plus the `linx-pycircuit` mandatory gates |
+| Agentic Circuit Python frontend, ACPy, schemas or CLI | AC G0 plus changed-file pre-commit checks |
+| ACIR/ACSim dialect, verifier, transformation or gfsim | AC G0 and AC G1 |
+| ACIR-to-PYC, pyc6 runtime integration or synthesizable AC semantics | AC G0/G1/G2 plus the full pyCircuit and Linx integration closure |
+
+## Agentic Circuit gates
+
+Agentic Circuit uses three stable gate classes. All commands run from the
+pyCircuit repository root and use generated output directories outside tracked
+source.
+
+### AC G0: frontend and contracts
+
+- install/import the `agentic-circuit` distribution from the current worktree;
+- validate ACPy epoch `0.3` golden serialization;
+- run Python frontend, schema, contract and CLI inventory tests; and
+- verify that `agentic_circuit` remains separate from `pycircuit` exports.
+
+### AC G1: ACIR, ACSim and gfsim
+
+- build `acir-opt`, ACIR/ACSim libraries and gfsim from the current worktree;
+- run ACIR/ACSim parser, printer, verifier and lit suites;
+- run the AC C++ unit suites; and
+- run at least one ACIR-to-ACSim-to-gfsim end-to-end case.
+
+### AC G2: pyCircuit 6 hardware integration
+
+- run the synthesizable ACIR subset through ACIR-to-PYC-to-`pycc`;
+- execute C++ simulation linked against `libpyc6_runtime`;
+- generate and validate Verilog for the same canonical cases;
+- compare applicable gfsim, pyc6 C++ and Verilator observations; and
+- prove unsupported ACIR constructs fail at the intended verifier boundary.
+
+AC G2 consumes current pyCircuit 6 contracts. It therefore requires the full
+examples, normal/nightly simulation, V6 semantic, strict decision-status and
+Linx integration lanes before the old Agentic Circuit repository is retired.
 
 ## When strict decision-status validation is required
 

@@ -7,3 +7,8 @@
 /CONTRIBUTING.md @PTO-ISA/pycircuit-maintainers
 /SECURITY.md @PTO-ISA/pycircuit-maintainers
 /CODE_OF_CONDUCT.md @PTO-ISA/pycircuit-maintainers
+
+# Agentic Circuit remains a separate semantic and package boundary in the
+# shared repository, but follows the same maintainer review authority.
+/components/agentic-circuit/ @PTO-ISA/pycircuit-maintainers
+/docs/acir/ @PTO-ISA/pycircuit-maintainers

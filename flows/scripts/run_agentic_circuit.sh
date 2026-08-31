@@ -1,0 +1,115 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+source "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
+
+gate_run_id="${PYC_GATE_RUN_ID:-$(date +%Y%m%d-%H%M%S)}"
+docs_gate_dir="${PYC_ROOT_DIR}/docs/gates/logs/${gate_run_id}"
+gate_out_dir="$(pyc_out_root)/gates/${gate_run_id}/agentic-circuit"
+ac_root="${PYC_ROOT_DIR}/components/agentic-circuit"
+venv="$(pyc_out_root)/agentic-circuit/venv"
+mkdir -p "${docs_gate_dir}" "${gate_out_dir}" "$(dirname "${venv}")"
+
+exec > >(tee "${docs_gate_dir}/agentic_circuit.stdout") \
+  2> >(tee "${docs_gate_dir}/agentic_circuit.stderr" >&2)
+
+cat > "${docs_gate_dir}/agentic_circuit_commands.txt" <<EOF
+bash flows/scripts/run_agentic_circuit.sh
+python3 -m unittest discover -s components/agentic-circuit/tests/python_frontend -p 'test_*.py'
+python3 -m unittest discover -s components/agentic-circuit/tests/cli -p 'test_*.py'
+cmake --build components/agentic-circuit/build/dev-llvm22 --target check-acir
+ctest --test-dir components/agentic-circuit/build/dev-llvm22 --output-on-failure
+bash flows/scripts/pyc build
+components/agentic-circuit/tools/ac-queue-pyc-build.py <ACIR> ...
+EOF
+
+pyc_log "Agentic Circuit closure run-id=${gate_run_id}"
+
+if [[ ! -x "${venv}/bin/python" ]]; then
+  python3 -m venv "${venv}"
+fi
+"${venv}/bin/python" -m pip install -e "${ac_root}[test]"
+
+llvm_config="${LLVM_CONFIG:-}"
+if [[ -z "${llvm_config}" ]]; then
+  for candidate in llvm-config-22 llvm-config; do
+    if command -v "${candidate}" >/dev/null 2>&1; then
+      llvm_config="$(command -v "${candidate}")"
+      break
+    fi
+  done
+fi
+[[ -n "${llvm_config}" ]] || pyc_die "LLVM 22 llvm-config is required"
+[[ "$("${llvm_config}" --version | cut -d. -f1)" == "22" ]] || \
+  pyc_die "Agentic Circuit requires LLVM 22"
+export LLVM_DIR="${LLVM_DIR:-$("${llvm_config}" --cmakedir)}"
+export MLIR_DIR="${MLIR_DIR:-$(dirname "${LLVM_DIR}")/mlir}"
+
+pyc_log "AC G0/G1: configure standalone AC component"
+PATH="${venv}/bin:${PATH}" cmake --preset dev-llvm22 \
+  -S "${ac_root}" -DACIR_BUILD_TESTING=ON
+cmake --build "${ac_root}/build/dev-llvm22" -j "${PYC_BUILD_JOBS:-6}"
+
+site_packages="$("${venv}/bin/python" -c \
+  'import sysconfig; print(sysconfig.get_paths()["purelib"])')"
+(
+  cd "${ac_root}"
+  PYTHONPATH="src:build/dev-llvm22/python" \
+    "${venv}/bin/python" -m unittest discover \
+      -s tests/python_frontend -p 'test_*.py'
+  PYTHONPATH="src:build/dev-llvm22/python" \
+    "${venv}/bin/python" -m unittest discover \
+      -s tests/cli -p 'test_*.py'
+  PYTHONPATH="${site_packages}" \
+    cmake --build build/dev-llvm22 --target check-acir -j "${PYC_BUILD_JOBS:-6}"
+  ctest --test-dir build/dev-llvm22 --output-on-failure \
+    -j "${PYC_TEST_JOBS:-6}"
+)
+
+pyc_log "AC G2: build and install the repo-local pyc6 + AC toolchain"
+PYC_BUILD_AGENTIC_CIRCUIT=ON bash "${PYC_ROOT_DIR}/flows/scripts/pyc" build
+toolchain="${PYC_ROOT_DIR}/.pycircuit_out/toolchain/install"
+pycgen="${toolchain}/bin/acir-queue-pycgen"
+pycc="${toolchain}/bin/pycc"
+metadata="${toolchain}/share/pycircuit/toolchain-metadata.json"
+for required in "${pycgen}" "${pycc}" "${metadata}"; do
+  [[ -f "${required}" ]] || pyc_die "missing integrated toolchain artifact: ${required}"
+done
+
+cxx="$(command -v c++ || true)"
+verilator="$(command -v verilator || true)"
+[[ -n "${cxx}" ]] || pyc_die "C++ compiler is required for AC G2"
+[[ -n "${verilator}" ]] || pyc_die "Verilator is required for AC G2"
+
+for case_name in arbiter atomic-transform popcount; do
+  case_dir="${gate_out_dir}/${case_name}"
+  if [[ -e "${case_dir}" ]]; then
+    pyc_die "AC G2 output already exists: ${case_dir}"
+  fi
+  "${ac_root}/tools/ac-queue-pyc-build.py" \
+    "${ac_root}/test/CodeGen/${case_name}.mlir" \
+    --pycgen-tool "${pycgen}" \
+    --pycc "${pycc}" \
+    --toolchain-lock "${ac_root}/toolchains/pyc.lock.json" \
+    --toolchain-metadata "${metadata}" \
+    --cxx "${cxx}" \
+    --verilator "${verilator}" \
+    --pyc-output "${case_dir}/model.pyc" \
+    --cpp-output-dir "${case_dir}/cpp" \
+    --verilog-output-dir "${case_dir}/verilog" \
+    --manifest "${case_dir}/manifest.json"
+done
+
+cat > "${docs_gate_dir}/agentic_circuit_summary.json" <<EOF
+{
+  "run_id": "${gate_run_id}",
+  "script": "run_agentic_circuit.sh",
+  "status": "pass",
+  "lanes": ["AC G0", "AC G1", "AC G2"],
+  "contract_epoch": "0.3",
+  "pyc_interface": "pyc6",
+  "cases": ["arbiter", "atomic-transform", "popcount"]
+}
+EOF
+
+pyc_log "Agentic Circuit G0/G1/G2 closure passed"
