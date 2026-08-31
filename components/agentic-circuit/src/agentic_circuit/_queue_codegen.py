@@ -1,0 +1,979 @@
+"""Deterministic QueueProgram to typed gfsim C++ lowering."""
+
+from __future__ import annotations
+
+import ast
+from dataclasses import dataclass
+
+from ._queue_frontend import (
+    CollectionBinding,
+    Payload,
+    QueueBinding,
+    QueueFrontendError,
+    QueueProgram,
+    StaticQueueCollection,
+    parse_queue_program,
+)
+
+
+def _cpp_type(acir_type: str) -> str:
+    if acir_type.startswith("i") and acir_type[1:].isdigit():
+        width = int(acir_type[1:])
+        if width == 1:
+            return "bool"
+        if width <= 8:
+            return "std::uint8_t"
+        if width <= 16:
+            return "std::uint16_t"
+        if width <= 32:
+            return "std::uint32_t"
+        if width <= 64:
+            return "std::int64_t"
+    prefix = "!ac.struct<@types::@"
+    if acir_type.startswith(prefix) and acir_type.endswith(">"):
+        return acir_type[len(prefix) : -1]
+    raise QueueFrontendError(f"ACLOWER-TYPE-MISMATCH: no C++ type for {acir_type}")
+
+
+class _CppExpression:
+    def __init__(self, argument: str) -> None:
+        self.argument = argument
+
+    def emit(self, node: ast.expr) -> str:
+        if isinstance(node, ast.Name) and node.id == self.argument:
+            return "item"
+        if isinstance(node, ast.Constant) and type(node.value) in {int, bool}:
+            if node.value is True:
+                return "true"
+            if node.value is False:
+                return "false"
+            return str(node.value)
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id == self.argument
+        ):
+            if (
+                node.func.attr in {"peek", "pop"}
+                and not node.args
+                and not node.keywords
+            ):
+                return "item"
+            if node.func.attr == "push" and len(node.args) == 1 and not node.keywords:
+                return self.emit(node.args[0])
+        if isinstance(node, ast.Attribute):
+            return f"{self.emit(node.value)}.{node.attr}"
+        if isinstance(node, ast.BinOp) and isinstance(
+            node.op, (ast.Add, ast.Sub, ast.Mult)
+        ):
+            operator = {ast.Add: "+", ast.Sub: "-", ast.Mult: "*"}[type(node.op)]
+            return f"({self.emit(node.left)} {operator} {self.emit(node.right)})"
+        if isinstance(node, ast.BoolOp) and isinstance(node.op, ast.And):
+            return "(" + " && ".join(self.emit(value) for value in node.values) + ")"
+        if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not):
+            return f"(!{self.emit(node.operand)})"
+        if (
+            isinstance(node, ast.Compare)
+            and len(node.ops) == len(node.comparators) == 1
+        ):
+            operators = {
+                ast.Eq: "==",
+                ast.NotEq: "!=",
+                ast.Lt: "<",
+                ast.LtE: "<=",
+                ast.Gt: ">",
+                ast.GtE: ">=",
+            }
+            operator = operators.get(type(node.ops[0]))
+            if operator is not None:
+                return (
+                    f"({self.emit(node.left)} {operator} "
+                    f"{self.emit(node.comparators[0])})"
+                )
+        raise QueueFrontendError(
+            "ACLOWER-UNSUPPORTED-CONSTRUCT: lambda is outside C++ expression subset"
+        )
+
+
+def _policy_body(queue: QueueBinding) -> list[str]:
+    assert queue.argument is not None and queue.expression is not None
+    return _expression_policy_body(queue.argument, queue.expression)
+
+
+def _expression_policy_body(argument: str, node: ast.expr) -> list[str]:
+    expression = _CppExpression(argument)
+    if (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "push"
+        and len(node.args) == 1
+        and not node.keywords
+    ):
+        node = node.args[0]
+    if (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "with_fields"
+        and not node.args
+    ):
+        lines = ["    auto result = item;"]
+        for keyword in node.keywords:
+            if keyword.arg is None:
+                raise QueueFrontendError(
+                    "ACLOWER-UNSUPPORTED-CONSTRUCT: field unpacking is forbidden"
+                )
+            lines.append(
+                f"    result.{keyword.arg} = {expression.emit(keyword.value)};"
+            )
+        lines.extend(("    return result;",))
+        return lines
+    return [f"    return {expression.emit(node)};"]
+
+
+@dataclass(frozen=True, slots=True)
+class _ObjectIds:
+    queues: dict[str, int]
+    fanout_queues: dict[str, int]
+    feedback_states: tuple[int, ...]
+    broadcasts: tuple[int, ...]
+    transforms: dict[str, int]
+    routes: tuple[int, ...]
+    forks: tuple[int, ...]
+    merges: tuple[int, ...]
+    barriers: tuple[int, ...]
+    feedbacks: tuple[int, ...]
+    reorders: tuple[int, ...]
+    dependencies: tuple[int, ...]
+    credits: tuple[int, ...]
+    memories: tuple[int, ...]
+    sinks: tuple[int, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class _Fanout:
+    source: str
+    outputs: tuple[str, ...]
+    consumers: tuple[str, ...]
+    payload: str
+    scope: tuple[str, ...]
+
+
+def _common_scope(scopes: list[tuple[str, ...]]) -> tuple[str, ...]:
+    common: list[str] = []
+    for parts in zip(*scopes, strict=False):
+        if len(set(parts)) != 1:
+            break
+        common.append(parts[0])
+    return tuple(common)
+
+
+def _fanouts(program: QueueProgram) -> tuple[_Fanout, ...]:
+    consumers: dict[str, list[QueueBinding]] = {}
+    for queue in program.queues:
+        if queue.input_name is not None:
+            consumers.setdefault(queue.input_name, []).append(queue)
+    existing = {queue.name for queue in program.queues}
+    fanouts: list[_Fanout] = []
+    for source, group in consumers.items():
+        if len(group) < 2:
+            continue
+        outputs = tuple(f"{source}__fanout{index}" for index in range(len(group)))
+        if existing.intersection(outputs):
+            raise QueueFrontendError(
+                "ACLOWER-OWNERSHIP: inferred broadcast Queue name collides with source"
+            )
+        source_queue = next(queue for queue in program.queues if queue.name == source)
+        fanouts.append(
+            _Fanout(
+                source,
+                outputs,
+                tuple(queue.name for queue in group),
+                source_queue.payload,
+                _common_scope([source_queue.scope, *(queue.scope for queue in group)]),
+            )
+        )
+    return tuple(fanouts)
+
+
+def _collection_leaves(
+    value: StaticQueueCollection,
+    path: tuple[int, ...] = (),
+) -> tuple[tuple[str, tuple[int, ...]], ...]:
+    leaves: list[tuple[str, tuple[int, ...]]] = []
+    for index, (_, member) in enumerate(value.members):
+        member_path = (*path, index)
+        if isinstance(member, str):
+            leaves.append((member, member_path))
+        else:
+            leaves.extend(_collection_leaves(member, member_path))
+    return tuple(leaves)
+
+
+def _owning_arrays(program: QueueProgram) -> tuple[CollectionBinding, ...]:
+    queue_names = {queue.name for queue in program.queues}
+    result: list[CollectionBinding] = []
+    claimed: set[str] = set()
+    for collection in program.collections:
+        if collection.value.kind != "array":
+            continue
+        leaves = {name for name, _ in _collection_leaves(collection.value)}
+        if (
+            not leaves
+            or not leaves.issubset(queue_names)
+            or claimed.intersection(leaves)
+        ):
+            continue
+        result.append(collection)
+        claimed.update(leaves)
+    return tuple(result)
+
+
+def _array_cpp_type(
+    value: StaticQueueCollection, queues: dict[str, QueueBinding]
+) -> str:
+    first = value.members[0][1]
+    element = (
+        f"gfsim::SimQueue<{_cpp_type(queues[first].payload)}>"
+        if isinstance(first, str)
+        else _array_cpp_type(first, queues)
+    )
+    return f"std::array<{element}, {len(value.members)}>"
+
+
+def _object_ids(program: QueueProgram, fanouts: tuple[_Fanout, ...]) -> _ObjectIds:
+    next_id = 0
+    queues: dict[str, int] = {}
+    for queue in program.queues:
+        queues[queue.name] = next_id
+        next_id += 1
+    fanout_queues: dict[str, int] = {}
+    for fanout in fanouts:
+        for output in fanout.outputs:
+            fanout_queues[output] = next_id
+            next_id += 1
+    feedback_states = tuple(range(next_id, next_id + len(program.feedbacks)))
+    next_id += len(feedback_states)
+    broadcasts = tuple(range(next_id, next_id + len(fanouts)))
+    next_id += len(broadcasts)
+    transforms: dict[str, int] = {}
+    for queue in program.queues:
+        if queue.input_name is not None:
+            transforms[queue.name] = next_id
+            next_id += 1
+    routes = tuple(range(next_id, next_id + len(program.routes)))
+    next_id += len(routes)
+    forks = tuple(range(next_id, next_id + len(program.forks)))
+    next_id += len(forks)
+    merges = tuple(range(next_id, next_id + len(program.merges)))
+    next_id += len(merges)
+    barriers = tuple(range(next_id, next_id + len(program.barriers)))
+    next_id += len(barriers)
+    feedbacks = tuple(range(next_id, next_id + len(program.feedbacks)))
+    next_id += len(feedbacks)
+    reorders = tuple(range(next_id, next_id + len(program.reorders)))
+    next_id += len(reorders)
+    dependencies = tuple(range(next_id, next_id + len(program.dependencies)))
+    next_id += len(dependencies)
+    credits = tuple(range(next_id, next_id + len(program.credits)))
+    next_id += len(credits)
+    memories = tuple(range(next_id, next_id + len(program.memories)))
+    next_id += len(memories)
+    sinks = tuple(range(next_id, next_id + len(program.sinks)))
+    return _ObjectIds(
+        queues,
+        fanout_queues,
+        feedback_states,
+        broadcasts,
+        transforms,
+        routes,
+        forks,
+        merges,
+        barriers,
+        feedbacks,
+        reorders,
+        dependencies,
+        credits,
+        memories,
+        sinks,
+    )
+
+
+def lower_queue_program_to_cpp(program: QueueProgram) -> str:
+    fanouts = _fanouts(program)
+    arrays = _owning_arrays(program)
+    ids = _object_ids(program, fanouts)
+    queues_by_name = {queue.name: queue for queue in program.queues}
+    array_leaf: dict[str, tuple[str, tuple[int, ...]]] = {
+        leaf: (collection.name, path)
+        for collection in arrays
+        for leaf, path in _collection_leaves(collection.value)
+    }
+
+    def queue_ref(name: str) -> str:
+        owner = array_leaf.get(name)
+        if owner is None:
+            return f"{name}_"
+        collection, path = owner
+        return f"{collection}_" + "".join(f"[{index}]" for index in path)
+
+    def queue_initializer(name: str) -> str:
+        queue = queues_by_name[name]
+        return (
+            f'gfsim::SimQueue<{_cpp_type(queue.payload)}>("{queue.name}", '
+            f"{ids.queues[queue.name]}, {module_ptr(queue_owner[queue.name])}, "
+            f"{queue.depth}, "
+            "std::numeric_limits<size_t>::max(), nullptr, "
+            f"{queue.latency}, {queue.rate})"
+        )
+
+    def array_initializer(value: StaticQueueCollection) -> str:
+        members = []
+        for _, member in value.members:
+            members.append(
+                queue_initializer(member)
+                if isinstance(member, str)
+                else array_initializer(member)
+            )
+        return "{{" + ", ".join(members) + "}}"
+
+    effective_input = {
+        consumer: output
+        for fanout in fanouts
+        for consumer, output in zip(fanout.consumers, fanout.outputs, strict=True)
+    }
+    scope_members = {
+        scope.path: "scope_" + "__".join(scope.path) + "_" for scope in program.scopes
+    }
+
+    def module_ptr(path: tuple[str, ...]) -> str:
+        return "this" if not path else f"&{scope_members[path]}"
+
+    def attach(path: tuple[str, ...], member: str) -> str:
+        if not path:
+            return f"    attachChild({member});"
+        return f"    {scope_members[path]}.attachChild({member});"
+
+    queue_uses: dict[str, list[tuple[str, ...]]] = {
+        queue.name: [] for queue in program.queues
+    }
+    for queue in program.queues:
+        if queue.input_name is not None:
+            queue_uses[queue.input_name].append(queue.scope)
+    for route in program.routes:
+        queue_uses[route.input_name].append(route.scope)
+    for fork in program.forks:
+        queue_uses[fork.input_name].append(fork.scope)
+    for merge in program.merges:
+        for input_name in merge.inputs:
+            queue_uses[input_name].append(merge.scope)
+    for feedback in program.feedbacks:
+        queue_uses[feedback.input_name].append(feedback.scope)
+    for reorder in program.reorders:
+        queue_uses[reorder.input_name].append(reorder.scope)
+    for dependency in program.dependencies:
+        queue_uses[dependency.input_name].append(dependency.scope)
+    for credit in program.credits:
+        queue_uses[credit.input_name].append(credit.scope)
+    for barrier in program.barriers:
+        for input_name in barrier.inputs:
+            queue_uses[input_name].append(barrier.scope)
+    for memory in program.memories:
+        queue_uses[memory.input_name].append(memory.scope)
+    for sink in program.sinks:
+        queue_uses[sink.queue].append(sink.scope)
+    queue_owner = {
+        queue.name: _common_scope([queue.scope, *queue_uses[queue.name]])
+        if queue_uses[queue.name]
+        else queue.scope
+        for queue in program.queues
+    }
+    lines = [
+        "// Generated by Agentic Circuit Queue/Var; do not edit.",
+        '#include "gfsim/dispatch.h"',
+        '#include "gfsim/object.h"',
+        '#include "gfsim/queue.h"',
+        '#include "gfsim/queue_blocks.h"',
+        "",
+        "#include <array>",
+        "#include <cstdint>",
+        "#include <limits>",
+        "#include <tuple>",
+        "",
+        "namespace ac_generated {",
+        "",
+    ]
+    if program.specialization_fingerprint is not None:
+        lines.insert(1, f"// Specialization: {program.specialization_fingerprint}")
+    for payload in program.payloads:
+        lines.extend(_emit_payload(payload))
+    for queue in program.queues:
+        if queue.input_name is None:
+            continue
+        payload = _cpp_type(queue.payload)
+        lines.extend(
+            (
+                f"struct {queue.name}_policy {{",
+                f"  {payload} operator()(const {payload} &item) const {{",
+                *_policy_body(queue),
+                "  }",
+                "};",
+                "",
+            )
+        )
+    for index, route in enumerate(program.routes):
+        payload = _cpp_type(
+            next(
+                queue.payload
+                for queue in program.queues
+                if queue.name == route.input_name
+            )
+        )
+        expression = _CppExpression(route.argument).emit(route.selector)
+        lines.extend(
+            (
+                f"struct route_{index}_policy {{",
+                f"  size_t operator()(const {payload} &item) const {{",
+                f"    return static_cast<size_t>({expression});",
+                "  }",
+                "};",
+                "",
+            )
+        )
+    for index, feedback in enumerate(program.feedbacks):
+        payload = _cpp_type(
+            next(
+                queue.payload
+                for queue in program.queues
+                if queue.name == feedback.output_name
+            )
+        )
+        lines.extend(
+            (
+                f"struct feedback_{index}_update_policy {{",
+                f"  {payload} operator()(const {payload} &item) const {{",
+                *_expression_policy_body(feedback.argument, feedback.update),
+                "  }",
+                "};",
+                "",
+                f"struct feedback_{index}_condition_policy {{",
+                f"  bool operator()(const {payload} &item) const {{",
+                f"    return {_CppExpression(feedback.argument).emit(feedback.condition)};",
+                "  }",
+                "};",
+                "",
+            )
+        )
+    for index, reorder in enumerate(program.reorders):
+        payload = _cpp_type(queues_by_name[reorder.input_name].payload)
+        expression = _CppExpression(reorder.argument).emit(reorder.key)
+        lines.extend(
+            (
+                f"struct reorder_{index}_key_policy {{",
+                f"  std::uint64_t operator()(const {payload} &item) const {{",
+                f"    return static_cast<std::uint64_t>({expression});",
+                "  }",
+                "};",
+                "",
+            )
+        )
+    for index, dependency in enumerate(program.dependencies):
+        payload = _cpp_type(queues_by_name[dependency.input_name].payload)
+        for suffix, expression_node in (
+            ("key", dependency.key),
+            ("dependency", dependency.waits_for),
+            ("resource", dependency.resource),
+            ("cost", dependency.cost),
+        ):
+            expression = _CppExpression(dependency.argument).emit(expression_node)
+            lines.extend(
+                (
+                    f"struct dependency_{index}_{suffix}_policy {{",
+                    f"  std::uint64_t operator()(const {payload} &item) const {{",
+                    f"    return static_cast<std::uint64_t>({expression});",
+                    "  }",
+                    "};",
+                    "",
+                )
+            )
+    for index, credit in enumerate(program.credits):
+        payload = _cpp_type(queues_by_name[credit.input_name].payload)
+        expression = _CppExpression(credit.argument).emit(credit.cost)
+        lines.extend(
+            (
+                f"struct credit_{index}_cost_policy {{",
+                f"  std::uint64_t operator()(const {payload} &item) const {{",
+                f"    return static_cast<std::uint64_t>({expression});",
+                "  }",
+                "};",
+                "",
+            )
+        )
+    for index, memory in enumerate(program.memories):
+        payload = _cpp_type(queues_by_name[memory.input_name].payload)
+        data_type = _cpp_type(memory.data_type)
+        policies = (
+            ("address", "std::uint64_t", memory.address),
+            ("write", "bool", memory.write),
+            ("data", data_type, memory.data),
+        )
+        for suffix, result_type, expression_node in policies:
+            expression = _CppExpression(memory.argument).emit(expression_node)
+            lines.extend(
+                (
+                    f"struct memory_{index}_{suffix}_policy {{",
+                    f"  {result_type} operator()(size_t, const {payload} &item) const {{",
+                    f"    return static_cast<{result_type}>({expression});",
+                    "  }",
+                    "};",
+                    "",
+                )
+            )
+        lines.extend(
+            (
+                f"struct memory_{index}_response_policy {{",
+                f"  {payload} operator()(size_t, const {payload} &item, "
+                f"const {data_type} &old_data) const {{",
+                "    auto result = item;",
+                f"    result.{memory.result_field} = old_data;",
+                "    return result;",
+                "  }",
+                "};",
+                "",
+            )
+        )
+
+    class_name = "".join(part.capitalize() for part in program.system.split("_"))
+    lines.extend((f"class {class_name} final : public gfsim::Module {{", "public:"))
+    lines.append(
+        f'  {class_name}() : gfsim::Module("{program.system}", '
+        "gfsim::kInvalidObjectId, nullptr),"
+    )
+    initializers: list[str] = []
+    for scope in program.scopes:
+        initializers.append(
+            f'{scope_members[scope.path]}("{scope.name}", '
+            f"gfsim::kInvalidObjectId, {module_ptr(scope.path[:-1])})"
+        )
+    for queue in program.queues:
+        if queue.name in array_leaf:
+            continue
+        payload = _cpp_type(queue.payload)
+        initializers.append(
+            f'{queue.name}_("{queue.name}", {ids.queues[queue.name]}, '
+            f"{module_ptr(queue_owner[queue.name])}, "
+            f"{queue.depth}, std::numeric_limits<size_t>::max(), nullptr, "
+            f"{queue.latency}, {queue.rate})"
+        )
+    for collection in arrays:
+        initializers.append(f"{collection.name}_" + array_initializer(collection.value))
+    for fanout in fanouts:
+        for output in fanout.outputs:
+            initializers.append(
+                f'{output}_("{output}", {ids.fanout_queues[output]}, '
+                f"{module_ptr(fanout.scope)}, "
+                "1, std::numeric_limits<size_t>::max(), nullptr, 1)"
+            )
+    for index, feedback in enumerate(program.feedbacks):
+        payload = _cpp_type(
+            next(
+                queue.payload
+                for queue in program.queues
+                if queue.name == feedback.output_name
+            )
+        )
+        initializers.append(
+            f'feedback_{index}_state_("feedback_{index}_state", '
+            f"{ids.feedback_states[index]}, {module_ptr(feedback.scope)}, 1, "
+            "std::numeric_limits<size_t>::max(), nullptr, 1)"
+        )
+    for index, reorder in enumerate(program.reorders):
+        initializers.append(
+            f'reorder_{index}_block_("reorder_{index}", '
+            f"{ids.reorders[index]}, {module_ptr(reorder.scope)}, "
+            f"{queue_ref(reorder.input_name)}, {queue_ref(reorder.output_name)})"
+        )
+    for index, dependency in enumerate(program.dependencies):
+        suffix = (
+            ")"
+            if dependency.provider == "schedule"
+            else f", {dependency.capacity}, {dependency.resources}, "
+            f"{dependency.no_dependency})"
+        )
+        initializers.append(
+            f'dependency_{index}_block_("{dependency.provider}_{index}", '
+            f"{ids.dependencies[index]}, {module_ptr(dependency.scope)}, "
+            f"{queue_ref(dependency.input_name)}, "
+            f"{queue_ref(dependency.output_name)}{suffix}"
+        )
+    for index, credit in enumerate(program.credits):
+        suffix = ")" if credit.provider == "engine" else f", {credit.credits})"
+        initializers.append(
+            f'credit_{index}_block_("{credit.provider}_{index}", '
+            f"{ids.credits[index]}, {module_ptr(credit.scope)}, "
+            f"{queue_ref(credit.input_name)}, {queue_ref(credit.output_name)}"
+            f"{suffix}"
+        )
+    for index, memory in enumerate(program.memories):
+        payload = _cpp_type(queues_by_name[memory.input_name].payload)
+        initializers.append(
+            f'memory_{index}_block_("table_{index}", '
+            f"{ids.memories[index]}, {module_ptr(memory.scope)}, "
+            f"std::array<gfsim::SimQueue<{payload}> *, 1>{{"
+            f"&{queue_ref(memory.input_name)}}}, "
+            f"std::array<gfsim::SimQueue<{payload}> *, 1>{{"
+            f"&{queue_ref(memory.output_name)}}}, {memory.entries}, "
+            f"{memory.init}, {memory.latency})"
+        )
+    for index, fanout in enumerate(fanouts):
+        payload = _cpp_type(fanout.payload)
+        outputs = ", ".join(f"&{queue_ref(name)}" for name in fanout.outputs)
+        initializers.append(
+            f'broadcast_{index}_block_("broadcast_{index}", '
+            f"{ids.broadcasts[index]}, {module_ptr(fanout.scope)}, "
+            f"{queue_ref(fanout.source)}, "
+            f"std::array<gfsim::SimQueue<{payload}> *, {len(fanout.outputs)}>"
+            f"{{{outputs}}})"
+        )
+    for index, route in enumerate(program.routes):
+        payload = _cpp_type(
+            next(
+                queue.payload
+                for queue in program.queues
+                if queue.name == route.input_name
+            )
+        )
+        outputs = ", ".join(f"&{queue_ref(name)}" for name in route.outputs)
+        initializers.append(
+            f'route_{index}_block_("route_{index}", {ids.routes[index]}, '
+            f"{module_ptr(route.scope)}, "
+            f"{queue_ref(route.input_name)}, std::array<gfsim::SimQueue<{payload}> *, "
+            f"{len(route.outputs)}>{{{outputs}}})"
+        )
+    for index, fork in enumerate(program.forks):
+        payload = _cpp_type(queues_by_name[fork.input_name].payload)
+        outputs = ", ".join(f"&{queue_ref(name)}" for name in fork.outputs)
+        initializers.append(
+            f'fork_{index}_block_("fork_{index}", {ids.forks[index]}, '
+            f"{module_ptr(fork.scope)}, {queue_ref(fork.input_name)}, "
+            f"std::array<gfsim::SimQueue<{payload}> *, {len(fork.outputs)}>"
+            f"{{{outputs}}})"
+        )
+    for index, merge in enumerate(program.merges):
+        payload = _cpp_type(
+            next(
+                queue.payload for queue in program.queues if queue.name == merge.output
+            )
+        )
+        inputs = ", ".join(f"&{queue_ref(name)}" for name in merge.inputs)
+        policy = (
+            "gfsim::QueueMergePolicy::RoundRobin"
+            if merge.policy == "round_robin"
+            else "gfsim::QueueMergePolicy::Priority"
+        )
+        initializers.append(
+            f'merge_{index}_block_("merge_{index}", {ids.merges[index]}, '
+            f"{module_ptr(merge.scope)}, "
+            f"std::array<gfsim::SimQueue<{payload}> *, {len(merge.inputs)}>"
+            f"{{{inputs}}}, {queue_ref(merge.output)}, {policy})"
+        )
+    for index, barrier in enumerate(program.barriers):
+        inputs = ", ".join(f"&{queue_ref(name)}" for name in barrier.inputs)
+        outputs = ", ".join(f"&{queue_ref(name)}" for name in barrier.outputs)
+        initializers.append(
+            f'barrier_{index}_block_("barrier_{index}", '
+            f"{ids.barriers[index]}, {module_ptr(barrier.scope)}, "
+            f"std::tuple{{{inputs}}}, std::tuple{{{outputs}}})"
+        )
+    for index, feedback in enumerate(program.feedbacks):
+        initializers.append(
+            f'feedback_{index}_block_("feedback_{index}", '
+            f"{ids.feedbacks[index]}, {module_ptr(feedback.scope)}, "
+            f"{queue_ref(feedback.input_name)}, "
+            f"feedback_{index}_state_, {queue_ref(feedback.output_name)}, "
+            f"{feedback.max_iterations})"
+        )
+    for queue in program.queues:
+        if queue.input_name is None:
+            continue
+        input_name = effective_input.get(queue.name, queue.input_name)
+        initializers.append(
+            f'{queue.name}_block_("{queue.name}_transform", '
+            f"{ids.transforms[queue.name]}, {module_ptr(queue.scope)}, "
+            f"{queue_ref(input_name)}, "
+            f"{queue_ref(queue.name)})"
+        )
+    for index, sink in enumerate(program.sinks):
+        initializers.append(
+            f'sink_{index}_("sink_{index}", {ids.sinks[index]}, '
+            f"{module_ptr(sink.scope)}, "
+            f"{queue_ref(sink.queue)})"
+        )
+    for index, initializer in enumerate(initializers):
+        suffix = "," if index + 1 < len(initializers) else ""
+        lines.append(f"        {initializer}{suffix}")
+    lines.extend(("  {", f'    setPath("/{program.system}");'))
+    for scope in program.scopes:
+        lines.append(attach(scope.path[:-1], scope_members[scope.path]))
+    for queue in program.queues:
+        lines.append(attach(queue_owner[queue.name], queue_ref(queue.name)))
+    for fanout in fanouts:
+        for output in fanout.outputs:
+            lines.append(attach(fanout.scope, f"{output}_"))
+    for index, _ in enumerate(program.feedbacks):
+        lines.append(attach(program.feedbacks[index].scope, f"feedback_{index}_state_"))
+    for index, reorder in enumerate(program.reorders):
+        lines.append(attach(reorder.scope, f"reorder_{index}_block_"))
+    for index, dependency in enumerate(program.dependencies):
+        lines.append(attach(dependency.scope, f"dependency_{index}_block_"))
+    for index, credit in enumerate(program.credits):
+        lines.append(attach(credit.scope, f"credit_{index}_block_"))
+    for index, memory in enumerate(program.memories):
+        lines.append(attach(memory.scope, f"memory_{index}_block_"))
+    for index, _ in enumerate(fanouts):
+        lines.append(attach(fanouts[index].scope, f"broadcast_{index}_block_"))
+    for queue in program.queues:
+        if queue.input_name is not None:
+            lines.append(attach(queue.scope, f"{queue.name}_block_"))
+    for index, _ in enumerate(program.routes):
+        lines.append(attach(program.routes[index].scope, f"route_{index}_block_"))
+    for index, fork in enumerate(program.forks):
+        lines.append(attach(fork.scope, f"fork_{index}_block_"))
+    for index, _ in enumerate(program.merges):
+        lines.append(attach(program.merges[index].scope, f"merge_{index}_block_"))
+    for index, barrier in enumerate(program.barriers):
+        lines.append(attach(barrier.scope, f"barrier_{index}_block_"))
+    for index, _ in enumerate(program.feedbacks):
+        lines.append(attach(program.feedbacks[index].scope, f"feedback_{index}_block_"))
+    for index, _ in enumerate(program.sinks):
+        lines.append(attach(program.sinks[index].scope, f"sink_{index}_"))
+    lines.extend(("  }", ""))
+    for queue in program.queues:
+        payload = _cpp_type(queue.payload)
+        lines.append(
+            f"  gfsim::SimQueue<{payload}> &{queue.name}() {{ "
+            f"return {queue_ref(queue.name)}; }}"
+        )
+    for index, sink in enumerate(program.sinks):
+        payload = _cpp_type(
+            next(q.payload for q in program.queues if q.name == sink.queue)
+        )
+        lines.append(
+            f"  const std::vector<{payload}> &sink_{index}_values() const {{ "
+            f"return sink_{index}_.received(); }}"
+        )
+    object_count = (
+        len(program.queues)
+        + len(ids.fanout_queues)
+        + len(ids.feedback_states)
+        + len(ids.broadcasts)
+        + len(ids.transforms)
+        + len(ids.routes)
+        + len(ids.forks)
+        + len(ids.merges)
+        + len(ids.barriers)
+        + len(ids.feedbacks)
+        + len(ids.reorders)
+        + len(ids.dependencies)
+        + len(ids.credits)
+        + len(ids.memories)
+        + len(ids.sinks)
+    )
+    lines.extend(
+        (
+            "",
+            f"  std::array<gfsim::DispatchRow, {object_count}> dispatch_rows() {{",
+            f"    return std::array<gfsim::DispatchRow, {object_count}>{{",
+        )
+    )
+    rows: list[str] = []
+    for queue in program.queues:
+        rows.append(f"gfsim::makeDispatchRow(&{queue_ref(queue.name)})")
+    for fanout in fanouts:
+        for output in fanout.outputs:
+            rows.append(f"gfsim::makeDispatchRow(&{output}_)")
+    for index, _ in enumerate(program.feedbacks):
+        rows.append(f"gfsim::makeDispatchRow(&feedback_{index}_state_)")
+    for index, _ in enumerate(fanouts):
+        rows.append(f"gfsim::makeDispatchRow(&broadcast_{index}_block_)")
+    for queue in program.queues:
+        if queue.input_name is not None:
+            rows.append(f"gfsim::makeDispatchRow(&{queue.name}_block_)")
+    for index, _ in enumerate(program.routes):
+        rows.append(f"gfsim::makeDispatchRow(&route_{index}_block_)")
+    for index, _ in enumerate(program.forks):
+        rows.append(f"gfsim::makeDispatchRow(&fork_{index}_block_)")
+    for index, _ in enumerate(program.merges):
+        rows.append(f"gfsim::makeDispatchRow(&merge_{index}_block_)")
+    for index, _ in enumerate(program.barriers):
+        rows.append(f"gfsim::makeDispatchRow(&barrier_{index}_block_)")
+    for index, _ in enumerate(program.feedbacks):
+        rows.append(f"gfsim::makeDispatchRow(&feedback_{index}_block_)")
+    for index, _ in enumerate(program.reorders):
+        rows.append(f"gfsim::makeDispatchRow(&reorder_{index}_block_)")
+    for index, _ in enumerate(program.dependencies):
+        rows.append(f"gfsim::makeDispatchRow(&dependency_{index}_block_)")
+    for index, _ in enumerate(program.credits):
+        rows.append(f"gfsim::makeDispatchRow(&credit_{index}_block_)")
+    for index, _ in enumerate(program.memories):
+        rows.append(f"gfsim::makeDispatchRow(&memory_{index}_block_)")
+    for index, _ in enumerate(program.sinks):
+        rows.append(f"gfsim::makeDispatchRow(&sink_{index}_)")
+    for index, row in enumerate(rows):
+        suffix = "," if index + 1 < len(rows) else ""
+        lines.append(f"        {row}{suffix}")
+    lines.extend(("    };", "  }", "", "private:"))
+    for scope in program.scopes:
+        lines.append(f"  gfsim::Module {scope_members[scope.path]};")
+    for queue in program.queues:
+        if queue.name in array_leaf:
+            continue
+        lines.append(f"  gfsim::SimQueue<{_cpp_type(queue.payload)}> {queue.name}_;")
+    for collection in arrays:
+        lines.append(
+            f"  {_array_cpp_type(collection.value, queues_by_name)} {collection.name}_;"
+        )
+    for fanout in fanouts:
+        for output in fanout.outputs:
+            lines.append(f"  gfsim::SimQueue<{_cpp_type(fanout.payload)}> {output}_;")
+    for index, feedback in enumerate(program.feedbacks):
+        payload = _cpp_type(
+            next(
+                queue.payload
+                for queue in program.queues
+                if queue.name == feedback.output_name
+            )
+        )
+        lines.append(
+            f"  gfsim::SimQueue<gfsim::FeedbackToken<{payload}>> "
+            f"feedback_{index}_state_;"
+        )
+    for index, reorder in enumerate(program.reorders):
+        payload = _cpp_type(queues_by_name[reorder.input_name].payload)
+        lines.append(
+            f"  gfsim::Reorder<{payload}, {reorder.capacity}, {reorder.start}, "
+            f"reorder_{index}_key_policy> "
+            f"reorder_{index}_block_;"
+        )
+    for index, dependency in enumerate(program.dependencies):
+        payload = _cpp_type(queues_by_name[dependency.input_name].payload)
+        if dependency.provider == "schedule":
+            lines.append(
+                f"  gfsim::Schedule<{payload}, {dependency.capacity}, "
+                f"{dependency.resources}, {dependency.no_dependency}, "
+                f"dependency_{index}_key_policy, "
+                f"dependency_{index}_dependency_policy, "
+                f"dependency_{index}_resource_policy, "
+                f"dependency_{index}_cost_policy> dependency_{index}_block_;"
+            )
+        else:
+            lines.append(
+                f"  gfsim::QueueDependency<{payload}, "
+                f"dependency_{index}_key_policy, "
+                f"dependency_{index}_dependency_policy, "
+                f"dependency_{index}_resource_policy, "
+                f"dependency_{index}_cost_policy> dependency_{index}_block_;"
+            )
+    for index, credit in enumerate(program.credits):
+        payload = _cpp_type(queues_by_name[credit.input_name].payload)
+        provider = (
+            f"gfsim::Engine<{payload}, {credit.credits}, "
+            if credit.provider == "engine"
+            else f"gfsim::QueueCredit<{payload}, "
+        )
+        lines.append(f"  {provider}credit_{index}_cost_policy> credit_{index}_block_;")
+    for index, memory in enumerate(program.memories):
+        payload = _cpp_type(queues_by_name[memory.input_name].payload)
+        data_type = _cpp_type(memory.data_type)
+        lines.append(
+            f"  gfsim::QueueMemoryArbiter<{payload}, {data_type}, 1, "
+            f"memory_{index}_address_policy, "
+            f"memory_{index}_write_policy, memory_{index}_data_policy, "
+            f"memory_{index}_response_policy> memory_{index}_block_;"
+        )
+    for index, fanout in enumerate(fanouts):
+        payload = _cpp_type(fanout.payload)
+        lines.append(
+            f"  gfsim::QueueBroadcast<{payload}, {len(fanout.outputs)}> "
+            f"broadcast_{index}_block_;"
+        )
+    for queue in program.queues:
+        if queue.input_name is None:
+            continue
+        payload = _cpp_type(queue.payload)
+        if queue.provider == "compute":
+            provider = (
+                f"gfsim::Compute<{payload}, {payload}, {queue.rate}, "
+                f"{queue.name}_policy>"
+            )
+        elif queue.provider == "pipeline":
+            provider = f"gfsim::Pipeline<{payload}, {queue.latency}, {queue.rate}>"
+        else:
+            provider = (
+                f"gfsim::QueueTransform<{payload}, {payload}, {queue.name}_policy>"
+            )
+        lines.append(f"  {provider} {queue.name}_block_;")
+    for index, route in enumerate(program.routes):
+        payload = _cpp_type(
+            next(
+                queue.payload
+                for queue in program.queues
+                if queue.name == route.input_name
+            )
+        )
+        lines.append(
+            f"  gfsim::QueueRoute<{payload}, {len(route.outputs)}, "
+            f"route_{index}_policy> route_{index}_block_;"
+        )
+    for index, fork in enumerate(program.forks):
+        payload = _cpp_type(queues_by_name[fork.input_name].payload)
+        lines.append(
+            f"  gfsim::QueueFork<{payload}, {len(fork.outputs)}> fork_{index}_block_;"
+        )
+    for index, merge in enumerate(program.merges):
+        payload = _cpp_type(
+            next(
+                queue.payload for queue in program.queues if queue.name == merge.output
+            )
+        )
+        lines.append(
+            f"  gfsim::QueueMerge<{payload}, {len(merge.inputs)}> merge_{index}_block_;"
+        )
+    for index, barrier in enumerate(program.barriers):
+        types = ", ".join(
+            _cpp_type(queues_by_name[name].payload) for name in barrier.inputs
+        )
+        lines.append(
+            f"  gfsim::QueueBarrier<std::tuple<{types}>> barrier_{index}_block_;"
+        )
+    for index, feedback in enumerate(program.feedbacks):
+        payload = _cpp_type(
+            next(
+                queue.payload
+                for queue in program.queues
+                if queue.name == feedback.output_name
+            )
+        )
+        lines.append(
+            f"  gfsim::QueueFeedback<{payload}, feedback_{index}_update_policy, "
+            f"feedback_{index}_condition_policy> feedback_{index}_block_;"
+        )
+    for index, sink in enumerate(program.sinks):
+        payload = _cpp_type(
+            next(q.payload for q in program.queues if q.name == sink.queue)
+        )
+        lines.append(f"  gfsim::QueueSink<{payload}> sink_{index}_;")
+    lines.extend(("};", "", "} // namespace ac_generated", ""))
+    return "\n".join(lines)
+
+
+def _emit_payload(payload: Payload) -> list[str]:
+    lines = [f"struct {payload.name} {{"]
+    for name, typ in payload.fields:
+        lines.append(f"  {_cpp_type(typ)} {name}{{}};")
+    lines.extend(("};", ""))
+    return lines
+
+
+def lower_queue_source_to_cpp(text: str, system: str) -> str:
+    return lower_queue_program_to_cpp(parse_queue_program(text, system))

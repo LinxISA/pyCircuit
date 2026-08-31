@@ -1,0 +1,29 @@
+#ifndef ACIR_DIALECT_ACIR_ACIROPS_H
+#define ACIR_DIALECT_ACIR_ACIROPS_H
+
+#include "acir/Dialect/ACIR/ACIRTypes.h"
+#include "mlir/Bytecode/BytecodeOpInterface.h"
+#include "mlir/IR/Builders.h"
+#include "mlir/IR/OpDefinition.h"
+#include "mlir/IR/RegionKindInterface.h"
+#include "mlir/IR/SymbolTable.h"
+#include "mlir/Interfaces/ControlFlowInterfaces.h"
+#include "mlir/Interfaces/DataLayoutInterfaces.h"
+#include "mlir/Interfaces/FunctionInterfaces.h"
+#include "mlir/Interfaces/SideEffectInterfaces.h"
+#include "llvm/ADT/StringMap.h"
+
+#include "acir/Dialect/ACIR/ACIROpInterfaces.h.inc"
+
+#define GET_OP_CLASSES
+#include "acir/Dialect/ACIR/ACIROps.h.inc"
+
+namespace acir::ac {
+
+/// Verifies symbol resolution and linear-use rules for ACIR topology types on
+/// an arbitrary operation. This is called by the whole-file ACIR verifier.
+mlir::LogicalResult verifyTopologyTypeUses(mlir::Operation *operation);
+
+} // namespace acir::ac
+
+#endif
