@@ -1,7 +1,7 @@
 # Agentic Circuit Consolidation Closure
 
-Run ID: `20260831-agentic-consolidation-r2`  
-Integration revision: `83f7f746`  
+Run ID: `20260831-agentic-consolidation-r2`
+Integration revision: `83f7f746`
 Decision: 0150
 
 ## Passed AC closure
