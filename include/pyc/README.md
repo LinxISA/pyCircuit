@@ -2,8 +2,8 @@
 
 Backend “template libraries” used by code generators:
 
-- `include/pyc/cpp/`: cycle-accurate C++ models (header-only, template-heavy)
-- `include/pyc/verilog/`: Verilog primitives used by emitted RTL
+- `runtime/cpp/`: cycle-accurate C++ models (header-only, template-heavy)
+- `runtime/verilog/`: Verilog primitives used by emitted RTL
 
 Generated code instantiates these templates for **stateful** primitives (regs,
 FIFOs, memories). Most **combinational** logic is emitted inline as expressions
@@ -18,8 +18,8 @@ can stay backend-agnostic.
 
 Examples:
 
-- Verilog: `include/pyc/verilog/pyc_reg.v` defines `module pyc_reg #(WIDTH) (...)`
-- C++: `include/pyc/cpp/pyc_primitives.hpp` defines `template<unsigned Width> class pyc::cpp::pyc_reg { ... }`
+- Verilog: `runtime/verilog/pyc_reg.v` defines `module pyc_reg #(WIDTH) (...)`
+- C++: `runtime/cpp/pyc_primitives.hpp` defines `template<unsigned Width> class pyc::cpp::pyc_reg { ... }`
 
 Current checked-in primitives (prototype):
 
@@ -38,9 +38,9 @@ Current checked-in primitives (prototype):
 
 Debug/testbench helpers (C++ only):
 
-- `include/pyc/cpp/pyc_print.hpp`: `operator<<` for wires and primitives
-- `include/pyc/cpp/pyc_tb.hpp`: small multi-clock-capable testbench harness
-- `include/pyc/cpp/pyc_vcd.hpp`: tiny VCD writer (waveform dumping)
-- Convenience include: `include/pyc/cpp/pyc_debug.hpp`
+- `runtime/cpp/pyc_print.hpp`: `operator<<` for wires and primitives
+- `runtime/cpp/pyc_tb.hpp`: small multi-clock-capable testbench harness
+- `runtime/cpp/pyc_vcd.hpp`: tiny VCD writer (waveform dumping)
+- Convenience include: `runtime/cpp/pyc_debug.hpp`
 
 For the full primitive “ABI” (ports/semantics) see `docs/PRIMITIVES.md`.

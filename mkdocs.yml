@@ -1,0 +1,112 @@
+# pyCircuit Documentation Configuration
+
+site_name: pyCircuit
+site_description: "A Python-based hardware description framework that compiles Python functions to synthesizable RTL through MLIR"
+site_author: LinxISA Contributors
+site_url: https://github.com/LinxISA/pyCircuit
+
+repo_url: https://github.com/LinxISA/pyCircuit
+repo_name: LinxISA/pyCircuit
+
+copyright: "Copyright &copy; 2024 LinxISA Contributors"
+
+# Configuration
+docs_dir: docs
+site_dir: _build/html
+
+# Theme
+theme:
+  name: material
+  palette:
+    - scheme: default
+      primary: blue
+      accent: blue
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - scheme: slate
+      primary: blue
+      accent: blue
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+  features:
+    - navigation.instant
+    - navigation.tracking
+    - navigation.tabs
+    - navigation.sections
+    - navigation.top
+    - search.suggest
+    - search.highlight
+    - content.code.annotate
+  icon:
+    repo: fontawesome/brands/github
+
+# Markdown extensions
+markdown_extensions:
+  - abbr
+  - admonition
+  - attr_list
+  - def_list
+  - footnotes
+  - meta
+  - md_in_html
+  - toc
+  - pymdownx.details
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+
+# Navigation
+nav:
+  - Home: index.md
+  - Getting Started:
+      - getting-started/index.md
+      - getting-started/installation.md
+      - getting-started/quickstart.md
+      - getting-started/first-design.md
+  - Tutorial:
+      - tutorial/index.md
+      - tutorial/unified-signal-model.md
+      - tutorial/cycle-aware-computing.md
+      - pyCircuit_Tutorial.md
+  - Core Docs:
+      - QUICKSTART.md
+      - FRONTEND_API.md
+      - TESTBENCH.md
+      - PRIMITIVES.md
+      - SPEC_STRUCTURES.md
+      - SPEC_COLLECTIONS.md
+      - CONST_METAPROGRAMMING.md
+      - IR_SPEC.md
+      - DIAGNOSTICS.md
+      - PIPELINE.md
+  - API Reference:
+      - api/index.md
+  - Development: development/index.md
+  - Upgrade:
+      - updatePLAN.md
+      - rfcs/pyc4.0-decisions.md
+  - Gates:
+      - gates/README.md
+      - gates/decision_status_v40.md
+
+# Plugins
+plugins:
+  - search:
+      lang: en
+
+# Extra
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/LinxISA/pyCircuit
+    - icon: fontawesome/brands/python
+      link: https://python.org

@@ -6,7 +6,7 @@ pyCircuit-generated `Counter` RTL to blink the Zybo Z7-20 user LEDs.
 ## What it builds
 
 - Top: `boards/zybo_z7_20/rtl/zybo_counter_top.sv`
-- Generated design: `examples/generated/counter/counter.v`
+- Generated design: `designs/examples/generated/counter/counter.v`
 - Constraints: `boards/zybo_z7_20/constraints/zybo_z7_20_minimal.xdc`
 - Vivado script: `boards/zybo_z7_20/vivado/build_zybo_counter.tcl`
 
@@ -43,7 +43,7 @@ This repo also includes a Zybo top that instantiates the pyCircuit-generated
 - Top: `boards/zybo_z7_20/rtl/zybo_linx_cpu_top.sv`
 - Constraints: `boards/zybo_z7_20/constraints/zybo_z7_20_linx_cpu.xdc`
 - Vivado script: `boards/zybo_z7_20/vivado/build_zybo_linx_cpu.tcl`
-- Windows helper: `tools/windows/zybo_z7_20_linx_cpu_flow.ps1`
+- Windows helper: `flows/tools/windows/zybo_z7_20_linx_cpu_flow.ps1`
 
 Build/program:
 
@@ -63,7 +63,7 @@ use the PS/PL platform wrappers (in-order + OOO):
 - Vivado scripts:
   - `boards/zybo_z7_20/vivado/build_zybo_linx_platform_inorder.tcl`
   - `boards/zybo_z7_20/vivado/build_zybo_linx_platform_ooo.tcl`
-- Windows helper: `tools/windows/zybo_z7_20_linx_platform_flow.ps1`
+- Windows helper: `flows/tools/windows/zybo_z7_20_linx_platform_flow.ps1`
 
 Build/program:
 

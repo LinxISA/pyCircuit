@@ -1,0 +1,65 @@
+name: Setup Verilator
+description: Install a recent Verilator binary (Ubuntu apt is too old for G1/G2 timing).
+
+inputs:
+  version:
+    description: Verilator version (x.yyy), matching veryl-lang/verilator-package releases
+    required: false
+    default: "5.048"
+
+runs:
+  using: composite
+  steps:
+    # Pure bash install (no Node action) so CI stays off deprecated Node.js 20 actions.
+    - name: Install Verilator package
+      shell: bash
+      env:
+        VERILATOR_VERSION: ${{ inputs.version }}
+      run: |
+        set -euxo pipefail
+        . /etc/os-release
+        case "${ID}-${VERSION_ID}" in
+          ubuntu-24.04) image="ubuntu-24.04" ;;
+          ubuntu-22.04) image="ubuntu-22.04" ;;
+          *)
+            echo "unsupported runner image for prebuilt Verilator: ${ID}-${VERSION_ID}" >&2
+            exit 1
+            ;;
+        esac
+        ver="${VERILATOR_VERSION#v}"
+        url="https://github.com/veryl-lang/verilator-package/releases/download/v${ver}/verilator-${image}.zip"
+        dest="${RUNNER_TEMP}/verilator-${ver}"
+        rm -rf "${dest}"
+        mkdir -p "${dest}"
+        curl -fsSL "${url}" -o "${RUNNER_TEMP}/verilator.zip"
+        unzip -o -q "${RUNNER_TEMP}/verilator.zip" -d "${dest}"
+        # Package layout is either dest/bin or dest/<single-dir>/bin.
+        if [[ -d "${dest}/bin" ]]; then
+          root="${dest}"
+        else
+          root="$(find "${dest}" -mindepth 1 -maxdepth 1 -type d | head -n 1)"
+        fi
+        [[ -x "${root}/bin/verilator" ]]
+        echo "${root}/bin" >> "${GITHUB_PATH}"
+        # Prebuilt kit root contains bin/ + include/ (not share/verilator).
+        echo "VERILATOR_ROOT=${root}" >> "${GITHUB_ENV}"
+        # Packaged verilated.mk invokes ccache; mold is optional but cheap.
+        sudo apt-get update
+        sudo apt-get install -y ccache mold
+
+    - name: Verify Verilator
+      shell: bash
+      run: |
+        set -euxo pipefail
+        command -v verilator
+        verilator --version
+        # Gates need >= 5.024 for --quiet and modern timing behavior.
+        ver="$(verilator --version | awk '{print $2; exit}')"
+        python3 -c '
+        import sys
+        ver = sys.argv[1]
+        major, minor = (int(x) for x in ver.split(".")[:2])
+        if (major, minor) < (5, 24):
+            raise SystemExit(f"Verilator {ver} is too old; need >= 5.024")
+        print(f"ok: verilator {ver}")
+        ' "${ver}"

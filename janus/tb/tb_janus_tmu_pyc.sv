@@ -5,13 +5,13 @@ module tb_janus_tmu_pyc;
   logic req_valid [0:7];
   logic req_write [0:7];
   logic [19:0] req_addr [0:7];
-  logic [19:0] req_tag [0:7];
+  logic [7:0] req_tag [0:7];
   logic [63:0] req_data [0:7][0:31];
   logic req_ready [0:7];
 
   logic resp_ready [0:7];
   logic resp_valid [0:7];
-  logic [19:0] resp_tag [0:7];
+  logic [7:0] resp_tag [0:7];
   logic [63:0] resp_data [0:7][0:31];
   logic resp_is_write [0:7];
 
@@ -644,7 +644,7 @@ module tb_janus_tmu_pyc;
         req_valid[i] = 1'b0;
         req_write[i] = 1'b0;
         req_addr[i] = 20'd0;
-        req_tag[i] = 20'd0;
+        req_tag[i] = 8'd0;
         resp_ready[i] = 1'b1;
         for (j = 0; j < 32; j = j + 1) begin
           req_data[i][j] = 64'd0;
@@ -657,7 +657,7 @@ module tb_janus_tmu_pyc;
       input int node,
       input bit write,
       input logic [19:0] addr,
-      input logic [19:0] tag,
+      input logic [7:0] tag,
       input logic [63:0] data[0:31]
   );
     integer i;
@@ -679,14 +679,14 @@ module tb_janus_tmu_pyc;
 
   task automatic wait_resp(
       input int node,
-      input logic [19:0] tag,
+      input logic [7:0] tag,
       input bit expect_write,
       input logic [63:0] expect_data[0:31]
   );
     integer timeout;
     integer i;
     begin
-      timeout = 400;
+      timeout = 2000;
       while (timeout > 0) begin
         @(posedge clk);
         if (resp_valid[node]) begin
@@ -714,19 +714,19 @@ module tb_janus_tmu_pyc;
     for (int n = 0; n < 8; n = n + 1) begin
       fill_data(line_data, n + 1);
       clear_line(line_zero);
-      send_req(n, 1'b1, make_addr(n, n, 0), make_addr(n, n, 0), line_data);
-      wait_resp(n, make_addr(n, n, 0), 1'b1, line_data);
-      send_req(n, 1'b0, make_addr(n, n, 0), make_addr(n, n, 0), line_zero);
-      wait_resp(n, make_addr(n, n, 0), 1'b0, line_data);
+      send_req(n, 1'b1, make_addr(n, n, 0), n[7:0], line_data);
+      wait_resp(n, n[7:0], 1'b1, line_data);
+      send_req(n, 1'b0, make_addr(n, n, 0), (8'h80 | n[7:0]), line_zero);
+      wait_resp(n, (8'h80 | n[7:0]), 1'b0, line_data);
     end
 
     begin
       fill_data(line_data, 8'hAA);
       clear_line(line_zero);
-      send_req(0, 1'b1, make_addr(5, 2, 0), make_addr(5, 2, 0), line_data);
-      wait_resp(0, make_addr(5, 2, 0), 1'b1, line_data);
-      send_req(0, 1'b0, make_addr(5, 2, 0), make_addr(5, 2, 0), line_zero);
-      wait_resp(0, make_addr(5, 2, 0), 1'b0, line_data);
+      send_req(0, 1'b1, make_addr(5, 2, 0), 8'h55, line_data);
+      wait_resp(0, 8'h55, 1'b1, line_data);
+      send_req(0, 1'b0, make_addr(5, 2, 0), 8'h56, line_zero);
+      wait_resp(0, 8'h56, 1'b0, line_data);
     end
 
     $display("PASS: TMU tests");

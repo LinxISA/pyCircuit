@@ -7,8 +7,6 @@ from pycircuit import Circuit, Reg, Wire
 from pycircuit.hw import cat
 
 from janus.bcc.ooo.helpers import mux_by_uindex
-from janus.tmu.noc.node import build_ring_node
-from janus.tmu.sram.tilereg import build_tilereg
 
 
 RING_ORDER = [0, 1, 3, 5, 7, 6, 4, 2]
@@ -150,8 +148,7 @@ def build(
     m: Circuit,
     *,
     tile_bytes: int | None = None,
-    tag_bits: int | None = None,
-    line_bytes: int | None = None,
+    tag_bits: int = 8,
     spb_depth: int = 4,
     mgb_depth: int = 4,
 ) -> None:
@@ -160,17 +157,12 @@ def build(
     if tile_bytes <= 0:
         raise ValueError("tile_bytes must be > 0")
 
-    if line_bytes is None:
-        line_bytes = int(os.getenv("JANUS_TMU_LINE_BYTES", 256))
-    if line_bytes < 8 or (line_bytes % 8) != 0:
-        raise ValueError("line_bytes must be a multiple of 8 bytes")
-    if (line_bytes & (line_bytes - 1)) != 0:
-        raise ValueError("line_bytes must be a power of two")
+    line_bytes = 256
     line_words = line_bytes // 8
     pipe_count = NODE_COUNT
 
     if tile_bytes % (pipe_count * line_bytes) != 0:
-        raise ValueError("tile_bytes must be divisible by pipe_count * line_bytes")
+        raise ValueError("tile_bytes must be divisible by 8 * 256")
 
     addr_bits = (tile_bytes - 1).bit_length()
     offset_bits = (line_bytes - 1).bit_length()
@@ -181,11 +173,6 @@ def build(
     index_bits = addr_bits - offset_bits - pipe_bits
     lines_per_pipe = tile_bytes // (pipe_count * line_bytes)
 
-    if tag_bits is None:
-        tag_bits = addr_bits
-    if tag_bits < addr_bits:
-        raise ValueError("tag_bits must cover full TileReg address width")
-
     c = m.const
     node_bits = pipe_bits
 
@@ -195,31 +182,22 @@ def build(
     # Meta layouts (packed into 64-bit).
     REQ_WRITE_LSB = 0
     REQ_SRC_LSB = REQ_WRITE_LSB + 1
-    REQ_TAG_LSB = REQ_SRC_LSB + node_bits
+    REQ_DST_LSB = REQ_SRC_LSB + node_bits
+    REQ_TAG_LSB = REQ_DST_LSB + node_bits
+    REQ_ADDR_LSB = REQ_TAG_LSB + tag_bits
 
     RSP_WRITE_LSB = 0
     RSP_SRC_LSB = RSP_WRITE_LSB + 1
     RSP_DST_LSB = RSP_SRC_LSB + node_bits
     RSP_TAG_LSB = RSP_DST_LSB + node_bits
 
-    def pack_req_meta(write: Wire, src: Wire, tag: Wire) -> Wire:
-        meta = cat(tag, src, write)
+    def pack_req_meta(write: Wire, src: Wire, dst: Wire, tag: Wire, addr: Wire) -> Wire:
+        meta = cat(addr, tag, dst, src, write)
         return meta.zext(width=64)
 
     def pack_rsp_meta(write: Wire, src: Wire, dst: Wire, tag: Wire) -> Wire:
         meta = cat(tag, dst, src, write)
         return meta.zext(width=64)
-
-    def _tag_addr(tag: Wire) -> Wire:
-        if tag.width > addr_bits:
-            return tag.slice(lsb=0, width=addr_bits)
-        if tag.width < addr_bits:
-            return tag.zext(width=addr_bits)
-        return tag
-
-    def _tag_pipe(tag: Wire) -> Wire:
-        addr = _tag_addr(tag)
-        return addr.slice(lsb=offset_bits, width=pipe_bits)
 
     # --- Node IOs ---
     nodes: list[NodeIo] = []
@@ -264,10 +242,9 @@ def build(
     req_dir_cw: list[Wire] = []
 
     for i, node in enumerate(nodes):
-        tag_addr = _tag_addr(node.req_tag)
-        dst = _tag_pipe(node.req_tag)
+        dst = node.req_addr.slice(lsb=offset_bits, width=pipe_bits)
         src = c(i, width=node_bits)
-        meta = pack_req_meta(node.req_write, src, node.req_tag)
+        meta = pack_req_meta(node.req_write, src, dst, node.req_tag, node.req_addr)
         req_meta.append(meta)
         words = node.req_data_words
         req_words.append(words)
@@ -310,9 +287,7 @@ def build(
             )
         )
 
-
-        addr_match = tag_addr.eq(node.req_addr)
-        m.assign(node.req_ready, addr_match & dir_cw.select(spb_cw[i].in_ready, spb_cc[i].in_ready))
+        m.assign(node.req_ready, dir_cw.select(spb_cw[i].in_ready, spb_cc[i].in_ready))
 
     # --- Ring link registers (request + response, cw/cc) ---
     req_cw_link_valid: list[Reg] = []
@@ -355,32 +330,10 @@ def build(
                 [m.out(f"cc_d{i}_w{wi}", clk=clk, rst=rst, width=64, init=0, en=1) for wi in range(line_words)]
             )
 
-
-    # --- Pipe request FIFOs (decouple ring from pipe stage) ---
-    pipe_fifo_in_valid: list[Wire] = []
-    pipe_fifo_in_meta: list[Wire] = []
-    pipe_fifo_in_data: list[list[Wire]] = []
-    pipe_fifo_out_ready: list[Wire] = []
-    pipe_fifo: list[BundleFifo] = []
-
-    for p in range(pipe_count):
-        pipe_fifo_in_valid.append(m.named_wire(f"pipe{p}_in_valid", width=1))
-        pipe_fifo_in_meta.append(m.named_wire(f"pipe{p}_in_meta", width=64))
-        pipe_fifo_in_data.append([m.named_wire(f"pipe{p}_in_d{wi}", width=64) for wi in range(line_words)])
-        pipe_fifo_out_ready.append(m.named_wire(f"pipe{p}_out_ready", width=1))
-        pipe_fifo.append(
-            _build_bundle_fifo(
-                m,
-                clk=clk,
-                rst=rst,
-                in_valid=pipe_fifo_in_valid[p],
-                in_meta=pipe_fifo_in_meta[p],
-                in_data=pipe_fifo_in_data[p],
-                out_ready=pipe_fifo_out_ready[p],
-                depth=spb_depth,
-                name=f"pipe{p}_req",
-            )
-        )
+    # --- Pipe request wires ---
+    pipe_req_valid: list[Wire] = [c(0, width=1) for _ in range(NODE_COUNT)]
+    pipe_req_meta: list[Wire] = [c(0, width=64) for _ in range(NODE_COUNT)]
+    pipe_req_data: list[list[Wire]] = [[c(0, width=64) for _ in range(line_words)] for _ in range(NODE_COUNT)]
 
     # --- Request ring traversal + ejection to pipes ---
     for pos in range(NODE_COUNT):
@@ -398,131 +351,43 @@ def build(
         cc_in_meta = req_cc_link_meta[next_pos].out()
         cc_in_data = [r.out() for r in req_cc_link_data[next_pos]]
 
-        cw_in_tag = _field(cw_in_meta, lsb=REQ_TAG_LSB, width=tag_bits)
-        cc_in_tag = _field(cc_in_meta, lsb=REQ_TAG_LSB, width=tag_bits)
-        cw_in_dst = _tag_pipe(cw_in_tag)
-        cc_in_dst = _tag_pipe(cc_in_tag)
+        cw_in_dst = _field(cw_in_meta, lsb=REQ_DST_LSB, width=node_bits)
+        cc_in_dst = _field(cc_in_meta, lsb=REQ_DST_LSB, width=node_bits)
 
-        node_cw = build_ring_node(
-            m,
-            in_valid=cw_in_valid,
-            in_brob=c(0, width=8),
-            in_payload=cw_in_meta,
-            inject_valid=c(0, width=1),
-            inject_brob=c(0, width=8),
-            inject_payload=c(0, width=64),
-            node_id=nid,
-            local_ready=c(1, width=1),
-            dst=cw_in_dst,
-        )
-        node_cc = build_ring_node(
-            m,
-            in_valid=cc_in_valid,
-            in_brob=c(0, width=8),
-            in_payload=cc_in_meta,
-            inject_valid=c(0, width=1),
-            inject_brob=c(0, width=8),
-            inject_payload=c(0, width=64),
-            node_id=nid,
-            local_ready=c(1, width=1),
-            dst=cc_in_dst,
-        )
-        ring_cw_local = node_cw.local_valid
-        ring_cc_local = node_cc.local_valid
-
-        cw_hold_out_ready = m.named_wire(f"req_cw_hold{nid}_out_ready", width=1)
-        cw_hold_in_valid = m.named_wire(f"req_cw_hold{nid}_in_valid", width=1)
-        cw_hold_in_meta = m.named_wire(f"req_cw_hold{nid}_in_meta", width=64)
-        cw_hold_in_data = [m.named_wire(f"req_cw_hold{nid}_in_d{wi}", width=64) for wi in range(line_words)]
-        cw_hold = _build_bundle_fifo(
-            m,
-            clk=clk,
-            rst=rst,
-            in_valid=cw_hold_in_valid,
-            in_meta=cw_hold_in_meta,
-            in_data=cw_hold_in_data,
-            out_ready=cw_hold_out_ready,
-            depth=spb_depth,
-            name=f"req_cw_hold{nid}",
-        )
-        cw_hold_has = cw_hold.out_valid
-        cw_local_valid = cw_hold_has | ring_cw_local
-        cw_local_meta = cw_hold_has.select(cw_hold.out_meta, cw_in_meta)
-        cw_local_data = _select_words(cw_hold_has, cw_hold.out_data, cw_in_data)
-
-        cc_hold_out_ready = m.named_wire(f"req_cc_hold{nid}_out_ready", width=1)
-        cc_hold_in_valid = m.named_wire(f"req_cc_hold{nid}_in_valid", width=1)
-        cc_hold_in_meta = m.named_wire(f"req_cc_hold{nid}_in_meta", width=64)
-        cc_hold_in_data = [m.named_wire(f"req_cc_hold{nid}_in_d{wi}", width=64) for wi in range(line_words)]
-        cc_hold = _build_bundle_fifo(
-            m,
-            clk=clk,
-            rst=rst,
-            in_valid=cc_hold_in_valid,
-            in_meta=cc_hold_in_meta,
-            in_data=cc_hold_in_data,
-            out_ready=cc_hold_out_ready,
-            depth=spb_depth,
-            name=f"req_cc_hold{nid}",
-        )
-        cc_hold_has = cc_hold.out_valid
-        cc_local_valid = cc_hold_has | ring_cc_local
-        cc_local_meta = cc_hold_has.select(cc_hold.out_meta, cc_in_meta)
-        cc_local_data = _select_words(cc_hold_has, cc_hold.out_data, cc_in_data)
-
+        ring_cw_local = cw_in_valid & cw_in_dst.eq(node_const)
+        ring_cc_local = cc_in_valid & cc_in_dst.eq(node_const)
 
         spb_cw_head_meta = spb_cw[nid].out_meta
         spb_cc_head_meta = spb_cc[nid].out_meta
         spb_cw_head_data = spb_cw[nid].out_data
         spb_cc_head_data = spb_cc[nid].out_data
 
-        spb_cw_tag = _field(spb_cw_head_meta, lsb=REQ_TAG_LSB, width=tag_bits)
-        spb_cc_tag = _field(spb_cc_head_meta, lsb=REQ_TAG_LSB, width=tag_bits)
-        spb_cw_dst = _tag_pipe(spb_cw_tag)
-        spb_cc_dst = _tag_pipe(spb_cc_tag)
+        spb_cw_dst = _field(spb_cw_head_meta, lsb=REQ_DST_LSB, width=node_bits)
+        spb_cc_dst = _field(spb_cc_head_meta, lsb=REQ_DST_LSB, width=node_bits)
 
-        spb_cw_local = c(0, width=1)
-        spb_cc_local = c(0, width=1)
+        spb_cw_local = spb_cw[nid].out_valid & spb_cw_dst.eq(node_const)
+        spb_cc_local = spb_cc[nid].out_valid & spb_cc_dst.eq(node_const)
 
-        pipe_accept = pipe_fifo[nid].in_ready
-        sel_ring_cw = cw_local_valid & pipe_accept
-        sel_ring_cc = (~sel_ring_cw) & cc_local_valid & pipe_accept
-        sel_spb_cw = (~sel_ring_cw) & (~sel_ring_cc) & spb_cw_local & pipe_accept
-        sel_spb_cc = (~sel_ring_cw) & (~sel_ring_cc) & (~sel_spb_cw) & spb_cc_local & pipe_accept
+        sel_ring_cw = ring_cw_local
+        sel_ring_cc = (~sel_ring_cw) & ring_cc_local
+        sel_spb_cw = (~sel_ring_cw) & (~sel_ring_cc) & spb_cw_local
+        sel_spb_cc = (~sel_ring_cw) & (~sel_ring_cc) & (~sel_spb_cw) & spb_cc_local
 
-        pipe_in_valid = sel_ring_cw | sel_ring_cc | sel_spb_cw | sel_spb_cc
-        pipe_in_meta = sel_ring_cw.select(
-            cw_local_meta,
-            sel_ring_cc.select(cc_local_meta, sel_spb_cw.select(spb_cw_head_meta, spb_cc_head_meta)),
+        pipe_req_valid[nid] = sel_ring_cw | sel_ring_cc | sel_spb_cw | sel_spb_cc
+        pipe_req_meta[nid] = sel_ring_cw.select(
+            cw_in_meta,
+            sel_ring_cc.select(cc_in_meta, sel_spb_cw.select(spb_cw_head_meta, spb_cc_head_meta)),
         )
-        pipe_in_data = _select4_words(
-            sel_ring_cw,
-            sel_ring_cc,
-            sel_spb_cw,
-            sel_spb_cc,
-            cw_local_data,
-            cc_local_data,
-            spb_cw_head_data,
-            spb_cc_head_data,
-        )
-        m.assign(pipe_fifo_in_valid[nid], pipe_in_valid)
-        m.assign(pipe_fifo_in_meta[nid], pipe_in_meta)
-        for wi in range(line_words):
-            m.assign(pipe_fifo_in_data[nid][wi], pipe_in_data[wi])
+        pipe_req_data[nid] = _select4_words(sel_ring_cw, sel_ring_cc, sel_spb_cw, sel_spb_cc, cw_in_data, cc_in_data, spb_cw_head_data, spb_cc_head_data)
 
-        ring_cw_accept = ring_cw_local & pipe_accept & (~cw_hold_has)
-        ring_cc_accept = ring_cc_local & pipe_accept & (~cc_hold_has) & (~sel_ring_cw)
-        ring_cw_to_hold = ring_cw_local & (~ring_cw_accept) & cw_hold.in_ready
-        ring_cc_to_hold = ring_cc_local & (~ring_cc_accept) & cc_hold.in_ready
-
-        cw_forward_valid = cw_in_valid & (~ring_cw_accept) & (~ring_cw_to_hold)
+        cw_forward_valid = cw_in_valid & (~sel_ring_cw)
         cw_can_inject = ~cw_forward_valid
         cw_inject_valid = spb_cw[nid].out_valid & (~spb_cw_local) & cw_can_inject
         cw_out_valid = cw_forward_valid | cw_inject_valid
         cw_out_meta = cw_forward_valid.select(cw_in_meta, spb_cw_head_meta)
         cw_out_data = _select_words(cw_forward_valid, cw_in_data, spb_cw_head_data)
 
-        cc_forward_valid = cc_in_valid & (~ring_cc_accept) & (~ring_cc_to_hold)
+        cc_forward_valid = cc_in_valid & (~sel_ring_cc)
         cc_can_inject = ~cc_forward_valid
         cc_inject_valid = spb_cc[nid].out_valid & (~spb_cc_local) & cc_can_inject
         cc_out_valid = cc_forward_valid | cc_inject_valid
@@ -541,59 +406,62 @@ def build(
 
         m.assign(spb_cw_out_ready[nid], sel_spb_cw | cw_inject_valid)
         m.assign(spb_cc_out_ready[nid], sel_spb_cc | cc_inject_valid)
-        m.assign(cw_hold_out_ready, sel_ring_cw & cw_hold_has)
-        m.assign(cc_hold_out_ready, sel_ring_cc & cc_hold_has)
-        m.assign(cw_hold_in_valid, ring_cw_to_hold)
-        m.assign(cw_hold_in_meta, ring_cw_to_hold.select(cw_in_meta, c(0, width=64)))
-        m.assign(cc_hold_in_valid, ring_cc_to_hold)
-        m.assign(cc_hold_in_meta, ring_cc_to_hold.select(cc_in_meta, c(0, width=64)))
+
+    # --- Pipe stage regs ---
+    pipe_stage_valid: list[Reg] = []
+    pipe_stage_meta: list[Reg] = []
+    pipe_stage_data: list[list[Reg]] = []
+
+    for p in range(pipe_count):
+        with m.scope(f"pipe{p}_stage"):
+            pipe_stage_valid.append(m.out("v", clk=clk, rst=rst, width=1, init=0, en=1))
+            pipe_stage_meta.append(m.out("m", clk=clk, rst=rst, width=64, init=0, en=1))
+            pipe_stage_data.append(
+                [m.out(f"d_w{wi}", clk=clk, rst=rst, width=64, init=0, en=1) for wi in range(line_words)]
+            )
+
+        pipe_stage_valid[p].set(pipe_req_valid[p])
+        pipe_stage_meta[p].set(pipe_req_meta[p])
         for wi in range(line_words):
-            m.assign(cw_hold_in_data[wi], ring_cw_to_hold.select(cw_in_data[wi], c(0, width=64)))
-            m.assign(cc_hold_in_data[wi], ring_cc_to_hold.select(cc_in_data[wi], c(0, width=64)))
+            pipe_stage_data[p][wi].set(pipe_req_data[p][wi])
 
     # --- Response inject bundles (per pipe, cw/cc) ---
     rsp_cw: list[BundleFifo] = []
     rsp_cc: list[BundleFifo] = []
     rsp_cw_out_ready: list[Wire] = []
     rsp_cc_out_ready: list[Wire] = []
-    mgb_cw_dbg_valid: list[Wire] = [c(0, width=1) for _ in range(NODE_COUNT)]
-    mgb_cw_dbg_meta: list[Wire] = [c(0, width=64) for _ in range(NODE_COUNT)]
-    mgb_cw_dbg_w0: list[Wire] = [c(0, width=64) for _ in range(NODE_COUNT)]
-    mgb_cc_dbg_valid: list[Wire] = [c(0, width=1) for _ in range(NODE_COUNT)]
-    mgb_cc_dbg_meta: list[Wire] = [c(0, width=64) for _ in range(NODE_COUNT)]
-    mgb_cc_dbg_w0: list[Wire] = [c(0, width=64) for _ in range(NODE_COUNT)]
-    resp_dbg_use_bypass: list[Wire] = [c(0, width=1) for _ in range(NODE_COUNT)]
-    resp_dbg_pick_cw: list[Wire] = [c(0, width=1) for _ in range(NODE_COUNT)]
-    resp_dbg_pick_cc: list[Wire] = [c(0, width=1) for _ in range(NODE_COUNT)]
 
     for p in range(pipe_count):
-        st_valid = pipe_fifo[p].out_valid
-        st_meta = pipe_fifo[p].out_meta
-        st_data_words = pipe_fifo[p].out_data
+        st_valid = pipe_stage_valid[p].out()
+        st_meta = pipe_stage_meta[p].out()
+        st_data_words = [r.out() for r in pipe_stage_data[p]]
 
         st_write = _field(st_meta, lsb=REQ_WRITE_LSB, width=1)
         st_src = _field(st_meta, lsb=REQ_SRC_LSB, width=node_bits)
         st_tag = _field(st_meta, lsb=REQ_TAG_LSB, width=tag_bits)
-        st_addr = _tag_addr(st_tag)
+        st_addr = _field(st_meta, lsb=REQ_ADDR_LSB, width=addr_bits)
 
         line_idx = st_addr.slice(lsb=offset_bits + pipe_bits, width=index_bits)
+        byte_addr = cat(line_idx, c(0, width=3))
+        depth_bytes = lines_per_pipe * 8
 
         read_words: list[Wire] = []
         wvalid = st_valid & st_write
+        wstrb = c(0xFF, width=8)
+
         for wi in range(line_words):
-            tilereg = build_tilereg(
-                m,
+            rdata = m.byte_mem(
                 clk=clk,
                 rst=rst,
-                read_idx=line_idx,
-                write_valid=wvalid,
-                write_idx=line_idx,
-                write_data=st_data_words[wi],
-                num_tiles=lines_per_pipe,
+                raddr=byte_addr,
+                wvalid=wvalid,
+                waddr=byte_addr,
+                wdata=st_data_words[wi],
+                wstrb=wstrb,
+                depth=depth_bytes,
                 name=f"tmu_p{p}_w{wi}",
-                use_byte_mem=True,
             )
-            read_words.append(tilereg.read_data)
+            read_words.append(rdata)
 
         rsp_meta = pack_rsp_meta(st_write, c(p, width=node_bits), st_src, st_tag)
         rsp_words = [st_write.select(st_data_words[wi], read_words[wi]) for wi in range(line_words)]
@@ -634,9 +502,6 @@ def build(
             )
         )
 
-
-        m.assign(pipe_fifo_out_ready[p], rsp_dir.select(rsp_cw[p].in_ready, rsp_cc[p].in_ready))
-
     # --- Response ring traversal + MGB buffers ---
     for pos in range(NODE_COUNT):
         nid = RING_ORDER[pos]
@@ -656,32 +521,8 @@ def build(
         cw_in_dst = _field(cw_in_meta, lsb=RSP_DST_LSB, width=node_bits)
         cc_in_dst = _field(cc_in_meta, lsb=RSP_DST_LSB, width=node_bits)
 
-        node_cw = build_ring_node(
-            m,
-            in_valid=cw_in_valid,
-            in_brob=c(0, width=8),
-            in_payload=cw_in_meta,
-            inject_valid=c(0, width=1),
-            inject_brob=c(0, width=8),
-            inject_payload=c(0, width=64),
-            node_id=nid,
-            local_ready=c(1, width=1),
-            dst=cw_in_dst,
-        )
-        node_cc = build_ring_node(
-            m,
-            in_valid=cc_in_valid,
-            in_brob=c(0, width=8),
-            in_payload=cc_in_meta,
-            inject_valid=c(0, width=1),
-            inject_brob=c(0, width=8),
-            inject_payload=c(0, width=64),
-            node_id=nid,
-            local_ready=c(1, width=1),
-            dst=cc_in_dst,
-        )
-        ring_cw_local = node_cw.local_valid
-        ring_cc_local = node_cc.local_valid
+        ring_cw_local = cw_in_valid & cw_in_dst.eq(node_const)
+        ring_cc_local = cc_in_valid & cc_in_dst.eq(node_const)
 
         rsp_cw_head_meta = rsp_cw[nid].out_meta
         rsp_cc_head_meta = rsp_cc[nid].out_meta
@@ -691,77 +532,25 @@ def build(
         rsp_cw_dst = _field(rsp_cw_head_meta, lsb=RSP_DST_LSB, width=node_bits)
         rsp_cc_dst = _field(rsp_cc_head_meta, lsb=RSP_DST_LSB, width=node_bits)
 
-        rsp_cw_local = c(0, width=1)
-        rsp_cc_local = c(0, width=1)
+        rsp_cw_local = rsp_cw[nid].out_valid & rsp_cw_dst.eq(node_const)
+        rsp_cc_local = rsp_cc[nid].out_valid & rsp_cc_dst.eq(node_const)
 
-        cw_hold_out_ready = m.named_wire(f"rsp_cw_hold{nid}_out_ready", width=1)
-        cw_hold_in_valid = m.named_wire(f"rsp_cw_hold{nid}_in_valid", width=1)
-        cw_hold_in_meta = m.named_wire(f"rsp_cw_hold{nid}_in_meta", width=64)
-        cw_hold_in_data = [m.named_wire(f"rsp_cw_hold{nid}_in_d{wi}", width=64) for wi in range(line_words)]
-        cw_hold = _build_bundle_fifo(
-            m,
-            clk=clk,
-            rst=rst,
-            in_valid=cw_hold_in_valid,
-            in_meta=cw_hold_in_meta,
-            in_data=cw_hold_in_data,
-            out_ready=cw_hold_out_ready,
-            depth=mgb_depth,
-            name=f"rsp_cw_hold{nid}",
-        )
-        cw_hold_has = cw_hold.out_valid
-
-        cc_hold_out_ready = m.named_wire(f"rsp_cc_hold{nid}_out_ready", width=1)
-        cc_hold_in_valid = m.named_wire(f"rsp_cc_hold{nid}_in_valid", width=1)
-        cc_hold_in_meta = m.named_wire(f"rsp_cc_hold{nid}_in_meta", width=64)
-        cc_hold_in_data = [m.named_wire(f"rsp_cc_hold{nid}_in_d{wi}", width=64) for wi in range(line_words)]
-        cc_hold = _build_bundle_fifo(
-            m,
-            clk=clk,
-            rst=rst,
-            in_valid=cc_hold_in_valid,
-            in_meta=cc_hold_in_meta,
-            in_data=cc_hold_in_data,
-            out_ready=cc_hold_out_ready,
-            depth=mgb_depth,
-            name=f"rsp_cc_hold{nid}",
-        )
-        cc_hold_has = cc_hold.out_valid
-
-        cw_local_pick_hold = cw_hold_has
-        cc_local_pick_hold = cc_hold_has
-        cw_local_pick_rsp = (~cw_local_pick_hold) & rsp_cw_local
-        cc_local_pick_rsp = (~cc_local_pick_hold) & rsp_cc_local
-        cw_local_pick_ring = (~cw_local_pick_hold) & (~cw_local_pick_rsp) & ring_cw_local
-        cc_local_pick_ring = (~cc_local_pick_hold) & (~cc_local_pick_rsp) & ring_cc_local
-
-        cw_local_valid_raw = cw_local_pick_hold | cw_local_pick_ring | cw_local_pick_rsp
-        cc_local_valid_raw = cc_local_pick_hold | cc_local_pick_ring | cc_local_pick_rsp
-        cw_local_meta = cw_local_pick_hold.select(
-            cw_hold.out_meta, cw_local_pick_ring.select(cw_in_meta, rsp_cw_head_meta)
-        )
-        cc_local_meta = cc_local_pick_hold.select(
-            cc_hold.out_meta, cc_local_pick_ring.select(cc_in_meta, rsp_cc_head_meta)
-        )
-        cw_local_data = _select_words(
-            cw_local_pick_hold, cw_hold.out_data, _select_words(cw_local_pick_ring, cw_in_data, rsp_cw_head_data)
-        )
-        cc_local_data = _select_words(
-            cc_local_pick_hold, cc_hold.out_data, _select_words(cc_local_pick_ring, cc_in_data, rsp_cc_head_data)
-        )
-
+        cw_local_valid = ring_cw_local | rsp_cw_local
+        cc_local_valid = ring_cc_local | rsp_cc_local
+        cw_local_meta = ring_cw_local.select(cw_in_meta, rsp_cw_head_meta)
+        cc_local_meta = ring_cc_local.select(cc_in_meta, rsp_cc_head_meta)
+        cw_local_data = _select_words(ring_cw_local, cw_in_data, rsp_cw_head_data)
+        cc_local_data = _select_words(ring_cc_local, cc_in_data, rsp_cc_head_data)
 
         # MGB buffers.
         mgb_cw_ready = m.named_wire(f"mgb{nid}_cw_out_ready", width=1)
         mgb_cc_ready = m.named_wire(f"mgb{nid}_cc_out_ready", width=1)
-        mgb_cw_in_valid = m.named_wire(f"mgb{nid}_cw_in_valid", width=1)
-        mgb_cc_in_valid = m.named_wire(f"mgb{nid}_cc_in_valid", width=1)
 
         mgb_cw = _build_bundle_fifo(
             m,
             clk=clk,
             rst=rst,
-            in_valid=mgb_cw_in_valid,
+            in_valid=cw_local_valid,
             in_meta=cw_local_meta,
             in_data=cw_local_data,
             out_ready=mgb_cw_ready,
@@ -772,45 +561,24 @@ def build(
             m,
             clk=clk,
             rst=rst,
-            in_valid=mgb_cc_in_valid,
+            in_valid=cc_local_valid,
             in_meta=cc_local_meta,
             in_data=cc_local_data,
             out_ready=mgb_cc_ready,
             depth=mgb_depth,
             name=f"mgb{nid}_cc",
         )
-        mgb_cw_dbg_valid[nid] = mgb_cw.out_valid
-        mgb_cw_dbg_meta[nid] = mgb_cw.out_meta
-        mgb_cw_dbg_w0[nid] = mgb_cw.out_data[0]
-        mgb_cc_dbg_valid[nid] = mgb_cc.out_valid
-        mgb_cc_dbg_meta[nid] = mgb_cc.out_meta
-        mgb_cc_dbg_w0[nid] = mgb_cc.out_data[0]
 
         rr = m.out(f"mgb{nid}_rr", clk=clk, rst=rst, width=1, init=0, en=1)
 
+        any_cw = mgb_cw.out_valid
+        any_cc = mgb_cc.out_valid
+        both = any_cw & any_cc
+        pick_cw = (any_cw & (~any_cc)) | (both & (~rr.out()))
+        pick_cc = (any_cc & (~any_cw)) | (both & rr.out())
+
         resp_ready = nodes[nid].resp_ready
-        mgb_cw_has = mgb_cw.out_valid
-        mgb_cc_has = mgb_cc.out_valid
-        mgb_empty = (~mgb_cw_has) & (~mgb_cc_has)
-
-
-        bypass_possible = resp_ready & mgb_empty
-        bypass_pick_cw = bypass_possible & cw_local_valid_raw & ((~cc_local_valid_raw) | (~rr.out()))
-        bypass_pick_cc = bypass_possible & cc_local_valid_raw & ((~cw_local_valid_raw) | rr.out())
-
-        cw_local_accept = cw_local_valid_raw & (bypass_pick_cw | mgb_cw.in_ready)
-        cc_local_accept = cc_local_valid_raw & (bypass_pick_cc | mgb_cc.in_ready)
-
-        m.assign(mgb_cw_in_valid, cw_local_accept & (~bypass_pick_cw))
-        m.assign(mgb_cc_in_valid, cc_local_accept & (~bypass_pick_cc))
-
-        use_bypass = bypass_pick_cw | bypass_pick_cc
-        both = mgb_cw_has & mgb_cc_has
-        pick_cw = (~use_bypass) & ((mgb_cw_has & (~mgb_cc_has)) | (both & (~rr.out())))
-        pick_cc = (~use_bypass) & ((mgb_cc_has & (~mgb_cw_has)) | (both & rr.out()))
-
-        resp_valid = use_bypass | pick_cw | pick_cc
-        resp_fire = resp_valid & resp_ready
+        resp_fire = (pick_cw | pick_cc) & resp_ready
 
         m.assign(mgb_cw_ready, pick_cw & resp_ready)
         m.assign(mgb_cc_ready, pick_cc & resp_ready)
@@ -819,30 +587,18 @@ def build(
         rr_next = resp_fire.select(~rr_next, rr_next)
         rr.set(rr_next)
 
-        resp_meta_mgb = pick_cw.select(mgb_cw.out_meta, mgb_cc.out_meta)
-        resp_words_mgb = _select_words(pick_cw, mgb_cw.out_data, mgb_cc.out_data)
-        resp_meta_bypass = bypass_pick_cw.select(cw_local_meta, cc_local_meta)
-        resp_words_bypass = _select_words(bypass_pick_cw, cw_local_data, cc_local_data)
-        resp_meta = use_bypass.select(resp_meta_bypass, resp_meta_mgb)
-        resp_words = _select_words(use_bypass, resp_words_bypass, resp_words_mgb)
-        resp_dbg_use_bypass[nid] = use_bypass
-        resp_dbg_pick_cw[nid] = pick_cw
-        resp_dbg_pick_cc[nid] = pick_cc
+        resp_meta = pick_cw.select(mgb_cw.out_meta, mgb_cc.out_meta)
+        resp_words = _select_words(pick_cw, mgb_cw.out_data, mgb_cc.out_data)
 
-        m.assign(nodes[nid].resp_valid, resp_valid)
+        m.assign(nodes[nid].resp_valid, resp_fire)
         m.assign(nodes[nid].resp_tag, _field(resp_meta, lsb=RSP_TAG_LSB, width=tag_bits))
         m.assign(nodes[nid].resp_is_write, _field(resp_meta, lsb=RSP_WRITE_LSB, width=1))
         for wi in range(line_words):
             m.assign(nodes[nid].resp_data_words[wi], resp_words[wi])
 
         # Forward or inject on response cw lane.
-        ring_cw_accept = ring_cw_local & cw_local_accept & cw_local_pick_ring
-        ring_cc_accept = ring_cc_local & cc_local_accept & cc_local_pick_ring
-        ring_cw_to_hold = ring_cw_local & (~ring_cw_accept) & cw_hold.in_ready
-        ring_cc_to_hold = ring_cc_local & (~ring_cc_accept) & cc_hold.in_ready
-
-        cw_forward_valid = cw_in_valid & (~ring_cw_accept) & (~ring_cw_to_hold)
-        cc_forward_valid = cc_in_valid & (~ring_cc_accept) & (~ring_cc_to_hold)
+        cw_forward_valid = cw_in_valid & (~ring_cw_local)
+        cc_forward_valid = cc_in_valid & (~ring_cc_local)
 
         cw_can_inject = ~cw_forward_valid
         cc_can_inject = ~cc_forward_valid
@@ -868,26 +624,16 @@ def build(
         for wi in range(line_words):
             rsp_cc_link_data[pos][wi].set(cc_out_data[wi])
 
-        rsp_cw_local_pop = cw_local_accept & cw_local_pick_rsp
-        rsp_cc_local_pop = cc_local_accept & cc_local_pick_rsp
+        rsp_cw_local_pop = rsp_cw_local & (~ring_cw_local) & mgb_cw.in_ready
+        rsp_cc_local_pop = rsp_cc_local & (~ring_cc_local) & mgb_cc.in_ready
         m.assign(rsp_cw_out_ready[nid], rsp_cw_local_pop | cw_inject_valid)
         m.assign(rsp_cc_out_ready[nid], rsp_cc_local_pop | cc_inject_valid)
-
-        m.assign(cw_hold_out_ready, cw_local_accept & cw_local_pick_hold)
-        m.assign(cc_hold_out_ready, cc_local_accept & cc_local_pick_hold)
-        m.assign(cw_hold_in_valid, ring_cw_to_hold)
-        m.assign(cc_hold_in_valid, ring_cc_to_hold)
-        m.assign(cw_hold_in_meta, ring_cw_to_hold.select(cw_in_meta, c(0, width=64)))
-        m.assign(cc_hold_in_meta, ring_cc_to_hold.select(cc_in_meta, c(0, width=64)))
-        for wi in range(line_words):
-            m.assign(cw_hold_in_data[wi], ring_cw_to_hold.select(cw_in_data[wi], c(0, width=64)))
-            m.assign(cc_hold_in_data[wi], ring_cc_to_hold.select(cc_in_data[wi], c(0, width=64)))
 
     # --- Debug ring metadata outputs (for visualization) ---
     for pos in range(NODE_COUNT):
         nid = RING_ORDER[pos]
-        req_meta = req_cw_link_meta[pos].out().slice(lsb=0, width=REQ_TAG_LSB + tag_bits)
-        req_meta_cc = req_cc_link_meta[pos].out().slice(lsb=0, width=REQ_TAG_LSB + tag_bits)
+        req_meta = req_cw_link_meta[pos].out().slice(lsb=0, width=REQ_ADDR_LSB + addr_bits)
+        req_meta_cc = req_cc_link_meta[pos].out().slice(lsb=0, width=REQ_ADDR_LSB + addr_bits)
         rsp_meta = rsp_cw_link_meta[pos].out().slice(lsb=0, width=RSP_TAG_LSB + tag_bits)
         rsp_meta_cc = rsp_cc_link_meta[pos].out().slice(lsb=0, width=RSP_TAG_LSB + tag_bits)
         m.output(f"dbg_req_cw_v{nid}", req_cw_link_valid[pos].out())
@@ -906,35 +652,6 @@ def build(
         for wi in range(line_words):
             m.output(f"n{i}_resp_data_w{wi}", node.resp_data_words[wi])
         m.output(f"n{i}_resp_is_write", node.resp_is_write)
-
-    for i in range(NODE_COUNT):
-        spb_tag = _field(spb_cw[i].out_meta, lsb=REQ_TAG_LSB, width=tag_bits)
-        pipe_tag = _field(pipe_fifo[i].out_meta, lsb=REQ_TAG_LSB, width=tag_bits)
-        rsp_cw_tag = _field(rsp_cw[i].out_meta, lsb=RSP_TAG_LSB, width=tag_bits)
-        rsp_cc_tag = _field(rsp_cc[i].out_meta, lsb=RSP_TAG_LSB, width=tag_bits)
-        mgb_cw_tag = _field(mgb_cw_dbg_meta[i], lsb=RSP_TAG_LSB, width=tag_bits)
-        mgb_cc_tag = _field(mgb_cc_dbg_meta[i], lsb=RSP_TAG_LSB, width=tag_bits)
-        m.output(f"dbg_spb_cw_v{i}", spb_cw[i].out_valid)
-        m.output(f"dbg_spb_cw_tag{i}", spb_tag)
-        m.output(f"dbg_spb_cw_w0_{i}", spb_cw[i].out_data[0])
-        m.output(f"dbg_pipe_v{i}", pipe_fifo[i].out_valid)
-        m.output(f"dbg_pipe_tag{i}", pipe_tag)
-        m.output(f"dbg_pipe_w0_{i}", pipe_fifo[i].out_data[0])
-        m.output(f"dbg_rsp_cw_v{i}", rsp_cw[i].out_valid)
-        m.output(f"dbg_rsp_cw_tag{i}", rsp_cw_tag)
-        m.output(f"dbg_rsp_cw_w0_{i}", rsp_cw[i].out_data[0])
-        m.output(f"dbg_rsp_cc_v{i}", rsp_cc[i].out_valid)
-        m.output(f"dbg_rsp_cc_tag{i}", rsp_cc_tag)
-        m.output(f"dbg_rsp_cc_w0_{i}", rsp_cc[i].out_data[0])
-        m.output(f"dbg_mgb_cw_v{i}", mgb_cw_dbg_valid[i])
-        m.output(f"dbg_mgb_cw_tag{i}", mgb_cw_tag)
-        m.output(f"dbg_mgb_cw_w0_{i}", mgb_cw_dbg_w0[i])
-        m.output(f"dbg_mgb_cc_v{i}", mgb_cc_dbg_valid[i])
-        m.output(f"dbg_mgb_cc_tag{i}", mgb_cc_tag)
-        m.output(f"dbg_mgb_cc_w0_{i}", mgb_cc_dbg_w0[i])
-        m.output(f"dbg_resp_use_bypass{i}", resp_dbg_use_bypass[i])
-        m.output(f"dbg_resp_pick_cw{i}", resp_dbg_pick_cw[i])
-        m.output(f"dbg_resp_pick_cc{i}", resp_dbg_pick_cc[i])
 
 
 build.__pycircuit_name__ = "janus_tmu_pyc"

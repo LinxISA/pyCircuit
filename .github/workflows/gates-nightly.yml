@@ -1,0 +1,112 @@
+name: Gates Nightly (G3)
+
+on:
+  workflow_dispatch:
+  schedule:
+    # 08:00 UTC daily
+    - cron: "0 8 * * *"
+
+env:
+  LLVM_VERSION: "19"
+  VERILATOR_VERSION: "5.048"
+  CMAKE_BUILD_TYPE: Release
+  PYC_GATE_RUN_ID: nightly-${{ github.run_id }}-${{ github.run_attempt }}
+
+jobs:
+  gate-g3-linux:
+    name: "G3: Nightly System Gates (Linux)"
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+
+      - name: Install LLVM 19 + build/sim deps
+        run: |
+          set -euxo pipefail
+          sudo apt-get update
+          sudo apt-get install -y wget gnupg software-properties-common cmake ninja-build clang iverilog
+          wget https://apt.llvm.org/llvm.sh
+          chmod +x llvm.sh
+          sudo ./llvm.sh ${LLVM_VERSION}
+          sudo apt-get install -y llvm-${LLVM_VERSION}-dev mlir-${LLVM_VERSION}-tools libmlir-${LLVM_VERSION}-dev
+          echo "/usr/lib/llvm-${LLVM_VERSION}/bin" >> "$GITHUB_PATH"
+
+      - name: Setup Verilator
+        uses: ./.github/actions/setup-verilator
+        with:
+          version: ${{ env.VERILATOR_VERSION }}
+
+      - name: Build staged toolchain
+        run: |
+          bash flows/scripts/pyc build \
+            --llvm-config /usr/lib/llvm-${LLVM_VERSION}/bin/llvm-config \
+            --build-dir "$PWD/.pycircuit_out/toolchain/build" \
+            --install-prefix "$PWD/.pycircuit_out/toolchain/install"
+
+      - name: Run sims nightly (G3)
+        id: sims_nightly
+        shell: bash
+        run: |
+          set -euxo pipefail
+          export PYC_TOOLCHAIN_ROOT="$PWD/.pycircuit_out/toolchain/install"
+          export PATH="$PYC_TOOLCHAIN_ROOT/bin:$PATH"
+          export PYC_GATE_RUN_ID="${PYC_GATE_RUN_ID}"
+          unset PYCC || true
+          bash flows/scripts/run_sims_nightly.sh
+
+      - name: Run Linx CPU C++ smoke (G3)
+        id: linx_cpp
+        # Still attempt Linx when sims fail so the matrix reports real status, not skip→fail.
+        if: always() && steps.sims_nightly.outcome != 'cancelled'
+        shell: bash
+        run: |
+          set -euxo pipefail
+          export PYC_TOOLCHAIN_ROOT="$PWD/.pycircuit_out/toolchain/install"
+          export PATH="$PYC_TOOLCHAIN_ROOT/bin:$PATH"
+          export PYC_GATE_RUN_ID="${PYC_GATE_RUN_ID}"
+          unset PYCC || true
+          mkdir -p "docs/gates/logs/${PYC_GATE_RUN_ID}"
+          set +e
+          bash contrib/linx/flows/tools/run_linx_cpu_pyc_cpp.sh \
+            >"docs/gates/logs/${PYC_GATE_RUN_ID}/linx_cpu_pyc_cpp.stdout" \
+            2>"docs/gates/logs/${PYC_GATE_RUN_ID}/linx_cpu_pyc_cpp.stderr"
+          rc=$?
+          set -e
+          echo "${rc}" >"docs/gates/logs/${PYC_GATE_RUN_ID}/linx_cpu_pyc_cpp.rc"
+          exit "${rc}"
+
+      - name: Write gate summary
+        if: always()
+        shell: bash
+        run: |
+          set -euxo pipefail
+          map_outcome() {
+            case "$1" in
+              success) echo pass ;;
+              failure) echo fail ;;
+              skipped|cancelled) echo skip ;;
+              *) echo unknown ;;
+            esac
+          }
+          sims_status="$(map_outcome "${{ steps.sims_nightly.outcome }}")"
+          linx_status="$(map_outcome "${{ steps.linx_cpp.outcome }}")"
+          python3 flows/tools/summarize_gate_run.py \
+            --run-id "${PYC_GATE_RUN_ID}" \
+            --row "run_sims_nightly:G3:${sims_status}" \
+            --row "linx_cpu_pyc_cpp:G3:${linx_status}" \
+            --append-to "${GITHUB_STEP_SUMMARY}"
+
+      - name: Upload gate logs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: gate-logs-g3-${{ env.PYC_GATE_RUN_ID }}
+          path: docs/gates/logs/${{ env.PYC_GATE_RUN_ID }}/
+          if-no-files-found: warn
+          retention-days: 14

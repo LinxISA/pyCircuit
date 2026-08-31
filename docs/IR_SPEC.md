@@ -4,6 +4,8 @@ PYC is an MLIR dialect (`pyc`) intended to be a common, backend-agnostic IR for
 hardware components, with multi-clock modeling and strict ready/valid streaming
 semantics.
 
+For the compiler pipeline and pass-by-pass behavior, see `docs/PIPELINE.md`.
+
 ## 1) Types
 
 - `!pyc.clock`: a clock signal
@@ -87,6 +89,22 @@ Verifier contract:
 Backends emit named port connections using the callee’s `arg_names` /
 `result_names` attributes.
 
+Boundary-dynamic value params:
+
+- Frontend may stamp:
+  - `pyc.value_params = ["name0", ...]`
+  - `pyc.value_param_types = ["iN"|!pyc.clock|!pyc.reset, ...]`
+- These names are a subset of `arg_names`.
+- Value params are runtime boundary ports only; they must not participate in
+  compile-time specialization identity.
+
+Hierarchy preservation policy:
+
+- `pycc` strict mode (`--hierarchy-policy=strict`, default) enforces that
+  frontend module symbol boundaries are preserved through lowering.
+- Default C++ out-dir flows use `--inline-policy=off` so `@module` callsites
+  remain explicit instance boundaries.
+
 ### 2.2.3 `pyc.assert` (simulation-only assertion)
 
 `pyc.assert` is a simulation-only check that aborts when `cond` is false.
@@ -165,19 +183,19 @@ into a single region:
 
 ## 3) Verilog backend (prototype)
 
-`pyc-compile --emit=verilog` emits Verilog:
+`pycc --emit=verilog` emits Verilog:
 
 - **Combinational ops** are typically emitted as flattened `assign` expressions (netlist style).
-- **Stateful ops** instantiate the corresponding primitives from `include/pyc/verilog/`:
-  - `pyc.reg` → `pyc_reg` (`include/pyc/verilog/pyc_reg.v`)
-  - `pyc.fifo` → `pyc_fifo` (`include/pyc/verilog/pyc_fifo.v`)
-  - `pyc.async_fifo` → `pyc_async_fifo` (`include/pyc/verilog/pyc_async_fifo.v`)
-  - `pyc.byte_mem` → `pyc_byte_mem` (`include/pyc/verilog/pyc_byte_mem.v`)
-  - `pyc.sync_mem` → `pyc_sync_mem` (`include/pyc/verilog/pyc_sync_mem.v`)
-  - `pyc.sync_mem_dp` → `pyc_sync_mem_dp` (`include/pyc/verilog/pyc_sync_mem_dp.v`)
-  - `pyc.cdc_sync` → `pyc_cdc_sync` (`include/pyc/verilog/pyc_cdc_sync.v`)
+- **Stateful ops** instantiate the corresponding primitives from `runtime/verilog/`:
+  - `pyc.reg` → `pyc_reg` (`runtime/verilog/pyc_reg.v`)
+  - `pyc.fifo` → `pyc_fifo` (`runtime/verilog/pyc_fifo.v`)
+  - `pyc.async_fifo` → `pyc_async_fifo` (`runtime/verilog/pyc_async_fifo.v`)
+  - `pyc.byte_mem` → `pyc_byte_mem` (`runtime/verilog/pyc_byte_mem.v`)
+  - `pyc.sync_mem` → `pyc_sync_mem` (`runtime/verilog/pyc_sync_mem.v`)
+  - `pyc.sync_mem_dp` → `pyc_sync_mem_dp` (`runtime/verilog/pyc_sync_mem_dp.v`)
+  - `pyc.cdc_sync` → `pyc_cdc_sync` (`runtime/verilog/pyc_cdc_sync.v`)
 
-`pyc-compile` also runs `pyc-fuse-comb`, which enables emission of flattened
+`pycc` also runs `pyc-fuse-comb`, which enables emission of flattened
 Verilog `assign` statements for large purely-combinational regions.
 
 ## 4) Structured control flow (frontend temporary IR)
@@ -187,12 +205,12 @@ The Python AST/JIT frontend may emit a small subset of standard MLIR dialects:
 - `scf.if` / `scf.for` (Structured Control Flow)
 - `arith.constant` of type `index` (loop bounds)
 
-These are **not** part of the stable PYC dialect contract: `pyc-compile` runs
+These are **not** part of the stable PYC dialect contract: `pycc` runs
 `pyc-lower-scf-static` to lower them into static PYC hardware ops:
 
 - `scf.if` → `pyc.mux` networks (both branches are speculated; must be side-effect-free)
 - `scf.for` → fully unrolled logic (bounds must be compile-time constants)
 
 Note: MLIR canonicalization may also introduce `arith.select` during cleanup.
-`pyc-compile` supports `arith.select` in both C++ and Verilog emission, but it
+`pycc` supports `arith.select` in both C++ and Verilog emission, but it
 is not considered part of the stable PYC dialect surface area.

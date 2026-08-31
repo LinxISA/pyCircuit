@@ -1,11 +1,8 @@
 #include <array>
-#include <cstdlib>
 #include <cstdint>
-#include <deque>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
-#include <map>
 #include <optional>
 #include <string>
 
@@ -21,15 +18,11 @@ namespace {
 
 constexpr int kNodes = 8;
 constexpr int kAddrBits = 20;
-constexpr int kTagBits = 20;
+constexpr int kTagBits = 8;
 constexpr int kWords = 32;
-constexpr std::uint64_t kDeadlockCycles = 800;
-constexpr int kDefaultCases = 20;
-constexpr int kDefaultRoundsPerCase = 20;
-constexpr int kWarmupCycles = 32;
 
 using DataWord = Wire<64>;
-using DataLineU64 = std::array<std::uint64_t, kWords>;
+using DataLine = std::array<DataWord, kWords>;
 
 struct NodePorts {
   Wire<1> *req_valid = nullptr;
@@ -56,11 +49,11 @@ static std::uint32_t makeAddr(std::uint32_t index, std::uint32_t pipe, std::uint
   return (index << 11) | (pipe << 8) | (offset & 0xFFu);
 }
 
-static DataLineU64 makeDataU64(std::uint32_t seed) {
-  DataLineU64 out{};
+static DataLine makeData(std::uint32_t seed) {
+  DataLine out{};
   for (unsigned i = 0; i < kWords; i++) {
     std::uint64_t word = (static_cast<std::uint64_t>(seed) << 32) | i;
-    out[i] = word;
+    out[i] = DataWord(word);
   }
   return out;
 }
@@ -76,505 +69,71 @@ static void zeroReq(NodePorts &n) {
 
 static void setRespReady(NodePorts &n, bool ready) { *n.resp_ready = Wire<1>(ready ? 1u : 0u); }
 
-struct PendingReq {
-  std::uint32_t addr = 0;
-  std::uint32_t tag = 0;
-  DataLineU64 data{};
-  bool is_write = true;
-};
+static void sendReq(Testbench<pyc::gen::janus_tmu_pyc> &tb,
+                    NodePorts &n,
+                    std::uint64_t &cycle,
+                    int node_id,
+                    bool write,
+                    std::uint32_t addr,
+                    std::uint8_t tag,
+                    const DataLine &data,
+                    std::ofstream &trace) {
+  *n.req_write = Wire<1>(write ? 1u : 0u);
+  *n.req_addr = Wire<kAddrBits>(addr);
+  *n.req_tag = Wire<kTagBits>(tag);
+  for (unsigned i = 0; i < kWords; i++)
+    *n.req_data[i] = data[i];
+  *n.req_valid = Wire<1>(1);
+  while (true) {
+    tb.runCycles(1);
+    cycle++;
+    if (n.req_ready->toBool()) {
+      trace << cycle << ",accept"
+            << "," << node_id << "," << unsigned(tag) << "," << (write ? 1 : 0) << ",0x" << std::hex << addr
+            << std::dec << ",0x"
+            << std::hex << data[0].value() << std::dec << "\n";
+      break;
+    }
+  }
+  *n.req_valid = Wire<1>(0);
+}
 
-struct ExpectedResp {
-  DataLineU64 data{};
-  bool is_write = true;
-  std::uint64_t issue_cycle = 0;
-};
-
-struct NodeDriver {
-  bool active = false;
-  std::uint64_t active_since = 0;
-  PendingReq current{};
-  std::deque<PendingReq> queue;
-  std::map<std::uint32_t, ExpectedResp> expected;
-};
-
-struct RespSample {
-  bool valid = false;
-  std::uint32_t tag = 0;
-  bool is_write = false;
-  DataLineU64 data{};
-  bool dbg_use_bypass = false;
-  bool dbg_pick_cw = false;
-  bool dbg_pick_cc = false;
-  std::uint32_t dbg_mgb_cw_tag = 0;
-  std::uint64_t dbg_mgb_cw_w0 = 0;
-  std::uint32_t dbg_mgb_cc_tag = 0;
-  std::uint64_t dbg_mgb_cc_w0 = 0;
-};
-
-static void driveNodeReq(NodePorts &n, const PendingReq *req) {
-  if (!req) {
-    *n.req_valid = Wire<1>(0);
-    *n.req_write = Wire<1>(0);
-    *n.req_addr = Wire<kAddrBits>(0);
-    *n.req_tag = Wire<kTagBits>(0);
-    for (unsigned i = 0; i < kWords; i++)
-      *n.req_data[i] = DataWord(0);
+static void waitResp(Testbench<pyc::gen::janus_tmu_pyc> &tb,
+                     NodePorts &n,
+                     std::uint64_t &cycle,
+                     int node_id,
+                     std::uint8_t tag,
+                     bool expect_write,
+                     const DataLine &expect_data,
+                     std::ofstream &trace) {
+  for (std::uint64_t i = 0; i < 2000; i++) {
+    tb.runCycles(1);
+    cycle++;
+    if (!n.resp_valid->toBool())
+      continue;
+    if (n.resp_tag->value() != tag) {
+      std::cerr << "FAIL: tag mismatch. got=" << std::hex << n.resp_tag->value() << " exp=" << unsigned(tag) << std::dec
+                << "\n";
+      std::exit(1);
+    }
+    if (n.resp_is_write->toBool() != expect_write) {
+      std::cerr << "FAIL: resp_is_write mismatch\n";
+      std::exit(1);
+    }
+    for (unsigned i = 0; i < kWords; i++) {
+      if (n.resp_data[i]->value() != expect_data[i].value()) {
+        std::cerr << "FAIL: resp_data mismatch\n";
+        std::exit(1);
+      }
+    }
+    trace << cycle << ",resp"
+          << "," << node_id << "," << unsigned(tag) << "," << (expect_write ? 1 : 0) << ",0x" << std::hex
+          << n.resp_data[0]->value()
+          << std::dec << "\n";
     return;
   }
-  *n.req_valid = Wire<1>(1);
-  *n.req_write = Wire<1>(req->is_write ? 1u : 0u);
-  *n.req_addr = Wire<kAddrBits>(req->addr);
-  *n.req_tag = Wire<kTagBits>(req->tag);
-  for (unsigned i = 0; i < kWords; i++)
-    *n.req_data[i] = DataWord(req->data[i]);
-}
-
-static std::uint32_t lcgNext(std::uint32_t &state) {
-  state = state * 1664525u + 1013904223u;
-  return state;
-}
-
-static void runCongestedCase(Testbench<pyc::gen::janus_tmu_pyc> &tb,
-                             pyc::gen::janus_tmu_pyc &dut,
-                             std::array<NodePorts, kNodes> &nodes,
-                             int case_id,
-                             int reqs_per_node,
-                             std::uint64_t &cycle,
-                             std::map<std::uint32_t, DataLineU64> &mem,
-                             std::ofstream &trace) {
-  std::array<NodeDriver, kNodes> drv{};
-  const std::array<Wire<1> *, kNodes> dbg_resp_use_bypass = {
-      &dut.dbg_resp_use_bypass0, &dut.dbg_resp_use_bypass1, &dut.dbg_resp_use_bypass2,
-      &dut.dbg_resp_use_bypass3, &dut.dbg_resp_use_bypass4, &dut.dbg_resp_use_bypass5,
-      &dut.dbg_resp_use_bypass6, &dut.dbg_resp_use_bypass7};
-  const std::array<Wire<1> *, kNodes> dbg_resp_pick_cw = {
-      &dut.dbg_resp_pick_cw0, &dut.dbg_resp_pick_cw1, &dut.dbg_resp_pick_cw2, &dut.dbg_resp_pick_cw3,
-      &dut.dbg_resp_pick_cw4, &dut.dbg_resp_pick_cw5, &dut.dbg_resp_pick_cw6, &dut.dbg_resp_pick_cw7};
-  const std::array<Wire<1> *, kNodes> dbg_resp_pick_cc = {
-      &dut.dbg_resp_pick_cc0, &dut.dbg_resp_pick_cc1, &dut.dbg_resp_pick_cc2, &dut.dbg_resp_pick_cc3,
-      &dut.dbg_resp_pick_cc4, &dut.dbg_resp_pick_cc5, &dut.dbg_resp_pick_cc6, &dut.dbg_resp_pick_cc7};
-  const std::array<Wire<kTagBits> *, kNodes> dbg_mgb_cw_tag = {
-      &dut.dbg_mgb_cw_tag0, &dut.dbg_mgb_cw_tag1, &dut.dbg_mgb_cw_tag2, &dut.dbg_mgb_cw_tag3,
-      &dut.dbg_mgb_cw_tag4, &dut.dbg_mgb_cw_tag5, &dut.dbg_mgb_cw_tag6, &dut.dbg_mgb_cw_tag7};
-  const std::array<Wire<64> *, kNodes> dbg_mgb_cw_w0 = {
-      &dut.dbg_mgb_cw_w0_0, &dut.dbg_mgb_cw_w0_1, &dut.dbg_mgb_cw_w0_2, &dut.dbg_mgb_cw_w0_3,
-      &dut.dbg_mgb_cw_w0_4, &dut.dbg_mgb_cw_w0_5, &dut.dbg_mgb_cw_w0_6, &dut.dbg_mgb_cw_w0_7};
-  const std::array<Wire<kTagBits> *, kNodes> dbg_mgb_cc_tag = {
-      &dut.dbg_mgb_cc_tag0, &dut.dbg_mgb_cc_tag1, &dut.dbg_mgb_cc_tag2, &dut.dbg_mgb_cc_tag3,
-      &dut.dbg_mgb_cc_tag4, &dut.dbg_mgb_cc_tag5, &dut.dbg_mgb_cc_tag6, &dut.dbg_mgb_cc_tag7};
-  const std::array<Wire<64> *, kNodes> dbg_mgb_cc_w0 = {
-      &dut.dbg_mgb_cc_w0_0, &dut.dbg_mgb_cc_w0_1, &dut.dbg_mgb_cc_w0_2, &dut.dbg_mgb_cc_w0_3,
-      &dut.dbg_mgb_cc_w0_4, &dut.dbg_mgb_cc_w0_5, &dut.dbg_mgb_cc_w0_6, &dut.dbg_mgb_cc_w0_7};
-
-  std::array<std::uint32_t, kNodes> rng_state{};
-  std::array<bool, kNodes> last_write_valid{};
-  std::array<std::uint32_t, kNodes> last_write_addr{};
-  std::array<DataLineU64, kNodes> last_write_data{};
-
-  for (int n = 0; n < kNodes; n++) {
-    rng_state[n] = 0x1234abcdU ^ (static_cast<std::uint32_t>(case_id) << 8) ^
-                   static_cast<std::uint32_t>(n);
-    const int base = case_id * 16;
-    for (int seq = 0; seq < reqs_per_node; seq++) {
-      const int pipe = (n + (seq % kNodes)) % kNodes;
-      const int index = base + seq;
-      PendingReq req{};
-      std::uint32_t rnd = lcgNext(rng_state[n]);
-      bool is_write = (rnd & 1u) != 0;
-      if (seq == 0)
-        is_write = true;
-
-      bool use_last = (!is_write) && last_write_valid[n] && ((lcgNext(rng_state[n]) & 3u) == 0);
-      if (use_last) {
-        req.addr = last_write_addr[n];
-      } else {
-        req.addr = makeAddr(static_cast<std::uint32_t>(index), static_cast<std::uint32_t>(pipe));
-      }
-      req.tag = req.addr;
-      req.is_write = is_write;
-      if (is_write) {
-        req.data = makeDataU64(static_cast<std::uint32_t>((case_id << 12) | (n << 6) | seq));
-        last_write_valid[n] = true;
-        last_write_addr[n] = req.addr;
-        last_write_data[n] = req.data;
-      }
-      drv[n].queue.push_back(req);
-    }
-  }
-
-  std::uint64_t outstanding = static_cast<std::uint64_t>(reqs_per_node) * kNodes;
-  std::uint64_t safety = 0;
-  const bool progress_log = envFlag("PYC_TMU_PROGRESS");
-  std::uint64_t progress_stride = 1000;
-  if (progress_log) {
-    if (const char *stride_env = std::getenv("PYC_TMU_PROGRESS_STRIDE")) {
-      const auto v = static_cast<std::uint64_t>(std::strtoull(stride_env, nullptr, 10));
-      if (v > 0)
-        progress_stride = v;
-    }
-  }
-
-  while (outstanding > 0) {
-    for (int n = 0; n < kNodes; n++) {
-      bool ready = false;
-      if (cycle >= kWarmupCycles) {
-        ready = (((cycle + static_cast<std::uint64_t>(n) + static_cast<std::uint64_t>(case_id)) % 2) == 0);
-      }
-      setRespReady(nodes[n], ready);
-      if (!drv[n].active && !drv[n].queue.empty()) {
-        drv[n].current = drv[n].queue.front();
-        drv[n].queue.pop_front();
-        drv[n].active = true;
-        drv[n].active_since = cycle;
-      }
-      driveNodeReq(nodes[n], drv[n].active ? &drv[n].current : nullptr);
-    }
-
-    dut.eval();
-    std::array<bool, kNodes> req_fire{};
-    std::array<RespSample, kNodes> resp_sample{};
-    for (int n = 0; n < kNodes; n++) {
-      req_fire[n] = drv[n].active && nodes[n].req_ready->toBool();
-      const bool ready = nodes[n].resp_ready->toBool();
-      const bool valid = nodes[n].resp_valid->toBool();
-      if (ready && valid) {
-        resp_sample[n].valid = true;
-        resp_sample[n].tag = static_cast<std::uint32_t>(nodes[n].resp_tag->value());
-        resp_sample[n].is_write = nodes[n].resp_is_write->toBool();
-        for (unsigned w = 0; w < kWords; w++) {
-          resp_sample[n].data[w] = static_cast<std::uint64_t>(nodes[n].resp_data[w]->value());
-        }
-        resp_sample[n].dbg_use_bypass = dbg_resp_use_bypass[n]->toBool();
-        resp_sample[n].dbg_pick_cw = dbg_resp_pick_cw[n]->toBool();
-        resp_sample[n].dbg_pick_cc = dbg_resp_pick_cc[n]->toBool();
-        resp_sample[n].dbg_mgb_cw_tag = static_cast<std::uint32_t>(dbg_mgb_cw_tag[n]->value());
-        resp_sample[n].dbg_mgb_cw_w0 = static_cast<std::uint64_t>(dbg_mgb_cw_w0[n]->value());
-        resp_sample[n].dbg_mgb_cc_tag = static_cast<std::uint32_t>(dbg_mgb_cc_tag[n]->value());
-        resp_sample[n].dbg_mgb_cc_w0 = static_cast<std::uint64_t>(dbg_mgb_cc_w0[n]->value());
-      }
-    }
-
-    tb.runCycles(1);
-    cycle++;
-    safety++;
-
-    if (progress_log && (cycle % progress_stride) == 0) {
-      std::cerr << "PROGRESS case=" << case_id << " cycle=" << cycle << " outstanding=" << outstanding << "\n";
-    }
-
-    for (int n = 0; n < kNodes; n++) {
-      if (req_fire[n]) {
-        ExpectedResp exp{};
-        exp.issue_cycle = cycle;
-        exp.is_write = drv[n].current.is_write;
-        if (drv[n].current.is_write) {
-          mem[drv[n].current.addr] = drv[n].current.data;
-          exp.data = drv[n].current.data;
-        } else {
-          auto mit = mem.find(drv[n].current.addr);
-          if (mit != mem.end())
-            exp.data = mit->second;
-        }
-        drv[n].expected[drv[n].current.tag] = exp;
-        if (trace.is_open()) {
-          trace << cycle << ",accept," << n << "," << drv[n].current.tag << ","
-                << (drv[n].current.is_write ? 1 : 0) << ",0x" << std::hex << drv[n].current.addr << std::dec
-                << ",0x" << std::hex << drv[n].current.data[0] << std::dec << "\n";
-        }
-        drv[n].active = false;
-      }
-    }
-
-    for (int n = 0; n < kNodes; n++) {
-      if (!resp_sample[n].valid)
-        continue;
-      const std::uint32_t tag = resp_sample[n].tag;
-      auto it = drv[n].expected.find(tag);
-      if (it == drv[n].expected.end()) {
-        std::cerr << "FAIL: unexpected resp tag. case=" << case_id << " node=" << n << " tag=0x" << std::hex
-                  << tag << std::dec << "\n";
-        std::exit(1);
-      }
-      if (resp_sample[n].is_write != it->second.is_write) {
-        std::cerr << "FAIL: resp_is_write mismatch. case=" << case_id << " node=" << n << " tag=0x" << std::hex
-                  << tag << std::dec << "\n";
-        std::exit(1);
-      }
-      for (unsigned w = 0; w < kWords; w++) {
-        if (resp_sample[n].data[w] != it->second.data[w]) {
-          std::cerr << "FAIL: resp_data mismatch. case=" << case_id << " node=" << n << " tag=0x" << std::hex
-                    << tag << std::dec << " word=" << w << " exp=0x" << std::hex << it->second.data[w]
-                    << " got=0x"
-                    << resp_sample[n].data[w] << std::dec << "\n";
-          if (envFlag("PYC_TMU_DUMP")) {
-            std::cerr << "  resp_dbg use_bypass=" << resp_sample[n].dbg_use_bypass
-                      << " pick_cw=" << resp_sample[n].dbg_pick_cw << " pick_cc=" << resp_sample[n].dbg_pick_cc
-                      << " mgb_cw_tag=0x" << std::hex << resp_sample[n].dbg_mgb_cw_tag << " mgb_cw_w0=0x"
-                      << resp_sample[n].dbg_mgb_cw_w0 << " mgb_cc_tag=0x" << resp_sample[n].dbg_mgb_cc_tag
-                      << " mgb_cc_w0=0x" << resp_sample[n].dbg_mgb_cc_w0 << std::dec << "\n";
-            std::array<Wire<1> *, kNodes> dbg_spb_cw_v = {
-                &dut.dbg_spb_cw_v0, &dut.dbg_spb_cw_v1, &dut.dbg_spb_cw_v2, &dut.dbg_spb_cw_v3,
-                &dut.dbg_spb_cw_v4, &dut.dbg_spb_cw_v5, &dut.dbg_spb_cw_v6, &dut.dbg_spb_cw_v7};
-            std::array<Wire<kTagBits> *, kNodes> dbg_spb_cw_tag = {
-                &dut.dbg_spb_cw_tag0, &dut.dbg_spb_cw_tag1, &dut.dbg_spb_cw_tag2, &dut.dbg_spb_cw_tag3,
-                &dut.dbg_spb_cw_tag4, &dut.dbg_spb_cw_tag5, &dut.dbg_spb_cw_tag6, &dut.dbg_spb_cw_tag7};
-            std::array<Wire<64> *, kNodes> dbg_spb_cw_w0 = {
-                &dut.dbg_spb_cw_w0_0, &dut.dbg_spb_cw_w0_1, &dut.dbg_spb_cw_w0_2, &dut.dbg_spb_cw_w0_3,
-                &dut.dbg_spb_cw_w0_4, &dut.dbg_spb_cw_w0_5, &dut.dbg_spb_cw_w0_6, &dut.dbg_spb_cw_w0_7};
-            std::array<Wire<1> *, kNodes> dbg_pipe_v = {&dut.dbg_pipe_v0, &dut.dbg_pipe_v1, &dut.dbg_pipe_v2,
-                                                        &dut.dbg_pipe_v3, &dut.dbg_pipe_v4, &dut.dbg_pipe_v5,
-                                                        &dut.dbg_pipe_v6, &dut.dbg_pipe_v7};
-            std::array<Wire<kTagBits> *, kNodes> dbg_pipe_tag = {
-                &dut.dbg_pipe_tag0, &dut.dbg_pipe_tag1, &dut.dbg_pipe_tag2, &dut.dbg_pipe_tag3,
-                &dut.dbg_pipe_tag4, &dut.dbg_pipe_tag5, &dut.dbg_pipe_tag6, &dut.dbg_pipe_tag7};
-            std::array<Wire<64> *, kNodes> dbg_pipe_w0 = {
-                &dut.dbg_pipe_w0_0, &dut.dbg_pipe_w0_1, &dut.dbg_pipe_w0_2, &dut.dbg_pipe_w0_3,
-                &dut.dbg_pipe_w0_4, &dut.dbg_pipe_w0_5, &dut.dbg_pipe_w0_6, &dut.dbg_pipe_w0_7};
-            std::array<Wire<1> *, kNodes> dbg_rsp_cw_v = {
-                &dut.dbg_rsp_cw_v0, &dut.dbg_rsp_cw_v1, &dut.dbg_rsp_cw_v2, &dut.dbg_rsp_cw_v3,
-                &dut.dbg_rsp_cw_v4, &dut.dbg_rsp_cw_v5, &dut.dbg_rsp_cw_v6, &dut.dbg_rsp_cw_v7};
-            std::array<Wire<kTagBits> *, kNodes> dbg_rsp_cw_tag = {
-                &dut.dbg_rsp_cw_tag0, &dut.dbg_rsp_cw_tag1, &dut.dbg_rsp_cw_tag2, &dut.dbg_rsp_cw_tag3,
-                &dut.dbg_rsp_cw_tag4, &dut.dbg_rsp_cw_tag5, &dut.dbg_rsp_cw_tag6, &dut.dbg_rsp_cw_tag7};
-            std::array<Wire<64> *, kNodes> dbg_rsp_cw_w0 = {
-                &dut.dbg_rsp_cw_w0_0, &dut.dbg_rsp_cw_w0_1, &dut.dbg_rsp_cw_w0_2, &dut.dbg_rsp_cw_w0_3,
-                &dut.dbg_rsp_cw_w0_4, &dut.dbg_rsp_cw_w0_5, &dut.dbg_rsp_cw_w0_6, &dut.dbg_rsp_cw_w0_7};
-            std::array<Wire<1> *, kNodes> dbg_rsp_cc_v = {
-                &dut.dbg_rsp_cc_v0, &dut.dbg_rsp_cc_v1, &dut.dbg_rsp_cc_v2, &dut.dbg_rsp_cc_v3,
-                &dut.dbg_rsp_cc_v4, &dut.dbg_rsp_cc_v5, &dut.dbg_rsp_cc_v6, &dut.dbg_rsp_cc_v7};
-            std::array<Wire<kTagBits> *, kNodes> dbg_rsp_cc_tag = {
-                &dut.dbg_rsp_cc_tag0, &dut.dbg_rsp_cc_tag1, &dut.dbg_rsp_cc_tag2, &dut.dbg_rsp_cc_tag3,
-                &dut.dbg_rsp_cc_tag4, &dut.dbg_rsp_cc_tag5, &dut.dbg_rsp_cc_tag6, &dut.dbg_rsp_cc_tag7};
-            std::array<Wire<64> *, kNodes> dbg_rsp_cc_w0 = {
-                &dut.dbg_rsp_cc_w0_0, &dut.dbg_rsp_cc_w0_1, &dut.dbg_rsp_cc_w0_2, &dut.dbg_rsp_cc_w0_3,
-                &dut.dbg_rsp_cc_w0_4, &dut.dbg_rsp_cc_w0_5, &dut.dbg_rsp_cc_w0_6, &dut.dbg_rsp_cc_w0_7};
-            std::array<Wire<1> *, kNodes> dbg_mgb_cw_v = {
-                &dut.dbg_mgb_cw_v0, &dut.dbg_mgb_cw_v1, &dut.dbg_mgb_cw_v2, &dut.dbg_mgb_cw_v3,
-                &dut.dbg_mgb_cw_v4, &dut.dbg_mgb_cw_v5, &dut.dbg_mgb_cw_v6, &dut.dbg_mgb_cw_v7};
-            std::array<Wire<kTagBits> *, kNodes> dbg_mgb_cw_tag = {
-                &dut.dbg_mgb_cw_tag0, &dut.dbg_mgb_cw_tag1, &dut.dbg_mgb_cw_tag2, &dut.dbg_mgb_cw_tag3,
-                &dut.dbg_mgb_cw_tag4, &dut.dbg_mgb_cw_tag5, &dut.dbg_mgb_cw_tag6, &dut.dbg_mgb_cw_tag7};
-            std::array<Wire<64> *, kNodes> dbg_mgb_cw_w0 = {
-                &dut.dbg_mgb_cw_w0_0, &dut.dbg_mgb_cw_w0_1, &dut.dbg_mgb_cw_w0_2, &dut.dbg_mgb_cw_w0_3,
-                &dut.dbg_mgb_cw_w0_4, &dut.dbg_mgb_cw_w0_5, &dut.dbg_mgb_cw_w0_6, &dut.dbg_mgb_cw_w0_7};
-            std::array<Wire<1> *, kNodes> dbg_mgb_cc_v = {
-                &dut.dbg_mgb_cc_v0, &dut.dbg_mgb_cc_v1, &dut.dbg_mgb_cc_v2, &dut.dbg_mgb_cc_v3,
-                &dut.dbg_mgb_cc_v4, &dut.dbg_mgb_cc_v5, &dut.dbg_mgb_cc_v6, &dut.dbg_mgb_cc_v7};
-            std::array<Wire<kTagBits> *, kNodes> dbg_mgb_cc_tag = {
-                &dut.dbg_mgb_cc_tag0, &dut.dbg_mgb_cc_tag1, &dut.dbg_mgb_cc_tag2, &dut.dbg_mgb_cc_tag3,
-                &dut.dbg_mgb_cc_tag4, &dut.dbg_mgb_cc_tag5, &dut.dbg_mgb_cc_tag6, &dut.dbg_mgb_cc_tag7};
-            std::array<Wire<64> *, kNodes> dbg_mgb_cc_w0 = {
-                &dut.dbg_mgb_cc_w0_0, &dut.dbg_mgb_cc_w0_1, &dut.dbg_mgb_cc_w0_2, &dut.dbg_mgb_cc_w0_3,
-                &dut.dbg_mgb_cc_w0_4, &dut.dbg_mgb_cc_w0_5, &dut.dbg_mgb_cc_w0_6, &dut.dbg_mgb_cc_w0_7};
-            std::array<Wire<1> *, kNodes> dbg_resp_use_bypass = {
-                &dut.dbg_resp_use_bypass0, &dut.dbg_resp_use_bypass1, &dut.dbg_resp_use_bypass2,
-                &dut.dbg_resp_use_bypass3, &dut.dbg_resp_use_bypass4, &dut.dbg_resp_use_bypass5,
-                &dut.dbg_resp_use_bypass6, &dut.dbg_resp_use_bypass7};
-            std::array<Wire<1> *, kNodes> dbg_resp_pick_cw = {
-                &dut.dbg_resp_pick_cw0, &dut.dbg_resp_pick_cw1, &dut.dbg_resp_pick_cw2, &dut.dbg_resp_pick_cw3,
-                &dut.dbg_resp_pick_cw4, &dut.dbg_resp_pick_cw5, &dut.dbg_resp_pick_cw6, &dut.dbg_resp_pick_cw7};
-            std::array<Wire<1> *, kNodes> dbg_resp_pick_cc = {
-                &dut.dbg_resp_pick_cc0, &dut.dbg_resp_pick_cc1, &dut.dbg_resp_pick_cc2, &dut.dbg_resp_pick_cc3,
-                &dut.dbg_resp_pick_cc4, &dut.dbg_resp_pick_cc5, &dut.dbg_resp_pick_cc6, &dut.dbg_resp_pick_cc7};
-            const int pipe = static_cast<int>((tag >> 8) & 0x7u);
-            auto dump_node = [&](int idx, const char *label) {
-              std::cerr << "  dbg " << label << " spb_cw_v=" << dbg_spb_cw_v[idx]->toBool() << " spb_cw_tag=0x"
-                        << std::hex << dbg_spb_cw_tag[idx]->value() << std::dec << " spb_cw_w0=0x" << std::hex
-                        << dbg_spb_cw_w0[idx]->value() << std::dec << " pipe_v=" << dbg_pipe_v[idx]->toBool()
-                        << " pipe_tag=0x" << std::hex << dbg_pipe_tag[idx]->value() << std::dec
-                        << " pipe_w0=0x" << std::hex << dbg_pipe_w0[idx]->value() << std::dec
-                        << " rsp_cw_v=" << dbg_rsp_cw_v[idx]->toBool() << " rsp_cw_tag=0x" << std::hex
-                        << dbg_rsp_cw_tag[idx]->value() << std::dec << " rsp_cw_w0=0x" << std::hex
-                        << dbg_rsp_cw_w0[idx]->value() << std::dec << " rsp_cc_v=" << dbg_rsp_cc_v[idx]->toBool()
-                        << " rsp_cc_tag=0x" << std::hex << dbg_rsp_cc_tag[idx]->value() << std::dec
-                        << " rsp_cc_w0=0x" << std::hex << dbg_rsp_cc_w0[idx]->value() << std::dec
-                        << " mgb_cw_v=" << dbg_mgb_cw_v[idx]->toBool() << " mgb_cw_tag=0x" << std::hex
-                        << dbg_mgb_cw_tag[idx]->value() << std::dec << " mgb_cw_w0=0x" << std::hex
-                        << dbg_mgb_cw_w0[idx]->value() << std::dec << " mgb_cc_v=" << dbg_mgb_cc_v[idx]->toBool()
-                        << " mgb_cc_tag=0x" << std::hex << dbg_mgb_cc_tag[idx]->value() << std::dec
-                        << " mgb_cc_w0=0x" << std::hex << dbg_mgb_cc_w0[idx]->value() << std::dec
-                        << " use_bypass=" << dbg_resp_use_bypass[idx]->toBool()
-                        << " pick_cw=" << dbg_resp_pick_cw[idx]->toBool()
-                        << " pick_cc=" << dbg_resp_pick_cc[idx]->toBool() << "\n";
-            };
-            dump_node(n, "node");
-            dump_node(pipe, "pipe");
-          }
-          std::exit(1);
-        }
-      }
-      if (trace.is_open()) {
-        trace << cycle << ",resp," << n << "," << tag << "," << (it->second.is_write ? 1 : 0) << ",0x"
-              << std::hex << it->second.data[0] << std::dec << "\n";
-      }
-      drv[n].expected.erase(it);
-      outstanding--;
-    }
-
-    if (outstanding > 0) {
-      for (int n = 0; n < kNodes; n++) {
-        if (drv[n].active) {
-          const std::uint64_t age = cycle - drv[n].active_since;
-          if (age > kDeadlockCycles) {
-            std::cerr << "FAIL: deadlock (req not accepted). case=" << case_id << " node=" << n << " tag=0x"
-                      << std::hex << drv[n].current.tag << std::dec << " age=" << age << " cycle=" << cycle << "\n";
-            std::exit(1);
-          }
-        }
-      }
-      for (int n = 0; n < kNodes; n++) {
-        for (const auto &kv : drv[n].expected) {
-          const std::uint64_t age = cycle - kv.second.issue_cycle;
-          if (age > kDeadlockCycles) {
-            std::cerr << "FAIL: deadlock. case=" << case_id << " node=" << n << " tag=0x" << std::hex
-                      << kv.first << std::dec << " age=" << age << " cycle=" << cycle << "\n";
-            std::exit(1);
-          }
-        }
-      }
-    }
-    if (safety > 200000) {
-      std::cerr << "FAIL: safety timeout. case=" << case_id << " cycle=" << cycle << "\n";
-      std::exit(1);
-    }
-  }
-}
-
-static void runSimultaneousCase(Testbench<pyc::gen::janus_tmu_pyc> &tb,
-                                pyc::gen::janus_tmu_pyc &dut,
-                                std::array<NodePorts, kNodes> &nodes,
-                                std::uint64_t &cycle,
-                                std::map<std::uint32_t, DataLineU64> &mem,
-                                std::ofstream &trace) {
-  std::array<NodeDriver, kNodes> drv{};
-  std::array<std::uint32_t, kNodes> rng_state{};
-  for (int n = 0; n < kNodes; n++) {
-    rng_state[n] = 0xA5A50000u ^ static_cast<std::uint32_t>(n);
-    PendingReq req{};
-    const int pipe = n;
-    const int index = n;
-    req.addr = makeAddr(static_cast<std::uint32_t>(index), static_cast<std::uint32_t>(pipe));
-    req.tag = req.addr;
-    req.is_write = (lcgNext(rng_state[n]) & 1u) != 0;
-    if (req.is_write) {
-      req.data = makeDataU64(static_cast<std::uint32_t>(0xA500u | static_cast<std::uint32_t>(n)));
-    }
-    drv[n].current = req;
-    drv[n].active = true;
-    drv[n].active_since = cycle;
-  }
-
-  std::uint64_t outstanding = kNodes;
-  std::uint64_t safety = 0;
-
-  while (outstanding > 0) {
-    for (int n = 0; n < kNodes; n++) {
-      setRespReady(nodes[n], true);
-      driveNodeReq(nodes[n], drv[n].active ? &drv[n].current : nullptr);
-    }
-
-    dut.eval();
-    std::array<bool, kNodes> req_fire{};
-    std::array<RespSample, kNodes> resp_sample{};
-    for (int n = 0; n < kNodes; n++) {
-      req_fire[n] = drv[n].active && nodes[n].req_ready->toBool();
-      const bool ready = nodes[n].resp_ready->toBool();
-      const bool valid = nodes[n].resp_valid->toBool();
-      if (ready && valid) {
-        resp_sample[n].valid = true;
-        resp_sample[n].tag = static_cast<std::uint32_t>(nodes[n].resp_tag->value());
-        resp_sample[n].is_write = nodes[n].resp_is_write->toBool();
-        for (unsigned w = 0; w < kWords; w++) {
-          resp_sample[n].data[w] = static_cast<std::uint64_t>(nodes[n].resp_data[w]->value());
-        }
-      }
-    }
-
-    tb.runCycles(1);
-    cycle++;
-    safety++;
-
-    for (int n = 0; n < kNodes; n++) {
-      if (req_fire[n]) {
-        ExpectedResp exp{};
-        exp.issue_cycle = cycle;
-        exp.is_write = drv[n].current.is_write;
-        if (drv[n].current.is_write) {
-          mem[drv[n].current.addr] = drv[n].current.data;
-          exp.data = drv[n].current.data;
-        } else {
-          auto mit = mem.find(drv[n].current.addr);
-          if (mit != mem.end())
-            exp.data = mit->second;
-        }
-        drv[n].expected[drv[n].current.tag] = exp;
-        if (trace.is_open()) {
-          trace << cycle << ",accept," << n << "," << drv[n].current.tag << ","
-                << (drv[n].current.is_write ? 1 : 0) << ",0x" << std::hex << drv[n].current.addr << std::dec
-                << ",0x" << std::hex << drv[n].current.data[0] << std::dec << "\n";
-        }
-        drv[n].active = false;
-      }
-    }
-
-    for (int n = 0; n < kNodes; n++) {
-      if (!resp_sample[n].valid)
-        continue;
-      const std::uint32_t tag = resp_sample[n].tag;
-      auto it = drv[n].expected.find(tag);
-      if (it == drv[n].expected.end()) {
-        std::cerr << "FAIL: unexpected resp tag. case=simul node=" << n << " tag=0x" << std::hex << tag
-                  << std::dec << "\n";
-        std::exit(1);
-      }
-      if (resp_sample[n].is_write != it->second.is_write) {
-        std::cerr << "FAIL: resp_is_write mismatch. case=simul node=" << n << " tag=0x" << std::hex << tag
-                  << std::dec << "\n";
-        std::exit(1);
-      }
-      for (unsigned w = 0; w < kWords; w++) {
-        if (resp_sample[n].data[w] != it->second.data[w]) {
-          std::cerr << "FAIL: resp_data mismatch. case=simul node=" << n << " tag=0x" << std::hex << tag
-                    << std::dec << " word=" << w << " exp=0x" << std::hex << it->second.data[w] << " got=0x"
-                    << resp_sample[n].data[w] << std::dec << "\n";
-          std::exit(1);
-        }
-      }
-      if (trace.is_open()) {
-        trace << cycle << ",resp," << n << "," << tag << "," << (it->second.is_write ? 1 : 0) << ",0x"
-              << std::hex << it->second.data[0] << std::dec << "\n";
-      }
-      drv[n].expected.erase(it);
-      outstanding--;
-    }
-
-    if (outstanding > 0) {
-      for (int n = 0; n < kNodes; n++) {
-        if (drv[n].active) {
-          const std::uint64_t age = cycle - drv[n].active_since;
-          if (age > kDeadlockCycles) {
-            std::cerr << "FAIL: deadlock (req not accepted). case=simul node=" << n << " tag=0x" << std::hex
-                      << drv[n].current.tag << std::dec << " age=" << age << " cycle=" << cycle << "\n";
-            std::exit(1);
-          }
-        }
-      }
-      for (int n = 0; n < kNodes; n++) {
-        for (const auto &kv : drv[n].expected) {
-          const std::uint64_t age = cycle - kv.second.issue_cycle;
-          if (age > kDeadlockCycles) {
-            std::cerr << "FAIL: deadlock. case=simul node=" << n << " tag=0x" << std::hex << kv.first << std::dec
-                      << " age=" << age << " cycle=" << cycle << "\n";
-            std::exit(1);
-          }
-        }
-      }
-    }
-    if (safety > 20000) {
-      std::cerr << "FAIL: safety timeout. case=simul cycle=" << cycle << "\n";
-      std::exit(1);
-    }
-  }
+  std::cerr << "FAIL: timeout waiting for response tag=0x" << std::hex << unsigned(tag) << std::dec << "\n";
+  std::exit(1);
 }
 
 } // namespace
@@ -678,38 +237,48 @@ int main() {
        {&dut.n7_resp_data_w0, &dut.n7_resp_data_w1, &dut.n7_resp_data_w2, &dut.n7_resp_data_w3, &dut.n7_resp_data_w4, &dut.n7_resp_data_w5, &dut.n7_resp_data_w6, &dut.n7_resp_data_w7, &dut.n7_resp_data_w8, &dut.n7_resp_data_w9, &dut.n7_resp_data_w10, &dut.n7_resp_data_w11, &dut.n7_resp_data_w12, &dut.n7_resp_data_w13, &dut.n7_resp_data_w14, &dut.n7_resp_data_w15, &dut.n7_resp_data_w16, &dut.n7_resp_data_w17, &dut.n7_resp_data_w18, &dut.n7_resp_data_w19, &dut.n7_resp_data_w20, &dut.n7_resp_data_w21, &dut.n7_resp_data_w22, &dut.n7_resp_data_w23, &dut.n7_resp_data_w24, &dut.n7_resp_data_w25, &dut.n7_resp_data_w26, &dut.n7_resp_data_w27, &dut.n7_resp_data_w28, &dut.n7_resp_data_w29, &dut.n7_resp_data_w30, &dut.n7_resp_data_w31}, &dut.n7_resp_is_write},
   }};
 
-  std::map<std::uint32_t, DataLineU64> mem;
-
   for (auto &n : nodes) {
     zeroReq(n);
-    setRespReady(n, false);
+    setRespReady(n, true);
   }
-  tb.reset(dut.rst, /*cyclesAsserted=*/2, /*cyclesDeasserted=*/1);
-  std::uint64_t sim_cycle = 0;
-  runSimultaneousCase(tb, dut, nodes, sim_cycle, mem, trace);
 
-  int case_count = kDefaultCases;
-  if (const char *cases_env = std::getenv("PYC_TMU_CASES")) {
-    const int v = std::atoi(cases_env);
-    if (v > 0)
-      case_count = v;
-  }
-  int rounds_per_case = kDefaultRoundsPerCase;
-  if (const char *rounds_env = std::getenv("PYC_TMU_ROUNDS")) {
-    const int v = std::atoi(rounds_env);
-    if (v > 0)
-      rounds_per_case = v;
-  }
-  const int reqs_per_node = rounds_per_case * kNodes;
+  std::uint64_t cycle = 0;
 
-  for (int case_id = 0; case_id < case_count; case_id++) {
-    for (auto &n : nodes) {
-      zeroReq(n);
-      setRespReady(n, false);
-    }
-    tb.reset(dut.rst, /*cyclesAsserted=*/2, /*cyclesDeasserted=*/1);
-    std::uint64_t cycle = 0;
-    runCongestedCase(tb, dut, nodes, case_id, reqs_per_node, cycle, mem, trace);
+  for (int n = 0; n < kNodes; n++) {
+    const auto addr = makeAddr(static_cast<std::uint32_t>(n), static_cast<std::uint32_t>(n));
+    const auto data = makeData(static_cast<std::uint32_t>(n + 1));
+    const std::uint8_t tag_w = static_cast<std::uint8_t>(n);
+    const std::uint8_t tag_r = static_cast<std::uint8_t>(0x80 | n);
+
+    sendReq(tb, nodes[n], cycle, n, true, addr, tag_w, data, trace);
+    waitResp(tb, nodes[n], cycle, n, tag_w, true, data, trace);
+
+    sendReq(tb, nodes[n], cycle, n, false, addr, tag_r, DataLine{}, trace);
+    waitResp(tb, nodes[n], cycle, n, tag_r, false, data, trace);
+  }
+
+  // Cross-node: node0 writes to pipe2, then reads it back.
+  {
+    const auto addr = makeAddr(5, 2);
+    const auto data = makeData(0xAA);
+    sendReq(tb, nodes[0], cycle, 0, true, addr, 0x55, data, trace);
+    waitResp(tb, nodes[0], cycle, 0, 0x55, true, data, trace);
+    sendReq(tb, nodes[0], cycle, 0, false, addr, 0x56, DataLine{}, trace);
+    waitResp(tb, nodes[0], cycle, 0, 0x56, false, data, trace);
+  }
+
+  // Ring traffic: each node accesses a non-local pipe to exercise ring flow.
+  for (int n = 0; n < kNodes; n++) {
+    const int dst_pipe = (n + 2) % kNodes;
+    const auto addr = makeAddr(16 + n, static_cast<std::uint32_t>(dst_pipe));
+    const auto data = makeData(0x100 + n);
+    const std::uint8_t tag_w = static_cast<std::uint8_t>(0x20 + n);
+    const std::uint8_t tag_r = static_cast<std::uint8_t>(0xA0 + n);
+
+    sendReq(tb, nodes[n], cycle, n, true, addr, tag_w, data, trace);
+    waitResp(tb, nodes[n], cycle, n, tag_w, true, data, trace);
+    sendReq(tb, nodes[n], cycle, n, false, addr, tag_r, DataLine{}, trace);
+    waitResp(tb, nodes[n], cycle, n, tag_r, false, data, trace);
   }
 
   std::cout << "PASS: TMU tests\n";

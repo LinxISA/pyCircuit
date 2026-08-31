@@ -3,14 +3,22 @@ __pycache__/
 *.py[codz]
 *$py.class
 
+# macOS
+.DS_Store
+
 # C extensions
 *.so
 *.dylib
+*.dSYM/
+
+# Generated PDFs (schematics, etc.)
+*.pdf
 
 # Distribution / packaging
 .Python
-build/
-build-*/
+/build/
+/build-*/
+compiler/mlir/build*/
 develop-eggs/
 dist/
 downloads/
@@ -167,6 +175,7 @@ venv.bak/
 
 # mkdocs documentation
 /site
+/_build/
 
 # mypy
 .mypy_cache/
@@ -220,8 +229,28 @@ marimo/_static/
 marimo/_lsp/
 __marimo__/
 
-# Verilog tool build outputs
-examples/generated/**/verilator/
+# pyCircuit generated outputs (local artifacts only; never checked in)
+.pycircuit_out/
+/examples/
+janus/
+**/generated/
+designs/**/generated/
+designs/examples/generated/**/verilator/
+designs/janus/generated/
 
-# Janus generated outputs (pyc-compile, verilator builds, benchmark artifacts)
-janus/generated/
+# XiangShan-pyc build outputs
+designs/XiangShan-pyc/build_out/
+designs/XiangShan-pyc/build_out_small/
+
+# External XiangShan repos (not part of pyCircuit)
+designs/XiangShan/
+designs/XiangShan-doc/
+
+# DavinciOO canonical tree (https://github.com/hengliao1972/DavinciOO); optional local checkout
+designs/DavinciOO/
+# pyCircuit imports use package name outerCube — symlink only, never commit
+designs/outerCube/
+
+.claude/settings.local.json
+# gate outputs
+docs/gates

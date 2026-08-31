@@ -1,0 +1,8 @@
+{
+  "cpp_modules": [],
+  "top": "mem_rdw_olddata",
+  "verilog_modules": [
+    "pyc_primitives.v",
+    "mem_rdw_olddata.v"
+  ]
+}
