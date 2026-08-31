@@ -106,8 +106,8 @@ int main(int argc, char **argv) {
   llvm::cl::opt<std::string> cxxCompiler("cxx",
                                          llvm::cl::desc("Host C++ compiler"),
                                          llvm::cl::init(ACIR_HOST_CXX));
-  llvm::cl::ParseCommandLineOptions(argc, argv,
-                                    "Freeze, lower, emit, and compile ACIR\n");
+  llvm::cl::ParseCommandLineOptions(
+      argc, argv, "Verify, normalize, lower, emit, and compile ACIR\n");
 
   DialectRegistry registry;
   acir::registerAllDialects(registry);
@@ -127,10 +127,11 @@ int main(int argc, char **argv) {
     return 1;
 
   {
-    PassManager freeze(&context);
-    freeze.enableVerifier(false);
-    freeze.addPass(acir::createFreezeTopologyPass());
-    if (failed(freeze.run(module.get())))
+    PassManager canonicalize(&context);
+    canonicalize.addPass(acir::createVerifyACIRFilePass());
+    canonicalize.addPass(acir::createNormalizeACIRFilePass());
+    canonicalize.addPass(acir::createFreezeTopologyPass());
+    if (failed(canonicalize.run(module.get())))
       return 1;
   }
 
