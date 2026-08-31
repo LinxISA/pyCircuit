@@ -41,7 +41,7 @@ setup(
     description="A Python-based hardware description framework that compiles Python to RTL through MLIR",
     long_description=(ROOT / "README.md").read_text(encoding="utf-8"),
     long_description_content_type="text/markdown",
-    license="MIT",
+    license="BSD-3-Clause",
     author="PTO-ISA Contributors",
     url="https://github.com/PTO-ISA/pyCircuit",
     project_urls={

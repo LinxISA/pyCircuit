@@ -3382,3 +3382,71 @@ gate documentation.
 
 **Source**
 - pyCircuit 6 repository convergence (2026-08-31).
+
+## Decision 0150: Agentic Circuit remains a distinct upper-level IR and frontend inside the pyCircuit repository
+
+**Status:** Accepted
+
+**Context / Goal**
+PTO-ISA is consolidating Agentic Circuit into `PTO-ISA/pyCircuit` so one
+repository owns the complete architecture-to-hardware flow. Consolidation must
+not collapse architecture/process semantics into the PYC hardware dialect or
+create a second timing model that competes with pyCircuit 6.
+
+**Decision (strong constraint)**
+- ACIR remains an independent, upper-level MLIR dialect. Its architecture,
+  process, and queue operations must not be folded into the `pyc` dialect.
+- The `agentic_circuit` and `pycircuit` Python distributions and import
+  namespaces remain distinct public surfaces in the shared repository.
+- The Agentic Circuit frontend continues to emit ACPy and ACIR. Existing ACPy
+  contract epochs and schemas may change only through an explicit contract
+  decision and matching compatibility evidence.
+- ACSim and gfsim remain the architecture-simulation lowering and runtime path.
+  They are not aliases for, or implementations inside, `libpyc6_runtime`.
+- Synthesizable ACIR lowers into verified PYC IR. ACIR-to-PYC integration must
+  adapt to pyCircuit 6, `libpyc6_runtime`, and the CycleAwareSignal contract in
+  Decision 0148; it must not reintroduce prior-version runtime names or bypass
+  PYC verifiers.
+- ACIR-to-PYC and the native pyCircuit frontend share the same verified PYC
+  semantics and downstream C++ and Verilog backends.
+- First-party Agentic Circuit and pyCircuit code in the consolidated repository
+  is licensed under BSD-3-Clause. The owner-direction record and exact imported
+  Git objects are maintained in
+  `docs/legal/AC-RELICENSE-BSD-3-CLAUSE.md`.
+
+**Migration and retirement rules**
+- Preserve the Agentic Circuit `main` history and migrate open PR work with
+  original commit and author provenance. Each old PR must receive an explicit
+  migrated, superseded, or rejected disposition; no unique reviewed work is
+  silently discarded.
+- The original Agentic Circuit repository remains active until both the AC
+  lanes and the existing PYC lanes pass from the consolidated checkout.
+- Retirement requires at least ACIR/ACSim parser and verifier coverage,
+  ACIR-to-gfsim execution, ACIR-to-PYC-to-C++/Verilog coverage, and the normal
+  pyCircuit 6 frontend, simulation, and semantic-regression gates.
+- After those gates pass, disable release, package, and CI authority in the old
+  repository, make it private, and retain only `zhoubot` as a direct repository
+  collaborator. PTO-ISA organization owners may retain access inherent to
+  GitHub organization administration; the repository policy must not claim it
+  can remove that inherited authority.
+- The old repository is provenance only after retirement. New source changes,
+  issues, releases, and packages belong in `PTO-ISA/pyCircuit`.
+
+**Compatibility and verification**
+- Keeping two Python namespaces does not authorize duplicate semantic
+  implementations: both hardware paths converge on verified PYC IR.
+- C++20 may remain target-local to Agentic Circuit targets during integration;
+  repository-wide compiler-standard changes require a separate decision.
+- Decision 0150 is implemented when the imported source, namespace boundaries,
+  repo-local pyc6 lowering, build/install contracts, and AC/PYC closure evidence
+  are present in `PTO-ISA/pyCircuit`.
+- Changing the old repository's visibility, credentials, and archive state is
+  a separate operational cutover. A blocked cutover does not make the merged
+  compiler implementation unverified; it requires the old repository to remain
+  active until the operational gate is resolved.
+
+**Source**
+- Repository-owner direction (2026-08-31): consolidate Agentic Circuit into
+  pyCircuit; retain ACIR and its frontend; use BSD-3-Clause; preserve both
+  Python namespaces; migrate existing PRs; test AC and PYC before retiring the
+  old private repository.

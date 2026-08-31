@@ -9,9 +9,11 @@ ownership for pyCircuit.
 | --- | --- | --- |
 | [`PTO-ISA/pyCircuit`](https://github.com/PTO-ISA/pyCircuit) | Canonical upstream | Product decisions, default branch, releases, packages, documentation, CI policy |
 | [`LinxISA/pyCircuit`](https://github.com/LinxISA/pyCircuit) | Downstream fork | Linx integration staging and downstream validation |
+| `PTO-ISA/agentic-circuit` | Private historical archive after closure | Original issues, pull requests and audit history only; no active development or publishing |
 
 The upstream repository is the only source of truth. Do not maintain a second
-independent product history in the LinxISA fork.
+independent product history in the LinxISA fork or the retired Agentic Circuit
+repository.
 
 ## Change flow
 
@@ -46,6 +48,7 @@ Only PTO-ISA/pyCircuit may:
 
 - create canonical version tags and GitHub releases;
 - publish the `pycircuit-hisi` package;
+- publish the `agentic-circuit` package;
 - publish canonical compiler or runtime artifacts; and
 - announce a language, ABI, trace-schema, or toolchain compatibility level.
 
@@ -90,3 +93,20 @@ Historical gate logs and compatibility identifiers may retain earlier version
 labels. Keep them stable unless an accepted migration decision defines the
 replacement and compatibility window. Current product documentation must still
 identify the language as pyCircuit 6.
+
+## Agentic Circuit retirement
+
+Agentic Circuit source, ACIR/ACSim, gfsim, tests, schemas and frontend are owned
+by the pyCircuit repository under `components/agentic-circuit/`. Do not land new
+source changes in the standalone repository after the migration freeze.
+
+The standalone repository may be made private and archived only after the AC
+closure and full PYC closure pass on the integrated revision and all open
+collaboration items have a target record. Before visibility changes:
+
+1. publish a final tombstone linking to the canonical pyCircuit revision;
+2. disable Actions, releases, packages, secrets, environments and webhooks;
+3. transfer issues and recreate or supersede pull requests with links;
+4. remove direct, team and outside-collaborator access; and
+5. verify `zhoubot` is the only explicitly granted repository user, subject to
+   GitHub organization-owner access.

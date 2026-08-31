@@ -1,0 +1,168 @@
+{
+  "candidates": [
+    {
+      "available": true,
+      "profile": "fast",
+      "record": {
+        "activation_sources": [],
+        "availability": "available",
+        "binding": "Consumer",
+        "binding_schema": "acsim-binding-0.1",
+        "component_schema": "ac.Consumer",
+        "component_schema_fingerprint": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        "construction": {"arguments": [], "kind": "constructor"},
+        "contract_epoch": "0.3",
+        "cpp": {
+          "concept": "gfsim::StatefulModel",
+          "entry_points": {
+            "pure": "",
+            "reset": "gfsim::consumer_reset",
+            "validate": "gfsim::consumer_validate",
+            "work": "gfsim::consumer_work",
+            "xfer": "gfsim::consumer_xfer"
+          },
+          "header": "gfsim/consumer.hpp",
+          "symbol": "gfsim::Consumer",
+          "target": "gfsim"
+        },
+        "cpp_type": "cpp_endpoint",
+        "effect": "stateful",
+        "fingerprint": "sha256:596eae9fb8166027ec0f237c0e57bdd750700fcdd1075dbb15b0ef8c44c65546",
+        "implementation": "gfsim.Consumer",
+        "ownership": {"kind": "unique", "placement": "member_or_array"},
+        "parameters": [],
+        "ports": [
+          {
+            "accessor": "input",
+            "cardinality": "exclusive",
+            "delegation": "forbidden",
+            "direction": "input",
+            "interface": "Wire",
+            "ownership": "borrowed",
+            "payload": "cpp_i8",
+            "protocol": "wire",
+            "role": "sink",
+            "time_domain": "cycle"
+          }
+        ],
+        "provider": "gfsim",
+        "provider_implementation_fingerprint": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+        "resources": [],
+        "results": []
+      },
+      "target": "arm64-apple-darwin"
+    },
+    {
+      "available": true,
+      "profile": "fast",
+      "record": {
+        "activation_sources": [],
+        "availability": "available",
+        "binding": "Producer",
+        "binding_schema": "acsim-binding-0.1",
+        "component_schema": "ac.Producer",
+        "component_schema_fingerprint": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+        "construction": {"arguments": [], "kind": "constructor"},
+        "contract_epoch": "0.3",
+        "cpp": {
+          "concept": "gfsim::StatefulModel",
+          "entry_points": {
+            "pure": "",
+            "reset": "gfsim::producer_reset",
+            "validate": "gfsim::producer_validate",
+            "work": "gfsim::producer_work",
+            "xfer": "gfsim::producer_xfer"
+          },
+          "header": "gfsim/producer.hpp",
+          "symbol": "gfsim::Producer",
+          "target": "gfsim"
+        },
+        "cpp_type": "cpp_endpoint",
+        "effect": "stateful",
+        "fingerprint": "sha256:78db155890336c5ebb10b7797e886480eba8f750a653d29ed6d8160d0589385a",
+        "implementation": "gfsim.Producer",
+        "ownership": {"kind": "unique", "placement": "member_or_array"},
+        "parameters": [],
+        "ports": [
+          {
+            "accessor": "output",
+            "cardinality": "exclusive",
+            "delegation": "forbidden",
+            "direction": "output",
+            "interface": "Wire",
+            "ownership": "borrowed",
+            "payload": "cpp_i8",
+            "protocol": "wire",
+            "role": "source",
+            "time_domain": "cycle"
+          }
+        ],
+        "provider": "gfsim",
+        "provider_implementation_fingerprint": "sha256:4444444444444444444444444444444444444444444444444444444444444444",
+        "resources": [],
+        "results": [{"cpp_type": "cpp_endpoint", "name": "out"}]
+      },
+      "target": "arm64-apple-darwin"
+    }
+  ],
+  "requests": [
+    {
+      "activation_sources": [],
+      "binding": "Consumer",
+      "binding_schema": "acsim-binding-0.1",
+      "component_schema": "ac.Consumer",
+      "component_schema_fingerprint": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+      "contract_epoch": "0.3",
+      "effect": "stateful",
+      "function_type": "(!ac.endpoint<@Wire, @source>) -> ()",
+      "parameters": [],
+      "ports": [
+        {
+          "cardinality": "exclusive",
+          "delegation": "forbidden",
+          "direction": "input",
+          "interface": "Wire",
+          "ownership": "borrowed",
+          "payload": "cpp_i8",
+          "protocol": "wire",
+          "role": "sink",
+          "time_domain": "cycle"
+        }
+      ],
+      "provider": "gfsim",
+      "provider_implementation_fingerprint": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+      "resolution_key": "@Consumer",
+      "resources": [],
+      "results": []
+    },
+    {
+      "activation_sources": [],
+      "binding": "Producer",
+      "binding_schema": "acsim-binding-0.1",
+      "component_schema": "ac.Producer",
+      "component_schema_fingerprint": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+      "contract_epoch": "0.3",
+      "effect": "stateful",
+      "function_type": "() -> !ac.endpoint<@Wire, @source>",
+      "parameters": [],
+      "ports": [
+        {
+          "cardinality": "exclusive",
+          "delegation": "forbidden",
+          "direction": "output",
+          "interface": "Wire",
+          "ownership": "borrowed",
+          "payload": "cpp_i8",
+          "protocol": "wire",
+          "role": "source",
+          "time_domain": "cycle"
+        }
+      ],
+      "provider": "gfsim",
+      "provider_implementation_fingerprint": "sha256:4444444444444444444444444444444444444444444444444444444444444444",
+      "resolution_key": "@Producer",
+      "resources": [],
+      "results": [{"acir_type": "!ac.endpoint<@Wire, @source>", "name": "out"}]
+    }
+  ]
+}

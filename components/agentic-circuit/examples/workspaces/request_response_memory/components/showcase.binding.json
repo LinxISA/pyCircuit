@@ -1,0 +1,142 @@
+{
+  "candidates": [
+    {
+      "available": true,
+      "profile": "fast",
+      "target": "unknown-unknown",
+      "record": {
+        "activation_sources": [],
+        "availability": "available",
+        "binding": "workspace_Showcase_binding",
+        "binding_schema": "acsim-binding-0.1",
+        "component_schema": "workspace.Showcase",
+        "component_schema_fingerprint": "sha256:3dd113d76227679688dc514e8bbe401a8225925cf592e362891a8857b6f2a270",
+        "construction": {
+          "arguments": [
+            2
+          ],
+          "kind": "constructor"
+        },
+        "contract_epoch": "0.3",
+        "cpp": {
+          "concept": "gfsim::Component",
+          "entry_points": {
+            "pure": "",
+            "reset": "gfsim::workspace_reset",
+            "validate": "gfsim::workspace_validate",
+            "work": "gfsim::workspace_work",
+            "xfer": "gfsim::workspace_xfer"
+          },
+          "header": "gfsim/showcase.h",
+          "symbol": "gfsim::ShowcaseTraceSource",
+          "target": "gfsim"
+        },
+        "cpp_type": "workspace_showcase_type",
+        "effect": "stateful",
+        "fingerprint": "sha256:04d4bb6c35f30c3202e0d90d520dcd731882ac806e8725490319c8caae770e44",
+        "implementation": "gfsim.ShowcaseTraceSource",
+        "ownership": {
+          "kind": "unique",
+          "placement": "member_or_array"
+        },
+        "parameters": [
+          {
+            "acir_type": "i64",
+            "cpp_type": "std::uint64_t",
+            "mapping": "constructor_constant",
+            "name": "scenario",
+            "ordinal": 0,
+            "value": 2
+          }
+        ],
+        "ports": [],
+        "provider": "workspace",
+        "provider_implementation_fingerprint": "sha256:5555555555555555555555555555555555555555555555555555555555555555",
+        "resources": [],
+        "results": []
+      }
+    },
+    {
+      "available": true,
+      "profile": "fast",
+      "target": "native",
+      "record": {
+        "activation_sources": [],
+        "availability": "available",
+        "binding": "workspace_Showcase_binding",
+        "binding_schema": "acsim-binding-0.1",
+        "component_schema": "workspace.Showcase",
+        "component_schema_fingerprint": "sha256:3dd113d76227679688dc514e8bbe401a8225925cf592e362891a8857b6f2a270",
+        "construction": {
+          "arguments": [
+            2
+          ],
+          "kind": "constructor"
+        },
+        "contract_epoch": "0.3",
+        "cpp": {
+          "concept": "gfsim::Component",
+          "entry_points": {
+            "pure": "",
+            "reset": "gfsim::workspace_reset",
+            "validate": "gfsim::workspace_validate",
+            "work": "gfsim::workspace_work",
+            "xfer": "gfsim::workspace_xfer"
+          },
+          "header": "gfsim/showcase.h",
+          "symbol": "gfsim::ShowcaseTraceSource",
+          "target": "gfsim"
+        },
+        "cpp_type": "workspace_showcase_type",
+        "effect": "stateful",
+        "fingerprint": "sha256:04d4bb6c35f30c3202e0d90d520dcd731882ac806e8725490319c8caae770e44",
+        "implementation": "gfsim.ShowcaseTraceSource",
+        "ownership": {
+          "kind": "unique",
+          "placement": "member_or_array"
+        },
+        "parameters": [
+          {
+            "acir_type": "i64",
+            "cpp_type": "std::uint64_t",
+            "mapping": "constructor_constant",
+            "name": "scenario",
+            "ordinal": 0,
+            "value": 2
+          }
+        ],
+        "ports": [],
+        "provider": "workspace",
+        "provider_implementation_fingerprint": "sha256:5555555555555555555555555555555555555555555555555555555555555555",
+        "resources": [],
+        "results": []
+      }
+    }
+  ],
+  "requests": [
+    {
+      "activation_sources": [],
+      "binding": "workspace_Showcase_binding",
+      "binding_schema": "acsim-binding-0.1",
+      "component_schema": "workspace.Showcase",
+      "component_schema_fingerprint": "sha256:3dd113d76227679688dc514e8bbe401a8225925cf592e362891a8857b6f2a270",
+      "contract_epoch": "0.3",
+      "effect": "stateful",
+      "function_type": "() -> ()",
+      "parameters": [
+        {
+          "acir_type": "i64",
+          "name": "scenario",
+          "ordinal": 0,
+          "value": 2
+        }
+      ],
+      "ports": [],
+      "provider": "workspace",
+      "provider_implementation_fingerprint": "sha256:5555555555555555555555555555555555555555555555555555555555555555",
+      "resolution_key": "@Showcase",
+      "resources": [],
+      "results": []
+    }
+  ]
+}

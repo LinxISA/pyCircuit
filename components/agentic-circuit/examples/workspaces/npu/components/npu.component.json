@@ -1,0 +1,43 @@
+{
+  "schema_kind": "agentic-circuit-component",
+  "schema_version": "0.1",
+  "contract_epoch": "0.3",
+  "canonical_name": "workspace.Npu",
+  "family": "source",
+  "provider_namespace": "workspace.npu.provider",
+  "stability": "experimental",
+  "cpp_binding": {
+    "header": "gfsim/npu.h",
+    "symbol": "gfsim::NpuTraceSource",
+    "language": "c++20",
+    "concept": "gfsim::Component",
+    "toolchain_target": "ac-gfsim-cxx20-v0.1",
+    "functional_policy": "none"
+  },
+  "static_parameters": [],
+  "bindings": [],
+  "results": [],
+  "resources": [],
+  "address_behavior": null,
+  "protocol_contracts": [],
+  "effect": {
+    "kind": "stateful",
+    "requirements": ["one validated canonical PTO trace document"],
+    "guarantees": ["deterministic dependency-aware NPU execution"],
+    "observable_effects": ["architectural_values", "runtime_events"],
+    "failure_behavior": "terminate_with_diagnostic"
+  },
+  "activation": {
+    "sources": [],
+    "predicate": "loaded and not committed",
+    "wakeup_contract": [],
+    "quiescence": "trace exhausted and all instructions retired"
+  },
+  "observation": {
+    "probes": [],
+    "counters": ["trace_records", "npu_events", "architectural_retired_instructions", "architectural_digest"],
+    "gauges": [],
+    "histograms": []
+  },
+  "schema_fingerprint": "sha256:d4db2ec8813016dce7fc4e03edddbeb45057bbf9d58081c265a27ecc4a7f6968"
+}

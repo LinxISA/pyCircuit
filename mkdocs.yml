@@ -75,6 +75,10 @@ nav:
       - Language Specification: v6_PyCircuit_Specification.md
       - Tutorial: v6_PyCircuit_Tutorial.md
       - Software Architecture: v6_PyCircuit_Software_Architecture.md
+  - Agentic Circuit:
+      - ACIR Architecture: acir/index.md
+      - Repository Migration: acir/migration.md
+      - Collaboration Migration: acir/agentic-circuit-collaboration.md
   - Core Docs:
       - QUICKSTART.md
       - FRONTEND_API.md
