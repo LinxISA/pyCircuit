@@ -1,9 +1,9 @@
 {
   "checks": {
-    "require_all_verified": false,
-    "require_concrete_evidence": false,
-    "require_existing_evidence": false,
-    "require_no_deferred": false
+    "require_all_verified": true,
+    "require_concrete_evidence": true,
+    "require_existing_evidence": true,
+    "require_no_deferred": true
   },
   "decisions": [
     {
@@ -1051,10 +1051,10 @@
     },
     {
       "decision": "0150",
-      "evidence": "docs/gates/logs/20260831-agentic-consolidation-r2/agentic_circuit_summary.json, docs/acir/migration.md, docs/legal/AC-RELICENSE-BSD-3-CLAUSE.md",
-      "next_action": "AC G0/G1/G2 pass; complete PYC and Linx closure, then promote to implemented-verified before repository retirement",
+      "evidence": "docs/gates/logs/20260831-agentic-consolidation-r2/agentic_circuit_summary.json, docs/gates/logs/20260831-agentic-consolidation-r2/summary.json, docs/gates/logs/20260831-agentic-consolidation-r2/run_sims_summary.json, docs/gates/logs/20260831-agentic-consolidation-r2/run_sims_nightly_summary.json, docs/gates/logs/20260831-agentic-consolidation-r2/semantic_regressions_summary.json, docs/gates/logs/20260831-agentic-consolidation-r2/migration_closure.md",
+      "next_action": "Keep AC/PYC gates green; old-repository retirement remains blocked on the current QEMU/PYC trace producer or fixture",
       "owner": "acir-integration",
-      "status": "implemented-unverified"
+      "status": "implemented-verified"
     }
   ],
   "deferred_decisions": [],
@@ -1064,9 +1064,7 @@
   "invalid_status_decisions": [],
   "missing_decisions": [],
   "missing_evidence_paths": {},
-  "non_verified_decisions": [
-    "0150"
-  ],
+  "non_verified_decisions": [],
   "ok": true,
   "placeholder_evidence_decisions": [],
   "rfc_path": "/Users/zhoubot/linx-isa/tools/pyCircuit/docs/rfcs/pyc6-decisions.md",
@@ -1074,8 +1072,8 @@
   "status_counts": {
     "deferred": 0,
     "gap-in-scope": 0,
-    "implemented-unverified": 1,
-    "implemented-verified": 149
+    "implemented-unverified": 0,
+    "implemented-verified": 150
   },
   "status_path": "/Users/zhoubot/linx-isa/tools/pyCircuit/docs/gates/decision_status_v6.md",
   "total_decisions": 150

@@ -58,8 +58,10 @@ is accepted.
 
 ## Retirement decision
 
-Decision 0150 remains `implemented-unverified`. The standalone Agentic Circuit
-repository must remain public and active until a current independent PYC
-commit-trace producer or reviewed current PYC fixture makes the QEMU/PYC gate
-pass. Do not disable publishing authority, change visibility, close the source
-PRs, or archive the repository before that gate passes.
+Decision 0150 is `implemented-verified` for repository consolidation, semantic
+boundaries, build/install integration, and AC/PYC closure. The standalone
+Agentic Circuit repository must nevertheless remain public and active until a
+current independent PYC commit-trace producer or reviewed current PYC fixture
+makes the QEMU/PYC gate pass. Do not disable publishing authority, change
+visibility, close the source PRs, or archive the repository before that gate
+passes.
