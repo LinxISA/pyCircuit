@@ -320,8 +320,7 @@ materialize_fixture_trace_if_needed() {
   for fixture in "${linxisa_root}"/docs/bringup/gates/model_diff_work/*_"${case_id}"_seed"${seed}"/pyc.jsonl; do
     if [[ -f "${fixture}" ]]; then
       mkdir -p "$(dirname -- "${out_path}")"
-      python3 "${ROOT_DIR}/contrib/linx/flows/tools/normalize_legacy_commit_trace.py" \
-        "${fixture}" "${out_path}"
+      cp "${fixture}" "${out_path}"
       echo "[pyc] using fixture trace ${fixture}" >&2
       return 0
     fi

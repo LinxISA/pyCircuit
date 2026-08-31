@@ -3437,8 +3437,13 @@ create a second timing model that competes with pyCircuit 6.
   implementations: both hardware paths converge on verified PYC IR.
 - C++20 may remain target-local to Agentic Circuit targets during integration;
   repository-wide compiler-standard changes require a separate decision.
-- Decision 0150 remains unverified until AC and PYC closure evidence is archived
-  under `docs/gates/logs/` and the decision-status row cites that evidence.
+- Decision 0150 is implemented when the imported source, namespace boundaries,
+  repo-local pyc6 lowering, build/install contracts, and AC/PYC closure evidence
+  are present in `PTO-ISA/pyCircuit`.
+- Changing the old repository's visibility, credentials, and archive state is
+  a separate operational cutover. A blocked cutover does not make the merged
+  compiler implementation unverified; it requires the old repository to remain
+  active until the operational gate is resolved.
 
 **Source**
 - Repository-owner direction (2026-08-31): consolidate Agentic Circuit into

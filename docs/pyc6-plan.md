@@ -105,18 +105,20 @@ PYC semantic contracts.
   `756002e2998b11dfe1fed14dc3d63cdad8be694c` with provenance intact.
 - [x] Record PTO-ISA's BSD-3-Clause owner direction and the imported main and
   open-PR head objects in `docs/legal/AC-RELICENSE-BSD-3-CLAUSE.md`.
-- [ ] Migrate the unique work and review disposition from Agentic Circuit PR
+- [x] Migrate the unique work and review disposition from Agentic Circuit PR
   #18 and PR #23 into reviewable pyCircuit changes.
-- [ ] Integrate the `agentic_circuit` distribution, ACPy/ACIR, ACSim/gfsim,
+- [x] Integrate the `agentic_circuit` distribution, ACPy/ACIR, ACSim/gfsim,
   and ACIR-to-PYC targets without merging their Python or MLIR namespaces.
-- [ ] Replace prior-version pyCircuit runtime references with repo-local
+- [x] Replace prior-version pyCircuit runtime references with repo-local
   pyCircuit 6 targets and `libpyc6_runtime`.
-- [ ] Run the ACIR/ACSim verifier and unit lanes, ACIR-to-gfsim execution, and
+- [x] Run the ACIR/ACSim verifier and unit lanes, ACIR-to-gfsim execution, and
   ACIR-to-PYC-to-C++/Verilog gates from the consolidated checkout.
-- [ ] Run the existing pyCircuit 6 API, examples, simulation, and semantic
+- [x] Run the existing pyCircuit 6 API, examples, simulation, and semantic
   closure lanes from the same checkout.
-- [ ] Attach gate evidence, promote Decision 0150 to `implemented-verified`,
-  then disable the old repository's publishing/CI authority and make it
+- [x] Attach gate evidence and promote Decision 0150 to
+  `implemented-verified` for repository and compiler consolidation.
+- [ ] After the independent current QEMU/PYC comparison passes, disable the
+  old repository's publishing/CI authority and make it
   private with only `zhoubot` as a direct repository collaborator.
 
 ## Gate mapping

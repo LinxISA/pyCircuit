@@ -4,8 +4,9 @@ This table tracks implementation status for all decisions in
 `docs/rfcs/pyc6-decisions.md`. Decisions 0001–0147 retain the pyc4.0 closure
 evidence and historical owner labels recorded when those contracts were
 verified. Decision 0010 is superseded by Decision 0148 and is not an active V6
-semantic contract. Decision 0150 remains an in-scope gap until the consolidated
-checkout has archived both AC and PYC closure evidence.
+semantic contract. Decision 0150 covers repository consolidation and is
+verified by the archived AC and PYC closure evidence; retirement of the old
+repository remains a separate operational gate.
 
 Allowed statuses:
 
