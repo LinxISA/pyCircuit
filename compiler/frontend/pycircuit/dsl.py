@@ -25,11 +25,11 @@ class Signal(Generic[DT]):
 
     def __str__(self) -> str:
         return self.ref
-    
+
     @property
     def width(self) -> int:
         return self.ty.width
-    
+
     @classmethod
     def as_sig(cls, v: Union[Connector, Wire, Reg, Signal]) -> Signal:
         from .hw import Reg, Wire
@@ -117,9 +117,9 @@ class Module:
 
     @overload
     def input(self, name:str, *, width: int, shape: None = None) -> Signal[Bits]: ...
-    
+
     @overload
-    def input(self, name:str, *, width: int, shape: list[int]) -> Signal[Vector[Data]]: ...     
+    def input(self, name:str, *, width: int, shape: list[int]) -> Signal[Vector[Data]]: ...
 
     def input(
         self,
@@ -138,7 +138,7 @@ class Module:
             ty = Bits(width)
         else:
             ty = Vector.from_shape(shape, Bits(width))
-            
+
         return self._arg(name, ty)
 
     def output(self, name: str, value: Signal) -> None:
@@ -195,7 +195,7 @@ class Module:
             raise TypeError(f"{op} operand leaf types must match: {a_ty} vs {b_ty}")
         if a_is_vec and b_is_vec and a_ty.shape() != b_ty.shape():
             raise TypeError(f"{op} vector shapes must match: {a_ty} vs {b_ty}")
-        
+
         result_ty = a_ty if a_is_vec else b_ty
 
         if compare:
@@ -312,13 +312,13 @@ class Module:
 
     @overload
     def extract(self, a: Signal[Bits], *, lsb: int, width: int) -> Signal[Bits]: ...
-    
+
     @overload
     def extract(self, a: Signal[Vector], *, lsb: int, width: int) -> Signal[Vector]: ...
-    
+
     @overload
     def extract(self, a: Signal[Data], *, lsb: int, width: int) -> Signal[Data]: ...
-    
+
     def extract(self, a: Signal, *, lsb: int, width: int) -> Signal:
         if lsb < 0:
             raise ValueError("extract lsb must be >= 0")
@@ -641,13 +641,13 @@ class Module:
 
     def new_wire(self, *, width: int, shape: list[int] | None = None, name: str | None = None) -> Signal:
         return self.new_signal(width=width, shape=shape, name=name)
-        
+
     def new_signal(self, *, width: int, shape: list[int] | None = None, name: str | None = None) -> Signal:
         if width <= 0:
             raise ValueError("width must be > 0")
         if shape:
             ty = Vector.from_shape(shape, Bits(width))
-        else: 
+        else:
             ty = Bits(width)
         tmp = self._get_next_temp_var()
         if name is None:

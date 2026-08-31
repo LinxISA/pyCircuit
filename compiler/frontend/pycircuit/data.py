@@ -33,7 +33,7 @@ class Data(ABC):
     @abstractmethod
     def width(self) -> int:
         """Integer bit-width (vectors: leaf/element width; clock/reset: 1)."""
-    
+
     @classmethod
     def from_str(cls, s: str) -> "Data":
         raw = str(s).strip()
@@ -63,7 +63,7 @@ class Bits(Data):
     @property
     def width(self) -> int:
         return self.bitwidth
-    
+
     def __str__(self) -> str:
         return f"i{self.bitwidth}"
 
@@ -104,7 +104,7 @@ class Vector(Data, Generic[DT]):
     def width(self) -> int:
         """Integer width of the element (leaf) type."""
         return self.datatype().width
-    
+
     def shape(self) -> list[int]:
         """All dimensions flattened, outer-to-inner. ``Vector(4, Vector(3, Bits(8)))`` → ``[4, 3]``."""
         s: list[int] = [self.length]
