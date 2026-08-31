@@ -4,7 +4,8 @@ This table tracks implementation status for all decisions in
 `docs/rfcs/pyc6-decisions.md`. Decisions 0001–0147 retain the pyc4.0 closure
 evidence and historical owner labels recorded when those contracts were
 verified. Decision 0010 is superseded by Decision 0148 and is not an active V6
-semantic contract.
+semantic contract. Decision 0150 remains an in-scope gap until the consolidated
+checkout has archived both AC and PYC closure evidence.
 
 Allowed statuses:
 
@@ -164,3 +165,4 @@ Allowed statuses:
 | 0147 | implemented-verified | docs/gates/logs/20260303-closure-v40-r2/summary.json, docs/gates/logs/20260303-closure-v40-r2/decision_status_report.json | pyc4-core | Keep gates green; refresh evidence on behavior changes |
 | 0148 | implemented-verified | tests/unit/test_pyc6_surface.py, tests/unit/test_v6_forward_signal.py, tests/v6/test_v6_vector.py, docs/gates/logs/pyc6-unification/pyc6_migration_summary.md, docs/gates/logs/pyc6-unification/semantic_regressions_summary.json | pyc6-frontend | Keep CycleAwareSignal and automatic cycle balancing gates green |
 | 0149 | implemented-verified | CMakeLists.txt, runtime/cpp/CMakeLists.txt, tests/unit/test_pyc6_surface.py, tests/system/test_smoke_system.py, docs/gates/logs/pyc6-unification/pyc6_migration_summary.md, docs/gates/logs/pyc6-unification/summary.json | pyc6-runtime | Keep runtime, trace, packaging, and semantic-gate names on V6 |
+| 0150 | gap-in-scope | docs/rfcs/pyc6-decisions.md, docs/legal/AC-RELICENSE-BSD-3-CLAUSE.md | acir-integration | Integrate migrated PR work, run AC and PYC closure lanes, archive evidence, then retire the old repository |

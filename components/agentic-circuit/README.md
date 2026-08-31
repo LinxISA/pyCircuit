@@ -59,7 +59,8 @@ historical reference.
 
 ## Project policies
 
-Contributions are accepted under the [Apache License 2.0](LICENSE). See
+Agentic Circuit is distributed as part of pyCircuit under the
+[BSD 3-Clause License](LICENSE). See
 [Contributing](CONTRIBUTING.md), the [Code of Conduct](CODE_OF_CONDUCT.md),
 [Security policy](SECURITY.md), and [Support policy](SUPPORT.md) before opening
 a change or report.

@@ -17,4 +17,4 @@ affected normative specification and machine-readable schema in the same
 change.
 
 By contributing, you agree that your contribution is licensed under the
-Apache License 2.0 and that you will follow the Code of Conduct.
+BSD 3-Clause License and that you will follow the Code of Conduct.

@@ -60,6 +60,6 @@ owned files.
 The source DavinciOO repository currently contains a repository-license
 placeholder stating that it does not publish a final blanket license grant.
 Accordingly, this snapshot is recorded as `unresolved` in `SOURCE.json` and is
-not represented as Apache-2.0 code, installed, packaged, or linked into public
+not represented as BSD-3-Clause code, installed, packaged, or linked into public
 Agentic Circuit libraries. Resolve upstream licensing before distributing the
 snapshot as part of a release artifact.

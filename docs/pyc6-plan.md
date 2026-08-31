@@ -29,8 +29,13 @@ builds, and cosimulation. The active status index is
 evidence paths.
 
 V6 adds Decision 0148: the global CycleAwareSignal design is the primary
-authoring model. This supersedes Decision 0010 without invalidating unrelated
-the earlier closure evidence.
+authoring model. This supersedes Decision 0010 without invalidating the
+unrelated earlier closure evidence.
+
+Decision 0150 adds Agentic Circuit as an independent upper-level ACIR and
+frontend in this repository. Its synthesizable path converges on verified PYC
+IR and the pyCircuit 6 backends; its ACSim/gfsim architecture-simulation path
+remains distinct.
 
 ## Milestones
 
@@ -90,6 +95,30 @@ V6 tests plus the examples, simulation, and semantic lanes archived under
 - [x] Ensure package metadata, documentation URLs, badges, and source links name
   PTO-ISA/pyCircuit.
 
+### Agentic Circuit consolidation
+
+**Goal:** Make this repository the only development and release authority for
+ACIR, Agentic Circuit, and pyCircuit without weakening the CycleAwareSignal or
+PYC semantic contracts.
+
+- [x] Import the Agentic Circuit `main` history at
+  `756002e2998b11dfe1fed14dc3d63cdad8be694c` with provenance intact.
+- [x] Record PTO-ISA's BSD-3-Clause owner direction and the imported main and
+  open-PR head objects in `docs/legal/AC-RELICENSE-BSD-3-CLAUSE.md`.
+- [ ] Migrate the unique work and review disposition from Agentic Circuit PR
+  #18 and PR #23 into reviewable pyCircuit changes.
+- [ ] Integrate the `agentic_circuit` distribution, ACPy/ACIR, ACSim/gfsim,
+  and ACIR-to-PYC targets without merging their Python or MLIR namespaces.
+- [ ] Replace prior-version pyCircuit runtime references with repo-local
+  pyCircuit 6 targets and `libpyc6_runtime`.
+- [ ] Run the ACIR/ACSim verifier and unit lanes, ACIR-to-gfsim execution, and
+  ACIR-to-PYC-to-C++/Verilog gates from the consolidated checkout.
+- [ ] Run the existing pyCircuit 6 API, examples, simulation, and semantic
+  closure lanes from the same checkout.
+- [ ] Attach gate evidence, promote Decision 0150 to `implemented-verified`,
+  then disable the old repository's publishing/CI authority and make it
+  private with only `zhoubot` as a direct repository collaborator.
+
 ## Gate mapping
 
 Use the minimum applicable lanes from
@@ -102,6 +131,7 @@ Use the minimum applicable lanes from
 | MLIR semantics or legality | examples, normal and nightly simulations, semantic regressions, strict decision status |
 | C++ or Verilog behavior | both simulation lanes and backend-equivalence evidence |
 | Linx integration | pyCircuit lanes plus the Linx interface and model-comparison gates |
+| ACIR or Agentic Circuit integration | ACIR/ACSim verifier and unit lanes, ACIR-to-gfsim, ACIR-to-PYC-to-C++/Verilog, plus pyCircuit examples, simulations, and semantic regressions |
 
 Use one `PYC_GATE_RUN_ID` for related semantic lanes. Record skipped gates and
 their risk in the pull request.
@@ -115,4 +145,6 @@ The pyCircuit 6 transition is complete when:
 - supported examples use the V6 CycleAwareSignal contract;
 - repository metadata and release automation point only to PTO-ISA/pyCircuit;
 - the LinxISA repository is maintained only as a downstream fork; and
+- Decision 0150 has archived AC and PYC closure evidence, and the retired
+  Agentic Circuit repository has no publishing or CI authority; and
 - all required gates pass from a clean worktree.
