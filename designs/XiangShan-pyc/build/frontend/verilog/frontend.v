@@ -468,4 +468,3 @@ assign fe_dec_pc_1 = pyc_comb_61;
 assign fe_frontend_stall = pyc_comb_62;
 
 endmodule
-

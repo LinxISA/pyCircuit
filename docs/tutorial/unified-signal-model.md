@@ -29,6 +29,7 @@ def build(m: Circuit) -> None:
 ```
 
 Key points:
+
 - `m.out(...)` creates a register with an explicit clock/reset and init value.
 - `.out()` reads the current value.
 - `.set(next, when=cond)` updates the register conditionally (otherwise it holds).
@@ -41,4 +42,3 @@ For larger designs, prefer `spec` + structured port declarations:
 - `m.outputs(spec, values, prefix=...)`
 
 See `docs/FRONTEND_API.md` and `docs/SPEC_STRUCTURES.md`.
-

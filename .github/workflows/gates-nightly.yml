@@ -7,7 +7,7 @@ on:
     - cron: "0 8 * * *"
 
 env:
-  LLVM_VERSION: "19"
+  LLVM_VERSION: "22"
   VERILATOR_VERSION: "5.048"
   CMAKE_BUILD_TYPE: Release
   PYC_GATE_RUN_ID: nightly-${{ github.run_id }}-${{ github.run_attempt }}
@@ -26,7 +26,7 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install LLVM 19 + build/sim deps
+      - name: Install LLVM 22 + build/sim deps
         run: |
           set -euxo pipefail
           sudo apt-get update

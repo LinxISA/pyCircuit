@@ -7,6 +7,8 @@ ROOT_DIR="$(cd -- "${SCRIPT_DIR}/../.." && pwd)"
 # shellcheck source=lib.sh
 source "${SCRIPT_DIR}/lib.sh"
 
+PYC_REQUIRED_LLVM_MAJOR=22
+
 usage() {
   cat <<EOF
 Usage: flows/scripts/pyc <command>
@@ -16,7 +18,7 @@ Commands:
   smoke        Run compiler smoke (emit+pycc) and a small simulation smoke set
 
 Env:
-  LLVM_DIR, MLIR_DIR        Optional. If unset, flows/scripts/pyc infers them via llvm-config-19.
+  LLVM_DIR, MLIR_DIR        Optional. If unset, flows/scripts/pyc infers them via llvm-config-22.
   PYC_BUILD_DIR             Optional build directory override.
   PYC_INSTALL_PREFIX        Optional install prefix override.
   PYCC                      Path to pycc (overrides auto-detect).
@@ -24,14 +26,14 @@ EOF
 }
 
 find_llvm_config() {
-  if command -v llvm-config-19 >/dev/null 2>&1; then
-    command -v llvm-config-19
+  if command -v "llvm-config-${PYC_REQUIRED_LLVM_MAJOR}" >/dev/null 2>&1; then
+    command -v "llvm-config-${PYC_REQUIRED_LLVM_MAJOR}"
     return 0
   fi
   if command -v llvm-config >/dev/null 2>&1; then
     local candidate
     candidate="$(command -v llvm-config)"
-    if [[ "$("${candidate}" --version 2>/dev/null | cut -d. -f1)" == "19" ]]; then
+    if [[ "$("${candidate}" --version 2>/dev/null | cut -d. -f1)" == "${PYC_REQUIRED_LLVM_MAJOR}" ]]; then
       printf '%s\n' "${candidate}"
       return 0
     fi
@@ -80,15 +82,15 @@ case "${cmd}" in
       fi
       if [[ -n "${llvm_config}" ]]; then
         local_llvm_major="$("${llvm_config}" --version 2>/dev/null | cut -d. -f1)"
-        if [[ "${local_llvm_major}" != "19" ]]; then
-          pyc_die "LLVM 19 is required, but ${llvm_config} reports version $("${llvm_config}" --version 2>/dev/null || echo unknown)"
+        if [[ "${local_llvm_major}" != "${PYC_REQUIRED_LLVM_MAJOR}" ]]; then
+          pyc_die "LLVM ${PYC_REQUIRED_LLVM_MAJOR} is required, but ${llvm_config} reports version $("${llvm_config}" --version 2>/dev/null || echo unknown)"
         fi
         pyc_log "inferring LLVM_DIR/MLIR_DIR via ${llvm_config}"
         LLVM_DIR="$("${llvm_config}" --cmakedir)"
         MLIR_DIR="$(dirname "${LLVM_DIR}")/mlir"
         export LLVM_DIR MLIR_DIR
       else
-        pyc_die "set LLVM_DIR and MLIR_DIR (or provide llvm-config-19) before building"
+        pyc_die "set LLVM_DIR and MLIR_DIR (or provide llvm-config-${PYC_REQUIRED_LLVM_MAJOR}) before building"
       fi
     fi
 

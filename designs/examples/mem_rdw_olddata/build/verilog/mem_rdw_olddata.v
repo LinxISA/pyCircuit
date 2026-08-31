@@ -31,4 +31,3 @@ pyc_sync_mem #(.ADDR_WIDTH(2), .DATA_WIDTH(32), .DEPTH(4)) mem0 (
 assign rdata = pyc_sync_mem_1;
 
 endmodule
-

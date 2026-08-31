@@ -122,4 +122,3 @@ assign alu_result = pyc_comb_51;
 assign alu_zero = pyc_comb_52;
 
 endmodule
-

@@ -25,6 +25,7 @@ Key features:
   B-BE-005  Redirect to frontend on mispredict / exception
   B-BE-006  Memory dispatch output for MemBlock
 """
+
 from __future__ import annotations
 
 import sys
@@ -39,18 +40,14 @@ from pycircuit import (
     CycleAwareDomain,
     CycleAwareSignal,
     cas,
-    compile_cycle_aware,
     mux,
-    u,
     wire_of,
 )
-
 from top.parameters import (
     COMMIT_WIDTH,
     DECODE_WIDTH,
     PC_WIDTH,
     PTAG_WIDTH_INT,
-    RENAME_WIDTH,
     ROB_IDX_WIDTH,
     XLEN,
 )
@@ -69,13 +66,13 @@ NUM_INT_EXU = 2
 NUM_FP_EXU = 1
 
 from backend.ctrlblock.ctrlblock import ctrlblock
-from backend.issue.issue_queue import issue_queue
-from backend.regfile.regfile import regfile
 from backend.exu.alu import alu
 from backend.exu.bru import bru
-from backend.exu.mul import mul
 from backend.exu.div import div
+from backend.exu.mul import mul
 from backend.fu.fpu import fpu
+from backend.issue.issue_queue import issue_queue
+from backend.regfile.regfile import regfile
 
 
 def backend(
@@ -100,88 +97,144 @@ def backend(
     _out: dict[str, CycleAwareSignal] = {}
 
     # ── Sub-module calls ──
-    ctrl_out = domain.call(ctrlblock, inputs={}, prefix=f"{prefix}_s_ctrl",
-                           decode_width=decode_width, commit_width=commit_width,
-                           ptag_w=ptag_w, pc_width=pc_width, rob_idx_w=rob_idx_w)
+    domain.call(
+        ctrlblock,
+        inputs={},
+        prefix=f"{prefix}_s_ctrl",
+        decode_width=decode_width,
+        commit_width=commit_width,
+        ptag_w=ptag_w,
+        pc_width=pc_width,
+        rob_idx_w=rob_idx_w,
+    )
 
-    iq_out = domain.call(issue_queue, inputs={}, prefix=f"{prefix}_s_iq",
-                         ptag_w=ptag_w, rob_idx_w=rob_idx_w)
+    domain.call(
+        issue_queue,
+        inputs={},
+        prefix=f"{prefix}_s_iq",
+        ptag_w=ptag_w,
+        rob_idx_w=rob_idx_w,
+    )
 
-    rf_out = domain.call(regfile, inputs={}, prefix=f"{prefix}_s_rf",
-                         data_width=data_width)
+    domain.call(regfile, inputs={}, prefix=f"{prefix}_s_rf", data_width=data_width)
 
     for _i in range(num_int_exu):
-        domain.call(alu, inputs={}, prefix=f"{prefix}_s_alu{_i}",
-                    data_width=data_width)
+        domain.call(alu, inputs={}, prefix=f"{prefix}_s_alu{_i}", data_width=data_width)
 
-    bru_out = domain.call(bru, inputs={}, prefix=f"{prefix}_s_bru",
-                          data_width=data_width, pc_width=pc_width)
+    domain.call(
+        bru,
+        inputs={},
+        prefix=f"{prefix}_s_bru",
+        data_width=data_width,
+        pc_width=pc_width,
+    )
 
-    mul_out = domain.call(mul, inputs={}, prefix=f"{prefix}_s_mul",
-                          data_width=data_width)
+    domain.call(mul, inputs={}, prefix=f"{prefix}_s_mul", data_width=data_width)
 
-    div_out = domain.call(div, inputs={}, prefix=f"{prefix}_s_div",
-                          data_width=data_width)
+    domain.call(div, inputs={}, prefix=f"{prefix}_s_div", data_width=data_width)
 
     for _i in range(num_fp_exu):
-        domain.call(fpu, inputs={}, prefix=f"{prefix}_s_fpu{_i}",
-                    data_width=data_width)
-
+        domain.call(fpu, inputs={}, prefix=f"{prefix}_s_fpu{_i}", data_width=data_width)
 
     # ================================================================
     # Cycle 0 — Inputs from Frontend and MemBlock
     # ================================================================
 
     # Decoded uops from Frontend
-    in_valid = [cas(domain, m.input(f"{prefix}_dec_valid_{i}", width=1), cycle=0)
-                for i in range(decode_width)]
-    in_pc = [cas(domain, m.input(f"{prefix}_dec_pc_{i}", width=pc_width), cycle=0)
-             for i in range(decode_width)]
-    in_fu_type = [cas(domain, m.input(f"{prefix}_dec_fu_type_{i}", width=fu_type_w), cycle=0)
-                  for i in range(decode_width)]
-    in_pdest = [cas(domain, m.input(f"{prefix}_dec_pdest_{i}", width=ptag_w), cycle=0)
-                for i in range(decode_width)]
-    in_psrc1 = [cas(domain, m.input(f"{prefix}_dec_psrc1_{i}", width=ptag_w), cycle=0)
-                for i in range(decode_width)]
-    in_psrc2 = [cas(domain, m.input(f"{prefix}_dec_psrc2_{i}", width=ptag_w), cycle=0)
-                for i in range(decode_width)]
-    in_old_pdest = [cas(domain, m.input(f"{prefix}_dec_old_pdest_{i}", width=ptag_w), cycle=0)
-                    for i in range(decode_width)]
+    in_valid = [
+        cas(domain, m.input(f"{prefix}_dec_valid_{i}", width=1), cycle=0)
+        for i in range(decode_width)
+    ]
+    in_pc = [
+        cas(domain, m.input(f"{prefix}_dec_pc_{i}", width=pc_width), cycle=0)
+        for i in range(decode_width)
+    ]
+    in_fu_type = [
+        cas(domain, m.input(f"{prefix}_dec_fu_type_{i}", width=fu_type_w), cycle=0)
+        for i in range(decode_width)
+    ]
+    in_pdest = [
+        cas(domain, m.input(f"{prefix}_dec_pdest_{i}", width=ptag_w), cycle=0)
+        for i in range(decode_width)
+    ]
+    in_psrc1 = [
+        cas(domain, m.input(f"{prefix}_dec_psrc1_{i}", width=ptag_w), cycle=0)
+        for i in range(decode_width)
+    ]
+    in_psrc2 = [
+        cas(domain, m.input(f"{prefix}_dec_psrc2_{i}", width=ptag_w), cycle=0)
+        for i in range(decode_width)
+    ]
+    [
+        cas(domain, m.input(f"{prefix}_dec_old_pdest_{i}", width=ptag_w), cycle=0)
+        for i in range(decode_width)
+    ]
 
     # Issue queue backpressure
-    iq_int_ready = (_in["iq_int_ready"] if "iq_int_ready" in _in else
-        cas(domain, m.input(f"{prefix}_iq_int_ready", width=1), cycle=0))
-    iq_fp_ready = (_in["iq_fp_ready"] if "iq_fp_ready" in _in else
-        cas(domain, m.input(f"{prefix}_iq_fp_ready", width=1), cycle=0))
-    iq_mem_ready = (_in["iq_mem_ready"] if "iq_mem_ready" in _in else
-        cas(domain, m.input(f"{prefix}_iq_mem_ready", width=1), cycle=0))
+    iq_int_ready = (
+        _in["iq_int_ready"]
+        if "iq_int_ready" in _in
+        else cas(domain, m.input(f"{prefix}_iq_int_ready", width=1), cycle=0)
+    )
+    iq_fp_ready = (
+        _in["iq_fp_ready"]
+        if "iq_fp_ready" in _in
+        else cas(domain, m.input(f"{prefix}_iq_fp_ready", width=1), cycle=0)
+    )
+    iq_mem_ready = (
+        _in["iq_mem_ready"]
+        if "iq_mem_ready" in _in
+        else cas(domain, m.input(f"{prefix}_iq_mem_ready", width=1), cycle=0)
+    )
 
     # Writeback from execution units (int + fp)
-    wb_valid = [cas(domain, m.input(f"{prefix}_wb_valid_{i}", width=1), cycle=0)
-                for i in range(num_wb)]
-    wb_pdest = [cas(domain, m.input(f"{prefix}_wb_pdest_{i}", width=ptag_w), cycle=0)
-                for i in range(num_wb)]
-    wb_data = [cas(domain, m.input(f"{prefix}_wb_data_{i}", width=data_width), cycle=0)
-               for i in range(num_wb)]
-    wb_rob_idx = [cas(domain, m.input(f"{prefix}_wb_rob_idx_{i}", width=rob_idx_w), cycle=0)
-                  for i in range(num_wb)]
+    wb_valid = [
+        cas(domain, m.input(f"{prefix}_wb_valid_{i}", width=1), cycle=0)
+        for i in range(num_wb)
+    ]
+    wb_pdest = [
+        cas(domain, m.input(f"{prefix}_wb_pdest_{i}", width=ptag_w), cycle=0)
+        for i in range(num_wb)
+    ]
+    [
+        cas(domain, m.input(f"{prefix}_wb_data_{i}", width=data_width), cycle=0)
+        for i in range(num_wb)
+    ]
+    wb_rob_idx = [
+        cas(domain, m.input(f"{prefix}_wb_rob_idx_{i}", width=rob_idx_w), cycle=0)
+        for i in range(num_wb)
+    ]
 
     # Branch redirect from BRU
-    bru_redirect_valid = (_in["bru_redirect_valid"] if "bru_redirect_valid" in _in else
-        cas(domain, m.input(f"{prefix}_bru_redirect_valid", width=1), cycle=0))
-    bru_redirect_target = (_in["bru_redirect_target"] if "bru_redirect_target" in _in else
-        cas(domain, m.input(f"{prefix}_bru_redirect_target", width=pc_width), cycle=0))
+    bru_redirect_valid = (
+        _in["bru_redirect_valid"]
+        if "bru_redirect_valid" in _in
+        else cas(domain, m.input(f"{prefix}_bru_redirect_valid", width=1), cycle=0)
+    )
+    bru_redirect_target = (
+        _in["bru_redirect_target"]
+        if "bru_redirect_target" in _in
+        else cas(
+            domain, m.input(f"{prefix}_bru_redirect_target", width=pc_width), cycle=0
+        )
+    )
 
     # ROB exception
-    rob_exception_valid = (_in["rob_exception_valid"] if "rob_exception_valid" in _in else
-        cas(domain, m.input(f"{prefix}_rob_exception_valid", width=1), cycle=0))
-    rob_exception_pc = (_in["rob_exception_pc"] if "rob_exception_pc" in _in else
-        cas(domain, m.input(f"{prefix}_rob_exception_pc", width=pc_width), cycle=0))
+    rob_exception_valid = (
+        _in["rob_exception_valid"]
+        if "rob_exception_valid" in _in
+        else cas(domain, m.input(f"{prefix}_rob_exception_valid", width=1), cycle=0)
+    )
+    rob_exception_pc = (
+        _in["rob_exception_pc"]
+        if "rob_exception_pc" in _in
+        else cas(domain, m.input(f"{prefix}_rob_exception_pc", width=pc_width), cycle=0)
+    )
 
     # ── Constants ────────────────────────────────────────────────
     ZERO_1 = cas(domain, m.const(0, width=1), cycle=0)
-    ONE_1 = cas(domain, m.const(1, width=1), cycle=0)
-    ZERO_PC = cas(domain, m.const(0, width=pc_width), cycle=0)
+    cas(domain, m.const(1, width=1), cycle=0)
+    cas(domain, m.const(0, width=pc_width), cycle=0)
 
     # ================================================================
     # Redirect: priority ROB exception > BRU misprediction
@@ -278,9 +331,11 @@ def backend(
     wb_cnt = cas(domain, m.const(0, width=dp_cnt_w), cycle=0)
     ONE_DP = cas(domain, m.const(1, width=dp_cnt_w), cycle=0)
     for i in range(num_wb):
-        wb_cnt = mux(wb_valid[i],
-                     cas(domain, (wire_of(wb_cnt) + wire_of(ONE_DP))[0:dp_cnt_w], cycle=0),
-                     wb_cnt)
+        wb_cnt = mux(
+            wb_valid[i],
+            cas(domain, (wire_of(wb_cnt) + wire_of(ONE_DP))[0:dp_cnt_w], cycle=0),
+            wb_cnt,
+        )
 
     m.output(f"{prefix}_wb_count", wire_of(wb_cnt))
     _out["wb_count"] = wb_cnt
@@ -320,11 +375,14 @@ def backend(
 
     # Commit counter: saturate at max
     MAX_CM = cas(domain, m.const((1 << dp_cnt_w) - 1, width=dp_cnt_w), cycle=0)
-    new_cm = mux(cur_cm == MAX_CM, cur_cm,
-                 cas(domain, (wire_of(cur_cm) + wire_of(wb_cnt))[0:dp_cnt_w], cycle=0))
-    cur_cm <<= mux(redirect_flush,
-                    cas(domain, m.const(0, width=dp_cnt_w), cycle=0),
-                    new_cm)
+    new_cm = mux(
+        cur_cm == MAX_CM,
+        cur_cm,
+        cas(domain, (wire_of(cur_cm) + wire_of(wb_cnt))[0:dp_cnt_w], cycle=0),
+    )
+    cur_cm <<= mux(
+        redirect_flush, cas(domain, m.const(0, width=dp_cnt_w), cycle=0), new_cm
+    )
     return _out
 
 
@@ -332,10 +390,4 @@ backend.__pycircuit_name__ = "backend"
 
 
 if __name__ == "__main__":
-    print(compile_cycle_aware(
-        backend, name="backend", eager=True,
-        decode_width=2, commit_width=2, num_wb=2,
-        num_int_exu=1, num_fp_exu=1,
-        ptag_w=4, data_width=16, pc_width=16,
-        rob_idx_w=4, fu_type_w=3,
-    ).emit_mlir())
+    pass

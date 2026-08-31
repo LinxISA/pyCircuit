@@ -1181,4 +1181,3 @@ assign ldq_enq_idx = pyc_comb_163;
 assign ldq_count = pyc_comb_165;
 
 endmodule
-

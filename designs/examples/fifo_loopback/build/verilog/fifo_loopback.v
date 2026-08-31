@@ -47,4 +47,3 @@ assign out_valid = pyc_fifo_5;
 assign out_data = pyc_fifo_6;
 
 endmodule
-

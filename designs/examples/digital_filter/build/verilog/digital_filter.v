@@ -150,4 +150,3 @@ assign y_out = y_out_reg;
 assign y_valid = pyc_comb_34;
 
 endmodule
-

@@ -31,4 +31,3 @@ assign lane_mask = pyc_comb_4;
 assign acc_width = pyc_comb_5;
 
 endmodule
-

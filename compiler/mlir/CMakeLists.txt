@@ -9,6 +9,14 @@ include(GNUInstallDirs)
 
 find_package(LLVM REQUIRED CONFIG)
 find_package(MLIR REQUIRED CONFIG)
+
+set(PYC_REQUIRED_LLVM_MAJOR 22)
+if(NOT LLVM_VERSION_MAJOR EQUAL PYC_REQUIRED_LLVM_MAJOR)
+  message(FATAL_ERROR
+    "pyCircuit requires LLVM/MLIR ${PYC_REQUIRED_LLVM_MAJOR}.x, "
+    "but LLVM ${LLVM_PACKAGE_VERSION} was provided")
+endif()
+
 set(PYC_LLVM_VERSION "${LLVM_PACKAGE_VERSION}" PARENT_SCOPE)
 
 message(STATUS "Using LLVMConfig.cmake in: ${LLVM_DIR}")

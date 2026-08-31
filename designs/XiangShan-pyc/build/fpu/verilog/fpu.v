@@ -329,4 +329,3 @@ assign fpu_in_ready = pyc_comb_79;
 assign fpu_result = pyc_comb_78;
 
 endmodule
-

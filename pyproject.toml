@@ -9,7 +9,7 @@ description = "A Python-based hardware description framework that compiles Pytho
 readme = "README.md"
 license = { file = "LICENSE" }
 authors = [
-    { name = "LinxISA Contributors", email = "contact@linxisa.org" }
+    { name = "PTO-ISA Contributors" }
 ]
 requires-python = ">=3.10"
 keywords = ["hardware", "rtl", "verilog", "mlir", "hdl", "fpga", "asic"]
@@ -33,10 +33,10 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/LinxISA/pyCircuit"
-Repository = "https://github.com/LinxISA/pyCircuit"
-Issues = "https://github.com/LinxISA/pyCircuit/issues"
-Releases = "https://github.com/LinxISA/pyCircuit/releases"
+Homepage = "https://github.com/PTO-ISA/pyCircuit"
+Repository = "https://github.com/PTO-ISA/pyCircuit"
+Issues = "https://github.com/PTO-ISA/pyCircuit/issues"
+Releases = "https://github.com/PTO-ISA/pyCircuit/releases"
 
 [project.optional-dependencies]
 dev = [
@@ -46,6 +46,7 @@ dev = [
     "black>=23.0.0",
     "ruff>=0.1.0",
     "mypy>=1.0.0",
+    "pre-commit>=3.7.0",
 ]
 docs = [
     "mkdocs>=1.5.0",
@@ -64,13 +65,25 @@ pycircuit = ["**/*.py", "**/*.md"]
 
 [tool.black]
 line-length = 88
-target-version = ["py310", "py311", "py312", "py313", "py314"]
+target-version = ["py310", "py311", "py312", "py313"]
 
 [tool.ruff]
 line-length = 88
 target-version = "py310"
+
+[tool.ruff.lint]
 select = ["E", "F", "W", "I", "N", "UP", "B", "A", "C4", "T20"]
 ignore = ["E501"]
+
+[tool.ruff.lint.per-file-ignores]
+"compiler/frontend/pycircuit/__init__.py" = ["A004"]
+"compiler/frontend/pycircuit/cli.py" = ["A004", "T201"]
+"compiler/frontend/pycircuit/hw.py" = ["A002", "B905", "C401", "C416", "E731", "I001", "UP007", "UP035", "UP037", "UP038"]
+"compiler/frontend/pycircuit/jit.py" = ["A001", "B009", "B905", "I001", "N818", "UP035", "UP037", "UP038"]
+"compiler/frontend/pycircuit/v5.py" = ["A002", "B010", "I001", "N801", "N816", "UP007", "UP037", "UP038"]
+"designs/examples/digital_filter/digital_filter.py" = ["N803", "N806"]
+"designs/examples/fm16/npu_node.py" = ["N803", "N806"]
+"designs/examples/fm16/sw5809s.py" = ["N803", "N806"]
 
 [tool.mypy]
 python_version = "3.10"
@@ -80,7 +93,12 @@ disallow_untyped_defs = false
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["."]
 python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
 addopts = "-v --tb=short"
+markers = [
+    "unit: fast Python-only tests",
+    "system: end-to-end smoke tests that require pycc and simulation tools",
+]

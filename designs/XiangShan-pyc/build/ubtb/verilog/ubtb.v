@@ -645,4 +645,3 @@ assign ubtb_pred_cfi_pos = pyc_comb_141;
 assign ubtb_pred_attr = pyc_comb_142;
 
 endmodule
-

@@ -1479,4 +1479,3 @@ assign stq_sbuf_addr = pyc_comb_253;
 assign stq_sbuf_data = pyc_comb_254;
 
 endmodule
-

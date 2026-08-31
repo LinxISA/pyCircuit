@@ -221,4 +221,3 @@ assign ldu_wb_lq_idx = pyc_comb_46;
 assign ldu_tlb_miss = pyc_comb_35;
 
 endmodule
-

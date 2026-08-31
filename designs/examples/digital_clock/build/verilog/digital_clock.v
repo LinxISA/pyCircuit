@@ -322,4 +322,3 @@ assign setting_mode = mode;
 assign colon_blink = pyc_comb_102;
 
 endmodule
-

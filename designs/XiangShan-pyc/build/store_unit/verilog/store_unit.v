@@ -166,4 +166,3 @@ assign stu_wb_rob_idx = stu_s1_rob;
 assign stu_tlb_miss = pyc_comb_34;
 
 endmodule
-

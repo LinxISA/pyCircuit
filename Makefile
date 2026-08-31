@@ -5,7 +5,7 @@ INSTALL_PREFIX ?= .pycircuit_out/toolchain/install
 
 help:
 	@echo "Targets:"
-	@echo "  configure  Configure CMake (needs LLVM_DIR/MLIR_DIR or LLVM_CONFIG=llvm-config-19)"
+	@echo "  configure  Configure CMake (needs LLVM_DIR/MLIR_DIR or LLVM_CONFIG=llvm-config-22)"
 	@echo "  tools      Build pycc + pyc-opt + runtime"
 	@echo "  smoke      Run compiler + simulation smoke checks"
 	@echo "  vec-smoke  Run generated Vec operator pytest checks"

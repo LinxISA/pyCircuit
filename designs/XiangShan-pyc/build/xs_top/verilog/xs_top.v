@@ -1968,4 +1968,3 @@ assign soc_axi_w_valid = pyc_comb_10;
 assign soc_axi_b_ready = pyc_comb_9;
 
 endmodule
-

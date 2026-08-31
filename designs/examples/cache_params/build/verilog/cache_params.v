@@ -30,4 +30,3 @@ assign line_words = pyc_comb_4;
 assign tag_bits = pyc_comb_5;
 
 endmodule
-

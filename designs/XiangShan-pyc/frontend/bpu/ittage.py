@@ -15,6 +15,7 @@ Key features:
   F-IT-004  Useful-bit replacement policy with periodic reset
   F-IT-005  Allocation on misprediction for longer-history tables
 """
+
 from __future__ import annotations
 
 import math
@@ -30,13 +31,11 @@ from pycircuit import (
     CycleAwareDomain,
     CycleAwareSignal,
     cas,
-    compile_cycle_aware,
     mux,
     u,
     wire_of,
 )
-
-from top.parameters import PC_WIDTH, ITTAGE_TAG_WIDTH
+from top.parameters import ITTAGE_TAG_WIDTH, PC_WIDTH
 
 SMALL_ITTAGE_TABLE_INFOS = [
     (32, 4),
@@ -70,28 +69,59 @@ def ittage(
     prov_id_w = max(1, math.ceil(math.log2(num_tables + 1)))
 
     # ── Cycle 0: Inputs ──────────────────────────────────────────────
-    s0_fire = (_in["s0_fire"] if "s0_fire" in _in else
-        cas(domain, m.input(f"{prefix}_s0_fire", width=1), cycle=0))
-    s0_pc = (_in["s0_pc"] if "s0_pc" in _in else
-        cas(domain, m.input(f"{prefix}_s0_pc", width=pc_width), cycle=0))
-    global_hist = (_in["global_hist"] if "global_hist" in _in else
-        cas(domain, m.input(f"{prefix}_global_hist", width=hist_w), cycle=0))
+    s0_fire = (
+        _in["s0_fire"]
+        if "s0_fire" in _in
+        else cas(domain, m.input(f"{prefix}_s0_fire", width=1), cycle=0)
+    )
+    s0_pc = (
+        _in["s0_pc"]
+        if "s0_pc" in _in
+        else cas(domain, m.input(f"{prefix}_s0_pc", width=pc_width), cycle=0)
+    )
+    global_hist = (
+        _in["global_hist"]
+        if "global_hist" in _in
+        else cas(domain, m.input(f"{prefix}_global_hist", width=hist_w), cycle=0)
+    )
 
-    train_valid = (_in["train_valid"] if "train_valid" in _in else
-
-        cas(domain, m.input(f"{prefix}_train_valid", width=1), cycle=0))
-    train_pc = (_in["train_pc"] if "train_pc" in _in else
-        cas(domain, m.input(f"{prefix}_train_pc", width=pc_width), cycle=0))
-    train_hist = (_in["train_hist"] if "train_hist" in _in else
-        cas(domain, m.input(f"{prefix}_train_hist", width=hist_w), cycle=0))
-    train_target = (_in["train_target"] if "train_target" in _in else
-        cas(domain, m.input(f"{prefix}_train_target", width=pc_width), cycle=0))
-    train_mispred = (_in["train_mispred"] if "train_mispred" in _in else
-        cas(domain, m.input(f"{prefix}_train_mispred", width=1), cycle=0))
-    train_provider_id = (_in["train_provider_id"] if "train_provider_id" in _in else
-        cas(domain, m.input(f"{prefix}_train_provider_id", width=prov_id_w), cycle=0))
-    train_provider_valid = (_in["train_provider_valid"] if "train_provider_valid" in _in else
-        cas(domain, m.input(f"{prefix}_train_provider_valid", width=1), cycle=0))
+    train_valid = (
+        _in["train_valid"]
+        if "train_valid" in _in
+        else cas(domain, m.input(f"{prefix}_train_valid", width=1), cycle=0)
+    )
+    train_pc = (
+        _in["train_pc"]
+        if "train_pc" in _in
+        else cas(domain, m.input(f"{prefix}_train_pc", width=pc_width), cycle=0)
+    )
+    train_hist = (
+        _in["train_hist"]
+        if "train_hist" in _in
+        else cas(domain, m.input(f"{prefix}_train_hist", width=hist_w), cycle=0)
+    )
+    train_target = (
+        _in["train_target"]
+        if "train_target" in _in
+        else cas(domain, m.input(f"{prefix}_train_target", width=pc_width), cycle=0)
+    )
+    train_mispred = (
+        _in["train_mispred"]
+        if "train_mispred" in _in
+        else cas(domain, m.input(f"{prefix}_train_mispred", width=1), cycle=0)
+    )
+    train_provider_id = (
+        _in["train_provider_id"]
+        if "train_provider_id" in _in
+        else cas(
+            domain, m.input(f"{prefix}_train_provider_id", width=prov_id_w), cycle=0
+        )
+    )
+    train_provider_valid = (
+        _in["train_provider_valid"]
+        if "train_provider_valid" in _in
+        else cas(domain, m.input(f"{prefix}_train_provider_valid", width=1), cycle=0)
+    )
 
     zero1 = cas(domain, m.const(0, width=1), cycle=0)
     one1 = cas(domain, m.const(1, width=1), cycle=0)
@@ -104,10 +134,28 @@ def ittage(
     tbl_entry_useful = []
 
     for t_idx, (tbl_size, _hl) in enumerate(table_infos):
-        ev = [domain.signal(width=1, reset_value=0, name=f"{prefix}_it{t_idx}_v_{i}") for i in range(tbl_size)]
-        etag = [domain.signal(width=tag_width, reset_value=0, name=f"{prefix}_it{t_idx}_tag_{i}") for i in range(tbl_size)]
-        etar = [domain.signal(width=pc_width, reset_value=0, name=f"{prefix}_it{t_idx}_tar_{i}") for i in range(tbl_size)]
-        euse = [domain.signal(width=useful_width, reset_value=0, name=f"{prefix}_it{t_idx}_u_{i}") for i in range(tbl_size)]
+        ev = [
+            domain.signal(width=1, reset_value=0, name=f"{prefix}_it{t_idx}_v_{i}")
+            for i in range(tbl_size)
+        ]
+        etag = [
+            domain.signal(
+                width=tag_width, reset_value=0, name=f"{prefix}_it{t_idx}_tag_{i}"
+            )
+            for i in range(tbl_size)
+        ]
+        etar = [
+            domain.signal(
+                width=pc_width, reset_value=0, name=f"{prefix}_it{t_idx}_tar_{i}"
+            )
+            for i in range(tbl_size)
+        ]
+        euse = [
+            domain.signal(
+                width=useful_width, reset_value=0, name=f"{prefix}_it{t_idx}_u_{i}"
+            )
+            for i in range(tbl_size)
+        ]
         tbl_entry_valid.append(ev)
         tbl_entry_tag.append(etag)
         tbl_entry_target.append(etar)
@@ -117,15 +165,17 @@ def ittage(
     tbl_hit = []
     tbl_target = []
 
-    for t_idx, (tbl_size, hist_len) in enumerate(table_infos):
+    for t_idx, (tbl_size, _hist_len) in enumerate(table_infos):
         idx_w = max(1, math.ceil(math.log2(tbl_size)))
         folded = global_hist[0:idx_w]
-        pc_bits = s0_pc[1:1 + idx_w]
+        pc_bits = s0_pc[1 : 1 + idx_w]
         tbl_index = cas(domain, (wire_of(pc_bits) ^ wire_of(folded))[0:idx_w], cycle=0)
 
         tag_hist = global_hist[0:tag_width]
-        pc_tag_bits = s0_pc[1:1 + tag_width]
-        tbl_tag_comp = cas(domain, (wire_of(pc_tag_bits) ^ wire_of(tag_hist))[0:tag_width], cycle=0)
+        pc_tag_bits = s0_pc[1 : 1 + tag_width]
+        tbl_tag_comp = cas(
+            domain, (wire_of(pc_tag_bits) ^ wire_of(tag_hist))[0:tag_width], cycle=0
+        )
 
         ev = tbl_entry_valid[t_idx]
         etag = tbl_entry_tag[t_idx]
@@ -155,7 +205,11 @@ def ittage(
         is_hit = tbl_hit[t_idx]
         provider_target = mux(is_hit, tbl_target[t_idx], provider_target)
         provider_valid = mux(is_hit, one1, provider_valid)
-        provider_id = mux(is_hit, cas(domain, m.const(t_idx + 1, width=prov_id_w), cycle=0), provider_id)
+        provider_id = mux(
+            is_hit,
+            cas(domain, m.const(t_idx + 1, width=prov_id_w), cycle=0),
+            provider_id,
+        )
 
     pred_valid = s0_fire & provider_valid
     m.output(f"{prefix}_pred_valid", wire_of(pred_valid))
@@ -174,17 +228,24 @@ def ittage(
     # ── domain.next() → Cycle 1: Training ────────────────────────────
     domain.next()
 
-    for t_idx, (tbl_size, hist_len) in enumerate(table_infos):
+    for t_idx, (tbl_size, _hist_len) in enumerate(table_infos):
         idx_w = max(1, math.ceil(math.log2(tbl_size)))
         t_folded = train_hist[0:idx_w]
-        t_pc_bits = train_pc[1:1 + idx_w]
-        t_index = cas(domain, (wire_of(t_pc_bits) ^ wire_of(t_folded))[0:idx_w], cycle=0)
+        t_pc_bits = train_pc[1 : 1 + idx_w]
+        t_index = cas(
+            domain, (wire_of(t_pc_bits) ^ wire_of(t_folded))[0:idx_w], cycle=0
+        )
 
         t_tag_hist = train_hist[0:tag_width]
-        t_pc_tag = train_pc[1:1 + tag_width]
-        t_tag = cas(domain, (wire_of(t_pc_tag) ^ wire_of(t_tag_hist))[0:tag_width], cycle=0)
+        t_pc_tag = train_pc[1 : 1 + tag_width]
+        t_tag = cas(
+            domain, (wire_of(t_pc_tag) ^ wire_of(t_tag_hist))[0:tag_width], cycle=0
+        )
 
-        is_provider = train_provider_valid & (train_provider_id == cas(domain, m.const(t_idx + 1, width=prov_id_w), cycle=0))
+        is_provider = train_provider_valid & (
+            train_provider_id
+            == cas(domain, m.const(t_idx + 1, width=prov_id_w), cycle=0)
+        )
 
         ev = tbl_entry_valid[t_idx]
         etag = tbl_entry_tag[t_idx]
@@ -205,32 +266,61 @@ def ittage(
 
             # Useful update: correct prediction → inc, wrong → dec
             target_correct = e_tar == train_target
-            u_inc = mux(e_u == cas(domain, m.const(useful_max, width=useful_width), cycle=0),
-                        e_u,
-                        cas(domain, (wire_of(e_u) + u(useful_width, 1))[0:useful_width], cycle=0))
-            u_dec = mux(e_u == cas(domain, m.const(0, width=useful_width), cycle=0),
-                        e_u,
-                        cas(domain, (wire_of(e_u) - u(useful_width, 1))[0:useful_width], cycle=0))
+            u_inc = mux(
+                e_u == cas(domain, m.const(useful_max, width=useful_width), cycle=0),
+                e_u,
+                cas(
+                    domain, (wire_of(e_u) + u(useful_width, 1))[0:useful_width], cycle=0
+                ),
+            )
+            u_dec = mux(
+                e_u == cas(domain, m.const(0, width=useful_width), cycle=0),
+                e_u,
+                cas(
+                    domain, (wire_of(e_u) - u(useful_width, 1))[0:useful_width], cycle=0
+                ),
+            )
             new_u = mux(target_correct, u_inc, u_dec)
             we_useful = train_valid & is_provider & idx_hit & e_v & tag_match
             euse[j].assign(mux(we_useful, new_u, e_u), when=we_useful)
 
             # Allocation on misprediction into longer-history tables
-            is_alloc = (train_provider_id < cas(domain, m.const(t_idx + 1, width=prov_id_w), cycle=0))
-            we_alloc = train_valid & train_mispred & idx_hit & is_alloc & \
-                       ((~e_v) | (e_u == cas(domain, m.const(0, width=useful_width), cycle=0)))
+            is_alloc = train_provider_id < cas(
+                domain, m.const(t_idx + 1, width=prov_id_w), cycle=0
+            )
+            we_alloc = (
+                train_valid
+                & train_mispred
+                & idx_hit
+                & is_alloc
+                & (
+                    (~e_v)
+                    | (e_u == cas(domain, m.const(0, width=useful_width), cycle=0))
+                )
+            )
             ev[j].assign(mux(we_alloc, one1, ev[j]), when=we_alloc)
             etag[j].assign(mux(we_alloc, t_tag, etag[j]), when=we_alloc)
             etar[j].assign(mux(we_alloc, train_target, etar[j]), when=we_alloc)
-            euse[j].assign(mux(we_alloc, cas(domain, m.const(0, width=useful_width), cycle=0), euse[j]), when=we_alloc)
+            euse[j].assign(
+                mux(
+                    we_alloc,
+                    cas(domain, m.const(0, width=useful_width), cycle=0),
+                    euse[j],
+                ),
+                when=we_alloc,
+            )
 
             # Periodic useful reset
-            euse[j].assign(cas(domain, m.const(0, width=useful_width), cycle=0), when=tick_overflow)
+            euse[j].assign(
+                cas(domain, m.const(0, width=useful_width), cycle=0), when=tick_overflow
+            )
 
     # Tick counter update
-    next_tick = mux(tick_overflow,
-                    cas(domain, m.const(0, width=8), cycle=0),
-                    cas(domain, (wire_of(tick_val) + u(8, 1))[0:8], cycle=0))
+    next_tick = mux(
+        tick_overflow,
+        cas(domain, m.const(0, width=8), cycle=0),
+        cas(domain, (wire_of(tick_val) + u(8, 1))[0:8], cycle=0),
+    )
     tick_val <<= mux(train_valid & train_mispred, next_tick, tick_val)
     return _out
 
@@ -239,7 +329,4 @@ ittage.__pycircuit_name__ = "ittage"
 
 
 if __name__ == "__main__":
-    print(compile_cycle_aware(
-        ittage, name="ittage", eager=True,
-        table_infos=SMALL_ITTAGE_TABLE_INFOS,
-    ).emit_mlir())
+    pass

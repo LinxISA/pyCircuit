@@ -6,7 +6,18 @@ from dataclasses import dataclass
 import hashlib
 import inspect
 import json
-from typing import Any, Generator, Generic, Iterable, Iterator, Literal, Mapping, Sequence, TypeVar, Union, cast, overload
+from typing import (
+    Any,
+    Generic,
+    Iterable,
+    Iterator,
+    Mapping,
+    Sequence,
+    TypeVar,
+    Union,
+    cast,
+    overload,
+)
 
 from .connectors import (
     Connector,
@@ -24,6 +35,7 @@ from .data import Bits, DT, Clock, Data, Reset, Vector
 from .design import DesignError
 from .dsl import Module, Signal, is_bits_signal, is_vector_signal
 from .literals import LiteralValue, infer_literal_width
+
 VT = TypeVar("VT", bound=Data)
 
 
@@ -69,7 +81,9 @@ def _normalize_shape_arg(shape: int | tuple[int, ...] | list[int]) -> tuple[int,
     elif isinstance(shape, (tuple, list)):
         dims = tuple(int(d) for d in shape)
     else:
-        raise TypeError(f"shape must be int, tuple[int, ...], or list[int], got {type(shape).__name__}")
+        raise TypeError(
+            f"shape must be int, tuple[int, ...], or list[int], got {type(shape).__name__}"
+        )
     if not dims:
         raise ValueError("shape cannot be empty")
     for d in dims:
@@ -128,10 +142,14 @@ class Wire(Generic[DT]):
             yield Wire(self.m, self.m.v_get(self.sig, index=i), signed=self.signed)
 
     @overload
-    def reduce_or(self: "Wire[Vector[Data]]", *, dim: None = None, mode: str = "chain") -> "Wire[Bits]": ...
+    def reduce_or(
+        self: "Wire[Vector[Data]]", *, dim: None = None, mode: str = "chain"
+    ) -> "Wire[Bits]": ...
 
     @overload
-    def reduce_or(self: "Wire[Vector[Data]]", *, dim: int, mode: str = "chain") -> "Wire[Data]": ...
+    def reduce_or(
+        self: "Wire[Vector[Data]]", *, dim: int, mode: str = "chain"
+    ) -> "Wire[Data]": ...
 
     def reduce_or(self, *, dim: int | None = None, mode: str = "chain") -> "Wire[Data]":
         if not is_vector_signal(self.sig):
@@ -139,12 +157,18 @@ class Wire(Generic[DT]):
         return Wire(self.m, self.m.v_or_reduce(self.sig, dim=dim, mode=mode))
 
     @overload
-    def reduce_and(self: "Wire[Vector[Data]]", *, dim: None = None, mode: str = "chain") -> "Wire[Bits]": ...
+    def reduce_and(
+        self: "Wire[Vector[Data]]", *, dim: None = None, mode: str = "chain"
+    ) -> "Wire[Bits]": ...
 
     @overload
-    def reduce_and(self: "Wire[Vector[Data]]", *, dim: int, mode: str = "chain") -> "Wire[Data]": ...
+    def reduce_and(
+        self: "Wire[Vector[Data]]", *, dim: int, mode: str = "chain"
+    ) -> "Wire[Data]": ...
 
-    def reduce_and(self, *, dim: int | None = None, mode: str = "chain") -> "Wire[Data]":
+    def reduce_and(
+        self, *, dim: int | None = None, mode: str = "chain"
+    ) -> "Wire[Data]":
         if not is_vector_signal(self.sig):
             raise TypeError(f"reduce_and requires Vector type, got {self.sig.ty!r}")
         return Wire(self.m, self.m.v_and_reduce(self.sig, dim=dim, mode=mode))
@@ -182,9 +206,13 @@ class Wire(Generic[DT]):
             raise TypeError(f"reduce_sum requires Vector type, got {self.sig.ty!r}")
         shape = self.sig.ty.shape()
         if dim is not None and (dim < 0 or dim >= len(shape)):
-            raise ValueError(f"reduce_sum dim out of range: {dim} for Vector rank {len(shape)}")
+            raise ValueError(
+                f"reduce_sum dim out of range: {dim} for Vector rank {len(shape)}"
+            )
         if not isinstance(self.sig.ty.datatype(), Bits):
-            raise TypeError(f"reduce_sum requires Bits element type, got {self.sig.ty.datatype()!r}")
+            raise TypeError(
+                f"reduce_sum requires Bits element type, got {self.sig.ty.datatype()!r}"
+            )
 
         red_sig = self.m.v_add_reduce(self.sig, dim=dim, mode=mode)
         return Wire(self.m, red_sig)
@@ -197,7 +225,14 @@ class Wire(Generic[DT]):
         return Wire(self.m, self.m.v_broadcast_dim(self.sig, size=size, dim=dim))
 
     @classmethod
-    def as_wire(cls, v: Union[Connector, Wire, Reg, Signal, int, list, LiteralValue], *, width: int | None = None, signed: bool | None = None, m: Module | None = None) -> Wire:
+    def as_wire(
+        cls,
+        v: Union[Connector, Wire, Reg, Signal, int, list, LiteralValue],
+        *,
+        width: int | None = None,
+        signed: bool | None = None,
+        m: Module | None = None,
+    ) -> Wire:
         if isinstance(v, Connector):
             v = v.read()
         if isinstance(v, Reg):
@@ -212,23 +247,34 @@ class Wire(Generic[DT]):
         if isinstance(v, Signal):
             return Wire(m, v)
         if isinstance(v, LiteralValue):
-            lit_w, lit_signed = _coerce_literal_width(v, ctx_width=width, ctx_signed=v.signed)
+            lit_w, lit_signed = _coerce_literal_width(
+                v, ctx_width=width, ctx_signed=v.signed
+            )
             const_sig = Module.const(m, int(v.value), width=int(lit_w))
             return Wire(m, const_sig, signed=lit_signed)
         if isinstance(v, int) or isinstance(v, list):
             if width is None:
                 raise ValueError("as_wire requires a width for int or list values")
             const_sig = Module.const(m, v, width=int(width))
-            has_neg = lambda x: x < 0 if isinstance(x, int) else any(has_neg(e) for e in x)
+            has_neg = lambda x: (
+                x < 0 if isinstance(x, int) else any(has_neg(e) for e in x)
+            )
             return Wire(m, const_sig, signed=has_neg(v))
         raise TypeError(f"unsupported operand type: {type(v).__name__}")
-    
-    def _as_wire(self, v: Union[Connector, Wire, Reg, Signal, int, list, LiteralValue], *, width: int | None) -> "Wire":
+
+    def _as_wire(
+        self,
+        v: Union[Connector, Wire, Reg, Signal, int, list, LiteralValue],
+        *,
+        width: int | None,
+    ) -> "Wire":
         if width is None:
             width = self.width
         return self.as_wire(v, width=width, signed=None, m=self.m)
 
-    def _promote2(self, other: Union["Wire", "Reg", Signal, int, LiteralValue]) -> tuple["Wire", "Wire"]:
+    def _promote2(
+        self, other: Union["Wire", "Reg", Signal, int, LiteralValue]
+    ) -> tuple["Wire", "Wire"]:
         """Promote operands to a common width (extend smaller operand).
 
         For Vector types no width promotion is performed: vector-vector ops
@@ -237,10 +283,12 @@ class Wire(Generic[DT]):
         """
         a = self._as_wire(self, width=None)
         if isinstance(other, int):
-            b = self._as_wire(int(other), width=a.width if isinstance(a.sig.ty, Bits) else None)
+            b = self._as_wire(
+                int(other), width=a.width if isinstance(a.sig.ty, Bits) else None
+            )
         else:
             b = self._as_wire(other, width=None)
-        
+
         out_w = max(a.width, b.width)
         if a.width != out_w:
             a = a.sext(width=out_w) if a.signed else a.zext(width=out_w)
@@ -252,14 +300,18 @@ class Wire(Generic[DT]):
         a, b = self._promote2(other)
         return Wire(self.m, self.m.add(a.sig, b.sig), signed=(a.signed or b.signed))
 
-    def __radd__(self, other: Union["Wire", "Reg", Signal, int, LiteralValue]) -> "Wire":
+    def __radd__(
+        self, other: Union["Wire", "Reg", Signal, int, LiteralValue]
+    ) -> "Wire":
         return self.__add__(other)
 
     def __sub__(self, other: Union["Wire", "Reg", Signal, int, LiteralValue]) -> "Wire":
         a, b = self._promote2(other)
         return Wire(self.m, self.m.sub(a.sig, b.sig), signed=(a.signed or b.signed))
 
-    def __rsub__(self, other: Union["Wire", "Reg", Signal, int, LiteralValue]) -> "Wire":
+    def __rsub__(
+        self, other: Union["Wire", "Reg", Signal, int, LiteralValue]
+    ) -> "Wire":
         b = self._as_wire(self, width=None)
         a = self._as_wire(other, width=b.width if isinstance(b.sig.ty, Bits) else None)
         aa, bb = a._promote2(b) if isinstance(a, Wire) else (a, b)
@@ -269,26 +321,42 @@ class Wire(Generic[DT]):
         a, b = self._promote2(other)
         return Wire(self.m, self.m.mul(a.sig, b.sig), signed=(a.signed or b.signed))
 
-    def __rmul__(self, other: Union["Wire", "Reg", Signal, int, LiteralValue]) -> "Wire":
+    def __rmul__(
+        self, other: Union["Wire", "Reg", Signal, int, LiteralValue]
+    ) -> "Wire":
         return self.__mul__(other)
 
-    def __rfloordiv__(self, other: Union["Wire", "Reg", Signal, int, LiteralValue]) -> "Wire":
+    def __rfloordiv__(
+        self, other: Union["Wire", "Reg", Signal, int, LiteralValue]
+    ) -> "Wire":
         num = self._as_wire(other, width=None)
         return num.__floordiv__(self)
 
-    def __floordiv__(self, other: Union["Wire", "Reg", Signal, int, LiteralValue]) -> "Wire":
+    def __floordiv__(
+        self, other: Union["Wire", "Reg", Signal, int, LiteralValue]
+    ) -> "Wire":
         a, b = self._promote2(other)
         if a.signed or b.signed:
             return Wire(self.m, self.m.sdiv(a.sig, b.sig), signed=True)
         return Wire(self.m, self.m.udiv(a.sig, b.sig), signed=False)
 
-    def __rtruediv__(self, other: Union["Wire", "Reg", Signal, int, LiteralValue]) -> "Wire":
-        raise TypeError("hardware `/` division is not supported; use `//` for integer division")
+    def __rtruediv__(
+        self, other: Union["Wire", "Reg", Signal, int, LiteralValue]
+    ) -> "Wire":
+        raise TypeError(
+            "hardware `/` division is not supported; use `//` for integer division"
+        )
 
-    def __truediv__(self, other: Union["Wire", "Reg", Signal, int, LiteralValue]) -> "Wire":
-        raise TypeError("hardware `/` division is not supported; use `//` for integer division")
+    def __truediv__(
+        self, other: Union["Wire", "Reg", Signal, int, LiteralValue]
+    ) -> "Wire":
+        raise TypeError(
+            "hardware `/` division is not supported; use `//` for integer division"
+        )
 
-    def __rmod__(self, other: Union["Wire", "Reg", Signal, int, LiteralValue]) -> "Wire":
+    def __rmod__(
+        self, other: Union["Wire", "Reg", Signal, int, LiteralValue]
+    ) -> "Wire":
         num = self._as_wire(other, width=None)
         return num.__mod__(self)
 
@@ -302,7 +370,9 @@ class Wire(Generic[DT]):
         a, b = self._promote2(other)
         return Wire(self.m, self.m.and_(a.sig, b.sig), signed=(a.signed or b.signed))
 
-    def __rand__(self, other: Union["Wire", "Reg", Signal, int, LiteralValue]) -> "Wire":
+    def __rand__(
+        self, other: Union["Wire", "Reg", Signal, int, LiteralValue]
+    ) -> "Wire":
         return self.__and__(other)
 
     def __or__(self, other: Union["Wire", "Reg", Signal, int, LiteralValue]) -> "Wire":
@@ -316,7 +386,9 @@ class Wire(Generic[DT]):
         a, b = self._promote2(other)
         return Wire(self.m, self.m.xor(a.sig, b.sig), signed=(a.signed or b.signed))
 
-    def __rxor__(self, other: Union["Wire", "Reg", Signal, int, LiteralValue]) -> "Wire":
+    def __rxor__(
+        self, other: Union["Wire", "Reg", Signal, int, LiteralValue]
+    ) -> "Wire":
         return self.__xor__(other)
 
     def __invert__(self) -> "Wire":
@@ -325,17 +397,21 @@ class Wire(Generic[DT]):
     def __lshift__(self, other: Union[int, "Wire"]) -> "Wire":
         return self.shl(amount=other)
 
-    def lshr(self, *, amount: Union[int, "Wire", "Reg", Signal, LiteralValue]) -> "Wire":
+    def lshr(
+        self, *, amount: Union[int, "Wire", "Reg", Signal, LiteralValue]
+    ) -> "Wire":
         """Logical shift right by an immediate or dynamic amount (zero-fill)."""
         if isinstance(amount, (int, LiteralValue)):
-            amt = int(amount) if isinstance(amount , int) else int(amount.value)
+            amt = int(amount) if isinstance(amount, int) else int(amount.value)
             if amt < 0:
                 raise ValueError("lshr amount must be >= 0")
             return Wire(self.m, self.m.lshri(self.sig, amount=amt), signed=False)
         amt = self._as_wire(amount, width=None)
         return Wire(self.m, self.m.lshr(self.sig, amt.sig), signed=False)
 
-    def ashr(self, *, amount: Union[int, "Wire", "Reg", Signal, LiteralValue]) -> "Wire":
+    def ashr(
+        self, *, amount: Union[int, "Wire", "Reg", Signal, LiteralValue]
+    ) -> "Wire":
         """Arithmetic shift right by an immediate or dynamic amount (sign-fill)."""
         if isinstance(amount, (int, LiteralValue)):
             amt = int(amount) if isinstance(amount, int) else int(amount.value)
@@ -423,21 +499,29 @@ class Wire(Generic[DT]):
         """Signed greater-than-or-equal compare (result is i1)."""
         return ~self.slt(other)
 
-    def _select_internal(self, a: Union["Wire", "Reg", Signal, int, LiteralValue, Connector], b: Union["Wire", "Reg", Signal, int, LiteralValue, Connector]) -> "Wire":
+    def _select_internal(
+        self,
+        a: Union["Wire", "Reg", Signal, int, LiteralValue, Connector],
+        b: Union["Wire", "Reg", Signal, int, LiteralValue, Connector],
+    ) -> "Wire":
         scalar_selector = self.ty == Bits(1)
         vector_selector = isinstance(self.ty, Vector) and self.ty.datatype() == Bits(1)
         if not scalar_selector and not vector_selector:
-            raise TypeError("conditional selection requires an i1 or vector<...xi1> selector wire")
+            raise TypeError(
+                "conditional selection requires an i1 or vector<...xi1> selector wire"
+            )
 
         # At least one operand must provide width.
         if isinstance(a, int) and isinstance(b, int):
-            raise TypeError("conditional selection requires at least one Wire/Reg/Signal operand (cannot infer width from two ints)")
+            raise TypeError(
+                "conditional selection requires at least one Wire/Reg/Signal operand (cannot infer width from two ints)"
+            )
 
         aw_temp = self._as_wire(a, width=None)
         bw_temp = self._as_wire(b, width=None)
-        
+
         out_w = max(aw_temp.width, bw_temp.width)
-        
+
         aw = self._as_wire(a, width=out_w)
         bw = self._as_wire(b, width=out_w)
 
@@ -446,6 +530,7 @@ class Wire(Generic[DT]):
         if bw.width != out_w:
             bw = bw.sext(width=out_w) if bw.signed else bw.zext(width=out_w)
         if vector_selector:
+
             def broadcast_scalar(value: Wire) -> Wire:
                 if isinstance(value.ty, Vector):
                     return value
@@ -458,10 +543,20 @@ class Wire(Generic[DT]):
             aw = broadcast_scalar(aw)
             bw = broadcast_scalar(bw)
             if not isinstance(aw.ty, Vector) or aw.ty.shape() != self.ty.shape():
-                raise TypeError("vector conditional selection requires selector and values with matching vector shapes")
-        return Wire(self.m, self.m.mux(self.sig, aw.sig, bw.sig), signed=(aw.signed or bw.signed))
+                raise TypeError(
+                    "vector conditional selection requires selector and values with matching vector shapes"
+                )
+        return Wire(
+            self.m,
+            self.m.mux(self.sig, aw.sig, bw.sig),
+            signed=(aw.signed or bw.signed),
+        )
 
-    def select(self, a: Union["Wire", "Reg", Signal, int, LiteralValue], b: Union["Wire", "Reg", Signal, int, LiteralValue]) -> "Wire":
+    def select(
+        self,
+        a: Union["Wire", "Reg", Signal, int, LiteralValue],
+        b: Union["Wire", "Reg", Signal, int, LiteralValue],
+    ) -> "Wire":
         return self._select_internal(a, b)
 
     def trunc(self, *, width: int) -> "Wire":
@@ -474,7 +569,9 @@ class Wire(Generic[DT]):
         return Wire(self.m, self.m.sext(self.sig, width=width), signed=True)
 
     def slice(self, *, lsb: int, width: int) -> "Wire":
-        return Wire(self.m, self.m.extract(self.sig, lsb=lsb, width=width), signed=False)
+        return Wire(
+            self.m, self.m.extract(self.sig, lsb=lsb, width=width), signed=False
+        )
 
     def lane(self, idx: int, *, width: int) -> "Wire":
         """ASL scaled slice ``x[idx *: width]`` — element-granular access.
@@ -499,7 +596,9 @@ class Wire(Generic[DT]):
     def shl(self, *, amount: Union[int, "Wire", "Reg", Signal, LiteralValue]) -> "Wire":
         """Shift left by an immediate or dynamic amount."""
         if isinstance(amount, int):
-            return Wire(self.m, self.m.shli(self.sig, amount=int(amount)), signed=self.signed)
+            return Wire(
+                self.m, self.m.shli(self.sig, amount=int(amount)), signed=self.signed
+            )
         amt = self._as_wire(amount, width=None)
         return Wire(self.m, self.m.shl(self.sig, amt.sig), signed=self.signed)
 
@@ -518,11 +617,17 @@ class Wire(Generic[DT]):
             return self.lane(idx[0], width=idx[1])
         if is_vector_signal(self.sig):
             if isinstance(idx, slice):
-                raise TypeError("Vector Wire indexing does not support slice (use v_get)")
+                raise TypeError(
+                    "Vector Wire indexing does not support slice (use v_get)"
+                )
             if not isinstance(idx, int):
-                raise TypeError(f"Vector Wire index must be int, got {type(idx).__name__}")
+                raise TypeError(
+                    f"Vector Wire index must be int, got {type(idx).__name__}"
+                )
             if idx < 0 or idx >= self.sig.ty.length:
-                raise IndexError(f"Vector Wire index {idx} out of range for {self.sig.ty}")
+                raise IndexError(
+                    f"Vector Wire index {idx} out of range for {self.sig.ty}"
+                )
             return Wire(self.m, self.m.v_get(self.sig, index=idx), signed=self.signed)
         if isinstance(idx, slice):
             if idx.step is not None:
@@ -537,7 +642,9 @@ class Wire(Generic[DT]):
             if width <= 0:
                 raise ValueError("wire slice width must be > 0")
             if lsb + width > self.width:
-                raise ValueError(f"wire slice out of range: [{lsb}:{stop}] on width {self.width}")
+                raise ValueError(
+                    f"wire slice out of range: [{lsb}:{stop}] on width {self.width}"
+                )
             return self.slice(lsb=lsb, width=width)
 
         bit = int(idx)
@@ -553,7 +660,9 @@ class Wire(Generic[DT]):
         scoped_name = getattr(self.m, "scoped_name", None)
         if callable(scoped_name):
             scoped = scoped_name(scoped)
-        return Wire(self.m, self.m.alias(self.sig, name=str(scoped)), signed=self.signed)
+        return Wire(
+            self.m, self.m.alias(self.sig, name=str(scoped)), signed=self.signed
+        )
 
     def as_signed(self) -> "Wire":
         """Mark this value as signed for shift/div/compare lowering."""
@@ -617,7 +726,11 @@ class Wire(Generic[DT]):
         the intent as a verifiable check.
         """
         val_set = _normalize_as_values(args, values)
-        given = [n for n, v in (("width", width), ("range", range), ("values", val_set)) if v is not None]
+        given = [
+            n
+            for n, v in (("width", width), ("range", range), ("values", val_set))
+            if v is not None
+        ]
         if len(given) != 1:
             raise TypeError(
                 "as_ requires exactly one of: positional value(s)/values=, width=, or range="
@@ -634,7 +747,7 @@ class Wire(Generic[DT]):
                 )
             if w == self.width:
                 return self
-            high = self[w:self.width]               # bits that must be zero
+            high = self[w : self.width]  # bits that must be zero
             cond = high == 0
             self.m.assert_(cond, msg=msg or f"as_: value does not fit in {w} bits")
             return self.trunc(width=w)
@@ -670,7 +783,9 @@ class Wire(Generic[DT]):
             cond = conds[0]
             for c in conds[1:]:
                 cond = cond & c
-            self.m.assert_(cond, msg=msg or f"assert_range: value not in [{lo_i}, {hi_i}]")
+            self.m.assert_(
+                cond, msg=msg or f"assert_range: value not in [{lo_i}, {hi_i}]"
+            )
         return self
 
     def assert_in(self, values: "Iterable[int]", *, msg: str | None = None) -> "Wire":
@@ -797,7 +912,11 @@ class Reg(Generic[DT]):
     def slice(self, *, lsb: int, width: int) -> Wire:
         return self.q.slice(lsb=lsb, width=width)
 
-    def select(self, a: Union[Wire, Reg, Signal, int, LiteralValue], b: Union[Wire, Reg, Signal, int, LiteralValue]) -> Wire:
+    def select(
+        self,
+        a: Union[Wire, Reg, Signal, int, LiteralValue],
+        b: Union[Wire, Reg, Signal, int, LiteralValue],
+    ) -> Wire:
         return self.q.select(a, b)
 
     def trunc(self, *, width: int) -> Wire:
@@ -829,19 +948,20 @@ class Reg(Generic[DT]):
         m = self.q.m
         if not isinstance(m, Circuit):
             raise TypeError("Reg.set requires the Reg to belong to a Circuit")
-        
+
         next_w = Wire.as_wire(value, m=m, width=self.width)
 
         if isinstance(when, int) and int(when) == 1:
             m.assign(self.next, next_w)
             return
-        
+
         cond = Wire.as_wire(when, m=m, width=1)
         if cond.width != 1:
             raise TypeError("when width must be 1")
         when_w = Wire.as_wire(when, m=m)
 
         m.assign(self.next, when_w._select_internal(value, self.q))
+
 
 class Circuit(Module):
     """High-level wrapper over `Module` that returns `Wire`/`Reg` objects."""
@@ -865,7 +985,9 @@ class Circuit(Module):
 
     @staticmethod
     def _struct_identity(payload: Any) -> str:
-        text = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+        text = json.dumps(
+            payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+        )
         return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
 
     def _record_struct_instance(self) -> None:
@@ -999,7 +1121,9 @@ class Circuit(Module):
         # hardened metadata (Decision 0125/0132).
         import json  # local import to keep hw.py import surface small
 
-        hardened_json = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+        hardened_json = json.dumps(
+            payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+        )
         self.set_func_attr("pyc.hardened", hardened_json)
 
     def scoped_name(self, name: str) -> str:
@@ -1007,7 +1131,8 @@ class Circuit(Module):
             return name
         return "__".join([*self._scope_stack, name])
 
-    def scope(self, name: str) -> Generator[None]:
+    @contextmanager
+    def scope(self, name: str) -> Iterator[None]:
         self._scope_stack.append(str(name))
         try:
             yield
@@ -1017,15 +1142,20 @@ class Circuit(Module):
     def domain(self, name: str) -> ClockDomain:
         return ClockDomain(clk=self.clock(f"{name}_clk"), rst=self.reset(f"{name}_rst"))
 
-    def create_domain(self, name: str, *, frequency_desc: str = "", reset_active_high: bool = False) -> Any:
+    def create_domain(
+        self, name: str, *, frequency_desc: str = "", reset_active_high: bool = False
+    ) -> Any:
         """V5 cycle-aware domain (next/prev/push/pop); see `pycircuit.v5.CycleAwareDomain`."""
-        
+
         _ = (frequency_desc, reset_active_high)
         from .v5 import CycleAwareDomain
+
         return CycleAwareDomain(self, str(name))
 
     @overload
-    def input(self, name:str, *, width: int,signed: bool = False, shape: None = None) -> Wire[Bits]: ...
+    def input(
+        self, name: str, *, width: int, signed: bool = False, shape: None = None
+    ) -> Wire[Bits]: ...
 
     @overload
     def input(
@@ -1055,7 +1185,9 @@ class Circuit(Module):
         """
         if enum is not None:
             if fields is not None or shape is not None:
-                raise TypeError("input(enum=...) cannot be combined with fields=/shape=")
+                raise TypeError(
+                    "input(enum=...) cannot be combined with fields=/shape="
+                )
             from .enums import EnumSignal, coerce_enum_cls, enum_width
 
             enum = coerce_enum_cls(enum)
@@ -1084,20 +1216,30 @@ class Circuit(Module):
             raise TypeError("input() requires width= (or fields=)")
         # Treat ``None`` and empty shape (``[]``/``()``) alike as a scalar port.
         norm_shape = list(_normalize_shape_arg(shape)) if shape else None
-        wire = Wire(self, super().input(name, width=width, shape=norm_shape), signed=bool(signed))
+        wire = Wire(
+            self,
+            super().input(name, width=width, shape=norm_shape),
+            signed=bool(signed),
+        )
         return fields.bind(wire) if fields is not None else wire
 
     @overload
-    def const(self, value: int, *, width: int, signed: bool = ...) -> Wire[Bits]: ... 
+    def const(self, value: int, *, width: int, signed: bool = ...) -> Wire[Bits]: ...
 
     @overload
-    def const(self, value: list[int], *, width: int, signed: bool = ...) -> Wire[Vector[Bits]]: ...
+    def const(
+        self, value: list[int], *, width: int, signed: bool = ...
+    ) -> Wire[Vector[Bits]]: ...
 
     @overload
-    def const(self, value: list[list[int]], *, width: int, signed: bool = ...) -> Wire[Vector[Vector[Bits]]]: ...
+    def const(
+        self, value: list[list[int]], *, width: int, signed: bool = ...
+    ) -> Wire[Vector[Vector[Bits]]]: ...
 
     @overload
-    def const(self, value: list[Any], *, width: int, signed: bool = ...) -> Wire[Vector[Vector[Vector[Data]]]]: ...
+    def const(
+        self, value: list[Any], *, width: int, signed: bool = ...
+    ) -> Wire[Vector[Vector[Vector[Data]]]]: ...
 
     def const(
         self,
@@ -1122,7 +1264,9 @@ class Circuit(Module):
         if isinstance(value, Connector):
             value = value.read()
         if isinstance(value, LiteralValue):
-            lit_w, _ = _coerce_literal_width(value, ctx_width=value.width, ctx_signed=value.signed)
+            lit_w, _ = _coerce_literal_width(
+                value, ctx_width=value.width, ctx_signed=value.signed
+            )
             super().output(name, super().const(int(value.value), width=lit_w))
             return
         if isinstance(value, int):
@@ -1136,7 +1280,11 @@ class Circuit(Module):
         return Wire(self, super().new_signal(width=width), assignable=True)
 
     def named_wire(self, name: str, *, width: int) -> Wire:
-        return Wire(self, super().new_signal(width=width, name=self.scoped_name(name)), assignable=True)
+        return Wire(
+            self,
+            super().new_signal(width=width, name=self.scoped_name(name)),
+            assignable=True,
+        )
 
     def wire(self, sig: Signal) -> Wire:
         return Wire(self, sig)
@@ -1154,11 +1302,17 @@ class Circuit(Module):
         tags: Mapping[str, Any] | None = None,
     ) -> Wire:
         _ = (name, value, at, tags)
-        raise DesignError("Legacy debug helper was removed; use standalone `@probe(target=...)` definitions instead")
+        raise DesignError(
+            "Legacy debug helper was removed; use standalone `@probe(target=...)` definitions instead"
+        )
 
-    def debug_bundle(self, prefix: str, fields: Mapping[str, Union[Wire, Reg, Signal, Connector]]) -> dict[str, Wire]:
+    def debug_bundle(
+        self, prefix: str, fields: Mapping[str, Union[Wire, Reg, Signal, Connector]]
+    ) -> dict[str, Wire]:
         _ = (prefix, fields)
-        raise DesignError("Legacy debug-bundle helper was removed; use standalone `@probe(target=...)` definitions instead")
+        raise DesignError(
+            "Legacy debug-bundle helper was removed; use standalone `@probe(target=...)` definitions instead"
+        )
 
     def debug_probe(
         self,
@@ -1171,11 +1325,20 @@ class Circuit(Module):
         tags: Mapping[str, Any] | None = None,
     ) -> dict[str, Wire]:
         _ = (stage, lane, fields, family, at, tags)
-        raise DesignError("Legacy debug-probe helper was removed; use standalone `@probe(target=...)` definitions instead")
+        raise DesignError(
+            "Legacy debug-probe helper was removed; use standalone `@probe(target=...)` definitions instead"
+        )
 
-    def debug_occ(self, stage: str, lane: int, fields: Mapping[str, Union[Wire, Reg, Signal, Connector]]) -> dict[str, Wire]:
+    def debug_occ(
+        self,
+        stage: str,
+        lane: int,
+        fields: Mapping[str, Union[Wire, Reg, Signal, Connector]],
+    ) -> dict[str, Wire]:
         _ = (stage, lane, fields)
-        raise DesignError("Legacy occupancy-debug helper was removed; use standalone `@probe(target=...)` definitions instead")
+        raise DesignError(
+            "Legacy occupancy-debug helper was removed; use standalone `@probe(target=...)` definitions instead"
+        )
 
     def probe(
         self,
@@ -1189,7 +1352,9 @@ class Circuit(Module):
         tags: Mapping[str, Any] | None = None,
     ) -> dict[str, Wire]:
         _ = (value, stage, lane, family, prefix, at, tags)
-        raise DesignError("Legacy probe helper was removed; use standalone `@probe(target=...)` definitions instead")
+        raise DesignError(
+            "Legacy probe helper was removed; use standalone `@probe(target=...)` definitions instead"
+        )
 
     def assign(
         self,
@@ -1203,8 +1368,10 @@ class Circuit(Module):
             dst = dst.read()
         if isinstance(src, Connector):
             src = src.read()
-        
-        def is_signed_src(v: Union[Wire, Reg, Signal, int, LiteralValue, Connector]) -> bool:
+
+        def is_signed_src(
+            v: Union[Wire, Reg, Signal, int, LiteralValue, Connector]
+        ) -> bool:
             if isinstance(v, Wire):
                 return bool(v.signed)
             if isinstance(v, Reg):
@@ -1219,7 +1386,9 @@ class Circuit(Module):
 
         dst_sig = Signal.as_sig(dst)
         if isinstance(src, LiteralValue):
-            lit_w, _ = _coerce_literal_width(src, ctx_width=dst_sig.ty.width, ctx_signed=is_signed_src(src))
+            lit_w, _ = _coerce_literal_width(
+                src, ctx_width=dst_sig.ty.width, ctx_signed=is_signed_src(src)
+            )
             src_sig = super().const(int(src.value), width=lit_w)
             super().assign(dst_sig, src_sig)
             return
@@ -1230,7 +1399,7 @@ class Circuit(Module):
 
         src_signed = is_signed_src(src)
         src_sig = Signal.as_sig(src)
-        
+
         if dst_sig.ty == src_sig.ty:
             super().assign(dst_sig, src_sig)
             return
@@ -1240,25 +1409,32 @@ class Circuit(Module):
             dst_w = dst_sig.ty.width
             src_w = src_sig.ty.width
             if src_w < dst_w:
-                src_sig = super().sext(src_sig, width=dst_w) if src_signed else super().zext(src_sig, width=dst_w)
+                src_sig = (
+                    super().sext(src_sig, width=dst_w)
+                    if src_signed
+                    else super().zext(src_sig, width=dst_w)
+                )
             elif src_w > dst_w:
                 src_sig = super().trunc(src_sig, width=dst_w)
             super().assign(dst_sig, src_sig)
             return
 
-        raise TypeError(f"assign requires same types, got {dst_sig.ty} and {src_sig.ty}")
+        raise TypeError(
+            f"assign requires same types, got {dst_sig.ty} and {src_sig.ty}"
+        )
 
-    def assert_(self, cond: Union[Wire, Reg, Signal], *, msg: str | None = None) -> None:
+    def assert_(
+        self, cond: Union[Wire, Reg, Signal], *, msg: str | None = None
+    ) -> None:
         c = cond.q.sig if isinstance(cond, Reg) else cond
         sig = c.sig if isinstance(c, Wire) else c
         super().assert_(sig, msg=msg)
 
-
     @overload
     def out(
-        self, 
-        name: str, 
-        *, 
+        self,
+        name: str,
+        *,
         clk: Signal[Clock] | None = None,
         rst: Signal[Reset] | None = None,
         domain: ClockDomain | None = None,
@@ -1267,14 +1443,14 @@ class Circuit(Module):
         en: Union[Wire, Signal, int, LiteralValue] = 1,
         shape: list[int],
         stage: str | None = None,
-        signed: bool | None = None
+        signed: bool | None = None,
     ) -> Reg[Vector]: ...
-    
+
     @overload
     def out(
-        self, 
-        name: str, 
-        *, 
+        self,
+        name: str,
+        *,
         clk: Signal[Clock] | None = None,
         rst: Signal[Reset] | None = None,
         domain: ClockDomain | None = None,
@@ -1282,9 +1458,9 @@ class Circuit(Module):
         init: Union[Wire, Reg, Signal, int, list, LiteralValue] | None = None,
         en: Union[Wire, Signal, int, LiteralValue] = 1,
         stage: str | None = None,
-        signed: bool | None = None
+        signed: bool | None = None,
     ) -> Reg: ...
-    
+
     def out(
         self,
         name: str,
@@ -1317,7 +1493,9 @@ class Circuit(Module):
             clk = domain.clk
             rst = domain.rst
         if clk is None or rst is None:
-            raise TypeError("out() requires either domain=... or both clk=... and rst=...")
+            raise TypeError(
+                "out() requires either domain=... or both clk=... and rst=..."
+            )
 
         if shape and not all(isinstance(d, int) and d > 0 for d in shape):
             raise ValueError("shape entries must be all int and all > 0")
@@ -1334,7 +1512,7 @@ class Circuit(Module):
 
         # ``pyc.reg`` enable is scalar i1 (shared across vector lanes).
         en_w = Wire.as_wire(en, width=1, m=self)
-        
+
         if en_w.ty != Bits(1):
             raise TypeError(f"out() en must be i1, got {en_w.ty}")
 
@@ -1342,12 +1520,14 @@ class Circuit(Module):
             init = 0
         init_w = Wire.as_wire(init, m=self, width=width)
         if shape and is_bits_signal(init_w.sig):
-            init_sig = cast(Signal[Bits], init_w.sig) 
+            init_sig = cast(Signal[Bits], init_w.sig)
             init_sig = super().v_broadcast(init_sig, size=shape[0])
             for dim in shape[1:]:
-                init_sig = super().v_broadcast_dim(init_sig, size=dim, dim=len(init_sig.ty.shape()))
+                init_sig = super().v_broadcast_dim(
+                    init_sig, size=dim, dim=len(init_sig.ty.shape())
+                )
             init_w = Wire(self, init_sig)
-            
+
         if shape and isinstance(init_w.ty, Vector) and init_w.ty.shape() != shape:
             raise TypeError(f"out() init shape must be {shape}, got {init_w.ty}")
 
@@ -1365,7 +1545,7 @@ class Circuit(Module):
         next_: Union[Wire, Signal],
         init: Union[Wire, Signal, int, LiteralValue],
     ) -> Reg:
-         return self.reg(clk, rst, en, next_, init)
+        return self.reg(clk, rst, en, next_, init)
 
     def reg(
         self,
@@ -1402,17 +1582,21 @@ class Circuit(Module):
         next_w = self.new_wire(width=width)
         if isinstance(en, LiteralValue):
             lit_w, lit_signed = _coerce_literal_width(en, ctx_width=1, ctx_signed=False)
-            en_w: Union[Wire, Signal] = Wire(self, super().const(int(en.value), width=lit_w), signed=lit_signed)
+            en_w: Union[Wire, Signal] = Wire(
+                self, super().const(int(en.value), width=lit_w), signed=lit_signed
+            )
         elif isinstance(en, int):
             en_w: Union[Wire, Signal] = self.const(en, width=1)
         else:
             en_w = en
-        
+
         init_w = self.const(init, width=width) if isinstance(init, int) else init
-        
+
         return self.reg(clk, rst, en_w, next_w, init_w)
 
-    def vec(self, *elems: Union[Wire[DT], Reg[DT], Sequence[Union[Wire[DT], Reg[DT]]]]) -> Wire[Vector[DT]]:
+    def vec(
+        self, *elems: Union[Wire[DT], Reg[DT], Sequence[Union[Wire[DT], Reg[DT]]]]
+    ) -> Wire[Vector[DT]]:
         """Build a vector Wire from scalar wires/regs (via ``pyc.v_create``).
         Accepts both ``m.vec(w1, w2, w3)`` and ``m.vec([w1, w2, w3])``.
         """
@@ -1428,8 +1612,10 @@ class Circuit(Module):
         sigs: list[Signal] = [Signal.as_sig(e) for e in flat_elems]
         for sig in sigs:
             if not sig.ty == sigs[0].ty:
-                raise TypeError(f"assert all types are same, but got {sig.ty} and {sigs[0].ty}")
-        
+                raise TypeError(
+                    f"assert all types are same, but got {sig.ty} and {sigs[0].ty}"
+                )
+
         signed_lanes = [(e.q if isinstance(e, Reg) else e).signed for e in flat_elems]
         if any(signed != signed_lanes[0] for signed in signed_lanes[1:]):
             raise TypeError("vec() requires uniform lane signedness")
@@ -1513,16 +1699,30 @@ class Circuit(Module):
         if isinstance(value, Signal):
             return WireConnector(owner=self, name=str(name or value.ref), wire=value)
         if isinstance(value, LiteralValue):
-            lit_w, lit_signed = _coerce_literal_width(value, ctx_width=value.width, ctx_signed=value.signed)
-            w = Wire(self, Module.const(self, int(value.value), width=int(lit_w)), signed=lit_signed)
-            return WireConnector(owner=self, name=str(name or f"lit_{int(value.value)}"), wire=w)
+            lit_w, lit_signed = _coerce_literal_width(
+                value, ctx_width=value.width, ctx_signed=value.signed
+            )
+            w = Wire(
+                self,
+                Module.const(self, int(value.value), width=int(lit_w)),
+                signed=lit_signed,
+            )
+            return WireConnector(
+                owner=self, name=str(name or f"lit_{int(value.value)}"), wire=w
+            )
         if isinstance(value, int):
             ww = infer_literal_width(int(value), signed=(int(value) < 0))
             w = self.const(int(value), width=ww)
-            return WireConnector(owner=self, name=str(name or f"lit_{int(value)}"), wire=w)
-        raise ConnectorError(f"expected Connector/Wire/Reg/Signal/int/literal, got {type(value).__name__}")
+            return WireConnector(
+                owner=self, name=str(name or f"lit_{int(value)}"), wire=w
+            )
+        raise ConnectorError(
+            f"expected Connector/Wire/Reg/Signal/int/literal, got {type(value).__name__}"
+        )
 
-    def input_connector(self, name: str, *, width: int, signed: bool = False) -> WireConnector:
+    def input_connector(
+        self, name: str, *, width: int, signed: bool = False
+    ) -> WireConnector:
         w = self.input(str(name), width=width, signed=signed)
         return WireConnector(owner=self, name=str(name), wire=w)
 
@@ -1567,7 +1767,9 @@ class Circuit(Module):
         )
         return RegConnector(owner=self, name=str(name), reg=r)
 
-    def bundle_connector(self, **fields: Union[Connector, Wire, Reg, Signal]) -> ConnectorBundle:
+    def bundle_connector(
+        self, **fields: Union[Connector, Wire, Reg, Signal]
+    ) -> ConnectorBundle:
         out: dict[str, Connector] = {}
         for k, v in fields.items():
             out[str(k)] = self.as_connector(v, name=str(k))
@@ -1593,7 +1795,9 @@ class Circuit(Module):
                     parts.append("missing: " + ", ".join(missing))
                 if extra:
                     parts.append("extra: " + ", ".join(extra))
-                raise ConnectorError(f"struct connect key mismatch ({'; '.join(parts)})")
+                raise ConnectorError(
+                    f"struct connect key mismatch ({'; '.join(parts)})"
+                )
             dflat = dst.flatten()
             sflat = src.flatten()
             for k in sorted(dkeys):
@@ -1613,22 +1817,32 @@ class Circuit(Module):
                     parts.append("missing: " + ", ".join(missing))
                 if extra:
                     parts.append("extra: " + ", ".join(extra))
-                raise ConnectorError(f"bundle connect key mismatch ({'; '.join(parts)})")
+                raise ConnectorError(
+                    f"bundle connect key mismatch ({'; '.join(parts)})"
+                )
             for k in sorted(dkeys):
                 self.connect(dst[k], src[k], when=when)
             return
 
         d = self.as_connector(dst)
-        s = self.as_connector(src) if not isinstance(src, Connector) else self.as_connector(src)
+        s = (
+            self.as_connector(src)
+            if not isinstance(src, Connector)
+            else self.as_connector(src)
+        )
 
         if isinstance(d, RegConnector):
             d.set(s.read(), when=when)
             return
         if not (isinstance(when, int) and int(when) == 1):
-            raise ConnectorError("conditional connect (`when=...`) is only supported for RegConnector destinations")
+            raise ConnectorError(
+                "conditional connect (`when=...`) is only supported for RegConnector destinations"
+            )
         self.assign(d.read(), s.read())
 
-    def inputs(self, spec: Any, *, prefix: str | None = None) -> ConnectorBundle | ConnectorStruct:
+    def inputs(
+        self, spec: Any, *, prefix: str | None = None
+    ) -> ConnectorBundle | ConnectorStruct:
         """Declare connector-backed input ports from a spec."""
         from .wiring.connect import inputs
 
@@ -1652,7 +1866,9 @@ class Circuit(Module):
             pname = str(leaf.path).replace(".", "_")
             port = f"{pfx}{pname}"
             if leaf.direction == "in":
-                flat[leaf.path] = self.input_connector(port, width=int(leaf.width), signed=bool(leaf.signed))
+                flat[leaf.path] = self.input_connector(
+                    port, width=int(leaf.width), signed=bool(leaf.signed)
+                )
                 continue
 
             # Output port placeholder with signedness tracking on the type.
@@ -1720,7 +1936,9 @@ class Circuit(Module):
                 if isinstance(src_values, Mapping):
                     src = ConnectorStruct(src_values)
                 else:
-                    raise ConnectorError("pipe(struct): source must be ConnectorStruct or mapping")
+                    raise ConnectorError(
+                        "pipe(struct): source must be ConnectorStruct or mapping"
+                    )
             else:
                 src = src_values
             self.connect(regs, src, when=en)
@@ -1736,7 +1954,9 @@ class Circuit(Module):
         elif isinstance(src_values, Mapping):
             src_map = dict(src_values)
         else:
-            raise ConnectorError("pipe(bundle): source must be ConnectorBundle or mapping")
+            raise ConnectorError(
+                "pipe(bundle): source must be ConnectorBundle or mapping"
+            )
 
         dkeys = set(regs.keys())
         skeys = set(str(k) for k in src_map.keys())
@@ -1764,7 +1984,9 @@ class Circuit(Module):
         fn: Any,
         *,
         name: str,
-        bind: Mapping[str, Connector | ConnectorBundle | ConnectorStruct | Mapping[str, Any] | Any],
+        bind: Mapping[
+            str, Connector | ConnectorBundle | ConnectorStruct | Mapping[str, Any] | Any
+        ],
         params: dict[str, Any] | None = None,
         module_name: str | None = None,
         short_name: str | None = None,
@@ -1860,8 +2082,13 @@ class Circuit(Module):
                 raise TypeError("array(ModuleFamilySpec, ...) requires `keys=`")
             if fn_or_collection.params is not None:
                 base_params.update(fn_or_collection.params.as_dict())
-            key_list = [(str(k), None) for k in sorted((str(x) for x in keys), key=lambda x: x)]
-        elif isinstance(fn_or_collection, (ModuleListSpec, ModuleVectorSpec, ModuleMapSpec, ModuleDictSpec)):
+            key_list = [
+                (str(k), None) for k in sorted((str(x) for x in keys), key=lambda x: x)
+            ]
+        elif isinstance(
+            fn_or_collection,
+            (ModuleListSpec, ModuleVectorSpec, ModuleMapSpec, ModuleDictSpec),
+        ):
             family = fn_or_collection.family
             fn = family.module
             if family.params is not None:
@@ -1871,7 +2098,9 @@ class Circuit(Module):
         else:
             if keys is None:
                 raise TypeError("array(fn, ...) requires `keys=`")
-            key_list = [(str(k), None) for k in sorted((str(x) for x in keys), key=lambda x: x)]
+            key_list = [
+                (str(k), None) for k in sorted((str(x) for x in keys), key=lambda x: x)
+            ]
 
         if not key_list:
             raise ValueError("array requires at least one key")
@@ -1956,9 +2185,13 @@ class Circuit(Module):
         from .design import DesignError
 
         if is_connector_bundle(v):
-            raise DesignError(f"instance port {port!r}: ConnectorBundle is not valid for a single callee port")
+            raise DesignError(
+                f"instance port {port!r}: ConnectorBundle is not valid for a single callee port"
+            )
         if is_connector_struct(v):
-            raise DesignError(f"instance port {port!r}: ConnectorStruct is not valid for a single callee port")
+            raise DesignError(
+                f"instance port {port!r}: ConnectorStruct is not valid for a single callee port"
+            )
         try:
             return self.as_connector(v, name=port)
         except Exception as e:  # noqa: BLE001
@@ -1981,19 +2214,25 @@ class Circuit(Module):
         """Instantiate a specialized sub-module and return a rich instance handle."""
 
         if self._design_ctx is None:
-            raise TypeError("Circuit.instance requires a design context (compile via pycircuit.jit.compile)")
+            raise TypeError(
+                "Circuit.instance requires a design context (compile via pycircuit.jit.compile)"
+            )
 
         from .design import DesignContext, DesignError, value_params_of
 
         if not isinstance(self._design_ctx, DesignContext):
-            raise TypeError("internal error: Circuit design context has an unexpected type")
+            raise TypeError(
+                "internal error: Circuit design context has an unexpected type"
+            )
 
         params_dict = dict(params or {})
         overlap = sorted(set(params_dict.keys()) & set(ports.keys()))
         if overlap:
             raise DesignError(f"instance params/ports overlap: {', '.join(overlap)}")
         callee_value_params = value_params_of(fn)
-        value_param_overlap = sorted(set(params_dict.keys()) & set(callee_value_params.keys()))
+        value_param_overlap = sorted(
+            set(params_dict.keys()) & set(callee_value_params.keys())
+        )
         if value_param_overlap:
             raise DesignError(
                 "value-param(s) must be connected as instance ports, not specialization params: "
@@ -2002,7 +2241,9 @@ class Circuit(Module):
 
         normalized_ports: dict[str, Connector] = {}
         for pname, v in ports.items():
-            normalized_ports[str(pname)] = self._coerce_instance_connector(v, port=str(pname))
+            normalized_ports[str(pname)] = self._coerce_instance_connector(
+                v, port=str(pname)
+            )
 
         # Signature-bound hardware args: if a function parameter name is provided
         # as a port connection, treat it as a formal input type for specialization.
@@ -2013,7 +2254,8 @@ class Circuit(Module):
             sig_param_names = {
                 p.name
                 for p in ps[1:]
-                if p.kind not in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD)
+                if p.kind
+                not in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD)
             }
         except (TypeError, ValueError):
             sig_param_names = set()
@@ -2028,7 +2270,9 @@ class Circuit(Module):
             rv = c.read()
             if isinstance(rv, Wire):
                 if rv.m is not self:
-                    raise DesignError(f"instance port {pname!r}: cannot connect a wire from a different module")
+                    raise DesignError(
+                        f"instance port {pname!r}: cannot connect a wire from a different module"
+                    )
                 if isinstance(rv.ty, Vector):
                     sig_port_specs[pname] = {
                         "kind": "vec",
@@ -2060,9 +2304,13 @@ class Circuit(Module):
                         "signed": bool(getattr(c, "signed", False)),
                     }
                 else:
-                    raise DesignError(f"instance port {pname!r}: unsupported signal type {rv.ty!r}")
+                    raise DesignError(
+                        f"instance port {pname!r}: unsupported signal type {rv.ty!r}"
+                    )
                 continue
-            raise DesignError(f"instance port {pname!r}: unsupported connector payload {type(rv).__name__}")
+            raise DesignError(
+                f"instance port {pname!r}: unsupported connector payload {type(rv).__name__}"
+            )
 
         cm = self._design_ctx.specialize(
             fn,
@@ -2081,20 +2329,26 @@ class Circuit(Module):
                 parts.append("missing: " + ", ".join(missing))
             if extra:
                 parts.append("extra: " + ", ".join(extra))
-            raise DesignError(f"instance port mismatch for {cm.sym_name!r} ({'; '.join(parts)})")
+            raise DesignError(
+                f"instance port mismatch for {cm.sym_name!r} ({'; '.join(parts)})"
+            )
 
         def coerce_to_sig(c: Connector, *, expected_ty: Data, port: str) -> Signal:
             rv = c.read()
             if isinstance(rv, Wire):
                 if rv.m is not self:
-                    raise DesignError(f"instance port {port!r}: cannot connect a wire from a different module")
+                    raise DesignError(
+                        f"instance port {port!r}: cannot connect a wire from a different module"
+                    )
                 sig = rv.sig
                 src_signed = bool(rv.signed)
             elif isinstance(rv, Signal):
                 sig = rv
                 src_signed = bool(getattr(c, "signed", False))
             else:
-                raise DesignError(f"instance port {port!r}: unsupported connector payload {type(rv).__name__}")
+                raise DesignError(
+                    f"instance port {port!r}: unsupported connector payload {type(rv).__name__}"
+                )
 
             if sig.ty == expected_ty:
                 return sig
@@ -2104,17 +2358,25 @@ class Circuit(Module):
                 got_w = sig.ty.width
                 exp_w = expected_ty.width
                 if got_w < exp_w:
-                    return self.sext(sig, width=exp_w) if src_signed else self.zext(sig, width=exp_w)
+                    return (
+                        self.sext(sig, width=exp_w)
+                        if src_signed
+                        else self.zext(sig, width=exp_w)
+                    )
                 if got_w > exp_w:
                     return self.trunc(sig, width=exp_w)
                 return sig
 
-            raise DesignError(f"instance port {port!r}: type mismatch, got {sig.ty} expected {expected_ty}")
+            raise DesignError(
+                f"instance port {port!r}: type mismatch, got {sig.ty} expected {expected_ty}"
+            )
 
         # Build operands in callee signature order.
         operands: list[Signal] = []
         for pname, pty in zip(cm.arg_names, cm.arg_types):
-            operands.append(coerce_to_sig(normalized_ports[pname], expected_ty=pty, port=pname))
+            operands.append(
+                coerce_to_sig(normalized_ports[pname], expected_ty=pty, port=pname)
+            )
 
         outs = self.instance_op(
             cm.sym_name,
@@ -2128,15 +2390,22 @@ class Circuit(Module):
         out_fields: dict[str, Connector] = {}
         for oname, sig in zip(cm.result_names, outs):
             if isinstance(sig.ty, Vector):
-                out_fields[oname] = WireConnector(owner=self, name=oname, wire=Wire(self, sig))
+                out_fields[oname] = WireConnector(
+                    owner=self, name=oname, wire=Wire(self, sig)
+                )
             else:
-                out_fields[oname] = WireConnector(owner=self, name=oname, wire=Wire(self, sig))
+                out_fields[oname] = WireConnector(
+                    owner=self, name=oname, wire=Wire(self, sig)
+                )
         force_bundle = False
         try:
             ann = inspect.signature(cm.fn).return_annotation
             if ann is ConnectorBundle:
                 force_bundle = True
-            elif isinstance(ann, str) and ann.replace(" ", "").lower() == "connectorbundle":
+            elif (
+                isinstance(ann, str)
+                and ann.replace(" ", "").lower() == "connectorbundle"
+            ):
                 force_bundle = True
         except (TypeError, ValueError):
             pass
@@ -2298,7 +2567,14 @@ class Circuit(Module):
         self._record_struct_state_alloc()
         return Wire(self, in_ready), Wire(self, out_valid), Wire(self, out_data)
 
-    def cdc_sync(self, clk: Signal, rst: Signal, a: Union[Wire, Reg, Signal], *, stages: int | None = None) -> Wire:
+    def cdc_sync(
+        self,
+        clk: Signal,
+        rst: Signal,
+        a: Union[Wire, Reg, Signal],
+        *,
+        stages: int | None = None,
+    ) -> Wire:
         sig = Signal.as_sig(a)
         out = super().cdc_sync(clk, rst, sig, stages=stages)
         self._record_struct_state_alloc()
@@ -2336,7 +2612,14 @@ class Circuit(Module):
         out_ready: Union[Wire, Reg, Signal],
         depth: int,
     ) -> tuple[Wire, Wire, Wire]:
-        return self.fifo(domain.clk, domain.rst, in_valid=in_valid, in_data=in_data, out_ready=out_ready, depth=depth)
+        return self.fifo(
+            domain.clk,
+            domain.rst,
+            in_valid=in_valid,
+            in_data=in_data,
+            out_ready=out_ready,
+            depth=depth,
+        )
 
     def rv_queue(
         self,
@@ -2352,7 +2635,9 @@ class Circuit(Module):
             clk = domain.clk
             rst = domain.rst
         if clk is None or rst is None:
-            raise TypeError("rv_queue() requires either domain=... or both clk=... and rst=...")
+            raise TypeError(
+                "rv_queue() requires either domain=... or both clk=... and rst=..."
+            )
         return RvQueue(self, name, clk=clk, rst=rst, width=width, depth=depth)
 
 
@@ -2392,9 +2677,9 @@ class Bundle:
         if not self.fields:
             raise ValueError("cannot pack an empty Bundle")
         first_value = list(self.fields.values())[0]
-        m = first_value.m if isinstance(first_value, Wire) else first_value.q.m 
+        m = first_value.m if isinstance(first_value, Wire) else first_value.q.m
         sigs = [Signal.as_sig(v) for v in self.fields.values()]
-        return Wire(m,  m.concat(*sigs))
+        return Wire(m, m.concat(*sigs))
 
     def unpack(self, packed: Wire) -> "Bundle":
         """Extract fields from a packed bus (inverse of pack())."""
@@ -2404,7 +2689,9 @@ class Bundle:
         widths = [(e.q.width if isinstance(e, Reg) else e.width) for e in elems]
         total = sum(widths)
         if packed.width != total:
-            raise ValueError(f"unpack width mismatch: got i{packed.width}, expected i{total}")
+            raise ValueError(
+                f"unpack width mismatch: got i{packed.width}, expected i{total}"
+            )
         out: dict[str, Union[Wire, Reg]] = {}
         lsb = 0
         # pack is MSB-first: first field is at the top bits
@@ -2433,7 +2720,9 @@ class RvQueue:
       # p.valid / p.data / p.fire
     """
 
-    def __init__(self, m: Circuit, name: str, *, clk: Signal, rst: Signal, width: int, depth: int) -> None:
+    def __init__(
+        self, m: Circuit, name: str, *, clk: Signal, rst: Signal, width: int, depth: int
+    ) -> None:
         self.m = m
         self.name = str(name)
         self.width = int(width)
@@ -2450,7 +2739,14 @@ class RvQueue:
         self._out_ready = m.named_wire(f"{self.name}__out_ready", width=1)
 
         # Underlying FIFO instance.
-        in_ready, out_valid, out_data = m.fifo(clk, rst, in_valid=self._in_valid, in_data=self._in_data, out_ready=self._out_ready, depth=self.depth)
+        in_ready, out_valid, out_data = m.fifo(
+            clk,
+            rst,
+            in_valid=self._in_valid,
+            in_data=self._in_data,
+            out_ready=self._out_ready,
+            depth=self.depth,
+        )
         self.in_ready = in_ready
         self.out_valid = out_valid
         self.out_data = out_data
@@ -2464,9 +2760,16 @@ class RvQueue:
         # Defer assigns so we can keep single-driver semantics while supporting a push/pop API.
         m.add_finalizer(self._finalize)
 
-    def push(self, data: Union[Wire, Reg, Signal, int, LiteralValue], *, when: Union[Wire, Signal, int, LiteralValue] = 1) -> Wire:
+    def push(
+        self,
+        data: Union[Wire, Reg, Signal, int, LiteralValue],
+        *,
+        when: Union[Wire, Signal, int, LiteralValue] = 1,
+    ) -> Wire:
         if self._push_bound:
-            raise ValueError("RvQueue.push() may only be called once per RvQueue instance (prototype limitation)")
+            raise ValueError(
+                "RvQueue.push() may only be called once per RvQueue instance (prototype limitation)"
+            )
         self._push_bound = True
         self._push_valid_expr = when
         self._push_data_expr = data
@@ -2476,7 +2779,9 @@ class RvQueue:
 
     def pop(self, *, when: Union[Wire, Signal, int, LiteralValue] = 1) -> Pop:
         if self._pop_bound:
-            raise ValueError("RvQueue.pop() may only be called once per RvQueue instance (prototype limitation)")
+            raise ValueError(
+                "RvQueue.pop() may only be called once per RvQueue instance (prototype limitation)"
+            )
         self._pop_bound = True
         self._pop_ready_expr = when
         w_when = self._coerce_i1(when, ctx="queue pop when")
@@ -2490,7 +2795,9 @@ class RvQueue:
         m.assign(self._in_data, self._push_data_expr)
         m.assign(self._out_ready, self._pop_ready_expr)
 
-    def _coerce_i1(self, v: Union[Wire, Signal, int, LiteralValue], *, ctx: str) -> Wire:
+    def _coerce_i1(
+        self, v: Union[Wire, Signal, int, LiteralValue], *, ctx: str
+    ) -> Wire:
         if isinstance(v, Wire):
             if v.m is not self.m:
                 raise ValueError("cannot combine wires from different modules")
@@ -2505,7 +2812,11 @@ class RvQueue:
             return self.m.const(int(v), width=1)
         if isinstance(v, LiteralValue):
             lit_w, lit_signed = _coerce_literal_width(v, ctx_width=1, ctx_signed=False)
-            w = Wire(self.m, Module.const(self.m, int(v.value), width=lit_w), signed=lit_signed)
+            w = Wire(
+                self.m,
+                Module.const(self.m, int(v.value), width=lit_w),
+                signed=lit_signed,
+            )
             if w.ty != "i1":
                 raise TypeError(f"{ctx}: expected i1 literal, got {w.ty}")
             return w
@@ -2533,7 +2844,9 @@ def cat(*elems: Union[Wire, Reg, int, LiteralValue]) -> Wire:
             owner = e.q.m
             break
     if owner is None:
-        raise TypeError("cat() requires at least one Wire/Reg element to establish module ownership")
+        raise TypeError(
+            "cat() requires at least one Wire/Reg element to establish module ownership"
+        )
 
     sigs = [Wire.as_wire(e, m=owner).sig for e in elems]
     return Wire(owner, owner.concat(*sigs))
@@ -2575,14 +2888,13 @@ def trunc(value: Any, *, width: int) -> Wire:
     """Truncate a Wire/Reg using the canonical function-style API."""
     return _cast_value(value, width=int(width), op="trunc")
 
+
 @overload
-def unsigned(v: Wire) -> Wire:
-    ...
+def unsigned(v: Wire) -> Wire: ...
 
 
 @overload
-def unsigned(v: Reg) -> Wire:
-    ...
+def unsigned(v: Reg) -> Wire: ...
 
 
 def unsigned(v: Wire | Reg) -> Wire:
@@ -2595,13 +2907,11 @@ def unsigned(v: Wire | Reg) -> Wire:
 
 
 @overload
-def signed(v: Wire) -> Wire:
-    ...
+def signed(v: Wire) -> Wire: ...
 
 
 @overload
-def signed(v: Reg) -> Wire:
-    ...
+def signed(v: Reg) -> Wire: ...
 
 
 def signed(v: Wire | Reg) -> Wire:

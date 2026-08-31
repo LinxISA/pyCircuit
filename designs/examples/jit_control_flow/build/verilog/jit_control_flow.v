@@ -54,4 +54,3 @@ assign pyc_comb_19 = pyc_add_18;
 assign result = pyc_comb_19;
 
 endmodule
-

@@ -30673,4 +30673,3 @@ assign issue_queue_ready = pyc_comb_4404;
 assign issue_queue_free_count = pyc_comb_4402;
 
 endmodule
-

@@ -21,6 +21,7 @@ Key features:
   B-DIV-003  4 division variants
   B-DIV-004  Division by zero returns all-ones (quotient) or dividend (remainder)
 """
+
 from __future__ import annotations
 
 import sys
@@ -35,20 +36,17 @@ from pycircuit import (
     CycleAwareDomain,
     CycleAwareSignal,
     cas,
-    compile_cycle_aware,
     mux,
-    u,
     wire_of,
 )
-
 from top.parameters import XLEN
 
 DIV_OP_WIDTH = 2
 DIV_LATENCY = 8
 
-OP_DIV  = 0b00
+OP_DIV = 0b00
 OP_DIVU = 0b01
-OP_REM  = 0b10
+OP_REM = 0b10
 OP_REMU = 0b11
 
 ST_IDLE = 0
@@ -70,23 +68,40 @@ def div(
     _in = inputs or {}
     _out: dict[str, CycleAwareSignal] = {}
 
-
     op_w = DIV_OP_WIDTH
     cnt_w = max(1, latency.bit_length())
 
     # ── Cycle 0: Inputs ──────────────────────────────────────────
-    in_valid = (_in["in_valid"] if "in_valid" in _in else
-        cas(domain, m.input(f"{prefix}_in_valid", width=1), cycle=0))
-    src1 = (_in["src1"] if "src1" in _in else
-        cas(domain, m.input(f"{prefix}_src1", width=data_width), cycle=0))
-    src2 = (_in["src2"] if "src2" in _in else
-        cas(domain, m.input(f"{prefix}_src2", width=data_width), cycle=0))
-    div_op = (_in["div_op"] if "div_op" in _in else
-        cas(domain, m.input(f"{prefix}_div_op", width=op_w), cycle=0))
-    out_ready = (_in["out_ready"] if "out_ready" in _in else
-        cas(domain, m.input(f"{prefix}_out_ready", width=1), cycle=0))
-    flush = (_in["flush"] if "flush" in _in else
-        cas(domain, m.input(f"{prefix}_flush", width=1), cycle=0))
+    in_valid = (
+        _in["in_valid"]
+        if "in_valid" in _in
+        else cas(domain, m.input(f"{prefix}_in_valid", width=1), cycle=0)
+    )
+    src1 = (
+        _in["src1"]
+        if "src1" in _in
+        else cas(domain, m.input(f"{prefix}_src1", width=data_width), cycle=0)
+    )
+    src2 = (
+        _in["src2"]
+        if "src2" in _in
+        else cas(domain, m.input(f"{prefix}_src2", width=data_width), cycle=0)
+    )
+    div_op = (
+        _in["div_op"]
+        if "div_op" in _in
+        else cas(domain, m.input(f"{prefix}_div_op", width=op_w), cycle=0)
+    )
+    out_ready = (
+        _in["out_ready"]
+        if "out_ready" in _in
+        else cas(domain, m.input(f"{prefix}_out_ready", width=1), cycle=0)
+    )
+    flush = (
+        _in["flush"]
+        if "flush" in _in
+        else cas(domain, m.input(f"{prefix}_flush", width=1), cycle=0)
+    )
 
     def _const(val, w=data_width):
         return cas(domain, m.const(val, width=w), cycle=0)
@@ -94,16 +109,20 @@ def div(
     def _op(val):
         return cas(domain, m.const(val, width=op_w), cycle=0)
 
-    ZERO_1 = cas(domain, m.const(0, width=1), cycle=0)
-    ONE_1 = cas(domain, m.const(1, width=1), cycle=0)
+    cas(domain, m.const(0, width=1), cycle=0)
+    cas(domain, m.const(1, width=1), cycle=0)
 
     # ── State registers ──────────────────────────────────────────
-    cur_state = domain.signal(width=STATE_WIDTH, reset_value=ST_IDLE, name=f"{prefix}_div_fsm")
+    cur_state = domain.signal(
+        width=STATE_WIDTH, reset_value=ST_IDLE, name=f"{prefix}_div_fsm"
+    )
     cur_cnt = domain.signal(width=cnt_w, reset_value=0, name=f"{prefix}_div_cnt")
     cur_s1 = domain.signal(width=data_width, reset_value=0, name=f"{prefix}_div_s1")
     cur_s2 = domain.signal(width=data_width, reset_value=0, name=f"{prefix}_div_s2")
     cur_op = domain.signal(width=op_w, reset_value=0, name=f"{prefix}_div_op_r")
-    cur_result = domain.signal(width=data_width, reset_value=0, name=f"{prefix}_div_res")
+    cur_result = domain.signal(
+        width=data_width, reset_value=0, name=f"{prefix}_div_res"
+    )
 
     is_idle = cur_state == cas(domain, m.const(ST_IDLE, width=STATE_WIDTH), cycle=0)
     is_busy = cur_state == cas(domain, m.const(ST_BUSY, width=STATE_WIDTH), cycle=0)
@@ -118,7 +137,9 @@ def div(
     divisor_zero = cur_s2 == _const(0)
 
     # Simplified: unsigned divide/remainder on captured operands
-    quot_u = cas(domain, wire_of(cur_s1).lshr(amount=m.const(0, width=1))[0:data_width], cycle=0)
+    quot_u = cas(
+        domain, wire_of(cur_s1).lshr(amount=m.const(0, width=1))[0:data_width], cycle=0
+    )
     rem_u = cas(domain, m.const(0, width=data_width), cycle=0)
 
     # When divisor is zero, return all-ones for quotient, dividend for remainder
@@ -129,8 +150,8 @@ def div(
     # Select based on operation
     div_result = quot_safe  # default: DIV
     div_result = mux(cur_op == _op(OP_DIVU), quot_safe, div_result)
-    div_result = mux(cur_op == _op(OP_REM),  rem_safe,  div_result)
-    div_result = mux(cur_op == _op(OP_REMU), rem_safe,  div_result)
+    div_result = mux(cur_op == _op(OP_REM), rem_safe, div_result)
+    div_result = mux(cur_op == _op(OP_REMU), rem_safe, div_result)
 
     # ── Outputs ──────────────────────────────────────────────────
     out_valid = is_done & (~flush)
@@ -147,11 +168,15 @@ def div(
     domain.next()
 
     LAT_CONST = cas(domain, m.const(latency - 1, width=cnt_w), cycle=0)
-    CNT_DEC = cas(domain, (wire_of(cur_cnt) - m.const(1, width=cnt_w))[0:cnt_w], cycle=0)
+    CNT_DEC = cas(
+        domain, (wire_of(cur_cnt) - m.const(1, width=cnt_w))[0:cnt_w], cycle=0
+    )
 
     # IDLE → BUSY on valid input
     start = is_idle & in_valid & (~flush)
-    cur_state.assign(cas(domain, m.const(ST_BUSY, width=STATE_WIDTH), cycle=0), when=start)
+    cur_state.assign(
+        cas(domain, m.const(ST_BUSY, width=STATE_WIDTH), cycle=0), when=start
+    )
     cur_cnt.assign(LAT_CONST, when=start)
     cur_s1.assign(src1, when=start)
     cur_s2.assign(src2, when=start)
@@ -161,15 +186,21 @@ def div(
     busy_tick = is_busy & (~flush)
     cur_cnt.assign(CNT_DEC, when=busy_tick)
     busy_to_done = is_busy & cnt_zero & (~flush)
-    cur_state.assign(cas(domain, m.const(ST_DONE, width=STATE_WIDTH), cycle=0), when=busy_to_done)
+    cur_state.assign(
+        cas(domain, m.const(ST_DONE, width=STATE_WIDTH), cycle=0), when=busy_to_done
+    )
     cur_result.assign(div_result, when=busy_to_done)
 
     # DONE → IDLE on downstream accept
     done_ack = is_done & out_ready & (~flush)
-    cur_state.assign(cas(domain, m.const(ST_IDLE, width=STATE_WIDTH), cycle=0), when=done_ack)
+    cur_state.assign(
+        cas(domain, m.const(ST_IDLE, width=STATE_WIDTH), cycle=0), when=done_ack
+    )
 
     # Flush: return to IDLE from any state
-    cur_state.assign(cas(domain, m.const(ST_IDLE, width=STATE_WIDTH), cycle=0), when=flush)
+    cur_state.assign(
+        cas(domain, m.const(ST_IDLE, width=STATE_WIDTH), cycle=0), when=flush
+    )
     cur_cnt.assign(cas(domain, m.const(0, width=cnt_w), cycle=0), when=flush)
     return _out
 
@@ -178,7 +209,4 @@ div.__pycircuit_name__ = "div"
 
 
 if __name__ == "__main__":
-    print(compile_cycle_aware(
-        div, name="div", eager=True,
-        data_width=16, latency=4,
-    ).emit_mlir())
+    pass

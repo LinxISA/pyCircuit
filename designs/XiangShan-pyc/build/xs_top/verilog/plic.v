@@ -470,4 +470,3 @@ assign plic_irq_out = pyc_comb_177;
 assign plic_irq_id = pyc_comb_176;
 
 endmodule
-

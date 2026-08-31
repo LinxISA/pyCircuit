@@ -3,15 +3,20 @@
 <p align="center">
   <img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License">
   <img src="https://img.shields.io/badge/Python-3.10%2B-green.svg" alt="Python">
-  <img src="https://img.shields.io/badge/MLIR-19-orange.svg" alt="MLIR">
-  <a href="https://github.com/LinxISA/pyCircuit/actions"><img src="https://github.com/LinxISA/pyCircuit/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://github.com/LinxISA/pyCircuit/actions/workflows/release.yml"><img src="https://github.com/LinxISA/pyCircuit/actions/workflows/release.yml/badge.svg" alt="Release"></a>
-  <a href="https://github.com/LinxISA/pyCircuit/releases"><img src="https://img.shields.io/github/v/release/LinxISA/pyCircuit?display_name=tag" alt="Latest Release"></a>
+  <img src="https://img.shields.io/badge/MLIR-22-orange.svg" alt="MLIR">
+  <a href="https://github.com/PTO-ISA/pyCircuit/actions"><img src="https://github.com/PTO-ISA/pyCircuit/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/PTO-ISA/pyCircuit/actions/workflows/release.yml"><img src="https://github.com/PTO-ISA/pyCircuit/actions/workflows/release.yml/badge.svg" alt="Release"></a>
+  <a href="https://github.com/PTO-ISA/pyCircuit/releases"><img src="https://img.shields.io/github/v/release/PTO-ISA/pyCircuit?display_name=tag" alt="Latest Release"></a>
   <img src="https://img.shields.io/badge/PyPI-pycircuit--hisi-blue.svg" alt="PyPI Package">
 </p>
 
 pyCircuit is a Python-based hardware construction DSL that compiles Python
 modules to an MLIR hardware dialect and emits:
+
+The canonical repository and single source of truth is
+[`PTO-ISA/pyCircuit`](https://github.com/PTO-ISA/pyCircuit). The
+`LinxISA/pyCircuit` repository is maintained as its downstream fork for Linx
+integration work.
 
 - **C++ functional simulation** (module instances become SimObjects with `tick()` / `transfer()`)
 - **Verilog** (RTL integration + Verilator)
@@ -62,7 +67,8 @@ the installed compiler command remains `pycc`.
 Install the frontend from source for development:
 
 ```bash
-python3 -m pip install -e .
+python3 -m pip install -e ".[dev,docs]"
+pre-commit install
 python3 -m pycircuit.cli --help
 ```
 
@@ -73,9 +79,24 @@ toolchain with `bash flows/scripts/pyc build` and point `PYC_TOOLCHAIN_ROOT` at
 Run the smoke gates:
 
 ```bash
+pre-commit run --files <changed-file> [<changed-file> ...]
+pytest tests/unit -m unit
 bash flows/scripts/run_examples.sh
 bash flows/scripts/run_sims.sh
 ```
+
+Use `pre-commit run --all-files` only when you are intentionally doing a wider
+repo hygiene sweep. CI runs the pre-commit lane against the PR or push diff so
+legacy backlog outside the change set does not block unrelated work.
+
+System smoke tests that exercise the CLI end-to-end are available via:
+
+```bash
+pytest tests/system -m system
+```
+
+They require a built toolchain (`PYC_TOOLCHAIN_ROOT` or `PYCC`) plus
+`verilator`.
 
 ### Minimal design snippet (counter)
 
@@ -109,7 +130,7 @@ For more end-to-end commands, see `docs/QUICKSTART.md`.
 
 ## Repo layout
 
-```
+```text
 pyCircuit
 ├── compiler/
 │   ├── frontend/          # Python frontend (pycircuit package)
@@ -129,6 +150,19 @@ pyCircuit
 - `docs/TESTBENCH.md`
 - `docs/IR_SPEC.md`
 - `docs/updatePLAN.md` and `docs/rfcs/pyc4.0-decisions.md`
+
+## Contributing and Governance
+
+The current contributor workflow uses the pyc5 frontend surface while retaining
+the `pyc4.0` decision corpus and gate evidence as the active semantic source of
+truth.
+
+- Contributor guide: `CONTRIBUTING.md`
+- Development workflow: `docs/development/index.md`
+- Gate matrix: `docs/development/testing-and-gates.md`
+- Merge and review expectations: `docs/development/review-and-merge.md`
+- Semantic evidence corpus: `docs/rfcs/pyc4.0-decisions.md`
+- Evidence archive contract: `docs/gates/README.md`
 
 ## Examples
 

@@ -91,4 +91,3 @@ assign mul_out_valid = mul_mul_out_v;
 assign mul_result = mul_mul_out_r;
 
 endmodule
-

@@ -10,6 +10,7 @@ Transforms:
 
 Usage: python tools/add_prefix.py [--dry-run] [--file path]
 """
+
 from __future__ import annotations
 
 import argparse
@@ -68,7 +69,9 @@ PERIPHERALS_FUNCS = {
 }
 
 
-def transform_file(filepath: Path, default_prefix: str, *, dry_run: bool = False) -> dict:
+def transform_file(
+    filepath: Path, default_prefix: str, *, dry_run: bool = False
+) -> dict:
     """Transform a single file. Returns stats dict."""
     text = filepath.read_text()
     original = text
@@ -82,30 +85,24 @@ def transform_file(filepath: Path, default_prefix: str, *, dry_run: bool = False
     else:
         func_match = re.search(r"def (build_\w+)\(", text)
         if not func_match:
-            print(f"  SKIP {filepath}: no build_* function found")
             return stats
         func_name = func_match.group(1)
         text = _transform_function_in_text(text, func_name, default_prefix, stats)
 
     if text == original:
-        print(f"  SKIP {filepath.relative_to(XS_ROOT)}: no changes needed")
         return stats
 
     if dry_run:
-        print(f"  DRY-RUN {filepath.relative_to(XS_ROOT)}: "
-              f"{sum(stats.values())} replacements")
+        pass
     else:
         filepath.write_text(text)
-        print(f"  WRITE {filepath.relative_to(XS_ROOT)}: "
-              f"{sum(stats.values())} replacements "
-              f"(in={stats['input']}, out={stats['output']}, "
-              f"state={stats['state']}, cycle={stats['cycle']})")
 
     return stats
 
 
-def _transform_function_in_text(text: str, func_name: str, prefix: str,
-                                 stats: dict) -> str:
+def _transform_function_in_text(
+    text: str, func_name: str, prefix: str, stats: dict
+) -> str:
     """Add prefix param and transform m.input/m.output/domain.signal/domain.cycle."""
 
     # 1) Add prefix parameter to function signature
@@ -119,7 +116,7 @@ def _transform_function_in_text(text: str, func_name: str, prefix: str,
         insertion = sig_match.group(1)
         indent = "    "
         new_sig = insertion + f'{indent}prefix: str = "{prefix}",\n'
-        text = text[:sig_match.start()] + new_sig + text[sig_match.end():]
+        text = text[: sig_match.start()] + new_sig + text[sig_match.end() :]
         stats["sig"] += 1
     else:
         sig_pattern2 = re.compile(
@@ -130,7 +127,7 @@ def _transform_function_in_text(text: str, func_name: str, prefix: str,
         if sig_match2:
             insertion = sig_match2.group(1)
             new_sig = insertion + f'prefix: str = "{prefix}", '
-            text = text[:sig_match2.start()] + new_sig + text[sig_match2.end():]
+            text = text[: sig_match2.start()] + new_sig + text[sig_match2.end() :]
             stats["sig"] += 1
 
     # Find the function body range (from def to next top-level statement)
@@ -198,10 +195,15 @@ def _transform_function_in_text(text: str, func_name: str, prefix: str,
 
 def main():
     parser = argparse.ArgumentParser(description="Add prefix to build_* functions")
-    parser.add_argument("--dry-run", action="store_true",
-                        help="Show changes without writing")
-    parser.add_argument("--file", type=str, default=None,
-                        help="Process a single file (relative to XiangShan-pyc/)")
+    parser.add_argument(
+        "--dry-run", action="store_true", help="Show changes without writing"
+    )
+    parser.add_argument(
+        "--file",
+        type=str,
+        default=None,
+        help="Process a single file (relative to XiangShan-pyc/)",
+    )
     args = parser.parse_args()
 
     total_stats = {"input": 0, "output": 0, "state": 0, "cycle": 0, "sig": 0}
@@ -209,7 +211,6 @@ def main():
     if args.file:
         modules = [(m, p) for m, p in ALL_MODULES if m == args.file]
         if not modules:
-            print(f"ERROR: {args.file} not in module list", file=sys.stderr)
             return 1
     else:
         modules = ALL_MODULES
@@ -218,23 +219,14 @@ def main():
     for rel_path, default_prefix in modules:
         filepath = XS_ROOT / rel_path
         if not filepath.exists():
-            print(f"  MISSING {rel_path}")
             continue
         s = transform_file(filepath, default_prefix, dry_run=args.dry_run)
         for k in total_stats:
             total_stats[k] += s[k]
         processed += 1
 
-    print(f"\n{'=' * 60}")
-    print(f"Processed {processed} files")
-    print(f"  Signatures added: {total_stats['sig']}")
-    print(f"  m.input:          {total_stats['input']}")
-    print(f"  m.output:         {total_stats['output']}")
-    print(f"  domain.signal:    {total_stats['state']}")
-    print(f"  domain.cycle:     {total_stats['cycle']}")
-    print(f"  Total:            {sum(total_stats.values())}")
     if args.dry_run:
-        print("  (DRY RUN — no files modified)")
+        pass
     return 0
 
 

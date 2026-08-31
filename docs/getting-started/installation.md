@@ -7,7 +7,7 @@ This guide covers setting up the pyCircuit development environment.
 | Component | Minimum Version | Recommended Version |
 |-----------|---------------|---------------------|
 | Python | 3.10 | 3.14 |
-| LLVM | 19 | 19 |
+| LLVM | 22 | 22.1.8 |
 | CMake | 3.20 | 3.28+ |
 | Ninja | 1.10 | Latest |
 
@@ -22,14 +22,14 @@ sudo apt-get update
 # Install build tools
 sudo apt-get install -y cmake ninja-build python3 python3-pip clang wget
 
-# Install LLVM/MLIR 19 (Ubuntu 22.04+)
+# Install LLVM/MLIR 22 (Ubuntu 22.04+)
 wget https://apt.llvm.org/llvm.sh
 chmod +x llvm.sh
-sudo ./llvm.sh 19
-sudo apt-get install -y llvm-19-dev mlir-19-tools libmlir-19-dev
+sudo ./llvm.sh 22
+sudo apt-get install -y llvm-22-dev mlir-22-tools libmlir-22-dev
 
 # Verify installation
-llvm-config-19 --version
+llvm-config-22 --version
 mlir-opt --version
 ```
 
@@ -42,10 +42,10 @@ mlir-opt --version
 # Install build tools
 brew install cmake ninja python@3
 
-# Install LLVM 19 with MLIR
-brew install llvm@19
+# Install LLVM 22 with MLIR
+brew install llvm@22
 # Add LLVM to PATH
-echo 'export PATH="$(brew --prefix llvm@19)/bin:$PATH"' >> ~/.zshrc
+echo 'export PATH="$(brew --prefix llvm@22)/bin:$PATH"' >> ~/.zshrc
 source ~/.zshrc
 
 # Verify installation
@@ -56,11 +56,13 @@ llvm-config --version
 
 ```bash
 # Clone the repository
-git clone https://github.com/LinxISA/pyCircuit.git
+git clone https://github.com/PTO-ISA/pyCircuit.git
 cd pyCircuit
 
 # Configure with CMake
-LLVM_DIR="$(llvm-config-19 --cmakedir)"
+LLVM_CONFIG="${LLVM_CONFIG:-$(command -v llvm-config-22 || command -v llvm-config)}"
+: "${LLVM_CONFIG:?LLVM 22 llvm-config not found}"
+LLVM_DIR="$("$LLVM_CONFIG" --cmakedir)"
 MLIR_DIR="$(dirname "$LLVM_DIR")/mlir"
 
 cmake -G Ninja -S . -B .pycircuit_out/toolchain/build \

@@ -2252,4 +2252,3 @@ assign prefetcher_pf_valid = pyc_comb_300;
 assign prefetcher_pf_addr = pyc_comb_299;
 
 endmodule
-

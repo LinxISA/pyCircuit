@@ -140,4 +140,3 @@ assign bru_is_link = pyc_comb_52;
 assign bru_mispredict = pyc_comb_53;
 
 endmodule
-

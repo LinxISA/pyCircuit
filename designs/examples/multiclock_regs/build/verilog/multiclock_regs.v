@@ -67,4 +67,3 @@ assign a_count = a_q;
 assign b_count = pyc_comb_10;
 
 endmodule
-

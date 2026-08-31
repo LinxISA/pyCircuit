@@ -13,6 +13,7 @@ class CoreState:
     br_off: Reg
     commit_cond: Reg
     commit_tgt: Reg
+    icall_tgt: Reg
     # Decoupled-block state (B.TEXT out-of-line bodies).
     dec_hdr_active: Reg
     in_body: Reg

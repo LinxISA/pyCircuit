@@ -13,6 +13,7 @@ Key features:
   B-RF-004  Register 0 is hardwired to zero
   B-RF-005  Combinational read, synchronous write
 """
+
 from __future__ import annotations
 
 import sys
@@ -27,12 +28,9 @@ from pycircuit import (
     CycleAwareDomain,
     CycleAwareSignal,
     cas,
-    compile_cycle_aware,
     mux,
-    u,
     wire_of,
 )
-
 from top.parameters import (
     INT_PHYS_REGS,
     PTAG_WIDTH_INT,
@@ -59,23 +57,32 @@ def regfile(
     _in = inputs or {}
     _out: dict[str, CycleAwareSignal] = {}
 
-
     ZERO_DATA = cas(domain, m.const(0, width=data_width), cycle=0)
 
     # ── Cycle 0: Inputs ──────────────────────────────────────────
-    rd_addr = [cas(domain, m.input(f"{prefix}_rd_addr_{i}", width=addr_width), cycle=0)
-               for i in range(num_read)]
+    rd_addr = [
+        cas(domain, m.input(f"{prefix}_rd_addr_{i}", width=addr_width), cycle=0)
+        for i in range(num_read)
+    ]
 
-    wr_en = [cas(domain, m.input(f"{prefix}_wr_en_{i}", width=1), cycle=0)
-             for i in range(num_write)]
-    wr_addr = [cas(domain, m.input(f"{prefix}_wr_addr_{i}", width=addr_width), cycle=0)
-               for i in range(num_write)]
-    wr_data = [cas(domain, m.input(f"{prefix}_wr_data_{i}", width=data_width), cycle=0)
-               for i in range(num_write)]
+    wr_en = [
+        cas(domain, m.input(f"{prefix}_wr_en_{i}", width=1), cycle=0)
+        for i in range(num_write)
+    ]
+    wr_addr = [
+        cas(domain, m.input(f"{prefix}_wr_addr_{i}", width=addr_width), cycle=0)
+        for i in range(num_write)
+    ]
+    wr_data = [
+        cas(domain, m.input(f"{prefix}_wr_data_{i}", width=data_width), cycle=0)
+        for i in range(num_write)
+    ]
 
     # ── State: register entries ──────────────────────────────────
-    regs = [domain.signal(width=data_width, reset_value=0, name=f"{prefix}_r{i}")
-            for i in range(num_entries)]
+    regs = [
+        domain.signal(width=data_width, reset_value=0, name=f"{prefix}_r{i}")
+        for i in range(num_entries)
+    ]
 
     # ── Cycle 0: Combinational read ──────────────────────────────
     for p in range(num_read):
@@ -92,7 +99,7 @@ def regfile(
     # ── Cycle 1: Synchronous write ───────────────────────────────
     domain.next()
 
-    ZERO_1 = cas(domain, m.const(0, width=1), cycle=0)
+    cas(domain, m.const(0, width=1), cycle=0)
     ZERO_ADDR = cas(domain, m.const(0, width=addr_width), cycle=0)
 
     for w in range(num_write):
@@ -109,8 +116,4 @@ regfile.__pycircuit_name__ = "regfile"
 
 
 if __name__ == "__main__":
-    print(compile_cycle_aware(
-        regfile, name="regfile", eager=True,
-        num_entries=8, num_read=2, num_write=2,
-        data_width=16, addr_width=3,
-    ).emit_mlir())
+    pass

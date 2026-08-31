@@ -1,10 +1,18 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-LLVM_PROJECT_DIR="${LLVM_PROJECT_DIR:-$HOME/llvm-project}"
-LLVM_BUILD_DIR="${LLVM_BUILD_DIR:-$HOME/llvm-project/build-mlir}"
 PYC_REPO_ROOT="${PYC_REPO_ROOT:-$(cd "$(dirname "$0")/../../.." && pwd)}"
 PYC_BUILD_DIR="${PYC_BUILD_DIR:-$PYC_REPO_ROOT/compiler/mlir/build}"
+SUPERPROJECT_ROOT="$(cd "$PYC_REPO_ROOT/../.." && pwd)"
+if [[ -z "${LLVM_PROJECT_DIR:-}" ]]; then
+  if [[ -d "$SUPERPROJECT_ROOT/compiler/llvm/llvm" ]]; then
+    LLVM_PROJECT_DIR="$SUPERPROJECT_ROOT/compiler/llvm"
+  else
+    echo "error: standalone builds require explicit LLVM_PROJECT_DIR" >&2
+    exit 1
+  fi
+fi
+LLVM_BUILD_DIR="${LLVM_BUILD_DIR:-${TMPDIR:-/tmp}/linx-pyc-llvm-build}"
 
 if [[ ! -d "$LLVM_PROJECT_DIR/llvm" ]]; then
   echo "error: LLVM_PROJECT_DIR does not look like llvm-project: $LLVM_PROJECT_DIR" >&2

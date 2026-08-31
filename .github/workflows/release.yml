@@ -12,6 +12,7 @@ permissions:
   id-token: write
 
 env:
+  LLVM_VERSION: "22"
   VERILATOR_VERSION: "5.048"
 
 jobs:
@@ -36,9 +37,9 @@ jobs:
           python3 -m pip install setuptools wheel
           wget https://apt.llvm.org/llvm.sh
           chmod +x llvm.sh
-          sudo ./llvm.sh 19
-          sudo apt-get install -y llvm-19-dev mlir-19-tools libmlir-19-dev
-          echo "/usr/lib/llvm-19/bin" >> "$GITHUB_PATH"
+          sudo ./llvm.sh "${LLVM_VERSION}"
+          sudo apt-get install -y "llvm-${LLVM_VERSION}-dev" "mlir-${LLVM_VERSION}-tools" "libmlir-${LLVM_VERSION}-dev"
+          echo "/usr/lib/llvm-${LLVM_VERSION}/bin" >> "$GITHUB_PATH"
 
       - name: Setup Verilator (Ubuntu)
         if: runner.os == 'Linux'
@@ -51,9 +52,9 @@ jobs:
         run: |
           set -euxo pipefail
           brew update
-          brew install ninja cmake llvm@19 python@3
+          brew install ninja cmake "llvm@${LLVM_VERSION}" python@3
           python3 -m pip install setuptools wheel
-          echo "$(brew --prefix llvm@19)/bin" >> "$GITHUB_PATH"
+          echo "$(brew --prefix "llvm@${LLVM_VERSION}")/bin" >> "$GITHUB_PATH"
 
       - name: Build staged toolchain
         run: |
@@ -61,9 +62,9 @@ jobs:
           VERSION="${GITHUB_REF_NAME#v}"
           PKG="pycircuit-${VERSION}-${RUNNER_OS}-${RUNNER_ARCH}"
           if [[ "${RUNNER_OS}" == "Linux" ]]; then
-            LLVM_CONFIG="/usr/lib/llvm-19/bin/llvm-config"
+            LLVM_CONFIG="/usr/lib/llvm-${LLVM_VERSION}/bin/llvm-config"
           else
-            LLVM_CONFIG="$(brew --prefix llvm@19)/bin/llvm-config"
+            LLVM_CONFIG="$(brew --prefix "llvm@${LLVM_VERSION}")/bin/llvm-config"
           fi
 
           bash flows/scripts/pyc build \
@@ -148,10 +149,10 @@ jobs:
             platform="${platform/linux-x64/linux-x86_64}"
             platform="${platform/macos-x64/macos-x86_64}"
             platform="${platform/macos-arm64/macos-arm64}"
-            ref="ghcr.io/linxisa/pyc-tools-${platform}"
+            ref="ghcr.io/pto-isa/pyc-tools-${platform}"
             oras push "${ref}:v${VERSION}" "${archive}:application/gzip"
             oras push "${ref}:latest" "${archive}:application/gzip"
-            oras push "${ref}:llvm19" "${archive}:application/gzip"
+            oras push "${ref}:llvm22" "${archive}:application/gzip"
           done
 
   github-release:

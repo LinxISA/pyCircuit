@@ -2445,4 +2445,3 @@ assign sbuffer_dcache_wr_mask = pyc_comb_427;
 assign sbuffer_ready = pyc_comb_423;
 
 endmodule
-

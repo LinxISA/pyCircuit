@@ -297,4 +297,3 @@ assign memblock_sbuf_drain_valid = memblock_commit_st_valid;
 assign memblock_flush_out = memblock_flush;
 
 endmodule
-

@@ -26,6 +26,7 @@ Key features:
   L2-004  Refill → respond to upstream core
   L2-005  Dual upstream ports (ICache + DCache)
 """
+
 from __future__ import annotations
 
 import sys
@@ -40,12 +41,9 @@ from pycircuit import (
     CycleAwareDomain,
     CycleAwareSignal,
     cas,
-    compile_cycle_aware,
     mux,
-    u,
     wire_of,
 )
-
 from top.parameters import (
     CACHE_LINE_SIZE,
     L2_SETS,
@@ -78,7 +76,6 @@ def l2_top(
     _in = inputs or {}
     _out: dict[str, CycleAwareSignal] = {}
 
-
     ptr_w = max(1, (queue_size - 1).bit_length() + 1)
     q_idx_w = max(1, (queue_size - 1).bit_length())
     cnt_w = max(1, queue_size.bit_length())
@@ -91,24 +88,45 @@ def l2_top(
     # ================================================================
 
     # ICache miss acquire
-    ic_req_valid = (_in["ic_req_valid"] if "ic_req_valid" in _in else
-        cas(domain, m.input(f"{prefix}_ic_req_valid", width=1), cycle=0))
-    ic_req_addr = (_in["ic_req_addr"] if "ic_req_addr" in _in else
-        cas(domain, m.input(f"{prefix}_ic_req_addr", width=addr_width), cycle=0))
+    ic_req_valid = (
+        _in["ic_req_valid"]
+        if "ic_req_valid" in _in
+        else cas(domain, m.input(f"{prefix}_ic_req_valid", width=1), cycle=0)
+    )
+    ic_req_addr = (
+        _in["ic_req_addr"]
+        if "ic_req_addr" in _in
+        else cas(domain, m.input(f"{prefix}_ic_req_addr", width=addr_width), cycle=0)
+    )
 
     # DCache miss acquire
-    dc_req_valid = (_in["dc_req_valid"] if "dc_req_valid" in _in else
-        cas(domain, m.input(f"{prefix}_dc_req_valid", width=1), cycle=0))
-    dc_req_addr = (_in["dc_req_addr"] if "dc_req_addr" in _in else
-        cas(domain, m.input(f"{prefix}_dc_req_addr", width=addr_width), cycle=0))
+    dc_req_valid = (
+        _in["dc_req_valid"]
+        if "dc_req_valid" in _in
+        else cas(domain, m.input(f"{prefix}_dc_req_valid", width=1), cycle=0)
+    )
+    dc_req_addr = (
+        _in["dc_req_addr"]
+        if "dc_req_addr" in _in
+        else cas(domain, m.input(f"{prefix}_dc_req_addr", width=addr_width), cycle=0)
+    )
 
     # Downstream Channel D: refill data from L3/memory
-    ds_resp_valid = (_in["ds_resp_valid"] if "ds_resp_valid" in _in else
-        cas(domain, m.input(f"{prefix}_ds_resp_valid", width=1), cycle=0))
-    ds_resp_data = (_in["ds_resp_data"] if "ds_resp_data" in _in else
-        cas(domain, m.input(f"{prefix}_ds_resp_data", width=block_bits), cycle=0))
-    ds_resp_source = (_in["ds_resp_source"] if "ds_resp_source" in _in else
-        cas(domain, m.input(f"{prefix}_ds_resp_source", width=1), cycle=0))  # 0=IC, 1=DC
+    ds_resp_valid = (
+        _in["ds_resp_valid"]
+        if "ds_resp_valid" in _in
+        else cas(domain, m.input(f"{prefix}_ds_resp_valid", width=1), cycle=0)
+    )
+    ds_resp_data = (
+        _in["ds_resp_data"]
+        if "ds_resp_data" in _in
+        else cas(domain, m.input(f"{prefix}_ds_resp_data", width=block_bits), cycle=0)
+    )
+    ds_resp_source = (
+        _in["ds_resp_source"]
+        if "ds_resp_source" in _in
+        else cas(domain, m.input(f"{prefix}_ds_resp_source", width=1), cycle=0)
+    )  # 0=IC, 1=DC
 
     # ================================================================
     # Request queue state
@@ -117,12 +135,18 @@ def l2_top(
     enq_ptr = domain.signal(width=ptr_w, reset_value=0, name=f"{prefix}_l2_enq_ptr")
     deq_ptr = domain.signal(width=ptr_w, reset_value=0, name=f"{prefix}_l2_deq_ptr")
 
-    q_addr = [domain.signal(width=addr_width, reset_value=0, name=f"{prefix}_l2_q_addr_{i}")
-              for i in range(queue_size)]
-    q_source = [domain.signal(width=1, reset_value=0, name=f"{prefix}_l2_q_src_{i}")
-                for i in range(queue_size)]
-    q_valid = [domain.signal(width=1, reset_value=0, name=f"{prefix}_l2_q_v_{i}")
-               for i in range(queue_size)]
+    q_addr = [
+        domain.signal(width=addr_width, reset_value=0, name=f"{prefix}_l2_q_addr_{i}")
+        for i in range(queue_size)
+    ]
+    q_source = [
+        domain.signal(width=1, reset_value=0, name=f"{prefix}_l2_q_src_{i}")
+        for i in range(queue_size)
+    ]
+    q_valid = [
+        domain.signal(width=1, reset_value=0, name=f"{prefix}_l2_q_v_{i}")
+        for i in range(queue_size)
+    ]
 
     enq_idx = enq_ptr[0:q_idx_w]
     deq_idx = deq_ptr[0:q_idx_w]
@@ -142,17 +166,23 @@ def l2_top(
 
     enq_fire = any_req & not_full
     m.output(f"{prefix}_ic_req_ready", wire_of(not_full & ic_req_valid))
-    m.output(f"{prefix}_dc_req_ready", wire_of(not_full & dc_req_valid & (~ic_req_valid)))
+    m.output(
+        f"{prefix}_dc_req_ready", wire_of(not_full & dc_req_valid & (~ic_req_valid))
+    )
 
     # ================================================================
     # Simplified tag-based hit/miss
     # ================================================================
 
     # Tag RAM state: one tag per way for the set addressed by head-of-queue
-    tag_ram = [domain.signal(width=tag_w, reset_value=0, name=f"{prefix}_l2_tag_{w}")
-               for w in range(num_ways)]
-    tag_valid = [domain.signal(width=1, reset_value=0, name=f"{prefix}_l2_tv_{w}")
-                 for w in range(num_ways)]
+    tag_ram = [
+        domain.signal(width=tag_w, reset_value=0, name=f"{prefix}_l2_tag_{w}")
+        for w in range(num_ways)
+    ]
+    tag_valid = [
+        domain.signal(width=1, reset_value=0, name=f"{prefix}_l2_tv_{w}")
+        for w in range(num_ways)
+    ]
 
     # Read head entry for tag comparison
     head_addr = cas(domain, m.const(0, width=addr_width), cycle=0)
@@ -166,7 +196,7 @@ def l2_top(
         head_valid = mux(hit, q_valid[j], head_valid)
 
     # Extract tag from address
-    head_tag = head_addr[addr_width - tag_w:addr_width]
+    head_tag = head_addr[addr_width - tag_w : addr_width]
 
     # Check hit across all ways
     l2_hit = ZERO_1
@@ -215,7 +245,7 @@ def l2_top(
     deq_fire = s1_hit_w | wire_of(ds_resp_valid)
 
     # ── Pipeline registers: cycle 1 → 2 ──────────────────────────
-    s2_resp_w = domain.cycle(wire_of(ds_resp_valid), name=f"{prefix}_l2_s2_resp")
+    domain.cycle(wire_of(ds_resp_valid), name=f"{prefix}_l2_s2_resp")
 
     domain.next()
 
@@ -243,7 +273,7 @@ def l2_top(
         q_valid[j].assign(ZERO_1, when=ce)
 
     # Update tag RAM on refill (simplified: write to way 0)
-    refill_tag = head_addr[addr_width - tag_w:addr_width]
+    refill_tag = head_addr[addr_width - tag_w : addr_width]
     tag_ram[0] <<= mux(ds_resp_valid, refill_tag, tag_ram[0])
     tag_valid[0] <<= mux(ds_resp_valid, ONE_1, tag_valid[0])
 
@@ -262,9 +292,4 @@ l2_top.__pycircuit_name__ = "l2_top"
 
 
 if __name__ == "__main__":
-    print(compile_cycle_aware(
-        l2_top, name="l2_top", eager=True,
-        addr_width=16, data_width=16,
-        block_bits=128, queue_size=4,
-        tag_w=8, idx_w=4, num_ways=2,
-    ).emit_mlir())
+    pass
