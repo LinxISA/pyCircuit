@@ -43,18 +43,17 @@ The QEMU-versus-pyCircuit trace gate is not closed.
 
 The current `linx_cpu_pyc` design is a contract smoke and does not execute the
 ELF supplied to `run_linx_qemu_vs_pyc.sh`; the gate therefore uses the archived
-`MODEL-SCALAR-MCOPY-MSET` pyCircuit trace. The migration added an explicit
-legacy-schema normalizer and instruction-boundary collapse, but the archived
-trace is semantically stale against the current QEMU/assembler line:
+`MODEL-SCALAR-MCOPY-MSET` pyCircuit trace. That archived trace is semantically
+stale against the current QEMU/assembler line:
 
 - at PC `0x10020`, QEMU reports instruction `0x164`, while the archived PYC
   trace records `0x154`;
 - a later current instruction is six bytes, while the archived trace advances
   by four bytes and has different writeback data.
 
-Regenerating the PYC trace from QEMU or ignoring instruction/length/writeback
-would make the comparison circular or weaken the gate, so neither workaround
-is accepted.
+Regenerating the PYC trace from QEMU or guessing legacy instruction length,
+store/source, trap, or writeback semantics would make the comparison circular
+or weaken the gate, so neither workaround is accepted.
 
 ## Retirement decision
 
