@@ -2,8 +2,10 @@
 #include "acir/CodeGen/QueueBlockContract.h"
 
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/StringRef.h"
+#include "llvm/ADT/StringSet.h"
 #include "llvm/ADT/StringSwitch.h"
 #include "llvm/Support/FormatVariadic.h"
 #include "llvm/Support/raw_ostream.h"
@@ -142,10 +144,19 @@ std::string commonPath(llvm::StringRef left, llvm::StringRef right) {
 
 llvm::Expected<std::string> emitExpressionBody(const QueueBlockPlan &block,
                                                llvm::StringRef yield,
-                                               unsigned indent) {
+                                               unsigned indent,
+                                               bool qualifyTables = false) {
   std::ostringstream output;
   std::string padding(indent, ' ');
+  llvm::StringSet<> needed;
+  needed.insert(yield);
+  for (const QueueExpressionPlan &expression : llvm::reverse(block.expressions))
+    if (needed.contains(expression.result))
+      for (const std::string &operand : expression.operands)
+        needed.insert(operand);
   for (const QueueExpressionPlan &expression : block.expressions) {
+    if (!needed.contains(expression.result))
+      continue;
     auto operand = [&](size_t index) -> llvm::Expected<llvm::StringRef> {
       if (index >= expression.operands.size())
         return generatorError("expression operand arity mismatch");
@@ -157,6 +168,40 @@ llvm::Expected<std::string> emitExpressionBody(const QueueBlockPlan &block,
              << literal.split(" : ").first.str() << ";\n";
       continue;
     }
+    if (expression.kind == "slot_get_valid") {
+      output << padding << "auto " << expression.result << " = slot_"
+             << identifier(expression.slot) << "->valid;\n";
+      continue;
+    }
+    if (expression.kind == "slot_get_value") {
+      output << padding << "auto " << expression.result << " = slot_"
+             << identifier(expression.slot) << "->value;\n";
+      continue;
+    }
+    if (expression.kind == "table_match") {
+      if (expression.nestedYields.size() != 1)
+        return generatorError("table.match predicate yield is missing");
+      QueueBlockPlan nested;
+      nested.expressions = expression.nestedExpressions;
+      nested.yields = expression.nestedYields;
+      auto predicate = emitExpressionBody(nested, nested.yields.front(),
+                                          indent + 8, qualifyTables);
+      if (!predicate)
+        return predicate.takeError();
+      const std::string table =
+          qualifyTables ? "table_" + identifier(expression.table) : "table";
+      output << padding << "std::uint64_t " << expression.result << " = 0;\n"
+             << padding << "for (std::size_t index = 0; index < " << table
+             << "->size(); "
+                "++index) {\n"
+             << padding << "  const auto &item = " << table << "->at(index);\n"
+             << padding << "  if ([&]() {\n"
+             << *predicate << padding << "  }())\n"
+             << padding << "    " << expression.result
+             << " |= (std::uint64_t{1} << index);\n"
+             << padding << "}\n";
+      continue;
+    }
     auto first = operand(0);
     if (!first)
       return first.takeError();
@@ -166,14 +211,64 @@ llvm::Expected<std::string> emitExpressionBody(const QueueBlockPlan &block,
       continue;
     }
     if (expression.kind == "table_get") {
-      output << padding << "auto " << expression.result
-             << " = table->at(static_cast<size_t>(" << first->str() << "));\n";
+      const std::string table =
+          qualifyTables ? "table_" + identifier(expression.table) : "table";
+      output << padding << "auto " << expression.result << " = " << table
+             << "->checkedAt(static_cast<size_t>(" << first->str() << "));\n";
       continue;
     }
     if (expression.kind == "popcount") {
       output << padding << "auto " << expression.result
              << " = __builtin_popcountll(static_cast<unsigned long long>("
              << first->str() << "));\n";
+      continue;
+    }
+    if (expression.kind == "table_choose_index" ||
+        expression.kind == "table_choose_valid") {
+      QueueBlockPlan nested;
+      nested.expressions = expression.nestedExpressions;
+      nested.yields = expression.nestedYields;
+      output << padding << "std::uint64_t " << expression.result << " = 0;\n"
+             << padding << "bool " << expression.result << "_found = false;\n"
+             << padding << "std::uint64_t " << expression.result
+             << "_best = 0;\n"
+             << padding << "for (std::size_t index = 0; index < "
+             << (qualifyTables ? "table_" + identifier(expression.table)
+                               : std::string("table"))
+             << "->size(); ++index) {\n"
+             << padding << "  if ((static_cast<std::uint64_t>(" << first->str()
+             << ") & (std::uint64_t{1} << index)) == 0) continue;\n";
+      if (expression.predicate == "first") {
+        output << padding << "  " << expression.result << " = index;\n"
+               << padding << "  " << expression.result << "_found = true;\n"
+               << padding << "  break;\n";
+      } else {
+        if (nested.yields.size() != 1)
+          return generatorError("table.choose key yield is missing");
+        auto key = emitExpressionBody(nested, nested.yields.front(), indent + 6,
+                                      qualifyTables);
+        if (!key)
+          return key.takeError();
+        const char *comparison = expression.predicate == "min" ? "<" : ">";
+        output << padding << "  const auto &item = "
+               << (qualifyTables ? "table_" + identifier(expression.table)
+                                 : std::string("table"))
+               << "->at(index);\n"
+               << padding << "  auto key = [&]() {\n"
+               << *key << padding << "  }();\n"
+               << padding << "  if (!" << expression.result
+               << "_found || static_cast<std::uint64_t>(key) " << comparison
+               << " " << expression.result << "_best) {\n"
+               << padding << "    " << expression.result << " = index;\n"
+               << padding << "    " << expression.result << "_found = true;\n"
+               << padding << "    " << expression.result
+               << "_best = static_cast<std::uint64_t>(key);\n"
+               << padding << "  }\n";
+      }
+      output << padding << "}\n";
+      if (expression.kind == "table_choose_valid")
+        output << padding << expression.result << " = " << expression.result
+               << "_found;\n";
       continue;
     }
     auto second = operand(1);
@@ -213,6 +308,16 @@ llvm::Expected<std::string> emitExpressionBody(const QueueBlockPlan &block,
   return output.str();
 }
 
+bool referencesTable(const std::vector<QueueExpressionPlan> &expressions,
+                     llvm::StringRef table) {
+  for (const QueueExpressionPlan &expression : expressions) {
+    if (expression.table == table ||
+        referencesTable(expression.nestedExpressions, table))
+      return true;
+  }
+  return false;
+}
+
 const QueuePlan *findQueue(const QueueGraphPlan &plan, llvm::StringRef name) {
   auto found =
       std::find_if(plan.queues.begin(), plan.queues.end(),
@@ -225,6 +330,13 @@ const TablePlan *findTable(const QueueGraphPlan &plan, llvm::StringRef name) {
       std::find_if(plan.tables.begin(), plan.tables.end(),
                    [&](const TablePlan &table) { return table.name == name; });
   return found == plan.tables.end() ? nullptr : &*found;
+}
+
+const SlotPlan *findSlot(const QueueGraphPlan &plan, llvm::StringRef name) {
+  auto found =
+      std::find_if(plan.slots.begin(), plan.slots.end(),
+                   [&](const SlotPlan &slot) { return slot.name == name; });
+  return found == plan.slots.end() ? nullptr : &*found;
 }
 
 bool isRuntimeBlock(const QueueBlockPlan &block) {
@@ -283,9 +395,13 @@ llvm::Expected<std::string> generateQueueGraphCpp(const QueueGraphPlan &plan) {
          block.yields.size() != 2 || block.table.empty()))
       return generatorError("table read contract is unsupported");
     if (block.kind == "table_write" &&
-        (block.inputs.size() != 1 || !block.outputs.empty() ||
+        (block.inputs.size() > 1 || !block.outputs.empty() ||
          block.yields.size() != 3 || block.table.empty()))
       return generatorError("table write contract is unsupported");
+    if (block.kind == "slot" &&
+        (block.inputs.size() != 1 || !block.outputs.empty() ||
+         block.yields.size() != 1 || block.slot.empty()))
+      return generatorError("slot contract is unsupported");
   }
   if (auto error = verifyQueueGraphPlan(plan))
     return std::move(error);
@@ -392,8 +508,40 @@ llvm::Expected<std::string> generateQueueGraphCpp(const QueueGraphPlan &plan) {
         block->kind != "select" && block->kind != "expect" &&
         block->kind != "dependency" && block->kind != "credit" &&
         block->kind != "reorder" && block->kind != "feedback" &&
-        block->kind != "table_read" && block->kind != "table_write")
+        block->kind != "table_read" && block->kind != "table_write" &&
+        block->kind != "slot")
       continue;
+    if (block->kind == "slot") {
+      const SlotPlan *slot = findSlot(plan, block->slot);
+      auto payloadType = slot ? cppType(slot->payloadType)
+                              : llvm::Expected<std::string>(
+                                    generatorError("slot declaration missing"));
+      if (!payloadType)
+        return payloadType.takeError();
+      output << "struct block_" << index << "_release_policy {\n";
+      for (const SlotPlan &candidate : plan.slots) {
+        auto type = cppType(candidate.payloadType);
+        if (!type)
+          return type.takeError();
+        output << "  gfsim::SlotState<" << *type << "> *slot_"
+               << identifier(candidate.name) << "{};\n";
+      }
+      for (const TablePlan &table : plan.tables) {
+        if (!referencesTable(block->expressions, table.name))
+          continue;
+        auto type = cppType(table.entryType);
+        if (!type)
+          return type.takeError();
+        output << "  gfsim::SimTable<" << *type << "> *table_"
+               << identifier(table.name) << "{};\n";
+      }
+      output << "  bool operator()() const {\n";
+      auto body = emitExpressionBody(*block, block->yields.front(), 4, true);
+      if (!body)
+        return body.takeError();
+      output << *body << "  }\n};\n\n";
+      continue;
+    }
     if (block->kind == "table_read" || block->kind == "table_write") {
       const TablePlan *table = findTable(plan, block->table);
       auto entryType = table ? cppType(table->entryType)
@@ -435,7 +583,15 @@ llvm::Expected<std::string> generateQueueGraphCpp(const QueueGraphPlan &plan) {
           return resultCppType.takeError();
         output << "struct block_" << index << '_' << policyName.str()
                << "_policy {\n  gfsim::SimTable<" << *entryType
-               << "> *table{};\n  " << *resultCppType << " operator()(";
+               << "> *table{};\n";
+        for (const SlotPlan &slot : plan.slots) {
+          auto type = cppType(slot.payloadType);
+          if (!type)
+            return type.takeError();
+          output << "  gfsim::SlotState<" << *type << "> *slot_"
+                 << identifier(slot.name) << "{};\n";
+        }
+        output << "  " << *resultCppType << " operator()(";
         if (!inputType.empty())
           output << "const " << inputType << " &item";
         output << ") const {\n";
@@ -676,6 +832,13 @@ llvm::Expected<std::string> generateQueueGraphCpp(const QueueGraphPlan &plan) {
                       "\", ", tableIds[table.name], ", ", *parent, ", ",
                       table.entries, ")");
   }
+  std::string slotPolicyPointers;
+  for (auto [index, slot] : llvm::enumerate(plan.slots)) {
+    (void)slot;
+    slotPolicyPointers.append(", &slot_")
+        .append(std::to_string(index))
+        .append("_state_");
+  }
   for (auto [index, block] : llvm::enumerate(runtimeBlocks)) {
     auto state = feedbackStateIds.find(index);
     if (state == feedbackStateIds.end())
@@ -835,26 +998,54 @@ llvm::Expected<std::string> generateQueueGraphCpp(const QueueGraphPlan &plan) {
                           blockIds[key], ", ", *parent, ", ", table->getValue(),
                           ", ", queueMembers[block->outputs[0]], ", block_",
                           index, "_address_policy{&", table->getValue(),
-                          "}, block_", index, "_when_policy{&",
-                          table->getValue(), "})");
+                          slotPolicyPointers, "}, block_", index,
+                          "_when_policy{&", table->getValue(),
+                          slotPolicyPointers, "})");
       else
         appendInitializer(initializers, member, "(\"", instanceName, "\", ",
                           blockIds[key], ", ", *parent, ", ", table->getValue(),
                           ", ", queueMembers[block->inputs[0]], ", ",
                           queueMembers[block->outputs[0]], ", block_", index,
-                          "_address_policy{&", table->getValue(), "}, block_",
-                          index, "_when_policy{&", table->getValue(), "})");
+                          "_address_policy{&", table->getValue(),
+                          slotPolicyPointers, "}, block_", index,
+                          "_when_policy{&", table->getValue(),
+                          slotPolicyPointers, "})");
     } else if (block->kind == "table_write") {
       auto table = tableMembers.find(block->table);
       if (table == tableMembers.end())
         return generatorError("table write declaration is missing");
-      appendInitializer(initializers, member, "(\"", instanceName, "\", ",
-                        blockIds[key], ", ", *parent, ", ", table->getValue(),
-                        ", ", queueMembers[block->inputs[0]], ", block_", index,
-                        "_address_policy{&", table->getValue(), "}, block_",
-                        index, "_enable_policy{&", table->getValue(),
-                        "}, block_", index, "_value_policy{&",
-                        table->getValue(), "})");
+      if (block->inputs.empty())
+        appendInitializer(
+            initializers, member, "(\"", instanceName, "\", ", blockIds[key],
+            ", ", *parent, ", ", table->getValue(), ", block_", index,
+            "_address_policy{&", table->getValue(), slotPolicyPointers,
+            "}, block_", index, "_enable_policy{&", table->getValue(),
+            slotPolicyPointers, "}, block_", index, "_value_policy{&",
+            table->getValue(), slotPolicyPointers, "})");
+      else
+        appendInitializer(
+            initializers, member, "(\"", instanceName, "\", ", blockIds[key],
+            ", ", *parent, ", ", table->getValue(), ", ",
+            queueMembers[block->inputs[0]], ", block_", index,
+            "_address_policy{&", table->getValue(), slotPolicyPointers,
+            "}, block_", index, "_enable_policy{&", table->getValue(),
+            slotPolicyPointers, "}, block_", index, "_value_policy{&",
+            table->getValue(), slotPolicyPointers, "})");
+    } else if (block->kind == "slot") {
+      const SlotPlan *slot = findSlot(plan, block->slot);
+      if (!slot)
+        return generatorError("slot declaration is missing");
+      auto slotIndex = static_cast<size_t>(slot - plan.slots.data());
+      std::string policyPointers = slotPolicyPointers;
+      for (const TablePlan &table : plan.tables)
+        if (referencesTable(block->expressions, table.name))
+          policyPointers.append(", &").append(tableMembers[table.name]);
+      appendInitializer(
+          initializers, member, "(\"", instanceName, "\", ", blockIds[key],
+          ", ", *parent, ", ", queueMembers[block->inputs[0]], ", slot_",
+          slotIndex, "_state_, block_", index, "_release_policy{",
+          policyPointers.empty() ? std::string() : policyPointers.substr(2),
+          "})");
     } else if (block->kind == "sink" || block->kind == "observe") {
       appendInitializer(initializers, member, "(\"", instanceName, "\", ",
                         blockIds[key], ", ", *parent, ", ",
@@ -1025,6 +1216,13 @@ llvm::Expected<std::string> generateQueueGraphCpp(const QueueGraphPlan &plan) {
       return type.takeError();
     output << "  gfsim::SimQueue<" << *type << "> " << queueMembers[queue.name]
            << ";\n";
+  }
+  for (auto [index, slot] : llvm::enumerate(plan.slots)) {
+    auto type = cppType(slot.payloadType);
+    if (!type)
+      return type.takeError();
+    output << "  gfsim::SlotState<" << *type << "> slot_" << index
+           << "_state_;\n";
   }
   for (const TablePlan &table : plan.tables) {
     auto type = cppType(table.entryType);
@@ -1221,21 +1419,37 @@ llvm::Expected<std::string> generateQueueGraphCpp(const QueueGraphPlan &plan) {
       }
     } else if (block->kind == "table_write") {
       const TablePlan *table = findTable(plan, block->table);
-      const QueuePlan *input = findQueue(plan, block->inputs.front());
       auto entryType = table ? cppType(table->entryType)
                              : llvm::Expected<std::string>(
                                    generatorError("table declaration missing"));
-      auto inputType = input ? cppType(input->payloadType)
-                             : llvm::Expected<std::string>(
-                                   generatorError("table write input missing"));
       if (!entryType)
         return entryType.takeError();
-      if (!inputType)
-        return inputType.takeError();
-      output << "  gfsim::QueueTableWrite<" << *inputType << ", " << *entryType
-             << ", block_" << index << "_address_policy, block_" << index
-             << "_enable_policy, block_" << index << "_value_policy> block_"
-             << index << "_;\n";
+      if (block->inputs.empty()) {
+        output << "  gfsim::TableWriteSource<" << *entryType << ", block_"
+               << index << "_address_policy, block_" << index
+               << "_enable_policy, block_" << index << "_value_policy> block_"
+               << index << "_;\n";
+      } else {
+        const QueuePlan *input = findQueue(plan, block->inputs.front());
+        auto inputType = input ? cppType(input->payloadType)
+                               : llvm::Expected<std::string>(generatorError(
+                                     "table write input missing"));
+        if (!inputType)
+          return inputType.takeError();
+        output << "  gfsim::QueueTableWrite<" << *inputType << ", "
+               << *entryType << ", block_" << index << "_address_policy, block_"
+               << index << "_enable_policy, block_" << index
+               << "_value_policy> block_" << index << "_;\n";
+      }
+    } else if (block->kind == "slot") {
+      const SlotPlan *slot = findSlot(plan, block->slot);
+      auto type = slot ? cppType(slot->payloadType)
+                       : llvm::Expected<std::string>(
+                             generatorError("slot declaration missing"));
+      if (!type)
+        return type.takeError();
+      output << "  gfsim::QueueSlot<" << *type << ", block_" << index
+             << "_release_policy> block_" << index << "_;\n";
     } else if (block->kind == "sink" || block->kind == "observe") {
       const QueuePlan *input = findQueue(plan, block->inputs[0]);
       auto type = input ? cppType(input->payloadType)
