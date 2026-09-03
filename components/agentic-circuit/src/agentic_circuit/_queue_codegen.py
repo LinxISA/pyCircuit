@@ -43,21 +43,59 @@ class _CppExpression:
         *,
         candidates: dict[str, object] | None = None,
         selections: dict[str, object] | None = None,
+        candidate_refs: dict[str, str] | None = None,
+        selection_refs: dict[str, str] | None = None,
         table_entries: dict[str, int] | None = None,
         table_names: dict[str, str] | None = None,
+        require_shared_refs: bool = False,
     ) -> None:
         self.argument = argument
         self.state_names = state_names or {}
         self.candidates = candidates or {}
         self.selections = selections or {}
+        self.candidate_refs = candidate_refs or {}
+        self.selection_refs = selection_refs or {}
         self.table_entries = table_entries or {}
         self.table_names = table_names or {}
+        self.require_shared_refs = require_shared_refs
 
     def emit(self, node: ast.expr) -> str:
         if isinstance(node, ast.Name) and node.id == self.argument:
             return "item"
         if isinstance(node, ast.Name) and node.id in self.state_names:
             return self.state_names[node.id]
+        if isinstance(node, ast.Name) and node.id in self.candidate_refs:
+            return f"{self.candidate_refs[node.id]}->get(epoch)"
+        if isinstance(node, ast.Name) and node.id in self.candidates:
+            if self.require_shared_refs:
+                raise QueueFrontendError(
+                    "ACLOWER-OWNERSHIP: CandidateSet shared cache reference is missing"
+                )
+            candidate = self.candidates[node.id]
+            table = self.table_names.get(candidate.table)
+            entries = self.table_entries.get(candidate.table)
+            if table is None or entries is None:
+                raise QueueFrontendError(
+                    "ACLOWER-OWNERSHIP: CandidateSet Table is unavailable to policy"
+                )
+            predicate = _CppExpression(
+                candidate.argument,
+                self.state_names,
+                candidates=self.candidates,
+                selections=self.selections,
+                candidate_refs=self.candidate_refs,
+                selection_refs=self.selection_refs,
+                table_entries=self.table_entries,
+                table_names=self.table_names,
+                require_shared_refs=self.require_shared_refs,
+            ).emit(candidate.predicate)
+            return (
+                "([&]() { std::uint64_t mask = 0; "
+                f"for (std::size_t index = 0; index < {entries}; ++index) {{ "
+                f"const auto &item = {table}->at(index); "
+                f"if ({predicate}) mask |= (std::uint64_t{{1}} << index); "
+                "} return mask; }())"
+            )
         if isinstance(node, ast.Constant) and type(node.value) in {int, bool}:
             if node.value is True:
                 return "true"
@@ -67,9 +105,20 @@ class _CppExpression:
         if (
             isinstance(node, ast.Attribute)
             and isinstance(node.value, ast.Name)
+            and node.value.id in self.selection_refs
+            and node.attr in {"index", "valid"}
+        ):
+            return f"{self.selection_refs[node.value.id]}->get(epoch).{node.attr}"
+        if (
+            isinstance(node, ast.Attribute)
+            and isinstance(node.value, ast.Name)
             and node.value.id in self.selections
             and node.attr in {"index", "valid"}
         ):
+            if self.require_shared_refs:
+                raise QueueFrontendError(
+                    "ACLOWER-OWNERSHIP: Selection shared cache reference is missing"
+                )
             selection = self.selections[node.value.id]
             candidate = self.candidates[selection.candidates]
             table = self.table_names.get(selection.table)
@@ -83,8 +132,11 @@ class _CppExpression:
                 self.state_names,
                 candidates=self.candidates,
                 selections=self.selections,
+                candidate_refs=self.candidate_refs,
+                selection_refs=self.selection_refs,
                 table_entries=self.table_entries,
                 table_names=self.table_names,
+                require_shared_refs=self.require_shared_refs,
             ).emit(candidate.predicate)
             body = (
                 "([&]() { std::pair<std::uint64_t, bool> selected{0, false}; "
@@ -101,8 +153,11 @@ class _CppExpression:
                     self.state_names,
                     candidates=self.candidates,
                     selections=self.selections,
+                    candidate_refs=self.candidate_refs,
+                    selection_refs=self.selection_refs,
                     table_entries=self.table_entries,
                     table_names=self.table_names,
+                    require_shared_refs=self.require_shared_refs,
                 ).emit(selection.key)
                 comparison = "<" if selection.policy == "min" else ">"
                 body += (
@@ -204,18 +259,24 @@ def _emit_table_state_expression(
     table: str,
     address: str,
     argument: str = "__state",
+    expression: _CppExpression | None = None,
 ) -> str:
     if view_alias is not None and isinstance(node, ast.Name) and node.id == view_alias:
         return f"{table}->checkedAt(static_cast<size_t>({address}))"
     if isinstance(node, ast.Attribute):
-        return (
-            f"{_emit_table_state_expression(node.value, view_alias, table, address, argument)}"
-            f".{node.attr}"
-        )
+        if (
+            view_alias is not None
+            and isinstance(node.value, ast.Name)
+            and node.value.id == view_alias
+        ):
+            return (
+                f"{table}->checkedAt(static_cast<size_t>({address})).{node.attr}"
+            )
+        return (expression or _CppExpression(argument)).emit(node)
     if isinstance(node, ast.BoolOp) and isinstance(node.op, ast.And):
         return "(" + " && ".join(
             _emit_table_state_expression(
-                value, view_alias, table, address, argument
+                value, view_alias, table, address, argument, expression
             )
             for value in node.values
         ) + ")"
@@ -223,11 +284,11 @@ def _emit_table_state_expression(
         return (
             "(!"
             + _emit_table_state_expression(
-                node.operand, view_alias, table, address, argument
+                node.operand, view_alias, table, address, argument, expression
             )
             + ")"
         )
-    return _CppExpression(argument).emit(node)
+    return (expression or _CppExpression(argument)).emit(node)
 
 
 @dataclass(frozen=True, slots=True)
@@ -250,6 +311,7 @@ class _ObjectIds:
     tables: tuple[int, ...]
     table_reads: tuple[int, ...]
     table_writes: tuple[int, ...]
+    masked_table_writes: tuple[int, ...]
     slots: tuple[int, ...]
     sinks: tuple[int, ...]
 
@@ -393,6 +455,10 @@ def _object_ids(program: QueueProgram, fanouts: tuple[_Fanout, ...]) -> _ObjectI
     next_id += len(table_reads)
     table_writes = tuple(range(next_id, next_id + len(program.table_writes)))
     next_id += len(table_writes)
+    masked_table_writes = tuple(
+        range(next_id, next_id + len(program.masked_table_writes))
+    )
+    next_id += len(masked_table_writes)
     slots = tuple(range(next_id, next_id + len(program.slots)))
     next_id += len(slots)
     sinks = tuple(range(next_id, next_id + len(program.sinks)))
@@ -415,6 +481,7 @@ def _object_ids(program: QueueProgram, fanouts: tuple[_Fanout, ...]) -> _ObjectI
         tables,
         table_reads,
         table_writes,
+        masked_table_writes,
         slots,
         sinks,
     )
@@ -435,6 +502,38 @@ def lower_queue_program_to_cpp(program: QueueProgram) -> str:
         selection.name: selection for selection in program.selections
     }
     table_entries = {table.name: table.entries for table in program.tables}
+    payloads_by_name = {payload.name: payload for payload in program.payloads}
+
+    def table_merge_policy(
+        policy_name: str, table: TableBinding, write_fields: tuple[str, ...]
+    ) -> list[str]:
+        entry = _cpp_type(table.entry_type)
+        if write_fields == ("$entry",):
+            ordinals = (0,)
+            assignments = ("    target = value;",)
+        else:
+            payload_name = table.entry_type.removeprefix(
+                "!ac.struct<@types::@"
+            ).removesuffix(">")
+            payload = payloads_by_name[payload_name]
+            field_ordinals = {
+                name: index for index, (name, _) in enumerate(payload.fields)
+            }
+            ordinals = tuple(field_ordinals[field] for field in write_fields)
+            assignments = tuple(
+                f"    target.{field} = value.{field};" for field in write_fields
+            )
+        return [
+            f"struct {policy_name} {{",
+            f"  static constexpr std::array<size_t, {len(ordinals)}> fields{{"
+            + ", ".join(str(value) for value in ordinals)
+            + "};",
+            f"  void operator()({entry} &target, const {entry} &value) const {{",
+            *assignments,
+            "  }",
+            "};",
+            "",
+        ]
     state_names = {slot.name: f"(*{slot.name})" for slot in program.slots}
     slot_policy_members = [
         f"  gfsim::SlotState<{_cpp_type(slot.payload)}> *{slot.name}{{}};"
@@ -443,9 +542,43 @@ def lower_queue_program_to_cpp(program: QueueProgram) -> str:
     slot_policy_arguments = ", ".join(
         f"&slot_state_{index}_" for index, _ in enumerate(program.slots)
     )
+    candidate_indices = {
+        candidate.name: index for index, candidate in enumerate(program.candidates)
+    }
+    selection_indices = {
+        selection.name: index for index, selection in enumerate(program.selections)
+    }
+    candidate_refs = {
+        name: f"table_match_{index}" for name, index in candidate_indices.items()
+    }
+    selection_refs = {
+        name: f"table_selection_{index}"
+        for name, index in selection_indices.items()
+    }
+    shared_policy_members = [
+        *(
+            f"  table_match_{index}_cache *table_match_{index}{{}};"
+            for index, _ in enumerate(program.candidates)
+        ),
+        *(
+            f"  table_selection_{index}_cache *table_selection_{index}{{}};"
+            for index, _ in enumerate(program.selections)
+        ),
+    ]
+    shared_policy_arguments = ", ".join(
+        [
+            *(f"&table_match_{index}_" for index, _ in enumerate(program.candidates)),
+            *(
+                f"&table_selection_{index}_"
+                for index, _ in enumerate(program.selections)
+            ),
+        ]
+    )
     release_policy_arguments = [
         *(f"&slot_state_{index}_" for index, _ in enumerate(program.slots)),
         *(f"&table_{index}_" for index, _ in enumerate(program.tables)),
+        *(f"&table_match_{index}_" for index, _ in enumerate(program.candidates)),
+        *(f"&table_selection_{index}_" for index, _ in enumerate(program.selections)),
     ]
     array_leaf: dict[str, tuple[str, tuple[int, ...]]] = {
         leaf: (collection.name, path)
@@ -763,30 +896,115 @@ def lower_queue_program_to_cpp(program: QueueProgram) -> str:
                 "",
             )
         )
+    for index, candidate in enumerate(program.candidates):
+        table = tables_by_name[candidate.table]
+        entry = _cpp_type(table.entry_type)
+        predicate = _CppExpression(
+            candidate.argument,
+            state_names,
+            table_entries=table_entries,
+            table_names={candidate.table: "table"},
+        ).emit(candidate.predicate)
+        lines.extend(
+            (
+                f"struct table_match_{index}_predicate_policy {{",
+                f"  gfsim::SimTable<{entry}> *table{{}};",
+                *slot_policy_members,
+                f"  bool operator()(const {entry} &item) const {{",
+                f"    return static_cast<bool>({predicate});",
+                "  }",
+                "};",
+                f"using table_match_{index}_cache = ",
+                f"    gfsim::TableMatchCache<{entry}, table_match_{index}_predicate_policy>;",
+                "",
+            )
+        )
+    for index, selection in enumerate(program.selections):
+        table = tables_by_name[selection.table]
+        entry = _cpp_type(table.entry_type)
+        candidate_index = candidate_indices[selection.candidates]
+        if selection.key is None:
+            key = "0"
+        else:
+            assert selection.argument is not None
+            key = _CppExpression(selection.argument).emit(selection.key)
+        policy = {
+            "first": "First",
+            "min": "Min",
+            "max": "Max",
+        }[selection.policy]
+        lines.extend(
+            (
+                f"struct table_selection_{index}_mask_policy {{",
+                f"  table_match_{candidate_index}_cache *match{{}};",
+                "  std::uint64_t operator()(gfsim::Epoch epoch) const {",
+                "    return match->get(epoch);",
+                "  }",
+                "};",
+                "",
+                f"struct table_selection_{index}_key_policy {{",
+                f"  std::uint64_t operator()(const {entry} &item) const {{",
+                f"    return static_cast<std::uint64_t>({key});",
+                "  }",
+                "};",
+                f"using table_selection_{index}_cache = ",
+                f"    gfsim::TableSelectionCache<{entry}, ",
+                f"        table_selection_{index}_mask_policy, ",
+                f"        table_selection_{index}_key_policy>;",
+                f"inline constexpr auto table_selection_{index}_policy = ",
+                f"    gfsim::TableChoosePolicy::{policy};",
+                "",
+            )
+        )
     for index, read in enumerate(program.table_reads):
         table = tables_by_name[read.table]
         entry = _cpp_type(table.entry_type)
+        expression = _CppExpression(
+            read.argument or "__state",
+            state_names,
+            candidates=candidates_by_name,
+            selections=selections_by_name,
+            candidate_refs=candidate_refs,
+            selection_refs=selection_refs,
+            table_entries=table_entries,
+            table_names={read.table: "table"},
+        )
         if read.argument is None:
-            address = _CppExpression("__state").emit(read.address)
+            address = expression.emit(read.address)
             when = _emit_table_state_expression(
-                read.when, read.view_alias, "table", address
+                read.when,
+                read.view_alias,
+                "table",
+                address,
+                expression=expression,
             )
-            address_signature = "std::uint64_t operator()() const"
-            when_signature = "bool operator()() const"
+            address_signature = "std::uint64_t operator()(gfsim::Epoch epoch) const"
+            when_signature = "bool operator()(gfsim::Epoch epoch) const"
         else:
             input_type = _cpp_type(queues_by_name[read.input_name].payload)
-            address = _CppExpression(read.argument).emit(read.address)
+            address = expression.emit(read.address)
             when = _emit_table_state_expression(
-                read.when, read.view_alias, "table", address, read.argument
+                read.when,
+                read.view_alias,
+                "table",
+                address,
+                read.argument,
+                expression,
             )
             address_signature = (
-                f"std::uint64_t operator()(const {input_type} &item) const"
+                f"std::uint64_t operator()(gfsim::Epoch epoch, "
+                f"const {input_type} &item) const"
             )
-            when_signature = f"bool operator()(const {input_type} &item) const"
+            when_signature = (
+                f"bool operator()(gfsim::Epoch epoch, "
+                f"const {input_type} &item) const"
+            )
         lines.extend(
             (
                 f"struct table_read_{index}_address_policy {{",
                 f"  gfsim::SimTable<{entry}> *table{{}};",
+                *slot_policy_members,
+                *shared_policy_members,
                 f"  {address_signature} {{",
                 f"    return static_cast<std::uint64_t>({address});",
                 "  }",
@@ -794,6 +1012,8 @@ def lower_queue_program_to_cpp(program: QueueProgram) -> str:
                 "",
                 f"struct table_read_{index}_when_policy {{",
                 f"  gfsim::SimTable<{entry}> *table{{}};",
+                *slot_policy_members,
+                *shared_policy_members,
                 f"  {when_signature} {{",
                 f"    return static_cast<bool>({when});",
                 "  }",
@@ -813,6 +1033,8 @@ def lower_queue_program_to_cpp(program: QueueProgram) -> str:
         expression_context = dict(
             candidates=candidates_by_name,
             selections=selections_by_name,
+            candidate_refs=candidate_refs,
+            selection_refs=selection_refs,
             table_entries=table_entries,
             table_names={write.table: "table"},
         )
@@ -822,12 +1044,15 @@ def lower_queue_program_to_cpp(program: QueueProgram) -> str:
         enable = _CppExpression(
             argument, state_names, **expression_context
         ).emit(write.enable)
-        signature = "" if input_type is None else f"const {input_type} &item"
+        signature = "gfsim::Epoch epoch"
+        if input_type is not None:
+            signature += f", const {input_type} &item"
         lines.extend(
             (
                 f"struct table_write_{index}_address_policy {{",
                 f"  gfsim::SimTable<{entry}> *table{{}};",
                 *slot_policy_members,
+                *shared_policy_members,
                 f"  std::uint64_t operator()({signature}) const {{",
                 f"    return static_cast<std::uint64_t>({address});",
                 "  }",
@@ -836,6 +1061,7 @@ def lower_queue_program_to_cpp(program: QueueProgram) -> str:
                 f"struct table_write_{index}_enable_policy {{",
                 f"  gfsim::SimTable<{entry}> *table{{}};",
                 *slot_policy_members,
+                *shared_policy_members,
                 f"  bool operator()({signature}) const {{",
                 f"    return static_cast<bool>({enable});",
                 "  }",
@@ -844,6 +1070,7 @@ def lower_queue_program_to_cpp(program: QueueProgram) -> str:
                 f"struct table_write_{index}_value_policy {{",
                 f"  gfsim::SimTable<{entry}> *table{{}};",
                 *slot_policy_members,
+                *shared_policy_members,
                 f"  {entry} operator()({signature}) const {{",
             )
         )
@@ -862,6 +1089,75 @@ def lower_queue_program_to_cpp(program: QueueProgram) -> str:
                 lines.append(f"    result.{field} = {expression.emit(value)};")
             lines.append("    return result;")
         lines.extend(("  }", "};", ""))
+        lines.extend(
+            table_merge_policy(
+                f"table_write_{index}_merge_policy", table, write.write_fields
+            )
+        )
+
+    for index, write in enumerate(program.masked_table_writes):
+        table = tables_by_name[write.table]
+        entry = _cpp_type(table.entry_type)
+        expression_context = dict(
+            candidates=candidates_by_name,
+            selections=selections_by_name,
+            candidate_refs=candidate_refs,
+            selection_refs=selection_refs,
+            table_entries=table_entries,
+            table_names={write.table: "table"},
+        )
+        mask = _CppExpression(
+            "", state_names, **expression_context
+        ).emit(ast.Name(id=write.candidates, ctx=ast.Load()))
+        enable = _CppExpression(
+            "", state_names, **expression_context
+        ).emit(write.enable)
+        lines.extend(
+            (
+                f"struct table_masked_write_{index}_mask_policy {{",
+                f"  gfsim::SimTable<{entry}> *table{{}};",
+                *slot_policy_members,
+                *shared_policy_members,
+                "  std::uint64_t operator()(gfsim::Epoch epoch) const {",
+                f"    return static_cast<std::uint64_t>({mask});",
+                "  }",
+                "};",
+                "",
+                f"struct table_masked_write_{index}_enable_policy {{",
+                f"  gfsim::SimTable<{entry}> *table{{}};",
+                *slot_policy_members,
+                *shared_policy_members,
+                "  bool operator()(gfsim::Epoch epoch) const {",
+                f"    return static_cast<bool>({enable});",
+                "  }",
+                "};",
+                "",
+                f"struct table_masked_write_{index}_value_policy {{",
+                f"  gfsim::SimTable<{entry}> *table{{}};",
+                *slot_policy_members,
+                *shared_policy_members,
+                f"  {entry} operator()(gfsim::Epoch epoch, "
+                f"const {entry} &item) const {{",
+            )
+        )
+        expression = _CppExpression(
+            "__old", state_names, **expression_context
+        )
+        if write.value is not None:
+            lines.append(f"    return {expression.emit(write.value)};")
+        else:
+            lines.append("    auto result = item;")
+            for field, value in write.patch_fields:
+                lines.append(f"    result.{field} = {expression.emit(value)};")
+            lines.append("    return result;")
+        lines.extend(("  }", "};", ""))
+        lines.extend(
+            table_merge_policy(
+                f"table_masked_write_{index}_merge_policy",
+                table,
+                write.write_fields,
+            )
+        )
 
     for index, release in enumerate(program.slot_releases):
         slot = slots_by_name[release.slot]
@@ -874,8 +1170,11 @@ def lower_queue_program_to_cpp(program: QueueProgram) -> str:
             state_names,
             candidates=candidates_by_name,
             selections=selections_by_name,
+            candidate_refs=candidate_refs,
+            selection_refs=selection_refs,
             table_entries=table_entries,
             table_names=release_table_names,
+            require_shared_refs=True,
         ).emit(release.when)
         table_policy_members = [
             f"  gfsim::SimTable<{_cpp_type(table.entry_type)}> *table_{table.name}{{}};"
@@ -886,7 +1185,8 @@ def lower_queue_program_to_cpp(program: QueueProgram) -> str:
                 f"struct slot_{index}_release_policy {{",
                 *slot_policy_members,
                 *table_policy_members,
-                "  bool operator()() const {",
+                *shared_policy_members,
+                "  bool operator()(gfsim::Epoch epoch) const {",
                 f"    return static_cast<bool>({condition});",
                 "  }",
                 "};",
@@ -998,6 +1298,24 @@ def lower_queue_program_to_cpp(program: QueueProgram) -> str:
             f'table_{index}_("{table.name}", {ids.tables[index]}, '
             f"{module_ptr(table.scope)}, {table.entries})"
         )
+    for index, candidate in enumerate(program.candidates):
+        table_index = table_indices[candidate.table]
+        predicate_arguments = f"&table_{table_index}_"
+        if slot_policy_arguments:
+            predicate_arguments += f", {slot_policy_arguments}"
+        initializers.append(
+            f"table_match_{index}_(table_{table_index}_, "
+            f"table_match_{index}_predicate_policy{{{predicate_arguments}}})"
+        )
+    for index, selection in enumerate(program.selections):
+        table_index = table_indices[selection.table]
+        candidate_index = candidate_indices[selection.candidates]
+        initializers.append(
+            f"table_selection_{index}_(table_{table_index}_, "
+            f"table_selection_{index}_mask_policy{{&table_match_{candidate_index}_}}, "
+            f"table_selection_{index}_key_policy{{}}, "
+            f"table_selection_{index}_policy)"
+        )
     for index, slot in enumerate(program.slots):
         release_index = next(
             release_index
@@ -1015,7 +1333,11 @@ def lower_queue_program_to_cpp(program: QueueProgram) -> str:
         runtime_arguments = f"table_{table_index}_"
         if write.input_name is not None:
             runtime_arguments += f", {queue_ref(write.input_name)}"
-        policy_arguments = slot_policy_arguments
+        policy_arguments = ", ".join(
+            value
+            for value in (slot_policy_arguments, shared_policy_arguments)
+            if value
+        )
         address_arguments = f"&table_{table_index}_"
         if policy_arguments:
             address_arguments += f", {policy_arguments}"
@@ -1029,10 +1351,45 @@ def lower_queue_program_to_cpp(program: QueueProgram) -> str:
             f"{runtime_arguments}, "
             f"table_write_{index}_address_policy{address_init}, "
             f"table_write_{index}_enable_policy{address_init}, "
-            f"table_write_{index}_value_policy{{{value_arguments}}})"
+            f"table_write_{index}_value_policy{{{value_arguments}}}, "
+            f"table_write_{index}_merge_policy{{}}, "
+            + (
+                "gfsim::TableWriteMode::Replace)"
+                if write.write_mode == "replace"
+                else "gfsim::TableWriteMode::FieldMerge)"
+            )
+        )
+    for index, write in enumerate(program.masked_table_writes):
+        table_index = table_indices[write.table]
+        policy_arguments = f"&table_{table_index}_"
+        all_policy_arguments = ", ".join(
+            value
+            for value in (slot_policy_arguments, shared_policy_arguments)
+            if value
+        )
+        if all_policy_arguments:
+            policy_arguments += f", {all_policy_arguments}"
+        policy_init = "{" + policy_arguments + "}"
+        initializers.append(
+            f'table_masked_write_{index}_block_("table_masked_write_{index}", '
+            f"{ids.masked_table_writes[index]}, {module_ptr(write.scope)}, "
+            f"table_{table_index}_, "
+            f"table_masked_write_{index}_mask_policy{policy_init}, "
+            f"table_masked_write_{index}_enable_policy{policy_init}, "
+            f"table_masked_write_{index}_value_policy{policy_init}, "
+            f"table_masked_write_{index}_merge_policy{{}})"
         )
     for index, read in enumerate(program.table_reads):
         table_index = table_indices[read.table]
+        policy_arguments = f"&table_{table_index}_"
+        all_policy_arguments = ", ".join(
+            value
+            for value in (slot_policy_arguments, shared_policy_arguments)
+            if value
+        )
+        if all_policy_arguments:
+            policy_arguments += f", {all_policy_arguments}"
+        policy_init = "{" + policy_arguments + "}"
         if read.input_name is None:
             arguments = f"table_{table_index}_, {queue_ref(read.output_name)}"
         else:
@@ -1043,8 +1400,8 @@ def lower_queue_program_to_cpp(program: QueueProgram) -> str:
         initializers.append(
             f'table_read_{index}_block_("table_read_{index}", '
             f"{ids.table_reads[index]}, {module_ptr(read.scope)}, {arguments}, "
-            f"table_read_{index}_address_policy{{&table_{table_index}_}}, "
-            f"table_read_{index}_when_policy{{&table_{table_index}_}})"
+            f"table_read_{index}_address_policy{policy_init}, "
+            f"table_read_{index}_when_policy{policy_init})"
         )
     for index, fanout in enumerate(fanouts):
         payload = _cpp_type(fanout.payload)
@@ -1159,6 +1516,8 @@ def lower_queue_program_to_cpp(program: QueueProgram) -> str:
         lines.append(attach(slot.scope, f"slot_{index}_block_"))
     for index, write in enumerate(program.table_writes):
         lines.append(attach(write.scope, f"table_write_{index}_block_"))
+    for index, write in enumerate(program.masked_table_writes):
+        lines.append(attach(write.scope, f"table_masked_write_{index}_block_"))
     for index, read in enumerate(program.table_reads):
         lines.append(attach(read.scope, f"table_read_{index}_block_"))
     for index, _ in enumerate(fanouts):
@@ -1178,6 +1537,11 @@ def lower_queue_program_to_cpp(program: QueueProgram) -> str:
         lines.append(attach(program.feedbacks[index].scope, f"feedback_{index}_block_"))
     for index, _ in enumerate(program.sinks):
         lines.append(attach(program.sinks[index].scope, f"sink_{index}_"))
+    lines.extend(("  }", "", "  void reset() override {", "    gfsim::Module::reset();"))
+    for index, _ in enumerate(program.candidates):
+        lines.append(f"    table_match_{index}_.reset();")
+    for index, _ in enumerate(program.selections):
+        lines.append(f"    table_selection_{index}_.reset();")
     lines.extend(("  }", ""))
     for queue in program.queues:
         payload = _cpp_type(queue.payload)
@@ -1212,6 +1576,7 @@ def lower_queue_program_to_cpp(program: QueueProgram) -> str:
         + len(ids.tables)
         + len(ids.table_reads)
         + len(ids.table_writes)
+        + len(ids.masked_table_writes)
         + len(ids.slots)
         + len(ids.sinks)
     )
@@ -1261,6 +1626,10 @@ def lower_queue_program_to_cpp(program: QueueProgram) -> str:
         rows.append(f"gfsim::makeDispatchRow(&slot_{index}_block_)")
     for index, _ in enumerate(program.table_writes):
         rows.append(f"gfsim::makeDispatchRow(&table_write_{index}_block_)")
+    for index, _ in enumerate(program.masked_table_writes):
+        rows.append(
+            f"gfsim::makeDispatchRow(&table_masked_write_{index}_block_)"
+        )
     for index, _ in enumerate(program.table_reads):
         rows.append(f"gfsim::makeDispatchRow(&table_read_{index}_block_)")
     for index, _ in enumerate(program.sinks):
@@ -1353,6 +1722,10 @@ def lower_queue_program_to_cpp(program: QueueProgram) -> str:
         lines.append(
             f"  gfsim::SimTable<{_cpp_type(table.entry_type)}> table_{index}_;"
         )
+    for index, _ in enumerate(program.candidates):
+        lines.append(f"  table_match_{index}_cache table_match_{index}_;")
+    for index, _ in enumerate(program.selections):
+        lines.append(f"  table_selection_{index}_cache table_selection_{index}_;")
     for index, slot in enumerate(program.slots):
         payload = _cpp_type(slot.payload)
         release_index = next(
@@ -1377,8 +1750,20 @@ def lower_queue_program_to_cpp(program: QueueProgram) -> str:
             )
         lines.append(
             f"  {provider}table_write_{index}_address_policy, "
-            f"table_write_{index}_enable_policy, table_write_{index}_value_policy> "
+            f"table_write_{index}_enable_policy, table_write_{index}_value_policy, "
+            f"table_write_{index}_merge_policy> "
             f"table_write_{index}_block_;"
+        )
+    for index, write in enumerate(program.masked_table_writes):
+        table = tables_by_name[write.table]
+        entry = _cpp_type(table.entry_type)
+        lines.append(
+            f"  gfsim::TableMaskedWriteSource<{entry}, "
+            f"table_masked_write_{index}_mask_policy, "
+            f"table_masked_write_{index}_enable_policy, "
+            f"table_masked_write_{index}_value_policy, "
+            f"table_masked_write_{index}_merge_policy> "
+            f"table_masked_write_{index}_block_;"
         )
     for index, read in enumerate(program.table_reads):
         table = tables_by_name[read.table]

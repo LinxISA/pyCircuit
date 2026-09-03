@@ -12,8 +12,10 @@
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/StringSet.h"
 #include "llvm/Support/JSON.h"
+#include "llvm/Support/MathExtras.h"
 #include "llvm/Support/raw_ostream.h"
 
+#include <optional>
 #include <system_error>
 
 namespace acir::codegen {
@@ -30,6 +32,15 @@ std::string printType(mlir::Type type) {
   llvm::raw_string_ostream stream(result);
   stream << type;
   return result;
+}
+
+std::optional<unsigned> integerWidth(llvm::StringRef type) {
+  if (!type.consume_front("i"))
+    return std::nullopt;
+  unsigned width = 0;
+  if (type.empty() || type.getAsInteger(10, width) || width == 0)
+    return std::nullopt;
+  return width;
 }
 
 std::string printAttribute(mlir::Attribute attribute) {
@@ -96,9 +107,20 @@ llvm::Expected<std::vector<std::string>> outputNames(mlir::Operation *op,
   return result;
 }
 
-llvm::Error extractExpressions(mlir::Region &region, QueueBlockPlan &plan) {
+using SharedExpression = std::pair<mlir::Value, QueueExpressionPlan>;
+
+llvm::Error
+extractExpressions(mlir::Region &region, QueueBlockPlan &plan,
+                   llvm::ArrayRef<SharedExpression> sharedExpressions = {}) {
   mlir::Block &block = region.front();
   llvm::DenseMap<mlir::Value, std::string> values;
+  for (const auto &[value, expression] : sharedExpressions) {
+    values[value] = expression.result;
+    if (llvm::none_of(plan.expressions, [&](const QueueExpressionPlan &item) {
+          return item.result == expression.result;
+        }))
+      plan.expressions.push_back(expression);
+  }
   for (auto [index, argument] : llvm::enumerate(block.getArguments()))
     values[argument] = index == 0 ? "item" : "item" + std::to_string(index);
   auto operandNames = [&](mlir::ValueRange operands)
@@ -405,6 +427,75 @@ private:
                            .getElementType()),
              *input, scopePath(scope), slot.getStableId().str(),
              slot.getOwner().str()});
+        continue;
+      }
+      if (auto match = mlir::dyn_cast<ac::TableMatchOp>(operation)) {
+        const std::string name =
+            "table_match_" + std::to_string(plan.tableMatches.size());
+        QueueBlockPlan predicate;
+        if (auto error = extractExpressions(match.getPredicate(), predicate))
+          return error;
+        if (predicate.yields.size() != 1)
+          return planError("table.match predicate must yield one value");
+        auto resultType = mlir::cast<ac::VarType>(match.getMask().getType());
+        plan.tableMatches.push_back(
+            {name, match.getTable().str(), scopePath(scope),
+             printType(resultType.getElementType()),
+             std::move(predicate.expressions), predicate.yields.front()});
+        QueueExpressionPlan reference{
+            "shared_match_" + std::to_string(plan.tableMatches.size() - 1),
+            "table_match_ref",
+            printType(resultType.getElementType()),
+            {}};
+        reference.field = name;
+        reference.table = match.getTable().str();
+        sharedExpressions.emplace_back(match.getMask(), std::move(reference));
+        continue;
+      }
+      if (auto choose = mlir::dyn_cast<ac::TableChooseOp>(operation)) {
+        auto matchValue = llvm::find_if(
+            sharedExpressions, [&](const SharedExpression &candidate) {
+              return candidate.first == choose.getMask() &&
+                     candidate.second.kind == "table_match_ref";
+            });
+        if (matchValue == sharedExpressions.end())
+          return planError("table.choose requires a shared table.match mask");
+        const std::string name =
+            "table_selection_" + std::to_string(plan.tableSelections.size());
+        QueueBlockPlan key;
+        if (choose.getPolicy() != "first") {
+          if (auto error = extractExpressions(choose.getKey(), key))
+            return error;
+          if (key.yields.size() != 1)
+            return planError("table.choose key must yield one value");
+        }
+        auto indexType = mlir::cast<ac::VarType>(choose.getIndex().getType());
+        plan.tableSelections.push_back(
+            {name, choose.getTable().str(), scopePath(scope),
+             matchValue->second.field, choose.getPolicy().str(),
+             printType(indexType.getElementType()), std::move(key.expressions),
+             key.yields.empty() ? std::string() : key.yields.front()});
+        QueueExpressionPlan indexReference{
+            "shared_selection_" +
+                std::to_string(plan.tableSelections.size() - 1) + "_index",
+            "table_selection_index_ref",
+            printType(indexType.getElementType()),
+            {}};
+        indexReference.field = name;
+        indexReference.table = choose.getTable().str();
+        sharedExpressions.emplace_back(choose.getIndex(),
+                                       std::move(indexReference));
+        auto validType = mlir::cast<ac::VarType>(choose.getValid().getType());
+        QueueExpressionPlan validReference{
+            "shared_selection_" +
+                std::to_string(plan.tableSelections.size() - 1) + "_valid",
+            "table_selection_valid_ref",
+            printType(validType.getElementType()),
+            {}};
+        validReference.field = name;
+        validReference.table = choose.getTable().str();
+        sharedExpressions.emplace_back(choose.getValid(),
+                                       std::move(validReference));
         continue;
       }
       if (auto source = mlir::dyn_cast<ac::SourceOp>(operation)) {
@@ -720,7 +811,8 @@ private:
         blockPlan.table = read.getTable().str();
         std::vector<std::string> policyYields;
         for (mlir::Region *policy : {&read.getAddress(), &read.getWhen()}) {
-          if (auto error = extractExpressions(*policy, blockPlan))
+          if (auto error =
+                  extractExpressions(*policy, blockPlan, sharedExpressions))
             return error;
           if (blockPlan.yields.size() != 1)
             return planError("table read policy must yield one value");
@@ -748,10 +840,15 @@ private:
         QueueBlockPlan blockPlan{
             "table_write", name.getValue().str(), scopePath(scope), inputs, {}};
         blockPlan.table = write.getTable().str();
+        blockPlan.writeMode = write.getMode().str();
+        for (mlir::Attribute rawField : write.getWriteFields())
+          blockPlan.writeFields.push_back(
+              mlir::cast<mlir::StringAttr>(rawField).getValue().str());
         std::vector<std::string> policyYields;
         for (mlir::Region *policy :
              {&write.getAddress(), &write.getEnable(), &write.getValue()}) {
-          if (auto error = extractExpressions(*policy, blockPlan))
+          if (auto error =
+                  extractExpressions(*policy, blockPlan, sharedExpressions))
             return error;
           if (blockPlan.yields.size() != 1)
             return planError("table write policy must yield one value");
@@ -760,7 +857,46 @@ private:
         blockPlan.yields = std::move(policyYields);
         plan.tableWrites.push_back(
             {blockPlan.table, blockPlan.name, blockPlan.scope,
-             inputs.empty() ? std::string() : inputs.front()});
+             inputs.empty() ? std::string() : inputs.front(),
+             blockPlan.writeMode, blockPlan.writeFields});
+        plan.blocks.push_back(std::move(blockPlan));
+        continue;
+      }
+      if (auto write = mlir::dyn_cast<ac::TableMaskedWriteOp>(operation)) {
+        auto name = write->getAttrOfType<mlir::StringAttr>("ac.name");
+        if (!name || name.getValue().empty())
+          return planError("table.masked_write requires frozen ac.name");
+        QueueBlockPlan blockPlan{"table_masked_write",
+                                 name.getValue().str(),
+                                 scopePath(scope),
+                                 {},
+                                 {}};
+        blockPlan.table = write.getTable().str();
+        blockPlan.writeMode = write.getMode().str();
+        for (mlir::Attribute rawField : write.getWriteFields())
+          blockPlan.writeFields.push_back(
+              mlir::cast<mlir::StringAttr>(rawField).getValue().str());
+        auto matchValue = llvm::find_if(
+            sharedExpressions, [&](const SharedExpression &candidate) {
+              return candidate.first == write.getMask() &&
+                     candidate.second.kind == "table_match_ref";
+            });
+        if (matchValue == sharedExpressions.end())
+          return planError("masked table write requires a shared match mask");
+        blockPlan.expressions.push_back(matchValue->second);
+        std::vector<std::string> policyYields{matchValue->second.result};
+        for (mlir::Region *policy : {&write.getEnable(), &write.getValue()}) {
+          if (auto error =
+                  extractExpressions(*policy, blockPlan, sharedExpressions))
+            return error;
+          if (blockPlan.yields.size() != 1)
+            return planError("masked table write policy must yield one value");
+          policyYields.push_back(blockPlan.yields.front());
+        }
+        blockPlan.yields = std::move(policyYields);
+        plan.tableMaskedWrites.push_back({blockPlan.table, blockPlan.name,
+                                          blockPlan.scope, blockPlan.writeMode,
+                                          blockPlan.writeFields});
         plan.blocks.push_back(std::move(blockPlan));
         continue;
       }
@@ -777,7 +913,8 @@ private:
             "slot", name.getValue().str(), scopePath(scope), {slot->input}, {}};
         blockPlan.slot = slot->name;
         blockPlan.region = printRegion(release.getWhen());
-        if (auto error = extractExpressions(release.getWhen(), blockPlan))
+        if (auto error = extractExpressions(release.getWhen(), blockPlan,
+                                            sharedExpressions))
           return error;
         if (blockPlan.yields.size() != 1)
           return planError("slot release policy must yield one value");
@@ -893,6 +1030,7 @@ private:
   mlir::ModuleOp module;
   QueueGraphPlan plan;
   llvm::DenseMap<mlir::Value, std::string> names;
+  std::vector<SharedExpression> sharedExpressions;
   llvm::StringSet<> queueIdentities;
   llvm::StringSet<> payloadIdentities;
 };
@@ -947,8 +1085,132 @@ llvm::Error verifyQueueGraphPlan(const QueueGraphPlan &plan) {
         table.stableId.empty() || table.ownerPath.empty())
       return planError("table metadata is incomplete");
   }
+  llvm::StringMap<const TableMatchPlan *> tableMatches;
+  for (const TableMatchPlan &match : plan.tableMatches) {
+    const TablePlan *table = tables.lookup(match.table);
+    auto width = integerWidth(match.resultType);
+    if (match.name.empty() || !table || !width || *width != table->entries ||
+        match.resultType.empty() || match.yield.empty() ||
+        !tableMatches.try_emplace(match.name, &match).second)
+      return planError("table match metadata is incomplete or duplicated");
+  }
+  llvm::StringMap<const TableSelectionPlan *> tableSelections;
+  for (const TableSelectionPlan &selection : plan.tableSelections) {
+    const TablePlan *table = tables.lookup(selection.table);
+    const TableMatchPlan *match = tableMatches.lookup(selection.match);
+    auto indexWidth = integerWidth(selection.indexType);
+    const unsigned expectedIndexWidth =
+        table ? std::max<unsigned>(1, llvm::Log2_64_Ceil(table->entries)) : 0;
+    if (selection.name.empty() || !table || !match || !indexWidth ||
+        *indexWidth != expectedIndexWidth || match->table != selection.table ||
+        selection.indexType.empty() ||
+        (selection.policy != "first" && selection.policy != "min" &&
+         selection.policy != "max") ||
+        (selection.policy == "first" &&
+         (!selection.keyExpressions.empty() || !selection.keyYield.empty())) ||
+        (selection.policy != "first" && selection.keyYield.empty()) ||
+        !tableSelections.try_emplace(selection.name, &selection).second)
+      return planError("table selection metadata is incomplete, duplicated, or "
+                       "inconsistent");
+  }
+  auto verifySharedExpression =
+      [&](auto &&self, const QueueExpressionPlan &expression) -> llvm::Error {
+    if (expression.kind == "table_match_ref") {
+      const TableMatchPlan *match = tableMatches.lookup(expression.field);
+      if (!match)
+        return planError("table_match_ref references unknown match target");
+      if (expression.table != match->table)
+        return planError("table_match_ref Table provenance is inconsistent");
+      if (expression.type != match->resultType)
+        return planError("table_match_ref field type is inconsistent");
+    } else if (expression.kind == "table_selection_index_ref" ||
+               expression.kind == "table_selection_valid_ref") {
+      const TableSelectionPlan *selection =
+          tableSelections.lookup(expression.field);
+      if (!selection)
+        return planError(
+            "table_selection_ref references unknown selection target");
+      if (expression.table != selection->table)
+        return planError(
+            "table_selection_ref Table provenance is inconsistent");
+      const llvm::StringRef expected =
+          expression.kind == "table_selection_index_ref"
+              ? llvm::StringRef(selection->indexType)
+              : llvm::StringRef("i1");
+      if (expression.type != expected)
+        return planError("table_selection_ref field type is inconsistent");
+    }
+    for (const QueueExpressionPlan &nested : expression.nestedExpressions)
+      if (auto error = self(self, nested))
+        return error;
+    return llvm::Error::success();
+  };
+  auto verifySharedExpressions = [&](const auto &expressions) -> llvm::Error {
+    for (const QueueExpressionPlan &expression : expressions)
+      if (auto error =
+              verifySharedExpression(verifySharedExpression, expression))
+        return error;
+    return llvm::Error::success();
+  };
+  for (const TableMatchPlan &match : plan.tableMatches)
+    if (auto error = verifySharedExpressions(match.expressions))
+      return error;
+  for (const TableSelectionPlan &selection : plan.tableSelections)
+    if (auto error = verifySharedExpressions(selection.keyExpressions))
+      return error;
   llvm::StringMap<unsigned> tableReaders;
-  llvm::StringMap<unsigned> tableWriters;
+  llvm::StringMap<llvm::StringSet<>> tableWriterFields;
+  llvm::StringSet<> tableReplaceWriters;
+  auto verifyWriteFields = [&](llvm::StringRef tableName, llvm::StringRef mode,
+                               const std::vector<std::string> &writeFields) {
+    const TablePlan *table = tables.lookup(tableName);
+    if (!table || writeFields.empty())
+      return false;
+    llvm::StringSet<> allowed;
+    llvm::StringMap<unsigned> ordinals;
+    if (llvm::StringRef(table->entryType).starts_with("!ac.struct<")) {
+      size_t marker = table->entryType.rfind('@');
+      size_t end = table->entryType.rfind('>');
+      if (marker == std::string::npos || end == std::string::npos ||
+          marker >= end)
+        return false;
+      llvm::StringRef payloadName(table->entryType.data() + marker + 1,
+                                  end - marker - 1);
+      auto payload =
+          llvm::find_if(plan.payloads, [&](const QueuePayloadPlan &item) {
+            return item.name == payloadName;
+          });
+      if (payload == plan.payloads.end())
+        return false;
+      for (auto [ordinal, field] : llvm::enumerate(payload->fields)) {
+        allowed.insert(field.name);
+        ordinals[field.name] = ordinal;
+      }
+    } else {
+      allowed.insert("$entry");
+      ordinals["$entry"] = 0;
+    }
+    llvm::StringSet<> local;
+    std::optional<unsigned> previousOrdinal;
+    for (const std::string &field : writeFields) {
+      if (field.empty() || !allowed.contains(field) ||
+          !local.insert(field).second)
+        return false;
+      unsigned ordinal = ordinals.lookup(field);
+      if (previousOrdinal && ordinal <= *previousOrdinal)
+        return false;
+      previousOrdinal = ordinal;
+    }
+    if (mode != "field" && mode != "replace")
+      return false;
+    if (mode == "replace")
+      return writeFields.size() == allowed.size() &&
+             tableReplaceWriters.insert(tableName).second;
+    for (const std::string &field : writeFields)
+      if (!tableWriterFields[tableName].insert(field).second)
+        return false;
+    return true;
+  };
   for (const TableReadPlan &read : plan.tableReads) {
     if (!tables.contains(read.table) || read.name.empty() ||
         read.output.empty() || read.depth == 0 || read.latency == 0)
@@ -958,11 +1220,23 @@ llvm::Error verifyQueueGraphPlan(const QueueGraphPlan &plan) {
   for (const TableWritePlan &write : plan.tableWrites) {
     if (!tables.contains(write.table) || write.name.empty())
       return planError("table write endpoint metadata is incomplete");
-    if (++tableWriters[write.table] > 1)
-      return planError("table permits at most one write endpoint");
+    if (!verifyWriteFields(write.table, write.mode, write.writeFields))
+      return planError(
+          "table write_fields are invalid or overlap another writer");
+  }
+  for (const TableMaskedWritePlan &write : plan.tableMaskedWrites) {
+    if (!tables.contains(write.table) || write.name.empty())
+      return planError("masked table write endpoint metadata is incomplete");
+    if (write.mode != "field" ||
+        !verifyWriteFields(write.table, write.mode, write.writeFields))
+      return planError(
+          "table write_fields are invalid or overlap another writer");
   }
   for (const auto &entry : tables)
-    if (tableReaders[entry.getKey()] + tableWriters[entry.getKey()] == 0)
+    if (tableReaders[entry.getKey()] +
+            (tableWriterFields.contains(entry.getKey()) ? 1U : 0U) +
+            (tableReplaceWriters.contains(entry.getKey()) ? 1U : 0U) ==
+        0)
       return planError("table '" + entry.getKey() + "' has no endpoints");
   llvm::StringSet<> slotNames;
   for (const SlotPlan &slot : plan.slots)
@@ -985,12 +1259,38 @@ llvm::Error verifyQueueGraphPlan(const QueueGraphPlan &plan) {
   }
 
   for (const QueueBlockPlan &block : plan.blocks) {
+    if (auto error = verifySharedExpressions(block.expressions))
+      return error;
     if (block.kind == "memory_request" &&
         !memoryInstances.contains(block.memoryInstance))
       return planError("memory request block references unknown instance");
-    if ((block.kind == "table_read" || block.kind == "table_write") &&
+    if ((block.kind == "table_read" || block.kind == "table_write" ||
+         block.kind == "table_masked_write") &&
         !tables.contains(block.table))
       return planError("table endpoint block references unknown table");
+    if (block.kind == "table_write") {
+      auto endpoint =
+          llvm::find_if(plan.tableWrites, [&](const TableWritePlan &write) {
+            return write.name == block.name && write.table == block.table &&
+                   write.scope == block.scope;
+          });
+      if (endpoint == plan.tableWrites.end() ||
+          endpoint->mode != block.writeMode ||
+          endpoint->writeFields != block.writeFields)
+        return planError("table write block mode/fields are inconsistent");
+    }
+    if (block.kind == "table_masked_write") {
+      auto endpoint = llvm::find_if(
+          plan.tableMaskedWrites, [&](const TableMaskedWritePlan &write) {
+            return write.name == block.name && write.table == block.table &&
+                   write.scope == block.scope;
+          });
+      if (endpoint == plan.tableMaskedWrites.end() ||
+          endpoint->mode != block.writeMode ||
+          endpoint->writeFields != block.writeFields)
+        return planError(
+            "masked table write block mode/fields are inconsistent");
+    }
     if (block.kind == "slot" && !slotNames.contains(block.slot))
       return planError("slot block references unknown slot");
     for (const QueueExpressionPlan &expression : block.expressions)
@@ -1114,6 +1414,9 @@ llvm::Expected<std::string> QueueGraphPlan::canonicalJson() const {
     llvm::json::Array yields;
     for (const std::string &yield : block.yields)
       yields.push_back(yield);
+    llvm::json::Array writeFields;
+    for (const std::string &field : block.writeFields)
+      writeFields.push_back(field);
     blockValues.push_back(
         llvm::json::Object{{"capacity", block.capacity},
                            {"credits", block.credits},
@@ -1126,6 +1429,7 @@ llvm::Expected<std::string> QueueGraphPlan::canonicalJson() const {
                            {"max_iterations", block.maxIterations},
                            {"message", block.message},
                            {"memory_instance", block.memoryInstance},
+                           {"write_mode", block.writeMode},
                            {"table", block.table},
                            {"slot", block.slot},
                            {"name", block.name},
@@ -1139,6 +1443,7 @@ llvm::Expected<std::string> QueueGraphPlan::canonicalJson() const {
                            {"scope", block.scope},
                            {"start", block.start},
                            {"init", block.init},
+                           {"write_fields", std::move(writeFields)},
                            {"yields", std::move(yields)}});
   }
   llvm::json::Array memoryInstanceValues;
@@ -1170,6 +1475,34 @@ llvm::Expected<std::string> QueueGraphPlan::canonicalJson() const {
                                              {"name", table.name},
                                              {"owner_path", table.ownerPath},
                                              {"stable_id", table.stableId}});
+  llvm::json::Array tableMatchValues;
+  for (const TableMatchPlan &match : tableMatches) {
+    llvm::json::Array expressions;
+    for (const QueueExpressionPlan &expression : match.expressions)
+      expressions.push_back(expressionJson(expressionJson, expression));
+    tableMatchValues.push_back(
+        llvm::json::Object{{"expressions", std::move(expressions)},
+                           {"name", match.name},
+                           {"result_type", match.resultType},
+                           {"scope", match.scope},
+                           {"table", match.table},
+                           {"yield", match.yield}});
+  }
+  llvm::json::Array tableSelectionValues;
+  for (const TableSelectionPlan &selection : tableSelections) {
+    llvm::json::Array expressions;
+    for (const QueueExpressionPlan &expression : selection.keyExpressions)
+      expressions.push_back(expressionJson(expressionJson, expression));
+    tableSelectionValues.push_back(
+        llvm::json::Object{{"index_type", selection.indexType},
+                           {"key_expressions", std::move(expressions)},
+                           {"key_yield", selection.keyYield},
+                           {"match", selection.match},
+                           {"name", selection.name},
+                           {"policy", selection.policy},
+                           {"scope", selection.scope},
+                           {"table", selection.table}});
+  }
   llvm::json::Array tableReadValues;
   for (const TableReadPlan &read : tableReads)
     tableReadValues.push_back(llvm::json::Object{{"depth", read.depth},
@@ -1180,11 +1513,30 @@ llvm::Expected<std::string> QueueGraphPlan::canonicalJson() const {
                                                  {"scope", read.scope},
                                                  {"table", read.table}});
   llvm::json::Array tableWriteValues;
-  for (const TableWritePlan &write : tableWrites)
-    tableWriteValues.push_back(llvm::json::Object{{"input", write.input},
-                                                  {"name", write.name},
-                                                  {"scope", write.scope},
-                                                  {"table", write.table}});
+  for (const TableWritePlan &write : tableWrites) {
+    llvm::json::Array writeFields;
+    for (const std::string &field : write.writeFields)
+      writeFields.push_back(field);
+    tableWriteValues.push_back(
+        llvm::json::Object{{"input", write.input},
+                           {"mode", write.mode},
+                           {"name", write.name},
+                           {"scope", write.scope},
+                           {"table", write.table},
+                           {"write_fields", std::move(writeFields)}});
+  }
+  llvm::json::Array tableMaskedWriteValues;
+  for (const TableMaskedWritePlan &write : tableMaskedWrites) {
+    llvm::json::Array writeFields;
+    for (const std::string &field : write.writeFields)
+      writeFields.push_back(field);
+    tableMaskedWriteValues.push_back(
+        llvm::json::Object{{"name", write.name},
+                           {"mode", write.mode},
+                           {"scope", write.scope},
+                           {"table", write.table},
+                           {"write_fields", std::move(writeFields)}});
+  }
   llvm::json::Array slotValues;
   for (const SlotPlan &slot : slots)
     slotValues.push_back(llvm::json::Object{{"input", slot.input},
@@ -1207,6 +1559,9 @@ llvm::Expected<std::string> QueueGraphPlan::canonicalJson() const {
                              ? llvm::json::Value(nullptr)
                              : llvm::json::Value(specializationFingerprint)},
       {"table_reads", std::move(tableReadValues)},
+      {"table_matches", std::move(tableMatchValues)},
+      {"table_masked_writes", std::move(tableMaskedWriteValues)},
+      {"table_selections", std::move(tableSelectionValues)},
       {"table_writes", std::move(tableWriteValues)},
       {"tables", std::move(tableValues)},
       {"system", system},
