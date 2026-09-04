@@ -20,12 +20,12 @@ ACIR, then targets either ACSim/gfsim or the pyCircuit 6 hardware flow.
 repository, release authority, and only active source of truth for both
 pyCircuit and Agentic Circuit.
 [`LinxISA/pyCircuit`](https://github.com/LinxISA/pyCircuit) is its downstream
-fork for Linx integration work.
+fork for downstream compatibility validation.
 
 The standalone [`PTO-ISA/agentic-circuit`](https://github.com/PTO-ISA/agentic-circuit)
 repository remains public only as a migration and review record. New AC source,
-issues, releases, and packages belong in `PTO-ISA/pyCircuit`; the old repository
-is not archived until the independent QEMU/PYC retirement gate passes.
+issues, releases, and packages belong in `PTO-ISA/pyCircuit`; retirement depends
+on the internal AC/PYC closure and operational cutover checklist.
 
 ## Why pyCircuit 6
 
@@ -95,7 +95,7 @@ ACIR remains an independent, upper-level MLIR dialect. It is not folded into
 the PYC dialect and does not replace the Cycle-Aware Signal model:
 
 ```text
-agentic_circuit frontend -> ACPy 0.4 -> ACIR
+agentic_circuit frontend -> ACPy 0.5 -> ACIR
                                          |-> ACSim -> gfsim
                                          `-> PYC -> pycc -> pyc6 C++ / Verilog
 
@@ -106,6 +106,23 @@ The public `agentic_circuit` import and `agentic-circuit` CLI remain distinct
 from `pycircuit`. AC symbols are not re-exported from `pycircuit.__init__`.
 See the [ACIR architecture overview](docs/acir/index.md) and
 [migration record](docs/acir/migration.md).
+
+The epoch 0.5 rule frontend keeps scheduling mechanics out of Python:
+
+```python
+@ac.rule
+def complete(entry):
+    return entry.with_fields(done=True)
+
+completed = complete(issued)
+```
+
+MLIR passes infer effects, establish the phase-one empty-check contract,
+materialize handshake, resolve scheduling, and lower the transient rule to
+marker-free internal firing IR. Dynamic checks remain fail-closed in this first
+slice. See the
+[bounded retirement example](examples/agentic-circuit/state/rob.py) for a
+runnable frontend-to-gfsim slice.
 
 ## First cycle-aware design
 
@@ -155,16 +172,22 @@ python3 -m pycircuit.cli build \
   --jobs 8
 ```
 
-Run the normal contributor lanes:
+Pull requests use two lightweight required checks: pyCircuit Python/repository
+hygiene and Agentic Circuit contract/frontend/CLI-inventory tests. Before
+opening a PR,
+run the matching local commands:
 
 ```bash
 pre-commit run --files <changed-file> [<changed-file> ...]
 pytest tests/unit -m unit
-bash flows/scripts/run_examples.sh
-bash flows/scripts/run_sims.sh
+python3 tools/agentic-circuit/check-contracts.py
 ```
 
-Run the complete Agentic Circuit G0/G1/G2 closure from the integrated checkout:
+For native, MLIR, lowering, runtime, or backend changes, add the narrowest
+affected local test to the PR evidence. Full AC/PYC closure is intentionally
+reserved for the release workflow and blocks package publication.
+
+To reproduce the complete Agentic Circuit G0/G1/G2 release lane locally:
 
 ```bash
 PYC_GATE_RUN_ID=local-ac-$(date +%Y%m%d-%H%M%S) \
@@ -179,6 +202,18 @@ System tests require a built toolchain and Verilator:
 ```bash
 pytest tests/system -m system
 ```
+
+## External designs
+
+pyCircuit provides language frontends, MLIR dialects and passes, runtimes,
+backend libraries, generic examples, and verification contracts. Complete CPU,
+NPU, SoC, board, and product-specific testbench sources are consumer-owned and
+live outside this repository.
+
+Linx, Janus, XiangShan, QEMU comparison, and FPGA flows consume a released or
+pinned pyCircuit toolchain from their own repositories. The framework does not
+carry consumer path allowlists, consumer-specific runtime headers, or in-tree
+integration scripts.
 
 ## Documentation
 
@@ -197,11 +232,12 @@ pytest tests/system -m system
 ## Repository governance
 
 PTO-ISA owns product decisions, both Python distributions, releases, package
-publication, and the default branch. Linx integration changes should be
-developed so they can be reviewed upstream; the LinxISA fork follows the
-upstream default branch. The standalone Agentic Circuit repository remains a
-public migration record until the current QEMU/PYC comparison and operational
-cutover checklist pass; it is not an active development or publishing source.
+publication, and the default branch. Consumer repositories pin a released or
+reviewed pyCircuit revision and own their design-specific integration gates.
+The LinxISA fork follows the upstream default branch and does not define a
+second framework API. The standalone Agentic Circuit repository remains a
+public migration record until its operational cutover checklist passes; it is
+not an active development or publishing source.
 
 - [Contribution workflow](docs/development/contributing-workflow.md)
 - [Testing and gates](docs/development/testing-and-gates.md)

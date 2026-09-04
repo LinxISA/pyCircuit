@@ -10,7 +10,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[4]
-CONTRACT_EPOCH = "0.4"
+CONTRACT_EPOCH = "0.5"
 LLVM_LOCK = {
     "release": "22.1.8",
     "upstream_commit": "ca7933e47d3a3451d81e72ac174dcb5aa28b59d1",
@@ -309,37 +309,42 @@ class RepositoryContractsTest(unittest.TestCase):
 
         Draft202012Validator(schema).validate(fixture)
 
-    def test_ci_runs_integrated_agentic_contract_and_g2_lanes(self):
+    def test_ci_keeps_agentic_python_checks_lightweight(self):
         workflow = (ROOT / ".github/workflows/ci.yml").read_text()
-        build_match = re.search(
-            r"(?ms)^  build-linux:\n.*?(?=^  [a-z][a-z0-9-]*:\n|\Z)",
-            workflow,
-        )
-        self.assertIsNotNone(build_match, "root CI lacks the integrated build job")
-        build_job = build_match.group()
-        self.assertIn("PYC_BUILD_AGENTIC_CIRCUIT_TESTS=ON", build_job)
-        self.assertIn("--target check-acir", build_job)
-        self.assertIn("ctest --test-dir", build_job)
-
         match = re.search(
-            r"(?ms)^  agentic-circuit:\n.*?(?=^  [a-z][a-z0-9-]*:\n|\Z)",
+            r"(?ms)^  agentic-python-checks:\n.*?(?=^  [a-z][a-z0-9-]*:\n|\Z)",
             workflow,
         )
-        self.assertIsNotNone(match, "root CI lacks the integrated AC gate")
+        self.assertIsNotNone(match, "root CI lacks Agentic Python checks")
         job = match.group()
-        self.assertIn("needs: [gate, build-linux]", job)
         self.assertIn('python -m pip install -e "python/agentic-circuit[test]"', job)
-        self.assertIn("name: pyc-toolchain-linux", job)
-        self.assertIn("path: .pycircuit_out/toolchain/install", job)
         self.assertIn("python tools/agentic-circuit/check-contracts.py", job)
+        self.assertIn("AC_PYTHON_ONLY=1", job)
         self.assertIn("tests/python/agentic-circuit/contracts", job)
         self.assertIn("tests/python/agentic-circuit/python_frontend", job)
-        self.assertIn("tests/python/agentic-circuit/cli", job)
-        self.assertIn("AC_GATE_RESUME_FROM=g2", job)
-        self.assertIn(
-            'AC_GATE_TOOLCHAIN_ROOT="$PWD/.pycircuit_out/toolchain/install"', job
+        self.assertIn("test_all_commands.py", job)
+        self.assertIn("test_workspace.py", job)
+        self.assertNotIn("flows/scripts/pyc build", workflow)
+        self.assertNotIn("setup-verilator", workflow)
+        self.assertNotIn("run_sims.sh", workflow)
+
+    def test_release_owns_integrated_agentic_and_pyc_closure(self):
+        workflow = (ROOT / ".github/workflows/release.yml").read_text()
+        match = re.search(
+            r"(?ms)^  full-validation:\n.*?(?=^  [a-z][a-z0-9-]*:\n|\Z)",
+            workflow,
         )
+        self.assertIsNotNone(match, "release lacks full AC/PYC validation")
+        job = match.group()
+        self.assertIn("PYC_BUILD_AGENTIC_CIRCUIT_TESTS=ON", job)
+        self.assertIn("--target check-acir", job)
+        self.assertIn("ctest --test-dir", job)
         self.assertIn("bash flows/scripts/run_agentic_circuit.sh", job)
+        self.assertIn("bash flows/scripts/run_examples.sh", job)
+        self.assertIn("bash flows/scripts/run_sims.sh", job)
+        self.assertIn("bash flows/scripts/run_sims_nightly.sh", job)
+        self.assertIn("--require-all-verified", job)
+        self.assertIn("needs: [full-validation]", workflow)
 
     def test_ci_has_no_standalone_agentic_build_contract(self):
         workflow = (ROOT / ".github/workflows/ci.yml").read_text()
@@ -434,9 +439,9 @@ class RepositoryContractsTest(unittest.TestCase):
             "operation_path": "@Top::@workload/r0/b0/o0",
         }
         descriptor = {
-            "cpp": "acir::generated::impl_wake_next_delta_043ae4e869cdd2b9059e1696f276b6844179f19aa6a52872ad0ac2d273a4c550",
+            "cpp": "acir::generated::impl_wake_next_delta_a311590813b87bcc30389b814d751def9dfefb49dcd07a9c485b90701a83617e",
             "effect": "stateful",
-            "fingerprint": "sha256:043ae4e869cdd2b9059e1696f276b6844179f19aa6a52872ad0ac2d273a4c550",
+            "fingerprint": "sha256:a311590813b87bcc30389b814d751def9dfefb49dcd07a9c485b90701a83617e",
             "inputs": [],
             "kind": "implementation",
             "ordinal": 0,
@@ -447,11 +452,11 @@ class RepositoryContractsTest(unittest.TestCase):
             "results": ["@acir_wake_next_delta"],
             "role": "wake_next_delta",
             "source_paths": [],
-            "symbol": "@acir_impl_wake_next_delta_043ae4e869cdd2b9059e1696f276b6844179f19aa6a52872ad0ac2d273a4c550",
+            "symbol": "@acir_impl_wake_next_delta_a311590813b87bcc30389b814d751def9dfefb49dcd07a9c485b90701a83617e",
         }
         fixture = {
             "callees": [descriptor],
-            "contract_epoch": "0.4",
+            "contract_epoch": "0.5",
             "processes": [
                 {
                     "blocks": [
